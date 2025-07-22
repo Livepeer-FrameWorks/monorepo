@@ -1,0 +1,222 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="@color/tokyo_night_bg_popup"
+    android:padding="16dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Camera Settings"
+            android:textColor="@color/tokyo_night_fg"
+            android:textSize="20sp"
+            android:textStyle="bold"
+            android:layout_marginBottom="16dp" />
+
+        <!-- Resolution -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Resolution"
+            android:textColor="@color/tokyo_night_blue"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            android:layout_marginBottom="8dp" />
+
+        <Spinner
+            android:id="@+id/resolutionSpinner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@color/tokyo_night_bg_sidebar"
+            android:layout_marginBottom="16dp" />
+
+        <!-- Frame Rate -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Frame Rate"
+            android:textColor="@color/tokyo_night_blue"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            android:layout_marginBottom="8dp" />
+
+        <Spinner
+            android:id="@+id/frameRateSpinner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@color/tokyo_night_bg_sidebar"
+            android:layout_marginBottom="16dp" />
+
+        <!-- Bitrate -->
+        <TextView
+            android:id="@+id/bitrateText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Bitrate: 2500 kbps"
+            android:textColor="@color/tokyo_night_blue"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            android:layout_marginBottom="8dp" />
+
+        <com.google.android.material.slider.Slider
+            android:id="@+id/bitrateSlider"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:valueFrom="500"
+            android:valueTo="10000"
+            android:stepSize="100"
+            android:value="2500"
+            app:thumbColor="@color/tokyo_night_cyan"
+            app:trackColorActive="@color/tokyo_night_blue"
+            app:trackColorInactive="@color/tokyo_night_comment"
+            android:layout_marginBottom="16dp" />
+
+        <!-- Focus Mode -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Focus Mode"
+            android:textColor="@color/tokyo_night_blue"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            android:layout_marginBottom="8dp" />
+
+        <Spinner
+            android:id="@+id/focusModeSpinner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@color/tokyo_night_bg_sidebar"
+            android:layout_marginBottom="16dp" />
+
+        <!-- White Balance -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="White Balance"
+            android:textColor="@color/tokyo_night_blue"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            android:layout_marginBottom="8dp" />
+
+        <Spinner
+            android:id="@+id/whiteBalanceSpinner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@color/tokyo_night_bg_sidebar"
+            android:layout_marginBottom="16dp" />
+
+        <!-- Exposure Compensation -->
+        <TextView
+            android:id="@+id/exposureText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Exposure: 0 EV"
+            android:textColor="@color/tokyo_night_blue"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            android:layout_marginBottom="8dp" />
+
+        <com.google.android.material.slider.Slider
+            android:id="@+id/exposureSlider"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:valueFrom="-2"
+            android:valueTo="2"
+            android:stepSize="1"
+            android:value="0"
+            app:thumbColor="@color/tokyo_night_cyan"
+            app:trackColorActive="@color/tokyo_night_blue"
+            app:trackColorInactive="@color/tokyo_night_comment"
+            android:layout_marginBottom="16dp" />
+
+        <!-- Zoom -->
+        <TextView
+            android:id="@+id/zoomText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Zoom: 1.0x"
+            android:textColor="@color/tokyo_night_blue"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            android:layout_marginBottom="8dp" />
+
+        <com.google.android.material.slider.Slider
+            android:id="@+id/zoomSlider"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:valueFrom="1.0"
+            android:valueTo="10.0"
+            android:stepSize="0.1"
+            android:value="1.0"
+            app:thumbColor="@color/tokyo_night_cyan"
+            app:trackColorActive="@color/tokyo_night_blue"
+            app:trackColorInactive="@color/tokyo_night_comment"
+            android:layout_marginBottom="16dp" />
+
+        <!-- Switches -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginBottom="8dp">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Torch"
+                android:textColor="@color/tokyo_night_fg"
+                android:textSize="16sp" />
+
+            <Switch
+                android:id="@+id/torchSwitch"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:thumbTint="@color/tokyo_night_cyan"
+                android:trackTint="@color/tokyo_night_blue7" />
+
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginBottom="24dp">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Audio"
+                android:textColor="@color/tokyo_night_fg"
+                android:textSize="16sp" />
+
+            <Switch
+                android:id="@+id/audioSwitch"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:thumbTint="@color/tokyo_night_cyan"
+                android:trackTint="@color/tokyo_night_blue7" />
+
+        </LinearLayout>
+
+        <!-- Apply Button -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/applyButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Apply Settings"
+            android:textColor="@color/tokyo_night_bg"
+            app:backgroundTint="@color/tokyo_night_green"
+            app:cornerRadius="12dp" />
+
+    </LinearLayout>
+
+</ScrollView> 

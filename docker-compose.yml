@@ -1,0 +1,791 @@
+# FrameWorks Development Environment
+# Boots all the microservices, interfaces, media server, etc.
+
+networks:
+  frameworks:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  mistserver_data:
+  zookeeper_data:
+  zookeeper_logs:
+  kafka_data:
+  clickhouse_data:
+  prometheus_data:
+  grafana_data:
+
+services: 
+  # PostgreSQL
+  postgres:
+    image: postgres:15
+    container_name: frameworks-postgres
+    environment:
+      POSTGRES_USER: frameworks_user
+      POSTGRES_PASSWORD: frameworks_dev
+      POSTGRES_DB: frameworks
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "5432:5432"
+    networks:
+      - frameworks
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    mem_limit: 1g
+    mem_reservation: 512m
+    cpus: 2.0
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U frameworks_user -d frameworks"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # MistServer with AV libs.
+  # Note: MistServer requires significant shared memory for holding stream buffers.
+  mistserver:
+    image: ddvtech/mistserver_alpine_minimal:with_av
+    container_name: frameworks-mistserver
+    platform: linux/amd64
+    shm_size: '2gb'  # Allocate 2GB of shared memory for MistServer
+    ports:
+      - "4242:4242"      # Controller
+      - "1935:1935"      # RTMP
+      - "8080:8080"      # HTTP
+    volumes:
+      # TODO: Make this read-only once initial configuration is stable
+      # Currently writable as we're actively developing/testing configs
+      - ./infrastructure/mistserver.conf:/etc/mistserver.conf
+      - mistserver_data:/var/lib/mistserver
+    restart: unless-stopped
+    command: ["/usr/bin/MistController", "-c", "/etc/mistserver.conf"]
+    networks:
+      - frameworks
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    mem_limit: 2g
+    mem_reservation: 1g
+    cpus: 2.0
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:4242/ >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Foghorn Load Balancer (Regional/Central)
+  foghorn:
+    # MistServer Load Balancer (comment out to use FrameWorks Foghorn)
+    # image: ddvtech/mistserver_loadbalancer:latest
+    # command: ["/usr/bin/MistUtilLoad", "-g", "5", "-P", "koekjes", "-p", "8042", "-s", "http://mistserver:4242"]
+
+    # FrameWorks Foghorn
+    container_name: frameworks-foghorn
+    build:
+      context: .
+      dockerfile: api_balancing/Dockerfile
+    environment:
+      - DATABASE_URL=postgres://frameworks_user:frameworks_dev@postgres:5432/frameworks?sslmode=disable
+      - PORT=18008
+      - LOG_LEVEL=info
+      - GIN_MODE=release
+      - DECKLOG_URL=http://decklog:18006
+      - CPU_WEIGHT=500
+      - RAM_WEIGHT=500
+      - BANDWIDTH_WEIGHT=1000
+      - GEO_WEIGHT=1000
+      - STREAM_BONUS=50
+    ports:
+      - "18008:18008"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - frameworks
+
+  # Add Kafka infrastructure for event-driven analytics
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.0
+    container_name: frameworks-zookeeper
+    hostname: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    volumes:
+      - zookeeper_data:/var/lib/zookeeper/data
+      - zookeeper_logs:/var/lib/zookeeper/log
+    networks:
+      - frameworks
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    mem_limit: 512m
+    mem_reservation: 256m
+    cpus: 1.0
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+    healthcheck:
+      test: echo stat | nc localhost 2181 || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  kafka:
+    image: confluentinc/cp-kafka:7.4.0
+    container_name: frameworks-kafka
+    hostname: kafka
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+      KAFKA_NUM_PARTITIONS: 3
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 1
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    ports:
+      - "29092:29092"
+    networks:
+      - frameworks
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    mem_limit: 1g
+    mem_reservation: 512m
+    cpus: 2.0
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+    healthcheck:
+      test: kafka-topics --bootstrap-server localhost:9092 --list || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # Kafka Topic Initialization
+  kafka-init:
+    image: confluentinc/cp-kafka:7.4.0
+    container_name: frameworks-kafka-init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: [ '/bin/sh', '-c' ]
+    command: |
+      "
+      echo 'Creating Kafka topics...'
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic analytics --partitions 3 --replication-factor 1
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic analytics_events --partitions 3 --replication-factor 1
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic stream-events --partitions 3 --replication-factor 1
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic viewer-metrics --partitions 3 --replication-factor 1
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic connection-events --partitions 3 --replication-factor 1
+      echo 'Topics created successfully'
+      "
+    networks:
+      - frameworks
+
+  # Quartermaster - Tenant Management Service
+  quartermaster:
+    container_name: frameworks-quartermaster
+    build:
+      context: .
+      dockerfile: api_tenants/Dockerfile
+    ports:
+      - "18002:18002"
+    environment:
+      - DATABASE_URL=postgres://frameworks_user:frameworks_dev@postgres:5432/frameworks?sslmode=disable
+      - PORT=18002
+      - LOG_LEVEL=info
+      - JWT_SECRET=your-jwt-secret-change-in-production
+      - SERVICE_TOKEN=your-service-token-change-in-production
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - frameworks
+    mem_limit: 512m
+    mem_reservation: 256m
+    cpus: 1.0
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:18002/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Event Ingest (Decklog)
+  decklog:
+    container_name: frameworks-decklog
+    build:
+      context: .
+      dockerfile: api_firehose/Dockerfile
+    hostname: decklog
+    environment:
+      - KAFKA_BROKERS=kafka:9092
+      - KAFKA_CLUSTER_ID=frameworks
+      - REGION=development
+      - HOSTNAME=decklog-dev
+      - PORT=18006
+      - LOG_LEVEL=info
+      - GIN_MODE=release
+      - GRPC_PORT=18006
+      - ALLOW_INSECURE=true  # For local development only
+    ports:
+      - "18006:18006"
+    depends_on:
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    networks:
+      - frameworks
+    mem_limit: 512m
+    mem_reservation: 256m
+    cpus: 1.0
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "grpcurl", "-plaintext", "localhost:18006", "decklog.DecklogService/CheckHealth"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # Signalman - WebSocket Hub Service  
+  signalman:
+    container_name: frameworks-signalman
+    build:
+      context: .
+      dockerfile: api_realtime/Dockerfile
+    hostname: signalman
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      quartermaster:
+        condition: service_started
+    environment:
+      - PORT=18009
+      - DATABASE_URL=postgres://frameworks_user:frameworks_dev@postgres:5432/frameworks?sslmode=disable
+      - KAFKA_BROKERS=kafka:9092
+      - KAFKA_TOPIC_PREFIX=frameworks
+      - KAFKA_CONSUMER_GROUP=signalman-websocket-hub
+      - LOG_LEVEL=info
+      - REGION=development
+      - HOSTNAME=signalman-dev
+      - QUARTERMASTER_URL=http://quartermaster:18002
+      - SERVICE_TOKEN=your-service-token-change-in-production
+    ports:
+      - "18009:18009"
+    networks:
+      - frameworks
+    mem_limit: 512m
+    mem_reservation: 256m
+    cpus: 1.0
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:18009/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Backend API
+  commodore:
+    container_name: frameworks-commodore
+    build:
+      context: .
+      dockerfile: api_control/Dockerfile
+    environment:
+      - DATABASE_URL=postgres://frameworks_user:frameworks_dev@postgres:5432/frameworks?sslmode=disable
+      - JWT_SECRET=your-jwt-secret-change-in-production
+      - FOGHORN_URL=http://foghorn:18008
+      - MIST_USERNAME=${MIST_USERNAME:-test}
+      - MIST_PASSWORD=${MIST_PASSWORD:-test}
+      - PORT=18001
+      - QUARTERMASTER_URL=http://quartermaster:18002
+      - SERVICE_TOKEN=your-service-token-change-in-production
+    ports:
+      - "18001:18001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      quartermaster:
+        condition: service_started
+    networks:
+      - frameworks
+    mem_limit: 512m
+    mem_reservation: 256m
+    cpus: 1.0
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:18001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Edge Sidecar API
+  helmsman:
+    container_name: frameworks-helmsman
+    build:
+      context: .
+      dockerfile: api_sidecar/Dockerfile
+    environment:
+      - COMMODORE_URL=http://commodore:18001
+      - DECKLOG_URL=http://decklog:18006
+      - FOGHORN_URL=http://foghorn:18008
+      - MISTSERVER_URL=http://mistserver:4242
+      - MIST_PASSWORD=${MIST_PASSWORD:-koekjes}
+      - MIST_API_USERNAME=${MIST_API_USERNAME:-test}
+      - MIST_API_PASSWORD=${MIST_API_PASSWORD:-test}
+      - CLUSTER_ID=default-cluster
+      - NODE_NAME=edge-node-1
+      - PORT=18007
+      - LOG_LEVEL=info
+      - DECKLOG_GRPC_TARGET=decklog:18006
+      - DECKLOG_ALLOW_INSECURE=true  # For local development only
+    depends_on:
+      commodore:
+        condition: service_started
+      foghorn:
+        condition: service_started
+      mistserver:
+        condition: service_started
+      decklog:
+        condition: service_started
+    ports:
+      - "18007:18007"
+    networks:
+      - frameworks
+  
+  # Periscope-Ingest: High-throughput event processing from Kafka
+  periscope-ingest:
+    container_name: frameworks-periscope-ingest
+    build:
+      context: .
+      dockerfile: api_analytics_ingest/Dockerfile
+    ports:
+      - "18005:18005"
+    environment:
+      - DATABASE_URL=postgres://frameworks_user:frameworks_dev@postgres:5432/frameworks?sslmode=disable
+      - KAFKA_BROKERS=kafka:9092
+      - KAFKA_GROUP_ID=periscope-ingest
+      - KAFKA_CLUSTER_ID=frameworks
+      - KAFKA_TOPICS=analytics
+      - LOG_LEVEL=info
+      - ENABLE_HEALTH_ENDPOINT=true
+      - HEALTH_PORT=18005
+      - CLICKHOUSE_HOST=clickhouse:9000
+      - CLICKHOUSE_PORT=8123
+      - CLICKHOUSE_DB=frameworks
+      - CLICKHOUSE_USER=frameworks
+      - CLICKHOUSE_PASSWORD=frameworks_dev
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      clickhouse:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - frameworks
+    mem_limit: 1g
+    mem_reservation: 512m
+    cpus: 2.0
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:18005/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # Periscope-Query (Analytics API - Query Side)
+  periscope-query:
+    container_name: frameworks-periscope-query
+    build:
+      context: .
+      dockerfile: api_analytics_query/Dockerfile
+    ports:
+      - "18004:18004"
+    environment:
+      - DATABASE_URL=postgres://frameworks_user:frameworks_dev@postgres:5432/frameworks?sslmode=disable
+      - PORT=18004
+      - LOG_LEVEL=info
+      - GIN_MODE=release
+      - JWT_SECRET=your-jwt-secret-change-in-production
+      - SERVICE_TOKEN=your-service-token-change-in-production
+      - PURSER_URL=http://purser:18003
+      - BILLING_HOURLY_INTERVAL=60
+      - BILLING_DAILY_INTERVAL=24
+      - CLICKHOUSE_HOST=clickhouse:9000
+      - CLICKHOUSE_PORT=8123
+      - CLICKHOUSE_DB=frameworks
+      - CLICKHOUSE_USER=frameworks
+      - CLICKHOUSE_PASSWORD=frameworks_dev
+    depends_on:
+      postgres:
+        condition: service_healthy
+      purser:
+        condition: service_started
+      clickhouse:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - frameworks
+    mem_limit: 1g
+    mem_reservation: 512m
+    cpus: 2.0
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:18004/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Purser (Billing API)
+  purser:
+    container_name: frameworks-purser
+    build:
+      context: .
+      dockerfile: api_billing/Dockerfile
+    ports:
+      - "18003:18003"
+    environment:
+      - DATABASE_URL=postgres://frameworks_user:frameworks_dev@postgres:5432/frameworks?sslmode=disable
+      - PORT=18003
+      - LOG_LEVEL=info
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:-sk_test_dummy}
+      - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET:-whsec_dummy}
+      - GIN_MODE=release
+      - JWT_SECRET=your-jwt-secret-change-in-production
+      - SERVICE_TOKEN=your-service-token-change-in-production
+      - QUARTERMASTER_URL=http://quartermaster:18002
+    depends_on:
+      postgres:
+        condition: service_healthy
+      quartermaster:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - frameworks
+    mem_limit: 512m
+    mem_reservation: 256m
+    cpus: 1.0
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:18003/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Web Console
+  frontend:
+    container_name: frameworks-frontend
+    build:
+      context: ./website_application
+      dockerfile: Dockerfile
+      args:
+        - VITE_API_URL=http://localhost:18090
+        - VITE_ANALYTICS_API_URL=http://localhost:18090/periscope/api/v1
+        - VITE_BILLING_API_URL=http://localhost:18090/api/v1
+        - VITE_REALTIME_WS_URL=ws://localhost:18090/ws
+        - VITE_RTMP_DOMAIN=localhost:1935
+        - VITE_HTTP_DOMAIN=localhost:8080
+        - VITE_CDN_DOMAIN=localhost:18090
+        - VITE_RTMP_PATH=/live
+        - VITE_HLS_PATH=/view
+        - VITE_WEBRTC_PATH=/webrtc
+        - VITE_EMBED_PATH=/view
+        - VITE_MARKETING_SITE_URL=http://localhost:18031
+    depends_on:
+      commodore:
+        condition: service_started
+    ports:
+      - "18030:3000"
+    networks:
+      - frameworks
+    mem_limit: 512m
+    mem_reservation: 256m
+    cpus: 1.0
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Marketing Website
+  website:
+    container_name: frameworks-website
+    build:
+      context: ./website_marketing
+      dockerfile: Dockerfile
+      args:
+        - VITE_APP_URL=http://localhost:18090
+        - VITE_API_URL=http://localhost:18001
+        - VITE_GITHUB_URL=https://github.com/livepeer-frameworks/monorepo
+        - VITE_LIVEPEER_URL=https://livepeer.org
+        - VITE_LIVEPEER_EXPLORER_URL=https://explorer.livepeer.org
+        - VITE_CONTACT_EMAIL=hello@frameworks.dev
+        - VITE_DEMO_STREAM_NAME=frameworks-demo
+        - VITE_COMPANY_NAME=FrameWorks
+        - VITE_DOMAIN=frameworks.dev
+    hostname: website
+    environment:
+      - NODE_ENV=production
+      - PORT=9009
+    ports:
+      - "18031:9009"
+    depends_on:
+      commodore:
+        condition: service_started
+      quartermaster:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - frameworks
+    mem_limit: 512m
+    mem_reservation: 256m
+    cpus: 1.0
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9009/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Reverse Proxy
+  nginx:
+    image: nginx:alpine
+    container_name: frameworks-nginx
+    ports:
+      - "18090:80"
+    volumes:
+      - ./infrastructure/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      mistserver:
+        condition: service_started
+      foghorn:
+        condition: service_started
+      commodore:
+        condition: service_started
+      helmsman:
+        condition: service_started
+      periscope-query:
+        condition: service_started
+      frontend:
+        condition: service_started
+      website:
+        condition: service_started
+      quartermaster:
+        condition: service_started
+    networks:
+      - frameworks
+    mem_limit: 256m
+    mem_reservation: 128m
+    cpus: 1.0
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:80/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  # ClickHouse for time-series analytics
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    container_name: frameworks-clickhouse
+    hostname: clickhouse
+    ports:
+      - "8123:8123"   # HTTP interface
+      - "9000:9000"   # Native interface
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - ./infrastructure/clickhouse/users.xml:/etc/clickhouse-server/users.xml:ro
+      - ./infrastructure/clickhouse/config.xml:/etc/clickhouse-server/config.d/frameworks.xml:ro
+      - ./database/clickhouse-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    environment:
+      # Start with default user for initialization
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: ""
+      CLICKHOUSE_DB: frameworks
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    mem_limit: 2g
+    mem_reservation: 1g
+    cpus: 2.0
+    networks:
+      - frameworks
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8123/ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Prometheus for metrics collection
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: frameworks-prometheus
+    hostname: prometheus
+    ports:
+      - "9091:9090"
+    volumes:
+      - prometheus_data:/prometheus
+      - ./infrastructure/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./infrastructure/prometheus/rules:/etc/prometheus/rules:ro
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+      - '--web.enable-admin-api'
+    networks:
+      - frameworks
+    mem_limit: 1g
+    mem_reservation: 512m
+    cpus: 1.0
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+    healthcheck:
+      test: wget --no-verbose --tries=1 --spider http://localhost:9090/-/healthy || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Grafana for visualization
+  grafana:
+    image: grafana/grafana:latest
+    container_name: frameworks-grafana
+    hostname: grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./infrastructure/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infrastructure/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=frameworks_dev
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_INSTALL_PLUGINS=grafana-clickhouse-datasource
+    depends_on:
+      prometheus:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    networks:
+      - frameworks
+    mem_limit: 512m
+    mem_reservation: 256m
+    cpus: 1.0
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+    healthcheck:
+      test: wget --no-verbose --tries=1 --spider http://localhost:3000/api/health || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s

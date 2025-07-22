@@ -1,0 +1,4 @@
+<?xml version="1.0"?>
+<clickhouse>
+    <interserver_http_port>9011</interserver_http_port>
+</clickhouse> 

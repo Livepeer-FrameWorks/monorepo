@@ -1,0 +1,12 @@
+[Interface]
+PrivateKey = {{ wg_private_key['content'] | b64decode }}
+Address = {{ wireguard_address }}/24
+ListenPort = {{ wireguard_port }}
+
+{% for peer in peers %}
+[Peer]
+PublicKey = {{ hostvars[peer]['wg_public_key'] }}
+AllowedIPs = {{ hostvars[peer]['wireguard_address'] }}/32
+Endpoint = {{ hostvars[peer]['ansible_host'] }}:{{ wireguard_port }}
+PersistentKeepalive = 25
+{% endfor %} 

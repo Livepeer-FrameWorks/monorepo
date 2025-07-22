@@ -1,0 +1,55 @@
+# Build stage
+FROM golang:1.23.8-alpine AS builder
+
+# Install build dependencies
+RUN apk add --no-cache git ca-certificates tzdata
+
+# Install grpcurl
+RUN go install github.com/fullstorydev/grpcurl/cmd/grpcurl@latest
+
+WORKDIR /src/frameworks
+
+# Copy go.mod and go.sum first
+COPY api_realtime/go.mod api_realtime/go.sum api_realtime/
+
+# Copy shared pkg module (maintain relative path for replace directive)
+COPY pkg/ pkg/
+
+# Copy service source code
+COPY api_realtime/ api_realtime/
+
+# Build the application
+WORKDIR /src/frameworks/api_realtime
+RUN go mod download
+RUN CGO_ENABLED=0 go build -o signalman ./cmd/signalman
+
+# Final stage
+FROM alpine:3.19
+
+# Install runtime dependencies
+RUN apk add --no-cache ca-certificates tzdata
+
+# Copy grpcurl from builder
+COPY --from=builder /go/bin/grpcurl /usr/local/bin/
+
+# Create non-root user
+RUN addgroup -g 1001 -S frameworks && \
+    adduser -u 1001 -S frameworks -G frameworks
+
+WORKDIR /app
+
+# Copy the binary from builder stage
+COPY --from=builder /src/frameworks/api_realtime/signalman .
+
+# Change ownership
+RUN chown -R frameworks:frameworks /app
+USER frameworks
+
+# Expose port
+EXPOSE 18009
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD grpcurl -plaintext localhost:18009 grpc.health.v1.Health/Check || exit 1
+
+CMD ["./signalman"] 

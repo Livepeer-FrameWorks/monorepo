@@ -1,0 +1,62 @@
+groups:
+- name: frameworks.rules
+  rules:
+  # Service availability alerts
+  - alert: ServiceDown
+    expr: up == 0
+    for: 1m
+    labels:
+      severity: critical
+    annotations:
+      summary: "Service {{ $labels.job }} is down"
+      description: "{{ $labels.job }} has been down for more than 1 minute."
+
+  # High CPU usage
+  - alert: HighCPUUsage
+    expr: cpu_usage_percent > 80
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "High CPU usage on {{ $labels.instance }}"
+      description: "CPU usage is above 80% for more than 5 minutes."
+
+  # High memory usage
+  - alert: HighMemoryUsage
+    expr: memory_usage_percent > 85
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "High memory usage on {{ $labels.instance }}"
+      description: "Memory usage is above 85% for more than 5 minutes."
+
+  # Stream-specific alerts
+  - alert: HighStreamLatency
+    expr: stream_latency_ms > 5000
+    for: 2m
+    labels:
+      severity: warning
+    annotations:
+      summary: "High stream latency detected"
+      description: "Stream latency is above 5 seconds for {{ $labels.stream_name }}."
+
+  # Kafka lag alert
+  - alert: KafkaConsumerLag
+    expr: kafka_consumer_lag > 1000
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "High Kafka consumer lag"
+      description: "Kafka consumer lag is above 1000 messages for {{ $labels.consumer_group }}."
+
+  # Database connection alerts
+  - alert: DatabaseConnectionsHigh
+    expr: database_connections_active / database_connections_max > 0.8
+    for: 2m
+    labels:
+      severity: warning
+    annotations:
+      summary: "High database connection usage"
+      description: "Database connection usage is above 80% on {{ $labels.instance }}." 

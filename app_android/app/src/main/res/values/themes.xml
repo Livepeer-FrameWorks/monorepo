@@ -1,0 +1,93 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- Tokyo Night application theme. -->
+    <style name="Theme.MistHose" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <!-- Primary brand color. -->
+        <item name="colorPrimary">@color/tokyo_night_blue</item>
+        <item name="colorPrimaryVariant">@color/tokyo_night_blue7</item>
+        <item name="colorOnPrimary">@color/tokyo_night_bg</item>
+        
+        <!-- Secondary brand color. -->
+        <item name="colorSecondary">@color/tokyo_night_cyan</item>
+        <item name="colorSecondaryVariant">@color/tokyo_night_blue1</item>
+        <item name="colorOnSecondary">@color/tokyo_night_bg</item>
+        
+        <!-- Background colors -->
+        <item name="android:colorBackground">@color/tokyo_night_bg</item>
+        <item name="colorSurface">@color/tokyo_night_bg_popup</item>
+        <item name="colorOnBackground">@color/tokyo_night_fg</item>
+        <item name="colorOnSurface">@color/tokyo_night_fg</item>
+        
+        <!-- Status bar and navigation bar -->
+        <item name="android:statusBarColor">@color/tokyo_night_bg_dark</item>
+        <item name="android:navigationBarColor">@color/tokyo_night_bg_dark</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+        
+        <!-- Error color -->
+        <item name="colorError">@color/tokyo_night_red</item>
+        <item name="colorOnError">@color/tokyo_night_bg</item>
+        
+        <!-- Text colors -->
+        <item name="android:textColorPrimary">@color/tokyo_night_fg</item>
+        <item name="android:textColorSecondary">@color/tokyo_night_fg_dark</item>
+        <item name="android:textColorTertiary">@color/tokyo_night_comment</item>
+        
+        <!-- Window background -->
+        <item name="android:windowBackground">@color/tokyo_night_bg</item>
+        
+        <!-- Material Design 3 colors -->
+        <item name="colorPrimaryContainer">@color/tokyo_night_bg_highlight</item>
+        <item name="colorOnPrimaryContainer">@color/tokyo_night_fg</item>
+        <item name="colorSecondaryContainer">@color/tokyo_night_bg_sidebar</item>
+        <item name="colorOnSecondaryContainer">@color/tokyo_night_fg</item>
+        
+        <!-- Button styles -->
+        <item name="materialButtonStyle">@style/TokyoNight.Button</item>
+        <item name="materialButtonOutlinedStyle">@style/TokyoNight.Button.Outlined</item>
+        
+        <!-- Bottom sheet -->
+        <item name="bottomSheetDialogTheme">@style/TokyoNight.BottomSheetDialog</item>
+    </style>
+
+    <style name="Theme.MistHose.NoActionBar">
+        <item name="windowActionBar">false</item>
+        <item name="windowNoTitle">true</item>
+        <item name="android:windowFullscreen">false</item>
+        <item name="android:windowContentOverlay">@null</item>
+    </style>
+
+    <!-- Tokyo Night Button Styles -->
+    <style name="TokyoNight.Button" parent="Widget.MaterialComponents.Button">
+        <item name="backgroundTint">@color/tokyo_night_blue</item>
+        <item name="android:textColor">@color/tokyo_night_bg</item>
+        <item name="cornerRadius">12dp</item>
+        <item name="android:textAllCaps">false</item>
+        <item name="android:fontFamily">sans-serif-medium</item>
+    </style>
+
+    <style name="TokyoNight.Button.Outlined" parent="Widget.MaterialComponents.Button.OutlinedButton">
+        <item name="strokeColor">@color/tokyo_night_blue</item>
+        <item name="android:textColor">@color/tokyo_night_blue</item>
+        <item name="cornerRadius">12dp</item>
+        <item name="android:textAllCaps">false</item>
+        <item name="android:fontFamily">sans-serif-medium</item>
+    </style>
+
+    <!-- Tokyo Night Bottom Sheet Dialog -->
+    <style name="TokyoNight.BottomSheetDialog" parent="Theme.Design.Light.BottomSheetDialog">
+        <item name="android:windowIsFloating">false</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:colorBackground">@color/tokyo_night_bg_popup</item>
+        <item name="android:textColorPrimary">@color/tokyo_night_fg</item>
+        <item name="android:textColorSecondary">@color/tokyo_night_fg_dark</item>
+    </style>
+
+    <!-- Tokyo Night Alert Dialog -->
+    <style name="TokyoNight.AlertDialog" parent="ThemeOverlay.MaterialComponents.Dialog.Alert">
+        <item name="android:colorBackground">@color/tokyo_night_bg_popup</item>
+        <item name="android:textColorPrimary">@color/tokyo_night_fg</item>
+        <item name="android:textColorSecondary">@color/tokyo_night_fg_dark</item>
+        <item name="colorPrimary">@color/tokyo_night_blue</item>
+        <item name="colorSecondary">@color/tokyo_night_cyan</item>
+    </style>
+</resources>

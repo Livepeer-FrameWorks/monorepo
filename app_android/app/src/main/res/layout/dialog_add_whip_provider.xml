@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="@color/tokyo_night_bg_popup"
+    android:orientation="vertical"
+    android:padding="16dp">
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Add WHIP Provider"
+        android:textColor="@color/tokyo_night_fg"
+        android:textSize="20sp"
+        android:textStyle="bold"
+        android:layout_marginBottom="16dp" />
+
+    <com.google.android.material.textfield.TextInputLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="16dp"
+        app:boxBackgroundColor="@color/tokyo_night_bg_sidebar"
+        app:boxStrokeColor="@color/tokyo_night_blue"
+        app:hintTextColor="@color/tokyo_night_blue">
+
+        <com.google.android.material.textfield.TextInputEditText
+            android:id="@+id/nameEdit"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="Provider Name"
+            android:textColor="@color/tokyo_night_fg"
+            android:textColorHint="@color/tokyo_night_comment" />
+
+    </com.google.android.material.textfield.TextInputLayout>
+
+    <com.google.android.material.textfield.TextInputLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="16dp"
+        app:boxBackgroundColor="@color/tokyo_night_bg_sidebar"
+        app:boxStrokeColor="@color/tokyo_night_blue"
+        app:hintTextColor="@color/tokyo_night_blue">
+
+        <com.google.android.material.textfield.TextInputEditText
+            android:id="@+id/urlEdit"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="WHIP Endpoint URL"
+            android:textColor="@color/tokyo_night_fg"
+            android:textColorHint="@color/tokyo_night_comment" />
+
+    </com.google.android.material.textfield.TextInputLayout>
+
+    <com.google.android.material.textfield.TextInputLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="16dp"
+        app:boxBackgroundColor="@color/tokyo_night_bg_sidebar"
+        app:boxStrokeColor="@color/tokyo_night_blue"
+        app:hintTextColor="@color/tokyo_night_blue">
+
+        <com.google.android.material.textfield.TextInputEditText
+            android:id="@+id/tokenEdit"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="Bearer Token (optional)"
+            android:textColor="@color/tokyo_night_fg"
+            android:textColorHint="@color/tokyo_night_comment" />
+
+    </com.google.android.material.textfield.TextInputLayout>
+
+</LinearLayout> 

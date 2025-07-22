@@ -1,0 +1,14 @@
+<resources>
+    <string name="app_name">MistHose</string>
+    <string name="streaming_service_name">Streaming Service</string>
+    <string name="streaming_service_description">Keeps streaming active in background</string>
+    <string name="streaming_notification_title">MistHose Streaming</string>
+    <string name="streaming_notification_text">Stream is active</string>
+    <string name="camera_permission_required">Camera permission is required</string>
+    <string name="microphone_permission_required">Microphone permission is required</string>
+    <string name="stream_key_required">Please enter a stream key</string>
+    <string name="valid_url_required">Please enter a valid URL</string>
+    <string name="camera_failed">Failed to start camera</string>
+    <string name="streaming_failed">Failed to start streaming</string>
+    <string name="streaming_error">Streaming error</string>
+</resources>

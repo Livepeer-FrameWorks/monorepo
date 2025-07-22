@@ -1,0 +1,290 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    @apply bg-tokyo-night-bg min-h-screen;
+  }
+
+  body {
+    font-family: 'Inter', sans-serif;
+    min-height: 100vh;
+    overflow-x: hidden;
+    @apply bg-tokyo-night-bg text-tokyo-night-fg;
+    background: linear-gradient(135deg, #1a1b26 0%, #24283b 100%);
+    margin: 0;
+    padding: 0;
+  }
+
+  code {
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  /* Custom scrollbar styling */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  ::-webkit-scrollbar-track {
+    @apply bg-tokyo-night-bg-dark;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply bg-tokyo-night-fg-gutter rounded;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-tokyo-night-blue;
+  }
+
+  /* Firefox scrollbar */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #3b4261 #16161e;
+  }
+}
+
+@layer components {
+  .glass-card {
+    @apply bg-tokyo-night-bg-light/50 backdrop-blur-sm border border-tokyo-night-fg-gutter rounded-lg;
+  }
+
+  .glow-card {
+    @apply glass-card transition-all duration-300 hover:shadow-lg hover:shadow-tokyo-night-blue/20;
+  }
+
+  .gradient-text {
+    @apply bg-gradient-to-r from-tokyo-night-blue via-tokyo-night-cyan to-tokyo-night-green bg-clip-text text-transparent;
+  }
+
+  .logo-gradient {
+    @apply bg-gradient-to-r from-tokyo-night-blue via-tokyo-night-cyan to-tokyo-night-green;
+    padding: 2px;
+  }
+
+  .logo-gradient img {
+    border-radius: inherit;
+  }
+
+  .gradient-bg {
+    @apply bg-gradient-to-r from-tokyo-night-blue via-tokyo-night-cyan to-tokyo-night-green;
+    background-size: 300% 300%;
+    animation: gradient 6s ease infinite;
+  }
+
+  .code-block {
+    @apply bg-tokyo-night-bg-dark border border-tokyo-night-fg-gutter rounded-lg p-4 font-mono text-sm overflow-x-auto;
+  }
+
+  .btn-primary {
+    @apply bg-tokyo-night-blue hover:bg-tokyo-night-blue/80 text-tokyo-night-bg px-6 py-3 rounded-lg font-medium transition-all duration-300;
+    position: relative;
+    overflow: hidden;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-size: 0.875rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .btn-secondary {
+    @apply border border-tokyo-night-blue text-tokyo-night-blue hover:bg-tokyo-night-blue hover:text-tokyo-night-bg px-6 py-3 rounded-lg font-medium transition-all duration-300;
+    position: relative;
+    overflow: hidden;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-size: 0.875rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  /* Lighthouse scan effect for buttons */
+  .btn-primary::before,
+  .btn-secondary::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 100%;
+    height: 100%;
+    transition: left 0.6s ease;
+    pointer-events: none;
+    z-index: 1;
+  }
+
+  /* Dark variant lighthouse scan for primary buttons */
+  .btn-primary::before {
+    background: linear-gradient(90deg,
+        transparent 0%,
+        rgba(0, 0, 0, 0.1) 20%,
+        rgba(0, 0, 0, 0.3) 50%,
+        rgba(0, 0, 0, 0.1) 80%,
+        transparent 100%);
+  }
+
+  /* Light variant lighthouse scan for secondary buttons */
+  .btn-secondary::before {
+    background: linear-gradient(90deg,
+        transparent 0%,
+        rgba(255, 255, 255, 0.1) 20%,
+        rgba(255, 255, 255, 0.4) 50%,
+        rgba(255, 255, 255, 0.1) 80%,
+        transparent 100%);
+  }
+
+  .btn-primary:hover::before,
+  .btn-secondary:hover::before {
+    left: 100%;
+  }
+
+  .btn-primary:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 15px rgba(122, 162, 247, 0.3);
+  }
+
+  .btn-secondary:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 15px rgba(122, 162, 247, 0.2);
+  }
+
+  /* Button text needs to be above the ::before overlay */
+  .btn-primary>*,
+  .btn-secondary>* {
+    position: relative;
+    z-index: 2;
+  }
+
+  /* Input styling */
+  .input {
+    @apply w-full px-4 py-3 bg-tokyo-night-bg-dark border border-tokyo-night-fg-gutter rounded-lg focus:outline-none focus:border-tokyo-night-blue transition-colors duration-200 text-tokyo-night-fg placeholder-tokyo-night-comment;
+  }
+
+  /* Loading spinner */
+  .loading-spinner {
+    @apply inline-block w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin;
+  }
+
+  /* Navigation styles */
+  .nav-item {
+    @apply flex items-center px-4 py-3 text-tokyo-night-fg-dark hover:text-tokyo-night-fg hover:bg-tokyo-night-bg-light/50 rounded-lg transition-all duration-200;
+  }
+
+  .nav-item.active {
+    @apply text-tokyo-night-blue bg-tokyo-night-blue/10 border-r-2 border-tokyo-night-blue;
+  }
+
+  .nav-item.coming-soon {
+    @apply text-tokyo-night-comment hover:text-tokyo-night-fg-dark cursor-not-allowed;
+  }
+
+  .nav-item.disabled {
+    @apply text-tokyo-night-comment/50 cursor-not-allowed;
+  }
+
+  /* Card styles */
+  .card {
+    @apply bg-tokyo-night-bg-light border border-tokyo-night-fg-gutter rounded-lg p-6;
+  }
+
+  .card-header {
+    @apply border-b border-tokyo-night-fg-gutter pb-4 mb-6;
+  }
+
+  /* Badge styles */
+  .badge {
+    @apply inline-flex items-center px-2 py-1 rounded-full text-xs font-medium;
+  }
+
+  .badge-primary {
+    @apply bg-tokyo-night-blue/20 text-tokyo-night-blue;
+  }
+
+  .badge-success {
+    @apply bg-tokyo-night-green/20 text-tokyo-night-green;
+  }
+
+  .badge-warning {
+    @apply bg-tokyo-night-yellow/20 text-tokyo-night-yellow;
+  }
+
+  .badge-danger {
+    @apply bg-tokyo-night-red/20 text-tokyo-night-red;
+  }
+
+  /* Status badges */
+  .status-online {
+    @apply bg-tokyo-night-green/20 text-tokyo-night-green border border-tokyo-night-green/30 px-3 py-1 rounded-full text-xs font-medium;
+  }
+
+  .status-recording {
+    @apply bg-tokyo-night-red/20 text-tokyo-night-red border border-tokyo-night-red/30 px-3 py-1 rounded-full text-xs font-medium;
+  }
+
+  .status-offline {
+    @apply bg-tokyo-night-comment/20 text-tokyo-night-comment border border-tokyo-night-comment/30 px-3 py-1 rounded-full text-xs font-medium;
+  }
+
+  /* Section padding */
+  .section-padding {
+    @apply py-8 px-6;
+  }
+
+  /* Page transitions */
+  .page-transition {
+    animation: fadeInUp 0.5s ease-out;
+  }
+
+  @keyframes fadeInUp {
+    from {
+      opacity: 0;
+      transform: translateY(20px);
+    }
+
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  /* Pulse animation for live indicators */
+  .pulse-animation {
+    animation: pulse 2s infinite;
+  }
+
+  @keyframes pulse {
+    0% {
+      box-shadow: 0 0 0 0 rgba(247, 118, 142, 0.7);
+    }
+
+    70% {
+      box-shadow: 0 0 0 10px rgba(247, 118, 142, 0);
+    }
+
+    100% {
+      box-shadow: 0 0 0 0 rgba(247, 118, 142, 0);
+    }
+  }
+
+  /* Gradient animation */
+  @keyframes gradient {
+
+    0%,
+    100% {
+      background-position: 0% 50%;
+    }
+
+    50% {
+      background-position: 100% 50%;
+    }
+  }
+}
+
+@layer utilities {
+  .text-shadow {
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+  }
+}

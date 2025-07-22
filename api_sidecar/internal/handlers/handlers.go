@@ -1,0 +1,486 @@
+package handlers
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"strings"
+	"time"
+
+	"frameworks/pkg/logging"
+	"frameworks/pkg/middleware"
+	"frameworks/pkg/models"
+)
+
+var (
+	logger       logging.Logger
+	apiBaseURL   string
+	clusterID    string
+	foghornURI   string
+	nodeName     string
+	serviceToken string
+)
+
+// Init initializes the handlers with logger and service URLs and cluster metadata
+func Init(log logging.Logger) {
+	logger = log
+
+	apiBaseURL = os.Getenv("COMMODORE_URL")
+	if apiBaseURL == "" {
+		apiBaseURL = "http://localhost:18001"
+	}
+
+	clusterID = os.Getenv("CLUSTER_ID")
+	if clusterID == "" {
+		clusterID = "local-cluster"
+	}
+
+	foghornURI = os.Getenv("FOGHORN_URL")
+	if foghornURI == "" {
+		foghornURI = "http://localhost:18008"
+	}
+
+	nodeName = os.Getenv("NODE_NAME")
+	if nodeName == "" {
+		nodeName = "local-mistserver"
+	}
+
+	serviceToken = os.Getenv("SERVICE_TOKEN")
+
+	// Initialize the Decklog client for analytics forwarding
+	InitDecklogClient()
+
+	// Initialize Prometheus monitoring
+	InitPrometheusMonitor(logger)
+
+	logger.WithFields(logging.Fields{
+		"commodore_url": apiBaseURL,
+		"cluster_id":    clusterID,
+		"foghorn_uri":   foghornURI,
+		"node_name":     nodeName,
+	}).Info("Handlers initialized")
+}
+
+// HealthCheck handles health check requests
+func HealthCheck(c middleware.Context) {
+	c.JSON(http.StatusOK, middleware.H{
+		"status":  "healthy",
+		"service": "helmsman",
+		"node":    nodeName,
+	})
+}
+
+// GetPrometheusPassword handles the /koekjes endpoint for Prometheus scraping
+func GetPrometheusPassword(c middleware.Context) {
+	password := os.Getenv("MIST_PASSWORD")
+	if password == "" {
+		password = "koekjes"
+	}
+
+	c.String(http.StatusOK, password)
+}
+
+// getCurrentNodeID gets the current node ID from the prometheus monitor
+func getCurrentNodeID() string {
+	if prometheusMonitor == nil {
+		return "unknown"
+	}
+
+	nodes := prometheusMonitor.GetNodes()
+	// Each sidecar monitors exactly 1 node - return the first (and only) one
+	for nodeID := range nodes {
+		return nodeID
+	}
+	return "unknown"
+}
+
+// validateStreamKeyViaAPI calls the main API to validate a stream key
+func validateStreamKeyViaAPI(streamKey string) (*models.StreamValidationResponse, error) {
+	url := fmt.Sprintf("%s/api/validate-stream-key/%s", apiBaseURL, streamKey)
+
+	resp, err := http.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call Commodore: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read Commodore response: %w", err)
+	}
+
+	var validation models.StreamValidationResponse
+	if resp.StatusCode == http.StatusOK {
+		err = json.Unmarshal(body, &validation)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse Commodore response: %w", err)
+		}
+		validation.Valid = true
+	} else {
+		// Parse error response
+		var errorResp map[string]string
+		json.Unmarshal(body, &errorResp)
+		validation.Valid = false
+		if msg, ok := errorResp["error"]; ok {
+			validation.Error = msg
+		}
+	}
+
+	return &validation, nil
+}
+
+// forwardEventToCommodore forwards stream events to Commodore for processing
+func forwardEventToCommodore(endpoint string, eventData map[string]interface{}) error {
+	enrichedData := enrichEventWithClusterMetadata(eventData)
+
+	jsonData, err := json.Marshal(enrichedData)
+	if err != nil {
+		return fmt.Errorf("failed to marshal event data: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/api/%s", apiBaseURL, endpoint)
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if serviceToken != "" {
+		req.Header.Set("Authorization", "Bearer "+serviceToken)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to forward event to Commodore: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(resp.Body)
+		logger.WithFields(logging.Fields{
+			"status_code": resp.StatusCode,
+			"response":    string(body),
+		}).Error("Commodore returned error")
+	}
+
+	return nil
+}
+
+// HandlePushRewrite handles the PUSH_REWRITE trigger from MistServer
+// This is a critical trigger - validates stream keys and routes to wildcard streams
+func HandlePushRewrite(c middleware.Context) {
+	// Read the raw body - MistServer sends parameters as raw text, not JSON
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		logger.WithFields(logging.Fields{
+			"error": err,
+		}).Error("Failed to read PUSH_REWRITE body")
+		c.String(http.StatusOK, "") // Empty response denies the push
+		return
+	}
+
+	// Parse the parameters - MistServer sends them as newline-separated text
+	params := strings.Split(strings.TrimSpace(string(body)), "\n")
+	if len(params) < 3 {
+		logger.WithFields(logging.Fields{
+			"error": "Invalid PUSH_REWRITE payload: expected 3 parameters, got " + fmt.Sprintf("%d", len(params)),
+		}).Error("Invalid PUSH_REWRITE payload")
+		c.String(http.StatusOK, "") // Empty response denies the push
+		return
+	}
+
+	pushURL := params[0]
+	hostname := params[1]
+	streamName := params[2]
+
+	logger.WithFields(logging.Fields{
+		"push_url":    pushURL,
+		"hostname":    hostname,
+		"stream_name": streamName,
+	}).Info("Received PUSH_REWRITE")
+
+	// Extract stream key from the stream name
+	streamKey := streamName
+
+	// Validate stream key via Commodore API
+	validation, err := validateStreamKeyViaAPI(streamKey)
+	if err != nil {
+		logger.WithFields(logging.Fields{
+			"stream_key": streamKey,
+			"error":      err,
+		}).Error("Failed to validate stream key via API")
+		c.String(http.StatusOK, "") // Empty response denies the push
+		return
+	}
+
+	if !validation.Valid {
+		logger.WithFields(logging.Fields{
+			"stream_key": streamKey,
+			"api_error":  validation.Error,
+		}).Error("Invalid stream key")
+		c.String(http.StatusOK, "") // Empty response denies the push
+		return
+	}
+
+	// Get current node ID
+	nodeID := getCurrentNodeID()
+
+	// Extract actual protocol from push URL instead of hardcoding
+	protocol := "unknown"
+	if strings.HasPrefix(pushURL, "rtmp://") {
+		protocol = "rtmp"
+	} else if strings.HasPrefix(pushURL, "srt://") {
+		protocol = "srt"
+	} else if strings.HasPrefix(pushURL, "whip://") {
+		protocol = "whip"
+	} else if strings.HasPrefix(pushURL, "http://") || strings.HasPrefix(pushURL, "https://") {
+		protocol = "http"
+	}
+
+	// Forward stream start event to API for database updates
+	go forwardEventToCommodore("stream-start", map[string]interface{}{
+		"node_id":       nodeID,
+		"stream_key":    streamKey,
+		"internal_name": validation.InternalName,
+		"hostname":      hostname,
+		"push_url":      pushURL,
+		"event_type":    "push_rewrite_success",
+		"timestamp":     time.Now().Unix(),
+	})
+
+	// Forward analytics event to Decklog for batched processing
+	go ForwardEventToDecklog("stream-ingest", map[string]interface{}{
+		"tenant_id":     validation.TenantID,
+		"stream_key":    streamKey,
+		"user_id":       validation.UserID,
+		"internal_name": validation.InternalName,
+		"hostname":      hostname,
+		"push_url":      pushURL,
+		"protocol":      protocol,
+		"event_type":    "stream-ingest",
+		"timestamp":     time.Now().Unix(),
+		"source":        "mistserver_webhook",
+		"node_id":       nodeID,
+	})
+
+	// Create wildcard stream name for MistServer routing
+	wildcardStreamName := fmt.Sprintf("+%s", validation.InternalName)
+
+	logger.WithFields(logging.Fields{
+		"stream_key":           streamKey,
+		"wildcard_stream_name": wildcardStreamName,
+		"user_id":              validation.UserID,
+	}).Info("Stream key validated, routing to wildcard stream")
+
+	// Return the wildcard stream name for MistServer to use
+	c.String(http.StatusOK, wildcardStreamName)
+}
+
+// HandleDefaultStream handles the DEFAULT_STREAM trigger from MistServer
+// This maps playback IDs to internal stream names for viewing
+func HandleDefaultStream(c middleware.Context) {
+	// Read the raw body - MistServer sends parameters as raw text, not JSON
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		logger.WithFields(logging.Fields{
+			"error": err,
+		}).Error("Failed to read DEFAULT_STREAM body")
+		c.String(http.StatusOK, "") // Empty response uses default behavior
+		return
+	}
+
+	// Parse the parameters - they come as newline-separated values
+	params := strings.Split(strings.TrimSpace(string(body)), "\n")
+	if len(params) < 2 {
+		logger.WithFields(logging.Fields{
+			"param_count": len(params),
+			"expected":    "at least 2",
+		}).Error("Invalid DEFAULT_STREAM payload")
+		c.String(http.StatusOK, "") // Empty response uses default behavior
+		return
+	}
+
+	defaultStream := params[0]
+	requestedStream := params[1]
+	viewerHost := ""
+	outputType := ""
+	requestURL := ""
+
+	if len(params) > 2 {
+		viewerHost = params[2]
+	}
+	if len(params) > 3 {
+		outputType = params[3]
+	}
+	if len(params) > 4 {
+		requestURL = params[4]
+	}
+
+	logger.WithFields(logging.Fields{
+		"default_stream":   defaultStream,
+		"requested_stream": requestedStream,
+		"viewer_host":      viewerHost,
+		"output_type":      outputType,
+		"request_url":      requestURL,
+	}).Info("DEFAULT_STREAM trigger")
+
+	// Call API to resolve playback ID to internal name
+	// Use defaultStream (the playback ID) instead of requestedStream (which is often an IP address)
+	url := fmt.Sprintf("%s/api/resolve-playback-id/%s", apiBaseURL, defaultStream)
+	resp, err := http.Get(url)
+	if err != nil {
+		logger.WithFields(logging.Fields{
+			"error":       err,
+			"playback_id": defaultStream,
+		}).Error("Failed to resolve playback ID")
+		c.String(http.StatusOK, "")
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		logger.WithFields(logging.Fields{
+			"playback_id":   defaultStream,
+			"status_code":   resp.StatusCode,
+			"response_body": string(body),
+		}).Error("Failed to resolve playback ID")
+		c.String(http.StatusOK, "")
+		return
+	}
+
+	body, err = io.ReadAll(resp.Body)
+	if err != nil {
+		logger.Error("Failed to read resolve response body")
+		c.String(http.StatusOK, "")
+		return
+	}
+
+	var resolveResponse struct {
+		InternalName string `json:"internal_name"`
+		TenantID     string `json:"tenant_id"`
+		Status       string `json:"status"`
+	}
+
+	if err := json.Unmarshal(body, &resolveResponse); err != nil {
+		logger.WithFields(logging.Fields{
+			"playback_id": defaultStream,
+			"error":       err,
+			"response":    string(body),
+		}).Error("Failed to parse playback ID resolution response")
+		c.String(http.StatusOK, "") // Empty response uses default behavior
+		return
+	}
+
+	// Get current node ID
+	nodeID := getCurrentNodeID()
+
+	// Forward analytics event to Decklog for stream view tracking (data plane only)
+	go ForwardEventToDecklog("stream-view", map[string]interface{}{
+		"tenant_id":     resolveResponse.TenantID,
+		"playback_id":   defaultStream,
+		"internal_name": resolveResponse.InternalName,
+		"node_id":       nodeID,
+		"viewer_host":   viewerHost,
+		"output_type":   outputType,
+		"event_type":    "stream-view-request",
+		"timestamp":     time.Now().Unix(),
+		"source":        "mistserver_webhook",
+	})
+
+	// Return the wildcard stream name: live+{internal_name}
+	wildcardStreamName := fmt.Sprintf("live+%s", resolveResponse.InternalName)
+	logger.WithFields(logging.Fields{
+		"playback_id":          defaultStream,
+		"wildcard_stream_name": wildcardStreamName,
+		"internal_name":        resolveResponse.InternalName,
+	}).Info("Playback ID resolved successfully")
+
+	c.String(http.StatusOK, wildcardStreamName)
+}
+
+// enrichEventWithClusterMetadata adds cluster and node metadata to events
+func enrichEventWithClusterMetadata(eventData map[string]interface{}) map[string]interface{} {
+	nodeID := getCurrentNodeID()
+
+	enriched := make(map[string]interface{})
+	for k, v := range eventData {
+		enriched[k] = v
+	}
+
+	enriched["cluster_id"] = clusterID
+	enriched["foghorn_uri"] = foghornURI
+	enriched["node_id"] = nodeID
+	enriched["node_name"] = nodeName
+
+	// Add geographic metadata from existing PrometheusMonitor
+	if prometheusMonitor != nil {
+		prometheusMonitor.mutex.RLock()
+		if prometheusMonitor.latitude != nil {
+			enriched["latitude"] = *prometheusMonitor.latitude
+		}
+		if prometheusMonitor.longitude != nil {
+			enriched["longitude"] = *prometheusMonitor.longitude
+		}
+		if prometheusMonitor.location != "" {
+			enriched["location"] = prometheusMonitor.location
+		}
+		prometheusMonitor.mutex.RUnlock()
+	}
+
+	return enriched
+}
+
+// updateFoghornStreamHealth immediately updates Foghorn with stream health status
+func updateFoghornStreamHealth(streamName string, isHealthy bool, details map[string]interface{}) error {
+	nodeID := getCurrentNodeID()
+
+	// Extract internal name from wildcard stream
+	var internalName string
+	if plusIndex := strings.Index(streamName, "+"); plusIndex != -1 {
+		internalName = streamName[plusIndex+1:]
+	} else {
+		internalName = streamName
+	}
+
+	// Prepare update payload
+	update := map[string]interface{}{
+		"node_id":       nodeID,
+		"stream_name":   streamName,
+		"internal_name": internalName,
+		"is_healthy":    isHealthy,
+		"timestamp":     time.Now().Unix(),
+	}
+
+	// Add any additional details
+	for k, v := range details {
+		update[k] = v
+	}
+
+	// Send to Foghorn
+	jsonData, err := json.Marshal(update)
+	if err != nil {
+		return fmt.Errorf("failed to marshal stream health update: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/stream/health", foghornURI)
+	resp, err := http.Post(url, "application/json", bytes.NewBuffer(jsonData))
+	if err != nil {
+		return fmt.Errorf("failed to send stream health update to Foghorn: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("Foghorn returned error status %d: %s", resp.StatusCode, string(body))
+	}
+
+	logger.WithFields(logging.Fields{
+		"stream_name": streamName,
+		"is_healthy":  isHealthy,
+		"node_id":     nodeID,
+	}).Info("Updated Foghorn with stream health status")
+
+	return nil
+}

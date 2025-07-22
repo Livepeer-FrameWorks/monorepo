@@ -1,0 +1,135 @@
+{
+  "search.exclude": {
+    "**/node_modules": true,
+    "**/build": true,
+    "**/dist": true,
+    "**/.svelte-kit": true,
+    "**/.vite": true,
+    "**/.gradle": true,
+    "**/.idea": true,
+    "**/tmp": true,
+    "**/temp": true,
+    "**/*.log": true,
+    "**/coverage": true,
+    "**/.nyc_output": true,
+    "**/go.sum": true,
+    "**/*.exe": true,
+    "**/*.dll": true,
+    "**/*.so": true,
+    "**/*.dylib": true,
+    "**/*.test": true,
+    "**/*.out": true,
+    "**/.DS_Store": true,
+    "**/Thumbs.db": true,
+    "**/.env": true,
+    "**/.env.local": true,
+    "**/.env.*.local": true,
+    "**/vendor": true,
+    "**/obj": true,
+    "**/.externalNativeBuild": true,
+    "**/.cxx": true,
+    "**/*.hprof": true,
+    "**/local.properties": true,
+    "**/*.keystore": true,
+    "**/*.jks": true,
+    "**/*.bak": true,
+    "**/*.backup": true,
+    "**/*.orig": true,
+    "**/*.zip": true,
+    "**/*.tar": true,
+    "**/*.tar.gz": true,
+    "**/*.rar": true,
+    "**/*.7z": true
+  },
+  "files.exclude": {
+    "**/node_modules": true,
+    "**/build": true,
+    "**/dist": true,
+    "**/.svelte-kit": true,
+    "**/.vite": true,
+    "**/.gradle": true,
+    "**/tmp": true,
+    "**/*.log": true,
+    "**/coverage": true,
+    "**/.nyc_output": true,
+    "**/*.exe": true,
+    "**/*.dll": true,
+    "**/*.so": true,
+    "**/*.dylib": true,
+    "**/*.test": true,
+    "**/*.out": true,
+    "**/.DS_Store": true,
+    "**/Thumbs.db": true,
+    "**/vendor": true,
+    "**/obj": true,
+    "**/.externalNativeBuild": true,
+    "**/.cxx": true,
+    "**/*.hprof": true,
+    "**/local.properties": true,
+    "**/*.keystore": true,
+    "**/*.jks": true,
+    "**/*.bak": true,
+    "**/*.backup": true,
+    "**/*.orig": true
+  },
+  "files.watcherExclude": {
+    "**/node_modules/**": true,
+    "**/build/**": true,
+    "**/dist/**": true,
+    "**/.svelte-kit/**": true,
+    "**/.vite/**": true,
+    "**/.gradle/**": true,
+    "**/tmp/**": true,
+    "**/temp/**": true,
+    "**/coverage/**": true,
+    "**/.nyc_output/**": true,
+    "**/vendor/**": true,
+    "**/obj/**": true,
+    "**/.externalNativeBuild/**": true,
+    "**/.cxx/**": true
+  },
+  "typescript.preferences.includePackageJsonAutoImports": "off",
+  "typescript.suggest.autoImports": false,
+  "go.toolsManagement.autoUpdate": true,
+  "go.useLanguageServer": true,
+  "go.formatTool": "goimports",
+  "go.lintTool": "golangci-lint",
+  "editor.formatOnSave": true,
+  "editor.codeActionsOnSave": {
+    "source.fixAll": true,
+    "source.organizeImports": true
+  },
+  "[javascript]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+  "[typescript]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+  "[svelte]": {
+    "editor.defaultFormatter": "svelte.svelte-vscode"
+  },
+  "[go]": {
+    "editor.defaultFormatter": "golang.go"
+  },
+  "[json]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+  "[yaml]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+  "[dockerfile]": {
+    "editor.defaultFormatter": "ms-azuretools.vscode-docker"
+  },
+  "svelte.enable-ts-plugin": true,
+  "emmet.includeLanguages": {
+    "svelte": "html"
+  },
+  "tailwindCSS.includeLanguages": {
+    "svelte": "html"
+  },
+  "tailwindCSS.classAttributes": [
+    "class",
+    "className",
+    "ngClass"
+  ]
+} 

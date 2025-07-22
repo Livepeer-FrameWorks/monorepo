@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="@color/tokyo_night_bg_popup"
+    android:orientation="vertical"
+    android:padding="16dp">
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Select Streaming Provider"
+        android:textColor="@color/tokyo_night_fg"
+        android:textSize="20sp"
+        android:textStyle="bold"
+        android:layout_marginBottom="16dp" />
+
+    <ListView
+        android:id="@+id/providerList"
+        android:layout_width="match_parent"
+        android:layout_height="300dp"
+        android:background="@color/tokyo_night_bg_sidebar"
+        android:divider="@color/tokyo_night_blue7"
+        android:dividerHeight="1dp"
+        android:layout_marginBottom="16dp" />
+
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/addProviderButton"
+        style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Add New Provider"
+        android:textColor="@color/tokyo_night_blue"
+        app:strokeColor="@color/tokyo_night_blue"
+        app:cornerRadius="12dp"
+        app:icon="@android:drawable/ic_input_add"
+        app:iconTint="@color/tokyo_night_blue" />
+
+</LinearLayout> 

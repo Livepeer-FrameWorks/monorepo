@@ -1,0 +1,18 @@
+[Unit]
+Description=FrameWorks Media Pipeline
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/livepeer-frameworks/monorepo
+ExecStart=/usr/bin/docker-compose up -d --build
+ExecStop=/usr/bin/docker-compose down
+ExecReload=/usr/bin/docker-compose restart
+TimeoutStartSec=300
+User=frameworks
+Group=frameworks
+
+[Install]
+WantedBy=multi-user.target 

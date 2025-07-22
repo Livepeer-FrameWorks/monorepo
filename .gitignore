@@ -1,0 +1,90 @@
+# Operating System
+.DS_Store
+Thumbs.db
+Desktop.ini
+*~
+.Trash*
+.directory
+
+# IDE & Editor
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*.sublime-*
+*~
+\#*\#
+
+# Node.js & Frontend
+node_modules/
+dist/
+build/
+.svelte-kit/
+.next/
+.nuxt/
+.output/
+.vite/
+coverage/
+*.log
+.env*
+!.env.example
+
+# Go
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+go.work*
+vendor/
+
+# Android
+.gradle/
+build/
+local.properties
+.externalNativeBuild/
+.cxx/
+*.hprof
+*.jks
+*.keystore
+
+# Infrastructure
+*.db
+*.sqlite*
+*.dump
+docker-compose.override.yml
+.terraform*
+*.tfstate*
+
+# Temporary & Logs
+**/tmp/
+**/temp/
+**/logs/
+*.log
+*.pid
+*.seed
+
+# Security & Sensitive
+*.pem
+*.key
+*.crt
+*.cert
+secrets.*
+
+# Backups & Archives
+*.bak
+*.backup
+*.orig
+*.zip
+*.tar*
+*.rar
+*.7z
+
+# Project Specific
+mistserver.conf.bak
+infrastructure/nginx/logs/ 

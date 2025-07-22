@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Tokyo Night Color Scheme -->
+    
+    <!-- Background Colors -->
+    <color name="tokyo_night_bg">#1a1b26</color>
+    <color name="tokyo_night_bg_dark">#16161e</color>
+    <color name="tokyo_night_bg_highlight">#292e42</color>
+    <color name="tokyo_night_terminal_black">#414868</color>
+    
+    <!-- Surface Colors -->
+    <color name="tokyo_night_bg_popup">#1f2335</color>
+    <color name="tokyo_night_bg_sidebar">#24283b</color>
+    <color name="tokyo_night_bg_float">#1d202f</color>
+    
+    <!-- Text Colors -->
+    <color name="tokyo_night_fg">#c0caf5</color>
+    <color name="tokyo_night_fg_dark">#a9b1d6</color>
+    <color name="tokyo_night_fg_gutter">#3b4261</color>
+    <color name="tokyo_night_dark3">#545c7e</color>
+    <color name="tokyo_night_comment">#565f89</color>
+    <color name="tokyo_night_dark5">#737aa2</color>
+    
+    <!-- Accent Colors -->
+    <color name="tokyo_night_blue">#7aa2f7</color>
+    <color name="tokyo_night_cyan">#7dcfff</color>
+    <color name="tokyo_night_blue1">#2ac3de</color>
+    <color name="tokyo_night_blue2">#0db9d7</color>
+    <color name="tokyo_night_blue5">#89ddff</color>
+    <color name="tokyo_night_blue6">#b4f9f8</color>
+    <color name="tokyo_night_blue7">#394b70</color>
+    
+    <!-- Status Colors -->
+    <color name="tokyo_night_green">#9ece6a</color>
+    <color name="tokyo_night_green1">#73daca</color>
+    <color name="tokyo_night_green2">#41a6b5</color>
+    <color name="tokyo_night_teal">#1abc9c</color>
+    <color name="tokyo_night_yellow">#e0af68</color>
+    <color name="tokyo_night_orange">#ff9e64</color>
+    <color name="tokyo_night_red">#f7768e</color>
+    <color name="tokyo_night_red1">#db4b4b</color>
+    <color name="tokyo_night_magenta">#bb9af7</color>
+    <color name="tokyo_night_magenta2">#ff007c</color>
+    <color name="tokyo_night_purple">#9d7cd8</color>
+    
+    <!-- App-specific color mappings -->
+    <color name="black">@color/tokyo_night_bg</color>
+    <color name="white">@color/tokyo_night_fg</color>
+    <color name="stream_button_color">@color/tokyo_night_green</color>
+    <color name="stream_button_stop">@color/tokyo_night_red</color>
+    <color name="overlay_background">@color/tokyo_night_bg_popup</color>
+    
+    <!-- Additional semantic colors -->
+    <color name="primary">@color/tokyo_night_blue</color>
+    <color name="primary_variant">@color/tokyo_night_blue7</color>
+    <color name="secondary">@color/tokyo_night_cyan</color>
+    <color name="secondary_variant">@color/tokyo_night_blue1</color>
+    <color name="background">@color/tokyo_night_bg</color>
+    <color name="surface">@color/tokyo_night_bg_popup</color>
+    <color name="error">@color/tokyo_night_red</color>
+    <color name="on_primary">@color/tokyo_night_bg</color>
+    <color name="on_secondary">@color/tokyo_night_bg</color>
+    <color name="on_background">@color/tokyo_night_fg</color>
+    <color name="on_surface">@color/tokyo_night_fg</color>
+    <color name="on_error">@color/tokyo_night_bg</color>
+    
+    <!-- Status colors -->
+    <color name="success">@color/tokyo_night_green</color>
+    <color name="warning">@color/tokyo_night_yellow</color>
+    <color name="info">@color/tokyo_night_blue</color>
+    <color name="accent">@color/tokyo_night_purple</color>
+</resources>

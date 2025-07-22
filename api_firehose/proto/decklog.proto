@@ -1,0 +1,159 @@
+syntax = "proto3";
+
+package decklog;
+
+option go_package = "frameworks/api_firehose/proto";
+
+import "google/protobuf/timestamp.proto";
+
+service DecklogService {
+  // Stream events from Helmsman (high throughput)
+  rpc StreamEvents(stream Event) returns (stream EventResponse);
+  
+  // Single event from Foghorn (load balancing decisions)
+  rpc SendBalancingEvent(BalancingEvent) returns (EventResponse);
+  
+  // Health check
+  rpc CheckHealth(HealthRequest) returns (HealthResponse);
+}
+
+enum EventType {
+  EVENT_TYPE_UNSPECIFIED = 0;
+  EVENT_TYPE_STREAM_INGEST = 1;
+  EVENT_TYPE_STREAM_VIEW = 2;
+  EVENT_TYPE_STREAM_LIFECYCLE = 3;
+  EVENT_TYPE_USER_CONNECTION = 4;
+  EVENT_TYPE_PUSH_LIFECYCLE = 5;
+  EVENT_TYPE_RECORDING_LIFECYCLE = 6;
+  EVENT_TYPE_CLIENT_LIFECYCLE = 7;
+  EVENT_TYPE_NODE_LIFECYCLE = 8;
+  EVENT_TYPE_LOAD_BALANCING = 9;
+  EVENT_TYPE_TRACK_LIST = 10;
+  EVENT_TYPE_STREAM_BUFFER = 11;
+  EVENT_TYPE_STREAM_END = 12;
+}
+
+message Event {
+  string batch_id = 1;
+  string source = 2;
+  string tenant_id = 3;
+  repeated EventData events = 4;
+  map<string, string> metadata = 5;
+  google.protobuf.Timestamp timestamp = 6;
+}
+
+message EventData {
+  string event_id = 1;
+  EventType event_type = 2;
+  google.protobuf.Timestamp timestamp = 3;
+  string source = 4;
+  optional string stream_id = 5;
+  optional string user_id = 6;
+  optional string playback_id = 7;
+  optional string internal_name = 8;
+  string region = 9;
+  optional string node_url = 10;
+  map<string, string> data = 11;
+  string schema_version = 12;
+}
+
+// Stream ingest specific data
+message StreamIngestData {
+  string stream_key = 1;
+  string protocol = 2;
+  string ingest_url = 3;
+  optional string encoder = 4;
+  optional string stream_settings = 5;
+}
+
+// Stream view specific data
+message StreamViewData {
+  string viewer_ip = 1;
+  string user_agent = 2;
+  optional string referrer = 3;
+  optional string player_type = 4;
+  optional string player_version = 5;
+}
+
+// Stream lifecycle specific data
+message StreamLifecycleData {
+  enum State {
+    STATE_UNSPECIFIED = 0;
+    STATE_STARTED = 1;
+    STATE_ENDED = 2;
+    STATE_LIVE = 3;
+    STATE_OFFLINE = 4;
+  }
+  State state = 1;
+  optional string reason = 2;
+  optional uint64 duration_seconds = 3;
+}
+
+// User connection specific data
+message UserConnectionData {
+  enum Action {
+    ACTION_UNSPECIFIED = 0;
+    ACTION_CONNECT = 1;
+    ACTION_DISCONNECT = 2;
+  }
+  Action action = 1;
+  optional string disconnect_reason = 2;
+  optional uint64 connection_duration = 3;
+}
+
+// Stream metrics specific data
+message StreamMetricsData {
+  uint64 bandwidth_bps = 1;
+  uint32 viewer_count = 2;
+  optional uint32 cpu_usage = 3;
+  optional uint64 memory_bytes = 4;
+  optional float packet_loss = 5;
+  optional uint32 bitrate_kbps = 6;
+  optional string resolution = 7;
+  optional uint32 fps = 8;
+}
+
+// Node monitoring specific data
+message NodeMonitoringData {
+  float cpu_load = 1;
+  uint64 memory_used = 2;
+  uint64 memory_total = 3;
+  uint64 disk_used = 4;
+  uint64 disk_total = 5;
+  uint64 network_in_bps = 6;
+  uint64 network_out_bps = 7;
+  uint32 active_streams = 8;
+  uint32 active_viewers = 9;
+}
+
+message BalancingEvent {
+  string event_id = 1;
+  string stream_id = 2;
+  string selected_node = 3;
+  string tenant_id = 4;
+  double latitude = 5;
+  double longitude = 6;
+  string status = 7;
+  string details = 8;
+  google.protobuf.Timestamp timestamp = 9;
+  string source = 10;
+  string region = 11;
+  uint64 score = 12;
+  string client_ip = 13;
+  string client_country = 14;
+  string schema_version = 15;
+}
+
+message EventResponse {
+  string status = 1;
+  string message = 2;
+  uint32 processed_count = 3;
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  string status = 1;
+  string version = 2;
+  google.protobuf.Timestamp timestamp = 3;
+} 

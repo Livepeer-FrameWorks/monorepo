@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="24dp"
+    android:gravity="center"
+    tools:context=".LoginActivity">
+
+    <!-- Logo/Title -->
+    <TextView
+        android:id="@+id/titleText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Login to FrameWorks"
+        android:textSize="28sp"
+        android:textStyle="bold"
+        android:layout_marginBottom="32dp"
+        android:textColor="@android:color/black" />
+
+    <!-- Name Input (hidden by default) -->
+    <EditText
+        android:id="@+id/nameInput"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="Full Name"
+        android:inputType="textPersonName"
+        android:layout_marginBottom="16dp"
+        android:visibility="gone" />
+
+    <!-- Email Input -->
+    <EditText
+        android:id="@+id/emailInput"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="Email"
+        android:inputType="textEmailAddress"
+        android:layout_marginBottom="16dp" />
+
+    <!-- Password Input -->
+    <EditText
+        android:id="@+id/passwordInput"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="Password"
+        android:inputType="textPassword"
+        android:layout_marginBottom="24dp" />
+
+    <!-- Progress Bar -->
+    <ProgressBar
+        android:id="@+id/progressBar"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:visibility="gone"
+        android:layout_marginBottom="16dp" />
+
+    <!-- Login Button -->
+    <Button
+        android:id="@+id/loginButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Login"
+        android:backgroundTint="@android:color/holo_blue_dark"
+        android:textColor="@android:color/white"
+        android:layout_marginBottom="16dp" />
+
+    <!-- Register Button -->
+    <Button
+        android:id="@+id/registerButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Register"
+        android:backgroundTint="@android:color/holo_green_dark"
+        android:textColor="@android:color/white"
+        android:layout_marginBottom="16dp"
+        android:visibility="gone" />
+
+    <!-- Toggle Mode Button -->
+    <TextView
+        android:id="@+id/toggleModeButton"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Need an account? Register"
+        android:textColor="@android:color/holo_blue_dark"
+        android:textStyle="bold"
+        android:layout_marginBottom="32dp"
+        android:clickable="true"
+        android:focusable="true"
+        android:padding="8dp" />
+
+    <!-- Custom Server Button -->
+    <Button
+        android:id="@+id/customServerButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Custom Server"
+        android:backgroundTint="@android:color/darker_gray"
+        android:textColor="@android:color/white"
+        style="?android:attr/buttonBarButtonStyle" />
+
+    <!-- Info Text -->
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Connect to your FrameWorks service or use a custom server for multi-cluster streaming"
+        android:textSize="12sp"
+        android:textColor="@android:color/darker_gray"
+        android:gravity="center"
+        android:layout_marginTop="16dp" />
+
+</LinearLayout> 
