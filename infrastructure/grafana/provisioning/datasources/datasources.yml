@@ -23,6 +23,7 @@ datasources:
       port: 8123
       server: clickhouse
       username: frameworks
+      protocol: http
       tlsSkipVerify: true
     editable: true
 

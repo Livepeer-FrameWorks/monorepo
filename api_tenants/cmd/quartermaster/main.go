@@ -1,12 +1,14 @@
 package main
 
 import (
+	"frameworks/api_tenants/internal/handlers"
 	"frameworks/pkg/config"
 	"frameworks/pkg/database"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/middleware"
+	"frameworks/pkg/monitoring"
 	"frameworks/pkg/server"
-	"frameworks/quartermaster/internal/handlers"
+	"frameworks/pkg/version"
 )
 
 func main() {
@@ -24,11 +26,41 @@ func main() {
 	db := database.MustConnect(dbConfig, logger)
 	defer db.Close()
 
+	// Setup monitoring
+	healthChecker := monitoring.NewHealthChecker("quartermaster", version.Version)
+	metricsCollector := monitoring.NewMetricsCollector("quartermaster", version.Version, version.GitCommit)
+
+	// Add health checks
+	healthChecker.AddCheck("database", monitoring.DatabaseHealthCheck(db))
+	healthChecker.AddCheck("config", monitoring.ConfigurationHealthCheck(map[string]string{
+		"DATABASE_URL":  config.GetEnv("DATABASE_URL", ""),
+		"SERVICE_TOKEN": config.GetEnv("SERVICE_TOKEN", ""),
+	}))
+
+	// Create tenant management metrics
+	tenantOperations, tenantRequests, tenantLatency := metricsCollector.CreateBusinessMetrics()
+	dbQueries, dbDuration, dbConnections := metricsCollector.CreateDatabaseMetrics()
+
+	// TODO: Wire these metrics into handlers
+	_ = tenantOperations
+	_ = tenantRequests
+	_ = tenantLatency
+	_ = dbQueries
+	_ = dbDuration
+	_ = dbConnections
+
 	// Initialize handlers
 	handlers.Init(db, logger)
 
 	// Setup router with common middleware
 	router := server.SetupRouterWithService(logger, "quartermaster")
+
+	// Add monitoring middleware
+	router.Use(metricsCollector.MetricsMiddleware())
+
+	// Add monitoring endpoints
+	router.GET("/health", healthChecker.Handler())
+	router.GET("/metrics", metricsCollector.Handler())
 
 	// Public routes
 	public := router.Group("/api")

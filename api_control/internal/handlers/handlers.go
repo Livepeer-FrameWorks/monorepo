@@ -2142,19 +2142,19 @@ func ResolveInternalName(c middleware.Context) {
 func createTenantForRegistration(email string) (string, error) {
 	quartermasterURL := config.GetEnv("QUARTERMASTER_URL", "http://localhost:18002")
 	serviceToken := config.GetEnv("SERVICE_TOKEN", "")
-	
+
 	if serviceToken == "" {
 		return "", fmt.Errorf("SERVICE_TOKEN not configured")
 	}
 
 	// Generate tenant name from email domain or use email prefix
 	tenantName := strings.Split(email, "@")[0]
-	
+
 	// Create tenant request
 	createTenantReq := map[string]interface{}{
-		"name":             tenantName,
-		"deployment_model": "shared",
-		"primary_deployment_tier": "global",
+		"name":                     tenantName,
+		"deployment_model":         "shared",
+		"primary_deployment_tier":  "global",
 		"allowed_deployment_tiers": []string{"global"},
 	}
 

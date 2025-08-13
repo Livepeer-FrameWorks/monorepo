@@ -6,17 +6,17 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/signal"
 	"syscall"
 	"time"
 
-	"os/signal"
-
 	"github.com/joho/godotenv"
 
-	"frameworks/helmsman/internal/handlers"
-	"frameworks/pkg/config"
+	"frameworks/api_sidecar/internal/handlers"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/middleware"
+	"frameworks/pkg/monitoring"
+	"frameworks/pkg/version"
 )
 
 // notifyFoghornShutdown sends a final health update to Foghorn before shutdown
@@ -79,6 +79,38 @@ func main() {
 
 	logger.Info("Starting FrameWorks Helmsman (Edge Sidecar)")
 
+	// Setup monitoring
+	healthChecker := monitoring.NewHealthChecker("helmsman", version.Version)
+	metricsCollector := monitoring.NewMetricsCollector("helmsman", version.Version, version.GitCommit)
+
+	// Add health checks for external dependencies
+	commodoreURL := os.Getenv("COMMODORE_URL")
+	foghornURL := os.Getenv("FOGHORN_URL")
+	mistServerURL := os.Getenv("MISTSERVER_URL")
+
+	if commodoreURL != "" {
+		healthChecker.AddCheck("commodore", monitoring.HTTPServiceHealthCheck("Commodore", commodoreURL+"/health"))
+	}
+	if foghornURL != "" {
+		healthChecker.AddCheck("foghorn", monitoring.HTTPServiceHealthCheck("Foghorn", foghornURL+"/health"))
+	}
+	if mistServerURL != "" {
+		healthChecker.AddCheck("mistserver", monitoring.HTTPServiceHealthCheck("MistServer", mistServerURL+"/api"))
+	}
+
+	healthChecker.AddCheck("config", monitoring.ConfigurationHealthCheck(map[string]string{
+		"NODE_NAME": os.Getenv("NODE_NAME"),
+		"PORT":      os.Getenv("PORT"),
+	}))
+
+	// Create metrics for proxy operations
+	proxyRequests, proxyOperations, proxyDuration := metricsCollector.CreateBusinessMetrics()
+
+	// TODO: Wire these metrics into handlers
+	_ = proxyRequests
+	_ = proxyOperations
+	_ = proxyDuration
+
 	// Initialize handlers with logger (no database needed - Helmsman is stateless)
 	handlers.Init(logger)
 
@@ -86,7 +118,6 @@ func main() {
 	handlers.InitPrometheusMonitor(logger)
 
 	// Add the local MistServer node to monitoring with default location
-	mistServerURL := os.Getenv("MISTSERVER_URL")
 	if mistServerURL == "" {
 		mistServerURL = "http://mistserver:4242"
 	}
@@ -101,6 +132,9 @@ func main() {
 
 	// Add shared middleware
 	middleware.SetupCommonMiddleware(r, logger)
+
+	// Add monitoring middleware
+	r.Use(metricsCollector.MetricsMiddleware())
 
 	// API routes - for external API calls and monitoring
 	api := r.Group("/api")
@@ -129,21 +163,11 @@ func main() {
 		webhooks.POST("/mist/live_bandwidth", handlers.HandleLiveBandwidth)
 	}
 
-	// Health check
-	r.GET("/health", func(c middleware.Context) {
-		c.JSON(http.StatusOK, middleware.H{
-			"status":    "ok",
-			"timestamp": time.Now(),
-			"service":   "helmsman",
-			"version":   config.GetEnv("VERSION", "1.0.0"),
-		})
-	})
+	// Health check endpoint with proper checks
+	r.GET("/health", healthChecker.Handler())
 
-	// Basic metrics endpoint for Prometheus
-	r.GET("/metrics", func(c middleware.Context) {
-		c.Header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-		c.String(http.StatusOK, "# HELP helmsman_up Service availability\n# TYPE helmsman_up gauge\nhelmsman_up 1\n")
-	})
+	// Metrics endpoint for Prometheus
+	r.GET("/metrics", metricsCollector.Handler())
 
 	// Graceful shutdown handling
 	quit := make(chan os.Signal, 1)

@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"frameworks/api_realtime/internal/websocket"
-	"frameworks/pkg/config"
 	"frameworks/pkg/kafka"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/middleware"
@@ -55,7 +54,7 @@ func (h *SignalmanHandlers) HandleHealth(c middleware.Context) {
 	health := middleware.H{
 		"status":    "healthy",
 		"service":   "signalman",
-		"version":   config.GetEnv("VERSION", "1.0.0"),
+		"version":   "1.0.0",
 		"timestamp": time.Now().UTC(),
 		"uptime":    time.Since(h.startTime).String(),
 	}

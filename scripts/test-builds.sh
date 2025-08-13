@@ -24,6 +24,8 @@ test_service() {
         cd $service_dir && \
         echo -e "${BLUE}[${service_name}]${NC} → Running go mod tidy..." && \
         go mod tidy >> $log_file 2>&1 && \
+        echo -e "${BLUE}[${service_name}]${NC} → Running go fmt..." && \
+        go fmt ./... >> $log_file 2>&1 && \
         echo -e "${BLUE}[${service_name}]${NC} → Running go build..." && \
         go build ./... >> $log_file 2>&1 && \
         if [ -f "Dockerfile" ]; then

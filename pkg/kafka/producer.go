@@ -165,3 +165,8 @@ func (p *KafkaProducer) GetMetrics() (map[string]interface{}, error) {
 	}
 	return metrics, nil
 }
+
+// GetClient returns the underlying kgo.Client for health checks
+func (p *KafkaProducer) GetClient() *kgo.Client {
+	return p.client
+}

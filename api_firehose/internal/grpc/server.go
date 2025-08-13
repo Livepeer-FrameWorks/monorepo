@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"frameworks/pkg/config"
 	"frameworks/pkg/logging"
 
 	"google.golang.org/grpc"
@@ -278,7 +277,7 @@ func (s *DecklogServer) SendBalancingEvent(ctx context.Context, event *pb.Balanc
 func (s *DecklogServer) CheckHealth(ctx context.Context, req *pb.HealthRequest) (*pb.HealthResponse, error) {
 	return &pb.HealthResponse{
 		Status:    "healthy",
-		Version:   config.GetEnv("VERSION", "1.0.0"),
+		Version:   "1.0.0",
 		Timestamp: timestamppb.Now(),
 	}, nil
 }

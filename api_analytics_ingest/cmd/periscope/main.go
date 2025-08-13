@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -14,6 +13,8 @@ import (
 	"frameworks/pkg/kafka"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/middleware"
+	"frameworks/pkg/monitoring"
+	"frameworks/pkg/version"
 )
 
 func main() {
@@ -44,6 +45,12 @@ func main() {
 	analyticsHandler := handlers.NewAnalyticsHandler(clickhouse, logger)
 	eventHandler := kafka.NewAnalyticsEventHandler(yugaDB, analyticsHandler.HandleAnalyticsEvent, logger)
 
+	// Setup monitoring
+	healthChecker := monitoring.NewHealthChecker("periscope-ingest", version.Version)
+	metricsCollector := monitoring.NewMetricsCollector("periscope-ingest", version.Version, version.GitCommit)
+
+	// We'll add health checks after we have the consumer client
+
 	// Setup Kafka consumer
 	brokers := strings.Split(config.GetEnv("KAFKA_BROKERS", "localhost:9092"), ",")
 	groupID := config.GetEnv("KAFKA_GROUP_ID", "periscope-ingest")
@@ -61,6 +68,29 @@ func main() {
 		logger.WithError(err).Fatal("Failed to subscribe to topics")
 	}
 
+	// Now add health checks with all dependencies
+	healthChecker.AddCheck("postgres", monitoring.DatabaseHealthCheck(yugaDB))
+	healthChecker.AddCheck("clickhouse", monitoring.ClickHouseNativeHealthCheck(clickhouse))
+	healthChecker.AddCheck("kafka", monitoring.KafkaConsumerHealthCheck(consumer.GetClient()))
+	healthChecker.AddCheck("config", monitoring.ConfigurationHealthCheck(map[string]string{
+		"DATABASE_URL":    config.GetEnv("DATABASE_URL", ""),
+		"CLICKHOUSE_HOST": config.GetEnv("CLICKHOUSE_HOST", ""),
+		"KAFKA_BROKERS":   config.GetEnv("KAFKA_BROKERS", ""),
+		"KAFKA_GROUP_ID":  config.GetEnv("KAFKA_GROUP_ID", ""),
+	}))
+
+	// Create Kafka and business metrics
+	kafkaMessages, kafkaDuration, kafkaLag := metricsCollector.CreateKafkaMetrics()
+	businessItems, operations, operationDuration := metricsCollector.CreateBusinessMetrics()
+
+	// TODO: Wire these metrics into handlers
+	_ = kafkaMessages
+	_ = kafkaDuration
+	_ = kafkaLag
+	_ = businessItems
+	_ = operations
+	_ = operationDuration
+
 	// Start consuming
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
@@ -71,7 +101,7 @@ func main() {
 
 	// Optional health check server
 	if config.GetEnvBool("ENABLE_HEALTH_ENDPOINT", true) {
-		go startHealthServer(yugaDB, clickhouse, logger)
+		go startHealthServer(healthChecker, metricsCollector, logger)
 	}
 
 	logger.Info("Periscope-Ingest started - consuming analytics events from Kafka")
@@ -92,51 +122,21 @@ func main() {
 	logger.Info("Periscope-Ingest stopped")
 }
 
-func startHealthServer(yugaDB database.PostgresConn, clickhouse database.ClickHouseNativeConn, logger logging.Logger) {
+func startHealthServer(healthChecker *monitoring.HealthChecker, metricsCollector *monitoring.MetricsCollector, logger logging.Logger) {
 	middleware.SetGinMode("release")
 	r := middleware.NewEngine()
 
 	// Add shared middleware
 	middleware.SetupCommonMiddleware(r, logger)
 
-	r.GET("/health", func(c middleware.Context) {
-		// Check YugaDB
-		if err := yugaDB.Ping(); err != nil {
-			c.JSON(http.StatusServiceUnavailable, middleware.H{
-				"status":  "unhealthy",
-				"service": "periscope-ingest",
-				"version": config.GetEnv("VERSION", "1.0.0"),
-				"mode":    "kafka-consumer",
-				"error":   "YugaDB: " + err.Error(),
-			})
-			return
-		}
+	// Add monitoring middleware
+	r.Use(metricsCollector.MetricsMiddleware())
 
-		// Check ClickHouse
-		if err := clickhouse.Ping(context.Background()); err != nil {
-			c.JSON(http.StatusServiceUnavailable, middleware.H{
-				"status":  "unhealthy",
-				"service": "periscope-ingest",
-				"version": config.GetEnv("VERSION", "1.0.0"),
-				"mode":    "kafka-consumer",
-				"error":   "ClickHouse: " + err.Error(),
-			})
-			return
-		}
+	// Health check endpoint with proper checks
+	r.GET("/health", healthChecker.Handler())
 
-		c.JSON(http.StatusOK, middleware.H{
-			"status":  "healthy",
-			"service": "periscope-ingest",
-			"version": config.GetEnv("VERSION", "1.0.0"),
-			"mode":    "kafka-consumer",
-		})
-	})
-
-	// Basic metrics endpoint for Prometheus
-	r.GET("/metrics", func(c middleware.Context) {
-		c.Header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-		c.String(http.StatusOK, "# HELP periscope_ingest_up Service availability\n# TYPE periscope_ingest_up gauge\nperiscope_ingest_up 1\n")
-	})
+	// Metrics endpoint for Prometheus
+	r.GET("/metrics", metricsCollector.Handler())
 
 	port := config.GetEnv("HEALTH_PORT", "18005")
 	logger.Infof("Health endpoint available on port %s", port)

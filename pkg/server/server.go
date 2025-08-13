@@ -61,7 +61,7 @@ func SetupRouterWithService(logger logging.Logger, serviceName string) *gin.Engi
 		c.JSON(http.StatusOK, gin.H{
 			"status":  "healthy",
 			"service": serviceName,
-			"version": config.GetEnv("VERSION", "1.0.0"),
+			"version": "1.0.0",
 		})
 	})
 

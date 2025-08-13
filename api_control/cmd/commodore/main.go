@@ -7,6 +7,8 @@ import (
 	"frameworks/pkg/database"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/middleware"
+	"frameworks/pkg/monitoring"
+	"frameworks/pkg/version"
 )
 
 func main() {
@@ -33,24 +35,41 @@ func main() {
 	// Initialize handlers
 	handlers.Init(db, logger, router)
 
+	// Setup monitoring
+	healthChecker := monitoring.NewHealthChecker("commodore", version.Version)
+	metricsCollector := monitoring.NewMetricsCollector("commodore", version.Version, version.GitCommit)
+
+	// Add health checks
+	healthChecker.AddCheck("database", monitoring.DatabaseHealthCheck(db))
+	healthChecker.AddCheck("config", monitoring.ConfigurationHealthCheck(map[string]string{
+		"DATABASE_URL": config.GetEnv("DATABASE_URL", ""),
+		"JWT_SECRET":   config.GetEnv("JWT_SECRET", ""),
+	}))
+
+	// Create business metrics for streams and operations
+	activeStreams, operations, operationDuration := metricsCollector.CreateBusinessMetrics()
+	dbQueries, dbDuration, dbConnections := metricsCollector.CreateDatabaseMetrics()
+
+	// TODO: Wire these metrics into handlers
+	_ = activeStreams
+	_ = operations
+	_ = operationDuration
+	_ = dbQueries
+	_ = dbDuration
+	_ = dbConnections
+
 	// Create Gin engine
 	app := middleware.NewEngine()
 	middleware.SetupCommonMiddleware(app, logger)
 
-	// Health check endpoint
-	app.GET("/health", func(c middleware.Context) {
-		c.JSON(200, middleware.H{
-			"status":  "ok",
-			"service": "commodore",
-			"version": config.GetEnv("VERSION", "1.0.0"),
-		})
-	})
+	// Add monitoring middleware
+	app.Use(metricsCollector.MetricsMiddleware())
 
-	// Basic metrics endpoint for Prometheus
-	app.GET("/metrics", func(c middleware.Context) {
-		c.Header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-		c.String(200, "# HELP commodore_up Service availability\n# TYPE commodore_up gauge\ncommodore_up 1\n")
-	})
+	// Health check endpoint with proper checks
+	app.GET("/health", healthChecker.Handler())
+
+	// Metrics endpoint for Prometheus
+	app.GET("/metrics", metricsCollector.Handler())
 
 	// API routes
 	api := app.Group("/api/v1")

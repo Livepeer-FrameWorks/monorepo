@@ -7,7 +7,7 @@ import (
 
 	"frameworks/pkg/logging"
 
-	"frameworks/periscope-query/internal/handlers"
+	"frameworks/api_analytics_query/internal/handlers"
 	"frameworks/pkg/database"
 )
 

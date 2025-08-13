@@ -275,4 +275,117 @@ PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (timestamp, internal_name)
 TTL timestamp + INTERVAL 90 DAY;
 
+-- ============================================================================
+-- ADDITIONAL MATERIALIZED VIEWS FOR GRAFANA DASHBOARDS
+-- ============================================================================
+
+-- Hourly stream summary for business dashboards
+CREATE TABLE IF NOT EXISTS stream_summary_hourly (
+    hour DateTime,
+    tenant_id UUID,
+    internal_name String,
+    total_viewers AggregateFunction(sum, UInt32),
+    peak_viewers AggregateFunction(max, UInt32),
+    avg_viewers AggregateFunction(avg, UInt32),
+    total_bytes AggregateFunction(sum, UInt64),
+    unique_viewers AggregateFunction(uniq, String)
+) ENGINE = AggregatingMergeTree()
+PARTITION BY toYYYYMM(hour)
+ORDER BY (hour, tenant_id, internal_name);
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS stream_summary_hourly_mv TO stream_summary_hourly AS
+SELECT
+    toStartOfHour(timestamp) as hour,
+    tenant_id,
+    internal_name,
+    sumState(viewer_count) as total_viewers,
+    maxState(viewer_count) as peak_viewers,
+    avgState(viewer_count) as avg_viewers,
+    sumState(bytes_transferred) as total_bytes,
+    uniqState(user_id) as unique_viewers
+FROM connection_events
+GROUP BY hour, tenant_id, internal_name;
+
+-- Node performance 5-minute summary for infrastructure monitoring
+CREATE TABLE IF NOT EXISTS node_performance_5m (
+    timestamp_5m DateTime,
+    node_id LowCardinality(String),
+    avg_cpu Float32,
+    max_cpu Float32,
+    avg_memory Float32,
+    max_memory Float32,
+    total_bandwidth UInt64,
+    avg_streams Float32,
+    max_streams UInt32
+) ENGINE = MergeTree()
+PARTITION BY toYYYYMM(timestamp_5m)
+ORDER BY (timestamp_5m, node_id);
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS node_performance_5m_mv TO node_performance_5m AS
+SELECT
+    toStartOfInterval(timestamp, INTERVAL 5 MINUTE) as timestamp_5m,
+    node_id,
+    avg(cpu_usage) as avg_cpu,
+    max(cpu_usage) as max_cpu,
+    avg(memory_usage) as avg_memory,
+    max(memory_usage) as max_memory,
+    sum(bandwidth_in + bandwidth_out) as total_bandwidth,
+    avg(stream_count) as avg_streams,
+    max(stream_count) as max_streams
+FROM node_metrics
+GROUP BY timestamp_5m, node_id;
+
+-- Daily tenant usage summary for business metrics
+CREATE TABLE IF NOT EXISTS tenant_usage_daily (
+    day Date,
+    tenant_id UUID,
+    viewer_minutes UInt64,
+    peak_concurrent_viewers UInt32,
+    total_bytes UInt64,
+    unique_streams UInt32,
+    total_stream_hours Float32
+) ENGINE = SummingMergeTree()
+PARTITION BY toYYYYMM(day)
+ORDER BY (day, tenant_id);
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS tenant_usage_daily_mv TO tenant_usage_daily AS
+SELECT
+    toDate(timestamp) as day,
+    tenant_id,
+    sum(viewer_count * 5) as viewer_minutes, -- 5-minute samples to viewer-minutes
+    max(viewer_count) as peak_concurrent_viewers,
+    sum(bytes_transferred) as total_bytes,
+    uniq(internal_name) as unique_streams,
+    count() * 5 / 60.0 as total_stream_hours -- Convert 5-minute samples to hours
+FROM viewer_metrics
+GROUP BY day, tenant_id;
+
+-- Geographic viewer distribution for maps
+CREATE TABLE IF NOT EXISTS viewer_geo_hourly (
+    hour DateTime,
+    tenant_id UUID,
+    country_code FixedString(2),
+    city LowCardinality(String),
+    viewer_count UInt32,
+    session_count UInt32,
+    avg_latitude Float64,
+    avg_longitude Float64
+) ENGINE = SummingMergeTree()
+PARTITION BY toYYYYMM(hour)
+ORDER BY (hour, tenant_id, country_code, city);
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS viewer_geo_hourly_mv TO viewer_geo_hourly AS
+SELECT
+    toStartOfHour(timestamp) as hour,
+    tenant_id,
+    country_code,
+    city,
+    sum(viewer_count) as viewer_count,
+    count() as session_count,
+    avg(latitude) as avg_latitude,
+    avg(longitude) as avg_longitude
+FROM viewer_metrics
+WHERE latitude != 0 AND longitude != 0
+GROUP BY hour, tenant_id, country_code, city;
+
 

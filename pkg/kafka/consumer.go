@@ -116,6 +116,10 @@ func (c *Consumer) HealthCheck() error {
 	return nil
 }
 
+func (c *Consumer) GetClient() *kgo.Client {
+	return c.client
+}
+
 func (c *Consumer) GetMetrics() (map[string]interface{}, error) {
 	metrics := map[string]interface{}{
 		"cluster_id": c.clusterID,

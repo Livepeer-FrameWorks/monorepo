@@ -15,7 +15,6 @@ import (
 
 	"frameworks/api_balancing/internal/balancer"
 	"frameworks/api_firehose/proto"
-	"frameworks/pkg/config"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/middleware"
 
@@ -58,20 +57,6 @@ func Init(database *sql.DB, log logging.Logger, loadBalancer *balancer.LoadBalan
 	decklogClient = proto.NewDecklogServiceClient(conn)
 }
 
-// HealthCheck provides basic health check
-func HealthCheck(c middleware.Context) {
-	c.JSON(http.StatusOK, middleware.H{
-		"status":    "healthy",
-		"service":   "foghorn",
-		"version":   config.GetEnv("VERSION", "1.0.0"),
-		"timestamp": time.Now().Unix(),
-	})
-}
-
-// PrometheusMetrics exposes Prometheus metrics
-func PrometheusMetrics(c middleware.Context) {
-	c.String(http.StatusOK, "# Prometheus metrics would be here")
-}
 
 // MistServerCompatibilityHandler handles ALL MistServer requests
 // This implements the exact same HTTP API as the C++ MistUtilLoad

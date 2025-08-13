@@ -8,12 +8,14 @@ import (
 	"syscall"
 	"time"
 
+	"frameworks/api_billing/internal/handlers"
 	"frameworks/pkg/auth"
 	"frameworks/pkg/config"
 	"frameworks/pkg/database"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/middleware"
-	"frameworks/purser/internal/handlers"
+	"frameworks/pkg/monitoring"
+	"frameworks/pkg/version"
 )
 
 func main() {
@@ -33,6 +35,29 @@ func main() {
 
 	// Initialize handlers
 	handlers.Init(db, logger)
+
+	// Setup monitoring
+	healthChecker := monitoring.NewHealthChecker("purser", version.Version)
+	metricsCollector := monitoring.NewMetricsCollector("purser", version.Version, version.GitCommit)
+
+	// Add health checks
+	healthChecker.AddCheck("database", monitoring.DatabaseHealthCheck(db))
+	healthChecker.AddCheck("config", monitoring.ConfigurationHealthCheck(map[string]string{
+		"DATABASE_URL": config.GetEnv("DATABASE_URL", ""),
+		"JWT_SECRET":   config.GetEnv("JWT_SECRET", ""),
+	}))
+
+	// Create business metrics for billing operations
+	activeItems, operations, operationDuration := metricsCollector.CreateBusinessMetrics()
+	dbQueries, dbDuration, dbConnections := metricsCollector.CreateDatabaseMetrics()
+
+	// TODO: Wire these metrics into handlers
+	_ = activeItems
+	_ = operations
+	_ = operationDuration
+	_ = dbQueries
+	_ = dbDuration
+	_ = dbConnections
 
 	// Initialize and start JobManager for background billing tasks
 	jobManager := handlers.NewJobManager(db, logger)
@@ -55,20 +80,14 @@ func main() {
 	router.Use(middleware.RecoveryMiddleware(logger))
 	router.Use(middleware.CORSMiddleware())
 
-	// Health check endpoint
-	router.GET("/health", func(c middleware.Context) {
-		c.JSON(200, middleware.H{
-			"status":  "healthy",
-			"service": "purser",
-			"version": config.GetEnv("VERSION", "1.0.0"),
-		})
-	})
+	// Add monitoring middleware
+	router.Use(metricsCollector.MetricsMiddleware())
 
-	// Basic metrics endpoint for Prometheus
-	router.GET("/metrics", func(c middleware.Context) {
-		c.Header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-		c.String(200, "# HELP purser_up Service availability\n# TYPE purser_up gauge\npurser_up 1\n")
-	})
+	// Health check endpoint with proper checks
+	router.GET("/health", healthChecker.Handler())
+
+	// Metrics endpoint for Prometheus
+	router.GET("/metrics", metricsCollector.Handler())
 
 	// API routes
 	api := router.Group("/api/v1")

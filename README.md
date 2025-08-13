@@ -60,6 +60,7 @@ Endpoints (local)
 | Data | Periscope Query | 18004 | API |
 | Data | Periscope Ingest | 18005 | Kafka consumer |
 | Data | Decklog | 18006 | gRPC |
+| Data | Decklog (metrics) | 18026 | Prometheus metrics |
 | Data | Kafka (external) | 29092 | Host access |
 | Data | Kafka (internal) | 9092 | Cluster access |
 | Data | Zookeeper | 2181 | Kafka coordination |

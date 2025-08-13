@@ -13,6 +13,8 @@ import (
 	"frameworks/pkg/database"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/middleware"
+	"frameworks/pkg/monitoring"
+	"frameworks/pkg/version"
 )
 
 func main() {
@@ -44,6 +46,28 @@ func main() {
 		lb.SetWeights(cpu, ram, bw, geo, bonus)
 	}
 
+	// Setup monitoring
+	healthChecker := monitoring.NewHealthChecker("foghorn", version.Version)
+	metricsCollector := monitoring.NewMetricsCollector("foghorn", version.Version, version.GitCommit)
+
+	// Add health checks
+	healthChecker.AddCheck("database", monitoring.DatabaseHealthCheck(db))
+	healthChecker.AddCheck("config", monitoring.ConfigurationHealthCheck(map[string]string{
+		"DATABASE_URL": config.GetEnv("DATABASE_URL", ""),
+	}))
+
+	// Create load balancer metrics
+	balancerOperations, balancerDecisions, balancerLatency := metricsCollector.CreateBusinessMetrics()
+	dbQueries, dbDuration, dbConnections := metricsCollector.CreateDatabaseMetrics()
+
+	// TODO: Wire these metrics into handlers
+	_ = balancerOperations
+	_ = balancerDecisions
+	_ = balancerLatency
+	_ = dbQueries
+	_ = dbDuration
+	_ = dbConnections
+
 	// Initialize handlers
 	handlers.Init(db, logger, lb)
 
@@ -55,11 +79,14 @@ func main() {
 	router := middleware.NewEngine()
 	middleware.SetupCommonMiddleware(router, logger)
 
-	// Health check endpoint
-	router.GET("/health", handlers.HealthCheck)
+	// Add monitoring middleware
+	router.Use(metricsCollector.MetricsMiddleware())
 
-	// Prometheus metrics
-	router.GET("/metrics", handlers.PrometheusMetrics)
+	// Health check endpoint with proper checks
+	router.GET("/health", healthChecker.Handler())
+
+	// Metrics endpoint for Prometheus
+	router.GET("/metrics", metricsCollector.Handler())
 
 	// Node update endpoint for Helmsman
 	router.POST("/node/update", handlers.HandleNodeUpdate)

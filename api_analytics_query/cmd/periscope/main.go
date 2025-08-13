@@ -8,13 +8,15 @@ import (
 	"syscall"
 	"time"
 
-	"frameworks/periscope-query/internal/handlers"
-	"frameworks/periscope-query/internal/scheduler"
+	"frameworks/api_analytics_query/internal/handlers"
+	"frameworks/api_analytics_query/internal/scheduler"
 	"frameworks/pkg/auth"
 	"frameworks/pkg/config"
 	"frameworks/pkg/database"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/middleware"
+	"frameworks/pkg/monitoring"
+	"frameworks/pkg/version"
 )
 
 func main() {
@@ -44,6 +46,32 @@ func main() {
 	// Initialize handlers with both databases
 	handlers.Init(yugaDB, clickhouse, logger)
 
+	// Setup monitoring
+	healthChecker := monitoring.NewHealthChecker("periscope-query", version.Version)
+	metricsCollector := monitoring.NewMetricsCollector("periscope-query", version.Version, version.GitCommit)
+
+	// Add health checks
+	healthChecker.AddCheck("postgres", monitoring.DatabaseHealthCheck(yugaDB))
+	healthChecker.AddCheck("clickhouse", monitoring.DatabaseHealthCheck(clickhouse))
+	healthChecker.AddCheck("config", monitoring.ConfigurationHealthCheck(map[string]string{
+		"DATABASE_URL":    config.GetEnv("DATABASE_URL", ""),
+		"CLICKHOUSE_HOST": config.GetEnv("CLICKHOUSE_HOST", ""),
+		"CLICKHOUSE_DB":   config.GetEnv("CLICKHOUSE_DB", ""),
+		"JWT_SECRET":      config.GetEnv("JWT_SECRET", ""),
+	}))
+
+	// Create analytics metrics
+	analyticsQueries, analyticsOperations, analyticsLatency := metricsCollector.CreateBusinessMetrics()
+	pgQueries, pgDuration, pgConnections := metricsCollector.CreateDatabaseMetrics()
+
+	// TODO: Wire these metrics into handlers
+	_ = analyticsQueries
+	_ = analyticsOperations
+	_ = analyticsLatency
+	_ = pgQueries
+	_ = pgDuration
+	_ = pgConnections
+
 	// Initialize and start scheduler for billing summarization
 	taskScheduler := scheduler.NewScheduler(yugaDB, clickhouse, logger)
 	taskScheduler.Start()
@@ -60,14 +88,14 @@ func main() {
 	router.Use(middleware.RecoveryMiddleware(logger))
 	router.Use(middleware.CORSMiddleware())
 
-	// Health check endpoint
-	router.GET("/health", func(c middleware.Context) {
-		c.JSON(200, middleware.H{
-			"status":  "healthy",
-			"service": "periscope-query",
-			"version": config.GetEnv("VERSION", "1.0.0"),
-		})
-	})
+	// Add monitoring middleware
+	router.Use(metricsCollector.MetricsMiddleware())
+
+	// Health check endpoint with proper checks
+	router.GET("/health", healthChecker.Handler())
+
+	// Metrics endpoint for Prometheus
+	router.GET("/metrics", metricsCollector.Handler())
 
 	// API routes with authentication
 	v1 := router.Group("/api/v1")

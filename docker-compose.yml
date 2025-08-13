@@ -270,6 +270,7 @@ services:
       - ALLOW_INSECURE=true  # For local development only
     ports:
       - "18006:18006"
+      - "18026:18026"
     depends_on:
       kafka:
         condition: service_healthy

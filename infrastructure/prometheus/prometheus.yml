@@ -67,7 +67,7 @@ scrape_configs:
 
   - job_name: 'decklog'
     static_configs:
-      - targets: ['decklog:18006']
+      - targets: ['decklog:18026']
     metrics_path: '/metrics'
     scrape_interval: 30s
 
@@ -77,15 +77,3 @@ scrape_configs:
       - targets: ['mistserver:4242']
     metrics_path: '/koekjes'
     scrape_interval: 60s
-
-  - job_name: 'clickhouse'
-    static_configs:
-      - targets: ['clickhouse:8123']
-    metrics_path: '/metrics'
-    scrape_interval: 60s
-
-  - job_name: 'nginx'
-    static_configs:
-      - targets: ['nginx:80']
-    metrics_path: '/nginx_status'
-    scrape_interval: 30s 

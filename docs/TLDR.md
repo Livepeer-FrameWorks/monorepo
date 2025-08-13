@@ -25,6 +25,7 @@ FrameWorks is a distributed microservices platform for multi-tenant video stream
 | Periscope Query | 18004 | Central | Analytics & reporting API |
 | Periscope Ingest | 18005 | Central | Kafka event processing |
 | Decklog | 18006 | Central | gRPC event ingress → Kafka |
+| Decklog (metrics) | 18026 | Central | Prometheus metrics |
 | **Media Plane** | | | |
 | Foghorn | 18008 | Central | Load balancer |
 | Helmsman | 18007 | Edge | MistServer sidecar |

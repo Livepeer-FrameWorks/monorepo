@@ -15,6 +15,8 @@ import (
 	"frameworks/pkg/kafka"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/middleware"
+	"frameworks/pkg/monitoring"
+	"frameworks/pkg/version"
 )
 
 func main() {
@@ -25,6 +27,10 @@ func main() {
 	config.LoadEnv(logger)
 
 	logger.Info("Starting Signalman (WebSocket Hub)")
+
+	// Setup monitoring
+	healthChecker := monitoring.NewHealthChecker("signalman", version.Version)
+	metricsCollector := monitoring.NewMetricsCollector("signalman", version.Version, version.GitCommit)
 
 	// Initialize WebSocket hub
 	hub := websocket.NewHub(logger)
@@ -55,6 +61,25 @@ func main() {
 		logger.WithError(err).Fatal("Failed to subscribe to topics")
 	}
 
+	// Add health checks
+	healthChecker.AddCheck("kafka", monitoring.KafkaConsumerHealthCheck(consumer.GetClient()))
+	healthChecker.AddCheck("config", monitoring.ConfigurationHealthCheck(map[string]string{
+		"KAFKA_BROKERS": config.GetEnv("KAFKA_BROKERS", ""),
+		"KAFKA_TOPICS":  config.GetEnv("KAFKA_TOPICS", ""),
+	}))
+
+	// Create WebSocket and messaging metrics
+	websocketConnections, messagingEvents, realtimeLatency := metricsCollector.CreateBusinessMetrics()
+	kafkaMessages, kafkaDuration, kafkaConnections := metricsCollector.CreateDatabaseMetrics()
+
+	// TODO: Wire these metrics into handlers
+	_ = websocketConnections
+	_ = messagingEvents
+	_ = realtimeLatency
+	_ = kafkaMessages
+	_ = kafkaDuration
+	_ = kafkaConnections
+
 	// Start Kafka consumer
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -76,15 +101,18 @@ func main() {
 	router.Use(middleware.RecoveryMiddleware(logger))
 	router.Use(middleware.CORSMiddleware())
 
+	// Add monitoring middleware
+	router.Use(metricsCollector.MetricsMiddleware())
+
 	// Setup WebSocket routes
 	router.GET("/ws/streams", signalmanHandlers.HandleWebSocketStreams)
 	router.GET("/ws/analytics", signalmanHandlers.HandleWebSocketAnalytics)
 	router.GET("/ws/system", signalmanHandlers.HandleWebSocketSystem)
 	router.GET("/ws", signalmanHandlers.HandleWebSocketAll)
 
-	// Setup HTTP routes
-	router.GET("/health", signalmanHandlers.HandleHealth)
-	router.GET("/metrics", signalmanHandlers.HandleMetrics)
+	// Setup monitoring routes
+	router.GET("/health", healthChecker.Handler())
+	router.GET("/metrics", metricsCollector.Handler())
 
 	// Admin routes with service auth
 	admin := router.Group("/admin")
