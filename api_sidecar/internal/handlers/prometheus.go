@@ -981,6 +981,24 @@ func (pm *PrometheusMonitor) extractStreamMetrics(jsonData map[string]interface{
 						metrics["total_connections"] = tot
 					}
 
+					// Check replication status (CRITICAL: matches C++ parsing)
+					if rep, ok := streamInfo["rep"].(bool); ok {
+						metrics["replicated"] = rep
+					} else {
+						metrics["replicated"] = false
+					}
+
+					// Extract input count from curr[1] (matches C++ parsing)
+					if curr, ok := streamInfo["curr"].([]interface{}); ok && len(curr) > 1 {
+						if inputs, ok := curr[1].(float64); ok {
+							metrics["inputs"] = int(inputs)
+						} else {
+							metrics["inputs"] = 0
+						}
+					} else {
+						metrics["inputs"] = 0
+					}
+
 					// Determine stream status based on available data
 					// Only set to live if we have clear indicators of activity
 					if viewers, ok := metrics["viewers"].(int); ok && viewers > 0 {
@@ -1295,31 +1313,44 @@ func (pm *PrometheusMonitor) getStreamMetrics() map[string]interface{} {
 				if streamInfo, ok := streamData.(map[string]interface{}); ok {
 					metrics := make(map[string]interface{})
 
-					// Extract viewer count
+					// Extract viewer count (matches C++ curr[0])
 					if curr, ok := streamInfo["curr"].([]interface{}); ok && len(curr) > 0 {
 						if viewers, ok := curr[0].(float64); ok {
 							metrics["total"] = uint64(viewers)
 						}
 					}
 
-					// Extract bandwidth
+					// Extract input count (matches C++ curr[1])
+					if curr, ok := streamInfo["curr"].([]interface{}); ok && len(curr) > 1 {
+						if inputs, ok := curr[1].(float64); ok {
+							metrics["inputs"] = uint32(inputs)
+						}
+					}
+
+					// Extract bandwidth (matches C++ bw[0] and bw[1])
 					if bw, ok := streamInfo["bw"].([]interface{}); ok && len(bw) >= 2 {
-						if bandwidthIn, ok := bw[0].(float64); ok {
-							metrics["bandwidth_in"] = uint64(bandwidthIn)
+						if bandwidthUp, ok := bw[0].(float64); ok {
+							metrics["bytes_up"] = uint64(bandwidthUp)
 						}
-						if bandwidthOut, ok := bw[1].(float64); ok {
-							metrics["bandwidth_out"] = uint64(bandwidthOut)
+						if bandwidthDown, ok := bw[1].(float64); ok {
+							metrics["bytes_down"] = uint64(bandwidthDown)
 						}
 					}
 
-					// Extract packet stats
-					if pkts, ok := streamInfo["pkts"].([]interface{}); ok && len(pkts) >= 3 {
-						metrics["packets"] = pkts
+					// Check replication status (CRITICAL: matches C++ strm.rep parsing)
+					if rep, ok := streamInfo["rep"].(bool); ok && rep {
+						metrics["replicated"] = true
 					}
 
-					// Extract total stats
-					if tot, ok := streamInfo["tot"].([]interface{}); ok && len(tot) >= 3 {
-						metrics["totals"] = tot
+					// Calculate approximate bandwidth per viewer (like C++)
+					if total, okTotal := metrics["total"].(uint64); okTotal && total > 0 {
+						if bytesUp, okUp := metrics["bytes_up"].(uint64); okUp {
+							if bytesDown, okDown := metrics["bytes_down"].(uint64); okDown {
+								metrics["bandwidth"] = uint32((bytesUp + bytesDown) / total)
+							}
+						}
+					} else {
+						metrics["bandwidth"] = uint32(131072) // Default 1mbps like C++
 					}
 
 					streamMetrics[streamName] = metrics

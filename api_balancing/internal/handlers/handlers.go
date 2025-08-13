@@ -493,7 +493,10 @@ func handleGetSource(c middleware.Context, streamName string, query url.Values) 
 	lon := getLatLon(c, query, "lon", "X-Longitude")
 	tagAdjust := getTagAdjustments(c, query)
 
-	bestNode, score, err := lb.GetBestNodeWithScore(c.Request.Context(), streamName, lat, lon, tagAdjust)
+	// Get client IP for same-host detection (like C++)
+	clientIP := c.ClientIP()
+
+	bestNode, score, err := lb.GetBestNodeWithScore(c.Request.Context(), streamName, lat, lon, tagAdjust, clientIP)
 	if err != nil {
 		// Post failed event
 		go postBalancingEvent(c, streamName, "", 0, lat, lon, "failed", err.Error())
@@ -534,8 +537,8 @@ func handleFindIngest(c middleware.Context, cpuUsage string, query url.Values) {
 		}
 	}
 
-	// Find best node, but check CPU capacity if minCpu is specified
-	bestNode, score, err := lb.GetBestNodeWithScore(c.Request.Context(), "", lat, lon, tagAdjust)
+	// Find best node for ingest (empty stream name means no same-host filtering)
+	bestNode, score, err := lb.GetBestNodeWithScore(c.Request.Context(), "", lat, lon, tagAdjust, "")
 	if err != nil {
 		// Post failed ingest event
 		go postBalancingEvent(c, "ingest", "", 0, lat, lon, "failed", err.Error())

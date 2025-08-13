@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"math"
+	"net"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,6 +32,7 @@ type LoadBalancer struct {
 // Node represents a MistServer node (matches C++ hostDetails exactly)
 type Node struct {
 	Host           string            `json:"host"`
+	BinHost        [16]byte          `json:"bin_host"` // Binary IP address (IPv6 compatible)
 	Port           int               `json:"port"`
 	DTSCPort       int               `json:"dtsc_port"`
 	Tags           []string          `json:"tags"`
@@ -79,8 +81,12 @@ func (lb *LoadBalancer) AddNode(host string, port int) error {
 	lb.mu.Lock()
 	defer lb.mu.Unlock()
 
+	// Resolve host to binary IP address (like C++)
+	binHost := lb.hostToBinary(host)
+
 	node := &Node{
 		Host:           host,
+		BinHost:        binHost,
 		Port:           port,
 		DTSCPort:       4200,              // Default DTSC port
 		CPU:            1000,              // Start at max load (like C++)
@@ -95,6 +101,57 @@ func (lb *LoadBalancer) AddNode(host string, port int) error {
 	lb.logger.WithField("host", host).Info("Added node to load balancer")
 
 	return nil
+}
+
+// hostToBinary converts hostname to 16-byte binary representation (IPv6 compatible)
+func (lb *LoadBalancer) hostToBinary(hostname string) [16]byte {
+	var binHost [16]byte
+
+	// Try to parse as IP first
+	if ip := net.ParseIP(hostname); ip != nil {
+		if ipv4 := ip.To4(); ipv4 != nil {
+			// IPv4 - store in IPv6 mapped format
+			copy(binHost[12:], ipv4)
+			binHost[10] = 0xff
+			binHost[11] = 0xff
+		} else if ipv6 := ip.To16(); ipv6 != nil {
+			// IPv6
+			copy(binHost[:], ipv6)
+		}
+		return binHost
+	}
+
+	// Try to resolve hostname to IP
+	ips, err := net.LookupIP(hostname)
+	if err != nil || len(ips) == 0 {
+		lb.logger.WithField("hostname", hostname).Warn("Could not resolve hostname to IP")
+		return binHost // Return zero-filled array
+	}
+
+	// Use first IP address
+	ip := ips[0]
+	if ipv4 := ip.To4(); ipv4 != nil {
+		// IPv4 - store in IPv6 mapped format
+		copy(binHost[12:], ipv4)
+		binHost[10] = 0xff
+		binHost[11] = 0xff
+	} else if ipv6 := ip.To16(); ipv6 != nil {
+		// IPv6
+		copy(binHost[:], ipv6)
+	}
+
+	return binHost
+}
+
+// compareBinaryHosts compares two binary host addresses (like C++ Socket::matchIPv6Addr)
+func (lb *LoadBalancer) compareBinaryHosts(host1, host2 [16]byte) bool {
+	// Compare all 16 bytes
+	for i := 0; i < 16; i++ {
+		if host1[i] != host2[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // RemoveNode removes a node from the load balancer
@@ -166,26 +223,34 @@ func (lb *LoadBalancer) UpdateNodeMetrics(host string, data map[string]interface
 		for streamName, streamData := range streams {
 			if streamMap, ok := streamData.(map[string]interface{}); ok {
 				stream := Stream{}
-				if total, ok := streamMap["total"].(float64); ok {
+				if total, ok := streamMap["total"].(uint64); ok {
+					stream.Total = total
+				} else if total, ok := streamMap["total"].(float64); ok {
 					stream.Total = uint64(total)
 				}
-				if inputs, ok := streamMap["inputs"].(float64); ok {
+				if inputs, ok := streamMap["inputs"].(uint32); ok {
+					stream.Inputs = inputs
+				} else if inputs, ok := streamMap["inputs"].(float64); ok {
 					stream.Inputs = uint32(inputs)
 				}
-				if bandwidth, ok := streamMap["bandwidth"].(float64); ok {
+				if bandwidth, ok := streamMap["bandwidth"].(uint32); ok {
+					stream.Bandwidth = bandwidth
+				} else if bandwidth, ok := streamMap["bandwidth"].(float64); ok {
 					stream.Bandwidth = uint32(bandwidth)
 				}
-				if bytesUp, ok := streamMap["bytes_up"].(float64); ok {
+				if bytesUp, ok := streamMap["bytes_up"].(uint64); ok {
+					stream.BytesUp = bytesUp
+				} else if bytesUp, ok := streamMap["bytes_up"].(float64); ok {
 					stream.BytesUp = uint64(bytesUp)
 				}
-				if bytesDown, ok := streamMap["bytes_down"].(float64); ok {
+				if bytesDown, ok := streamMap["bytes_down"].(uint64); ok {
+					stream.BytesDown = bytesDown
+				} else if bytesDown, ok := streamMap["bytes_down"].(float64); ok {
 					stream.BytesDown = uint64(bytesDown)
 				}
-				// Check for replication tag
-				if tags, ok := streamMap["tags"].(map[string]interface{}); ok {
-					if _, isReplicated := tags["replicated"]; isReplicated {
-						stream.Replicated = true
-					}
+				// Check for replication flag (matches C++ strm.rep parsing)
+				if replicated, ok := streamMap["replicated"].(bool); ok {
+					stream.Replicated = replicated
 				}
 				node.Streams[streamName] = stream
 			}
@@ -231,20 +296,36 @@ func (lb *LoadBalancer) GetNodes() map[string]*Node {
 
 // GetBestNode finds the best node using EXACT C++ rate() algorithm
 func (lb *LoadBalancer) GetBestNode(ctx context.Context, streamName string, lat, lon float64, tagAdjust map[string]int) (string, error) {
-	host, _, err := lb.GetBestNodeWithScore(ctx, streamName, lat, lon, tagAdjust)
+	host, _, err := lb.GetBestNodeWithScore(ctx, streamName, lat, lon, tagAdjust, "")
 	return host, err
 }
 
 // GetBestNodeWithScore finds the best node and returns both node and score
-func (lb *LoadBalancer) GetBestNodeWithScore(ctx context.Context, streamName string, lat, lon float64, tagAdjust map[string]int) (string, uint64, error) {
+func (lb *LoadBalancer) GetBestNodeWithScore(ctx context.Context, streamName string, lat, lon float64, tagAdjust map[string]int, clientIP string) (string, uint64, error) {
 	lb.mu.RLock()
 	defer lb.mu.RUnlock()
 
 	var bestHost *Node
 	var bestScore uint64 = 0
 
+	// Get client's binary IP for same-host detection
+	var clientBinHost [16]byte
+	if clientIP != "" {
+		clientBinHost = lb.hostToBinary(clientIP)
+	}
+
 	for _, node := range lb.nodes {
 		if !node.IsActive {
+			continue
+		}
+
+		// Skip same-host nodes for source selection (like C++)
+		if streamName != "" && clientIP != "" && lb.compareBinaryHosts(node.BinHost, clientBinHost) {
+			lb.logger.WithFields(logging.Fields{
+				"stream":    streamName,
+				"host":      node.Host,
+				"client_ip": clientIP,
+			}).Debug("Ignoring same-host entry for source selection")
 			continue
 		}
 
@@ -297,13 +378,23 @@ func (lb *LoadBalancer) rateNode(node *Node, streamName string, lat, lon float64
 		return 0
 	}
 
-	// Check if stream is replicated (like C++ source() method)
-	if stream, exists := node.Streams[streamName]; exists && stream.Replicated {
-		lb.logger.WithFields(logging.Fields{
-			"stream": streamName,
-			"host":   node.Host,
-		}).Debug("Stream is replicated, skipping for source")
-		return 0
+	// Check if stream is replicated or has no inputs (like C++ source() method)
+	if stream, exists := node.Streams[streamName]; exists {
+		if stream.Replicated {
+			lb.logger.WithFields(logging.Fields{
+				"stream": streamName,
+				"host":   node.Host,
+			}).Debug("Stream is replicated, skipping for source")
+			return 0
+		}
+		if stream.Inputs == 0 {
+			lb.logger.WithFields(logging.Fields{
+				"stream": streamName,
+				"host":   node.Host,
+				"inputs": stream.Inputs,
+			}).Debug("Stream has no inputs, skipping for source")
+			return 0
+		}
 	}
 
 	// Check config streams (like C++)
