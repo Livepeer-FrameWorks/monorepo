@@ -33,21 +33,21 @@ FrameWorks is a distributed microservices platform for multi-tenant video stream
 | Web Console | 18030 | Central | Main application interface |
 | Marketing Site | 18031 | Central | Public website |
 | Forms API | 18032 | Central | Contact form handling |
-| Prometheus | 9091 | Central | Metrics collection & alerting |
-| Grafana | 3000 | Central | Monitoring dashboards |
 | **Planned Services** 🚧 | | | |
-| Seawarden | 18010 | Central | Certificate management |
-| Navigator | 18011 | Central | DNS management |
-| Privateer | 18012 | Central | WireGuard mesh networking |
-| Lookout | 18013 | Central | Incident management |
-| Messenger | 18014 | Central | Chat system |
-| Deckhand | 18015 | Central | Support ticket system |
+| Privateer (api_mesh) | 18012 | Central | WireGuard mesh orchestration |
+| Lookout (api_incidents) | 18013 | Central | Incident management |
+| Parlor (api_rooms) | 18014 | Central | Interactive room service |
+| Deckhand (api_ticketing) | 18015 | Central | Support ticketing |
+| **Deferred Services** ⏸️ | | | |
+| Seawarden | 18010 | Central | Certificate management (use Cloudflare + Let's Encrypt) |
+| Navigator | 18011 | Central | DNS management (use Cloudflare DNS API) |
 
 ### Infrastructure Components
 
 | Component | Role | Plane | Port(s) | Deploy Location |
 |-----------|------|-------|---------|-----------------|
 | MistServer | Media processing (ingest/transcode) | Media | 4242, 8080, 1935 | Edge |
+| Livepeer | Transcoding/AI processing | Media | 18016 (CLI), 18017 (RPC/HTTP) | Edge |
 | PostgreSQL/YugabyteDB | State & configuration database | Data | 5432/5433 | Central |
 | ClickHouse | Time-series analytics database | Data | 8123, 9000 | Central |
 | Kafka | Event streaming backbone | Data | 9092, 29092 | Regional |
@@ -72,7 +72,7 @@ Note: State/aggregates live in PostgreSQL (YugabyteDB-compatible). Time‑series
 
 - **Central**: Commodore, Quartermaster, Periscope, Purser, PostgreSQL, ClickHouse, Foghorn
 - **Regional**: Decklog, Kafka, Signalman, Web Console, Marketing Site
-- **Edge**: MistServer, Helmsman
+- **Edge**: MistServer, Helmsman, Livepeer Gateway
 
 ---
 
@@ -94,9 +94,11 @@ Frontend → Purser (HTTP/REST - billing)
 
 ### Media Pipeline
 ```
+                Livepeer (transcoding/AI)
+                     ↕
 RTMP/SRT/WHIP → MistServer → HLS/WebRTC/SRT → Viewers
                      ↕
-                  Foghorn (load balancing)
+                Foghorn (load balancing)
 ```
 
 ---

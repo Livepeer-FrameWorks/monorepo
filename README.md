@@ -21,6 +21,7 @@ An open streaming stack for live video: apps, real‑time APIs, and analytics. S
 - Media plane (edge)
   - Helmsman (`api_sidecar`): MistServer integration, metrics, event emission
   - MistServer: ingest/processing/edge
+  - Livepeer Gateway (golivepeer): transcoding/AI processing
 - Realtime & UI
   - Signalman (`api_realtime`): WebSocket hub
   - Web Console (`website_application`)
@@ -70,6 +71,8 @@ Endpoints (local)
 | Media | MistServer (control) | 4242 | Control API |
 | Media | MistServer (RTMP) | 1935 | Ingest |
 | Media | MistServer (HTTP) | 8080 | HLS/WebRTC delivery |
+| Media | Livepeer Gateway (CLI) | 18016 | golivepeer control |
+| Media | Livepeer Gateway (RPC/HTTP) | 18017 | golivepeer public API |
 | Realtime | Signalman | 18009 | WebSocket hub |
 | Support | Nginx | 18090 | Reverse proxy |
 | Support | Prometheus | 9091 | Metrics |
@@ -77,12 +80,12 @@ Endpoints (local)
 | UI | Web Console | 18030 | Application UI |
 | UI | Marketing Site | 18031 | Public site |
 | Support | Forms API | 18032 | Contact forms |
-| Planned | Seawarden | 18010 | Certificate management (Reserved) |
-| Planned | Navigator | 18011 | DNS management (Reserved) |
-| Planned | Privateer | 18012 | WireGuard mesh (Reserved) |
-| Planned | Lookout | 18013 | Incident management (Reserved) |
-| Planned | Messenger | 18014 | Chat system (Reserved) |
-| Planned | Deckhand | 18015 | Support ticketing (Reserved) |
+| Deferred | Seawarden | 18010 | Certificate management (use Cloudflare + Let's Encrypt) |
+| Deferred | Navigator | 18011 | DNS management (use Cloudflare DNS API from Quartermaster) |
+| Planned | Privateer (api_mesh) | 18012 | WireGuard mesh orchestration |
+| Planned | Lookout (api_incidents) | 18013 | Incident management |
+| Planned | Parlor (api_rooms) | 18014 | Interactive room service |
+| Planned | Deckhand (api_ticketing) | 18015 | Support ticketing |
 
 ## Docs
 - [Database](docs/DATABASE.md) — Dual-database design: PostgreSQL/YugabyteDB for state/aggregates, ClickHouse for time‑series; schemas, materialized views, TTLs, and service touch‑points.

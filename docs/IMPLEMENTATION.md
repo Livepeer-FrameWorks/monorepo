@@ -37,23 +37,19 @@ FrameWorks is a **distributed microservices platform** for **multi-tenant video 
   - Invoice generation
 
 **Planned Services** 🚧:
+- **Privateer** (`api_mesh`): WireGuard mesh orchestration agent
+  - Token-based secure mesh joining
+  - Bootstrap peer architecture for initial connections
+  - Integration with Quartermaster node registry
+  - Zero-downtime configuration updates and peer discovery
+
+**Deferred Services** ⏸️:
 - **Seawarden** (`api_certmgr`): Certificate management
-  - SSL certificate automation
-  - Multi-domain support
-  - Certificate lifecycle management
-  - Integration with Let's Encrypt
-  - Cloudflare DNS validation
+  - **Deferred because**: Let's Encrypt + Certbot already handles SSL automation effectively, exploring handling this with Caddy or Terraform+Ansible
+  - **Current solution**: Custom Nginx build with automatic certificate renewal
 - **Navigator** (`api_dnsmgr`): DNS management
-  - DNS record automation
-  - Geographic routing
-  - Health-based failover
-  - Multi-provider support
-  - DNS propagation monitoring
-- **Privateer** (`api_mesh`): WireGuard mesh networking
-  - Self-hosted overlay network orchestration
-  - Automated peer discovery and configuration
-  - Multi-region and multi-tenant mesh coordination
-  - Dynamic configuration distribution
+  - **Deferred because**: Cloudflare DNS API provides all necessary functionality
+  - **Current solution**: Manual DNS configuration via Cloudflare dashboard, exploring handling this with Caddy or Terraform+Ansible
 
 **Characteristics**:
 - Lower volume, high-value operations
@@ -134,6 +130,11 @@ FrameWorks is a **distributed microservices platform** for **multi-tenant video 
   - Load distribution
   - Health checks
   - Geographic routing
+- **Livepeer Gateway** 
+  - GPU transcoding and AI jobs via Livepeer network
+  - Deployed on edge nodes alongside MistServer
+  - Simple deployment: Docker/binary, L2 RPC access, funded ETH wallet
+  - Keys require activation and deposit management
 
 **Characteristics**:
 - **Direct media protocols** for low-latency streaming
@@ -179,20 +180,20 @@ FrameWorks is a **distributed microservices platform** for **multi-tenant video 
 
 **Planned Services** 🚧:
 - **Lookout** (`api_incidents`): Incident management
-  - System health monitoring
-  - Automated incident response
-  - Status page integration
-  - Alert routing and escalation
-- **Messenger** (`api_chats`): Chat system
-  - Real-time support chat
-  - Team collaboration
-  - Message persistence
-  - Live stream chats
-- **Deckhand** (`api_ticketing`): Support ticket system
-  - Ticket management
-  - SLA tracking
-  - Escalation paths
-  - Integration with chat
+  - Alert aggregation from monitoring systems
+  - Smart deduplication and incident creation
+  - Escalation policies and multi-channel notifications
+  - Public status page integration
+- **Parlor** (`api_rooms`): Interactive room service
+  - Room hierarchy with persistent communities
+  - Multi-modal interaction (chat, voice, video, games)
+  - Channel credit economy and prediction markets
+  - Zoom-like group calls with broadcasting modes
+- **Deckhand** (`api_ticketing`): Support ticketing
+  - Stream-aware ticket creation with diagnostics
+  - Multi-channel intake (email, web, chat, API)
+  - SLA management and agent routing
+  - Knowledge base integration
 
 **Infrastructure**:
 - **Nginx**: Reverse proxy and routing

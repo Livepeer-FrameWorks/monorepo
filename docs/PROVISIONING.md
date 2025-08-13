@@ -31,7 +31,7 @@ This guide demonstrates a **production-ready FrameWorks deployment** based on ou
 │ • Purser        │    │ • Decklog       │    │                 │
 │ • Foghorn       │    │ • Kafka         │    │                 │
 │ • Forms         │    │ • Nginx         │    │                 │
-│ • Forum         │    │ • Messenger 🚧  │    │                 │
+│ • Forum         │    │ • Parlor 🚧     │    │                 │
 │ • Metrics       │    │                 │    │                 │
 │ • Lookout 🚧    │    │                 │    │                 │
 │ • Deckhand 🚧   │    │                 │    │                 │
