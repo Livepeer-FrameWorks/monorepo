@@ -275,8 +275,8 @@ func (pm *PrometheusMonitor) fetchJSON(url string) (map[string]interface{}, erro
 
 // emitStreamLifecycle fetches data from MistServer's TCP API directly
 func (pm *PrometheusMonitor) emitStreamLifecycle(nodeID, baseURL string) {
-	// Try direct TCP API at port 4242 first
-	apiURL := "http://localhost:4242/"
+	// Use the provided baseURL for the API
+	apiURL := baseURL
 
 	monitorLogger.WithFields(logging.Fields{
 		"api_url": apiURL,

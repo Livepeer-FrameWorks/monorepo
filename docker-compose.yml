@@ -111,6 +111,8 @@ services:
       - BANDWIDTH_WEIGHT=1000
       - GEO_WEIGHT=1000
       - STREAM_BONUS=50
+      - MISTSERVER_URL=http://mistserver:4242
+      - SERVICE_TOKEN=your-service-token-change-in-production
     ports:
       - "18008:18008"
     depends_on:
@@ -312,8 +314,10 @@ services:
       - PORT=18009
       - DATABASE_URL=postgres://frameworks_user:frameworks_dev@postgres:5432/frameworks?sslmode=disable
       - KAFKA_BROKERS=kafka:9092
-      - KAFKA_TOPIC_PREFIX=frameworks
-      - KAFKA_CONSUMER_GROUP=signalman-websocket-hub
+      - KAFKA_TOPICS=analytics_events
+      - KAFKA_GROUP_ID=signalman-group
+      - KAFKA_CLUSTER_ID=frameworks
+      - KAFKA_CLIENT_ID=signalman
       - LOG_LEVEL=info
       - REGION=development
       - HOSTNAME=signalman-dev
@@ -350,8 +354,11 @@ services:
       - FOGHORN_URL=http://foghorn:18008
       - MIST_USERNAME=${MIST_USERNAME:-test}
       - MIST_PASSWORD=${MIST_PASSWORD:-test}
+      - MIST_API_USERNAME=${MIST_API_USERNAME:-test}
+      - MIST_API_PASSWORD=${MIST_API_PASSWORD:-test}
       - PORT=18001
       - QUARTERMASTER_URL=http://quartermaster:18002
+      - PURSER_URL=http://purser:18003
       - SERVICE_TOKEN=your-service-token-change-in-production
     ports:
       - "18001:18001"
@@ -395,6 +402,7 @@ services:
       - NODE_NAME=edge-node-1
       - PORT=18007
       - LOG_LEVEL=info
+      - SERVICE_TOKEN=your-service-token-change-in-production
       - DECKLOG_GRPC_TARGET=decklog:18006
       - DECKLOG_ALLOW_INSECURE=true  # For local development only
     depends_on:
@@ -424,7 +432,8 @@ services:
       - KAFKA_BROKERS=kafka:9092
       - KAFKA_GROUP_ID=periscope-ingest
       - KAFKA_CLUSTER_ID=frameworks
-      - KAFKA_TOPICS=analytics
+      - KAFKA_TOPICS=analytics_events
+      - KAFKA_CLIENT_ID=periscope-ingest
       - LOG_LEVEL=info
       - ENABLE_HEALTH_ENDPOINT=true
       - HEALTH_PORT=18005
@@ -526,6 +535,20 @@ services:
       - JWT_SECRET=your-jwt-secret-change-in-production
       - SERVICE_TOKEN=your-service-token-change-in-production
       - QUARTERMASTER_URL=http://quartermaster:18002
+      # Optional: Crypto payment providers (uncomment when needed)
+      # - MOLLIE_API_KEY=${MOLLIE_API_KEY}
+      # - ETHERSCAN_API_KEY=${ETHERSCAN_API_KEY}
+      # - BLOCKCYPHER_API_KEY=${BLOCKCYPHER_API_KEY}
+      # - ETHEREUM_RPC_URL=${ETHEREUM_RPC_URL}
+      # - MASTER_WALLET_SEED=${MASTER_WALLET_SEED}
+      # Optional: Email/SMTP configuration (uncomment when needed)
+      # - SMTP_HOST=${SMTP_HOST}
+      # - SMTP_PORT=${SMTP_PORT}
+      # - SMTP_USER=${SMTP_USER}
+      # - SMTP_PASSWORD=${SMTP_PASSWORD}
+      # - FROM_EMAIL=${FROM_EMAIL}
+      # - FROM_NAME=${FROM_NAME}
+      # - BASE_URL=${BASE_URL}
     depends_on:
       postgres:
         condition: service_healthy
