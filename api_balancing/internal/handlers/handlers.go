@@ -703,6 +703,12 @@ func postBalancingEvent(c middleware.Context, streamName, selectedNode string, s
 		country = c.GetHeader("X-Country-Code")
 	}
 
+	// Extract real IP from CloudFlare (overrides X-Forwarded-For if present)
+	cfConnectingIP := c.GetHeader("CF-Connecting-IP")
+	if cfConnectingIP != "" {
+		clientIP = cfConnectingIP
+	}
+
 	// Determine tenant ID from headers (service-to-service calls must set X-Tenant-ID)
 	tenantID := c.GetHeader("X-Tenant-ID")
 	if tenantID == "" {
@@ -741,13 +747,30 @@ func postBalancingEvent(c middleware.Context, streamName, selectedNode string, s
 // Helper functions
 
 func getLatLon(c middleware.Context, query url.Values, queryKey, headerKey string) float64 {
-	// Check header first (like C++)
+	// First check CloudFlare geographic headers (most accurate)
+	if queryKey == "lat" {
+		if val := c.GetHeader("CF-IPLatitude"); val != "" {
+			if f, err := strconv.ParseFloat(val, 64); err == nil {
+				return f
+			}
+		}
+	}
+	if queryKey == "lon" {
+		if val := c.GetHeader("CF-IPLongitude"); val != "" {
+			if f, err := strconv.ParseFloat(val, 64); err == nil {
+				return f
+			}
+		}
+	}
+
+	// Then check standard headers (nginx with GeoIP, etc.)
 	if val := c.GetHeader(headerKey); val != "" {
 		if f, err := strconv.ParseFloat(val, 64); err == nil {
 			return f
 		}
 	}
-	// Check query parameter
+
+	// Finally check query parameter
 	if val := query.Get(queryKey); val != "" {
 		if f, err := strconv.ParseFloat(val, 64); err == nil {
 			return f
