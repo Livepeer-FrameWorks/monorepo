@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,18 +11,22 @@ import (
 	"strings"
 	"time"
 
+	"frameworks/pkg/clients/commodore"
+	"frameworks/pkg/clients/foghorn"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/middleware"
 	"frameworks/pkg/models"
 )
 
 var (
-	logger       logging.Logger
-	apiBaseURL   string
-	clusterID    string
-	foghornURI   string
-	nodeName     string
-	serviceToken string
+	logger          logging.Logger
+	apiBaseURL      string
+	clusterID       string
+	foghornURI      string
+	nodeName        string
+	serviceToken    string
+	commodoreClient *commodore.Client
+	foghornClient   *foghorn.Client
 )
 
 // Init initializes the handlers with logger and service URLs and cluster metadata
@@ -49,6 +54,21 @@ func Init(log logging.Logger) {
 	}
 
 	serviceToken = os.Getenv("SERVICE_TOKEN")
+
+	// Initialize Commodore client
+	commodoreClient = commodore.NewClient(commodore.Config{
+		BaseURL:      apiBaseURL,
+		ServiceToken: serviceToken,
+		Timeout:      10 * time.Second,
+		Logger:       logger,
+	})
+
+	foghornClient = foghorn.NewClient(foghorn.Config{
+		BaseURL:      foghornURI,
+		ServiceToken: serviceToken,
+		Timeout:      10 * time.Second,
+		Logger:       logger,
+	})
 
 	// Initialize the Decklog client for analytics forwarding
 	InitDecklogClient()
@@ -97,39 +117,11 @@ func getCurrentNodeID() string {
 	return "unknown"
 }
 
-// validateStreamKeyViaAPI calls the main API to validate a stream key
 func validateStreamKeyViaAPI(streamKey string) (*models.StreamValidationResponse, error) {
-	url := fmt.Sprintf("%s/api/validate-stream-key/%s", apiBaseURL, streamKey)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
-	resp, err := http.Get(url)
-	if err != nil {
-		return nil, fmt.Errorf("failed to call Commodore: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read Commodore response: %w", err)
-	}
-
-	var validation models.StreamValidationResponse
-	if resp.StatusCode == http.StatusOK {
-		err = json.Unmarshal(body, &validation)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse Commodore response: %w", err)
-		}
-		validation.Valid = true
-	} else {
-		// Parse error response
-		var errorResp map[string]string
-		json.Unmarshal(body, &errorResp)
-		validation.Valid = false
-		if msg, ok := errorResp["error"]; ok {
-			validation.Error = msg
-		}
-	}
-
-	return &validation, nil
+	return commodoreClient.ValidateStreamKey(ctx, streamKey)
 }
 
 // forwardEventToCommodore forwards stream events to Commodore for processing
@@ -325,51 +317,16 @@ func HandleDefaultStream(c middleware.Context) {
 		"request_url":      requestURL,
 	}).Info("DEFAULT_STREAM trigger")
 
-	// Call API to resolve playback ID to internal name
-	// Use defaultStream (the playback ID) instead of requestedStream (which is often an IP address)
-	url := fmt.Sprintf("%s/api/resolve-playback-id/%s", apiBaseURL, defaultStream)
-	resp, err := http.Get(url)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	resolveResponse, err := commodoreClient.ResolvePlaybackID(ctx, defaultStream)
 	if err != nil {
 		logger.WithFields(logging.Fields{
 			"error":       err,
 			"playback_id": defaultStream,
 		}).Error("Failed to resolve playback ID")
 		c.String(http.StatusOK, "")
-		return
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		logger.WithFields(logging.Fields{
-			"playback_id":   defaultStream,
-			"status_code":   resp.StatusCode,
-			"response_body": string(body),
-		}).Error("Failed to resolve playback ID")
-		c.String(http.StatusOK, "")
-		return
-	}
-
-	body, err = io.ReadAll(resp.Body)
-	if err != nil {
-		logger.Error("Failed to read resolve response body")
-		c.String(http.StatusOK, "")
-		return
-	}
-
-	var resolveResponse struct {
-		InternalName string `json:"internal_name"`
-		TenantID     string `json:"tenant_id"`
-		Status       string `json:"status"`
-	}
-
-	if err := json.Unmarshal(body, &resolveResponse); err != nil {
-		logger.WithFields(logging.Fields{
-			"playback_id": defaultStream,
-			"error":       err,
-			"response":    string(body),
-		}).Error("Failed to parse playback ID resolution response")
-		c.String(http.StatusOK, "") // Empty response uses default behavior
 		return
 	}
 
@@ -458,22 +415,21 @@ func updateFoghornStreamHealth(streamName string, isHealthy bool, details map[st
 		update[k] = v
 	}
 
-	// Send to Foghorn
-	jsonData, err := json.Marshal(update)
-	if err != nil {
-		return fmt.Errorf("failed to marshal stream health update: %w", err)
+	// Send to Foghorn using shared client
+	req := &foghorn.StreamHealthRequest{
+		NodeID:       nodeID,
+		StreamName:   streamName,
+		InternalName: internalName,
+		IsHealthy:    isHealthy,
+		Timestamp:    time.Now().Unix(),
+		Details:      details,
 	}
 
-	url := fmt.Sprintf("%s/stream/health", foghornURI)
-	resp, err := http.Post(url, "application/json", bytes.NewBuffer(jsonData))
-	if err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := foghornClient.UpdateStreamHealth(ctx, req); err != nil {
 		return fmt.Errorf("failed to send stream health update to Foghorn: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("Foghorn returned error status %d: %s", resp.StatusCode, string(body))
 	}
 
 	logger.WithFields(logging.Fields{

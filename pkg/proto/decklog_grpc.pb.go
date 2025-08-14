@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.5.1
 // - protoc             v5.29.3
-// source: proto/decklog.proto
+// source: decklog.proto
 
 package proto
 
@@ -19,9 +19,9 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	DecklogService_StreamEvents_FullMethodName       = "/decklog.DecklogService/StreamEvents"
-	DecklogService_SendBalancingEvent_FullMethodName = "/decklog.DecklogService/SendBalancingEvent"
-	DecklogService_CheckHealth_FullMethodName        = "/decklog.DecklogService/CheckHealth"
+	DecklogService_StreamEvents_FullMethodName = "/decklog.DecklogService/StreamEvents"
+	DecklogService_SendEvent_FullMethodName    = "/decklog.DecklogService/SendEvent"
+	DecklogService_CheckHealth_FullMethodName  = "/decklog.DecklogService/CheckHealth"
 )
 
 // DecklogServiceClient is the client API for DecklogService service.
@@ -31,7 +31,7 @@ type DecklogServiceClient interface {
 	// Stream events from Helmsman (high throughput)
 	StreamEvents(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[Event, EventResponse], error)
 	// Single event from Foghorn (load balancing decisions)
-	SendBalancingEvent(ctx context.Context, in *BalancingEvent, opts ...grpc.CallOption) (*EventResponse, error)
+	SendEvent(ctx context.Context, in *Event, opts ...grpc.CallOption) (*EventResponse, error)
 	// Health check
 	CheckHealth(ctx context.Context, in *HealthRequest, opts ...grpc.CallOption) (*HealthResponse, error)
 }
@@ -57,10 +57,10 @@ func (c *decklogServiceClient) StreamEvents(ctx context.Context, opts ...grpc.Ca
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type DecklogService_StreamEventsClient = grpc.BidiStreamingClient[Event, EventResponse]
 
-func (c *decklogServiceClient) SendBalancingEvent(ctx context.Context, in *BalancingEvent, opts ...grpc.CallOption) (*EventResponse, error) {
+func (c *decklogServiceClient) SendEvent(ctx context.Context, in *Event, opts ...grpc.CallOption) (*EventResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(EventResponse)
-	err := c.cc.Invoke(ctx, DecklogService_SendBalancingEvent_FullMethodName, in, out, cOpts...)
+	err := c.cc.Invoke(ctx, DecklogService_SendEvent_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -84,7 +84,7 @@ type DecklogServiceServer interface {
 	// Stream events from Helmsman (high throughput)
 	StreamEvents(grpc.BidiStreamingServer[Event, EventResponse]) error
 	// Single event from Foghorn (load balancing decisions)
-	SendBalancingEvent(context.Context, *BalancingEvent) (*EventResponse, error)
+	SendEvent(context.Context, *Event) (*EventResponse, error)
 	// Health check
 	CheckHealth(context.Context, *HealthRequest) (*HealthResponse, error)
 	mustEmbedUnimplementedDecklogServiceServer()
@@ -100,8 +100,8 @@ type UnimplementedDecklogServiceServer struct{}
 func (UnimplementedDecklogServiceServer) StreamEvents(grpc.BidiStreamingServer[Event, EventResponse]) error {
 	return status.Errorf(codes.Unimplemented, "method StreamEvents not implemented")
 }
-func (UnimplementedDecklogServiceServer) SendBalancingEvent(context.Context, *BalancingEvent) (*EventResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method SendBalancingEvent not implemented")
+func (UnimplementedDecklogServiceServer) SendEvent(context.Context, *Event) (*EventResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SendEvent not implemented")
 }
 func (UnimplementedDecklogServiceServer) CheckHealth(context.Context, *HealthRequest) (*HealthResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CheckHealth not implemented")
@@ -134,20 +134,20 @@ func _DecklogService_StreamEvents_Handler(srv interface{}, stream grpc.ServerStr
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type DecklogService_StreamEventsServer = grpc.BidiStreamingServer[Event, EventResponse]
 
-func _DecklogService_SendBalancingEvent_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(BalancingEvent)
+func _DecklogService_SendEvent_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(Event)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(DecklogServiceServer).SendBalancingEvent(ctx, in)
+		return srv.(DecklogServiceServer).SendEvent(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: DecklogService_SendBalancingEvent_FullMethodName,
+		FullMethod: DecklogService_SendEvent_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(DecklogServiceServer).SendBalancingEvent(ctx, req.(*BalancingEvent))
+		return srv.(DecklogServiceServer).SendEvent(ctx, req.(*Event))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -178,8 +178,8 @@ var DecklogService_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*DecklogServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
-			MethodName: "SendBalancingEvent",
-			Handler:    _DecklogService_SendBalancingEvent_Handler,
+			MethodName: "SendEvent",
+			Handler:    _DecklogService_SendEvent_Handler,
 		},
 		{
 			MethodName: "CheckHealth",
@@ -194,5 +194,5 @@ var DecklogService_ServiceDesc = grpc.ServiceDesc{
 			ClientStreams: true,
 		},
 	},
-	Metadata: "proto/decklog.proto",
+	Metadata: "decklog.proto",
 }

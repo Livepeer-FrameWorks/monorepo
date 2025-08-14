@@ -1,15 +1,13 @@
 package handlers
 
 import (
-	"bytes"
+	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"sync"
 	"time"
 
+	"frameworks/pkg/api/quartermaster"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/models"
 )
@@ -55,51 +53,18 @@ type QuartermasterRouter struct {
 	mutex  sync.RWMutex
 }
 
-// GetBestClusterForStream returns the best cluster for a stream
 func (r *QuartermasterRouter) GetBestClusterForStream(req models.StreamRequest) (*ClusterInfo, error) {
-	// Call Quartermaster's routing API
-	reqBody := map[string]interface{}{
-		"tenant_id": req.TenantID,
-		"stream_id": req.StreamID,
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	routingReq := &quartermaster.TenantRoutingRequest{
+		TenantID: req.TenantID,
+		StreamID: req.StreamID,
 	}
 
-	jsonBody, err := json.Marshal(reqBody)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
-	}
-
-	httpReq, err := http.NewRequest("POST", quartermasterURL+"/api/v1/tenant/routing", bytes.NewBuffer(jsonBody))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+serviceToken)
-
-	resp, err := http.DefaultClient.Do(httpReq)
+	routing, err := quartermasterClient.GetTenantRouting(ctx, routingReq)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get cluster routing: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("routing request failed: %s", string(body))
-	}
-
-	var routing struct {
-		ClusterID      string   `json:"cluster_id"`
-		ClusterType    string   `json:"cluster_type"`
-		BaseURL        string   `json:"base_url"`
-		KafkaBrokers   []string `json:"kafka_brokers"`
-		TopicPrefix    string   `json:"topic_prefix"`
-		MaxStreams     int      `json:"max_streams"`
-		CurrentStreams int      `json:"current_streams"`
-		HealthStatus   string   `json:"health_status"`
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&routing); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
 	info := &ClusterInfo{

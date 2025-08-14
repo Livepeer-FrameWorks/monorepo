@@ -2,7 +2,7 @@
 // versions:
 // 	protoc-gen-go v1.36.6
 // 	protoc        v5.29.3
-// source: proto/decklog.proto
+// source: decklog.proto
 
 package proto
 
@@ -85,11 +85,11 @@ func (x EventType) String() string {
 }
 
 func (EventType) Descriptor() protoreflect.EnumDescriptor {
-	return file_proto_decklog_proto_enumTypes[0].Descriptor()
+	return file_decklog_proto_enumTypes[0].Descriptor()
 }
 
 func (EventType) Type() protoreflect.EnumType {
-	return &file_proto_decklog_proto_enumTypes[0]
+	return &file_decklog_proto_enumTypes[0]
 }
 
 func (x EventType) Number() protoreflect.EnumNumber {
@@ -98,7 +98,7 @@ func (x EventType) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use EventType.Descriptor instead.
 func (EventType) EnumDescriptor() ([]byte, []int) {
-	return file_proto_decklog_proto_rawDescGZIP(), []int{0}
+	return file_decklog_proto_rawDescGZIP(), []int{0}
 }
 
 type StreamLifecycleData_State int32
@@ -140,11 +140,11 @@ func (x StreamLifecycleData_State) String() string {
 }
 
 func (StreamLifecycleData_State) Descriptor() protoreflect.EnumDescriptor {
-	return file_proto_decklog_proto_enumTypes[1].Descriptor()
+	return file_decklog_proto_enumTypes[1].Descriptor()
 }
 
 func (StreamLifecycleData_State) Type() protoreflect.EnumType {
-	return &file_proto_decklog_proto_enumTypes[1]
+	return &file_decklog_proto_enumTypes[1]
 }
 
 func (x StreamLifecycleData_State) Number() protoreflect.EnumNumber {
@@ -153,7 +153,7 @@ func (x StreamLifecycleData_State) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use StreamLifecycleData_State.Descriptor instead.
 func (StreamLifecycleData_State) EnumDescriptor() ([]byte, []int) {
-	return file_proto_decklog_proto_rawDescGZIP(), []int{4, 0}
+	return file_decklog_proto_rawDescGZIP(), []int{4, 0}
 }
 
 type UserConnectionData_Action int32
@@ -189,11 +189,11 @@ func (x UserConnectionData_Action) String() string {
 }
 
 func (UserConnectionData_Action) Descriptor() protoreflect.EnumDescriptor {
-	return file_proto_decklog_proto_enumTypes[2].Descriptor()
+	return file_decklog_proto_enumTypes[2].Descriptor()
 }
 
 func (UserConnectionData_Action) Type() protoreflect.EnumType {
-	return &file_proto_decklog_proto_enumTypes[2]
+	return &file_decklog_proto_enumTypes[2]
 }
 
 func (x UserConnectionData_Action) Number() protoreflect.EnumNumber {
@@ -202,7 +202,7 @@ func (x UserConnectionData_Action) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use UserConnectionData_Action.Descriptor instead.
 func (UserConnectionData_Action) EnumDescriptor() ([]byte, []int) {
-	return file_proto_decklog_proto_rawDescGZIP(), []int{5, 0}
+	return file_decklog_proto_rawDescGZIP(), []int{5, 0}
 }
 
 type Event struct {
@@ -219,7 +219,7 @@ type Event struct {
 
 func (x *Event) Reset() {
 	*x = Event{}
-	mi := &file_proto_decklog_proto_msgTypes[0]
+	mi := &file_decklog_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -231,7 +231,7 @@ func (x *Event) String() string {
 func (*Event) ProtoMessage() {}
 
 func (x *Event) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_decklog_proto_msgTypes[0]
+	mi := &file_decklog_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -244,7 +244,7 @@ func (x *Event) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Event.ProtoReflect.Descriptor instead.
 func (*Event) Descriptor() ([]byte, []int) {
-	return file_proto_decklog_proto_rawDescGZIP(), []int{0}
+	return file_decklog_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *Event) GetBatchId() string {
@@ -301,15 +301,26 @@ type EventData struct {
 	InternalName  *string                `protobuf:"bytes,8,opt,name=internal_name,json=internalName,proto3,oneof" json:"internal_name,omitempty"`
 	Region        string                 `protobuf:"bytes,9,opt,name=region,proto3" json:"region,omitempty"`
 	NodeUrl       *string                `protobuf:"bytes,10,opt,name=node_url,json=nodeUrl,proto3,oneof" json:"node_url,omitempty"`
-	Data          map[string]string      `protobuf:"bytes,11,rep,name=data,proto3" json:"data,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	SchemaVersion string                 `protobuf:"bytes,12,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
+	// Typed event data using oneof for type safety
+	//
+	// Types that are valid to be assigned to EventData:
+	//
+	//	*EventData_StreamIngestData
+	//	*EventData_StreamViewData
+	//	*EventData_StreamLifecycleData
+	//	*EventData_UserConnectionData
+	//	*EventData_StreamMetricsData
+	//	*EventData_NodeMonitoringData
+	//	*EventData_LoadBalancingData
+	EventData     isEventData_EventData `protobuf_oneof:"event_data"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *EventData) Reset() {
 	*x = EventData{}
-	mi := &file_proto_decklog_proto_msgTypes[1]
+	mi := &file_decklog_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -321,7 +332,7 @@ func (x *EventData) String() string {
 func (*EventData) ProtoMessage() {}
 
 func (x *EventData) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_decklog_proto_msgTypes[1]
+	mi := &file_decklog_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -334,7 +345,7 @@ func (x *EventData) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EventData.ProtoReflect.Descriptor instead.
 func (*EventData) Descriptor() ([]byte, []int) {
-	return file_proto_decklog_proto_rawDescGZIP(), []int{1}
+	return file_decklog_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *EventData) GetEventId() string {
@@ -407,19 +418,128 @@ func (x *EventData) GetNodeUrl() string {
 	return ""
 }
 
-func (x *EventData) GetData() map[string]string {
-	if x != nil {
-		return x.Data
-	}
-	return nil
-}
-
 func (x *EventData) GetSchemaVersion() string {
 	if x != nil {
 		return x.SchemaVersion
 	}
 	return ""
 }
+
+func (x *EventData) GetEventData() isEventData_EventData {
+	if x != nil {
+		return x.EventData
+	}
+	return nil
+}
+
+func (x *EventData) GetStreamIngestData() *StreamIngestData {
+	if x != nil {
+		if x, ok := x.EventData.(*EventData_StreamIngestData); ok {
+			return x.StreamIngestData
+		}
+	}
+	return nil
+}
+
+func (x *EventData) GetStreamViewData() *StreamViewData {
+	if x != nil {
+		if x, ok := x.EventData.(*EventData_StreamViewData); ok {
+			return x.StreamViewData
+		}
+	}
+	return nil
+}
+
+func (x *EventData) GetStreamLifecycleData() *StreamLifecycleData {
+	if x != nil {
+		if x, ok := x.EventData.(*EventData_StreamLifecycleData); ok {
+			return x.StreamLifecycleData
+		}
+	}
+	return nil
+}
+
+func (x *EventData) GetUserConnectionData() *UserConnectionData {
+	if x != nil {
+		if x, ok := x.EventData.(*EventData_UserConnectionData); ok {
+			return x.UserConnectionData
+		}
+	}
+	return nil
+}
+
+func (x *EventData) GetStreamMetricsData() *StreamMetricsData {
+	if x != nil {
+		if x, ok := x.EventData.(*EventData_StreamMetricsData); ok {
+			return x.StreamMetricsData
+		}
+	}
+	return nil
+}
+
+func (x *EventData) GetNodeMonitoringData() *NodeMonitoringData {
+	if x != nil {
+		if x, ok := x.EventData.(*EventData_NodeMonitoringData); ok {
+			return x.NodeMonitoringData
+		}
+	}
+	return nil
+}
+
+func (x *EventData) GetLoadBalancingData() *LoadBalancingData {
+	if x != nil {
+		if x, ok := x.EventData.(*EventData_LoadBalancingData); ok {
+			return x.LoadBalancingData
+		}
+	}
+	return nil
+}
+
+type isEventData_EventData interface {
+	isEventData_EventData()
+}
+
+type EventData_StreamIngestData struct {
+	StreamIngestData *StreamIngestData `protobuf:"bytes,13,opt,name=stream_ingest_data,json=streamIngestData,proto3,oneof"`
+}
+
+type EventData_StreamViewData struct {
+	StreamViewData *StreamViewData `protobuf:"bytes,14,opt,name=stream_view_data,json=streamViewData,proto3,oneof"`
+}
+
+type EventData_StreamLifecycleData struct {
+	StreamLifecycleData *StreamLifecycleData `protobuf:"bytes,15,opt,name=stream_lifecycle_data,json=streamLifecycleData,proto3,oneof"`
+}
+
+type EventData_UserConnectionData struct {
+	UserConnectionData *UserConnectionData `protobuf:"bytes,16,opt,name=user_connection_data,json=userConnectionData,proto3,oneof"`
+}
+
+type EventData_StreamMetricsData struct {
+	StreamMetricsData *StreamMetricsData `protobuf:"bytes,17,opt,name=stream_metrics_data,json=streamMetricsData,proto3,oneof"`
+}
+
+type EventData_NodeMonitoringData struct {
+	NodeMonitoringData *NodeMonitoringData `protobuf:"bytes,18,opt,name=node_monitoring_data,json=nodeMonitoringData,proto3,oneof"`
+}
+
+type EventData_LoadBalancingData struct {
+	LoadBalancingData *LoadBalancingData `protobuf:"bytes,19,opt,name=load_balancing_data,json=loadBalancingData,proto3,oneof"`
+}
+
+func (*EventData_StreamIngestData) isEventData_EventData() {}
+
+func (*EventData_StreamViewData) isEventData_EventData() {}
+
+func (*EventData_StreamLifecycleData) isEventData_EventData() {}
+
+func (*EventData_UserConnectionData) isEventData_EventData() {}
+
+func (*EventData_StreamMetricsData) isEventData_EventData() {}
+
+func (*EventData_NodeMonitoringData) isEventData_EventData() {}
+
+func (*EventData_LoadBalancingData) isEventData_EventData() {}
 
 // Stream ingest specific data
 type StreamIngestData struct {
@@ -435,7 +555,7 @@ type StreamIngestData struct {
 
 func (x *StreamIngestData) Reset() {
 	*x = StreamIngestData{}
-	mi := &file_proto_decklog_proto_msgTypes[2]
+	mi := &file_decklog_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -447,7 +567,7 @@ func (x *StreamIngestData) String() string {
 func (*StreamIngestData) ProtoMessage() {}
 
 func (x *StreamIngestData) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_decklog_proto_msgTypes[2]
+	mi := &file_decklog_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -460,7 +580,7 @@ func (x *StreamIngestData) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamIngestData.ProtoReflect.Descriptor instead.
 func (*StreamIngestData) Descriptor() ([]byte, []int) {
-	return file_proto_decklog_proto_rawDescGZIP(), []int{2}
+	return file_decklog_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *StreamIngestData) GetStreamKey() string {
@@ -512,7 +632,7 @@ type StreamViewData struct {
 
 func (x *StreamViewData) Reset() {
 	*x = StreamViewData{}
-	mi := &file_proto_decklog_proto_msgTypes[3]
+	mi := &file_decklog_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -524,7 +644,7 @@ func (x *StreamViewData) String() string {
 func (*StreamViewData) ProtoMessage() {}
 
 func (x *StreamViewData) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_decklog_proto_msgTypes[3]
+	mi := &file_decklog_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -537,7 +657,7 @@ func (x *StreamViewData) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamViewData.ProtoReflect.Descriptor instead.
 func (*StreamViewData) Descriptor() ([]byte, []int) {
-	return file_proto_decklog_proto_rawDescGZIP(), []int{3}
+	return file_decklog_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *StreamViewData) GetViewerIp() string {
@@ -587,7 +707,7 @@ type StreamLifecycleData struct {
 
 func (x *StreamLifecycleData) Reset() {
 	*x = StreamLifecycleData{}
-	mi := &file_proto_decklog_proto_msgTypes[4]
+	mi := &file_decklog_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -599,7 +719,7 @@ func (x *StreamLifecycleData) String() string {
 func (*StreamLifecycleData) ProtoMessage() {}
 
 func (x *StreamLifecycleData) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_decklog_proto_msgTypes[4]
+	mi := &file_decklog_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -612,7 +732,7 @@ func (x *StreamLifecycleData) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamLifecycleData.ProtoReflect.Descriptor instead.
 func (*StreamLifecycleData) Descriptor() ([]byte, []int) {
-	return file_proto_decklog_proto_rawDescGZIP(), []int{4}
+	return file_decklog_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *StreamLifecycleData) GetState() StreamLifecycleData_State {
@@ -648,7 +768,7 @@ type UserConnectionData struct {
 
 func (x *UserConnectionData) Reset() {
 	*x = UserConnectionData{}
-	mi := &file_proto_decklog_proto_msgTypes[5]
+	mi := &file_decklog_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -660,7 +780,7 @@ func (x *UserConnectionData) String() string {
 func (*UserConnectionData) ProtoMessage() {}
 
 func (x *UserConnectionData) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_decklog_proto_msgTypes[5]
+	mi := &file_decklog_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -673,7 +793,7 @@ func (x *UserConnectionData) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UserConnectionData.ProtoReflect.Descriptor instead.
 func (*UserConnectionData) Descriptor() ([]byte, []int) {
-	return file_proto_decklog_proto_rawDescGZIP(), []int{5}
+	return file_decklog_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *UserConnectionData) GetAction() UserConnectionData_Action {
@@ -714,7 +834,7 @@ type StreamMetricsData struct {
 
 func (x *StreamMetricsData) Reset() {
 	*x = StreamMetricsData{}
-	mi := &file_proto_decklog_proto_msgTypes[6]
+	mi := &file_decklog_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -726,7 +846,7 @@ func (x *StreamMetricsData) String() string {
 func (*StreamMetricsData) ProtoMessage() {}
 
 func (x *StreamMetricsData) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_decklog_proto_msgTypes[6]
+	mi := &file_decklog_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -739,7 +859,7 @@ func (x *StreamMetricsData) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamMetricsData.ProtoReflect.Descriptor instead.
 func (*StreamMetricsData) Descriptor() ([]byte, []int) {
-	return file_proto_decklog_proto_rawDescGZIP(), []int{6}
+	return file_decklog_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *StreamMetricsData) GetBandwidthBps() uint64 {
@@ -816,7 +936,7 @@ type NodeMonitoringData struct {
 
 func (x *NodeMonitoringData) Reset() {
 	*x = NodeMonitoringData{}
-	mi := &file_proto_decklog_proto_msgTypes[7]
+	mi := &file_decklog_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -828,7 +948,7 @@ func (x *NodeMonitoringData) String() string {
 func (*NodeMonitoringData) ProtoMessage() {}
 
 func (x *NodeMonitoringData) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_decklog_proto_msgTypes[7]
+	mi := &file_decklog_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -841,7 +961,7 @@ func (x *NodeMonitoringData) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NodeMonitoringData.ProtoReflect.Descriptor instead.
 func (*NodeMonitoringData) Descriptor() ([]byte, []int) {
-	return file_proto_decklog_proto_rawDescGZIP(), []int{7}
+	return file_decklog_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *NodeMonitoringData) GetCpuLoad() float32 {
@@ -907,42 +1027,36 @@ func (x *NodeMonitoringData) GetActiveViewers() uint32 {
 	return 0
 }
 
-type BalancingEvent struct {
+// Load balancing specific data
+type LoadBalancingData struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	EventId       string                 `protobuf:"bytes,1,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"`
-	StreamId      string                 `protobuf:"bytes,2,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`
-	SelectedNode  string                 `protobuf:"bytes,3,opt,name=selected_node,json=selectedNode,proto3" json:"selected_node,omitempty"`
-	TenantId      string                 `protobuf:"bytes,4,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
-	Latitude      float64                `protobuf:"fixed64,5,opt,name=latitude,proto3" json:"latitude,omitempty"`
-	Longitude     float64                `protobuf:"fixed64,6,opt,name=longitude,proto3" json:"longitude,omitempty"`
-	Status        string                 `protobuf:"bytes,7,opt,name=status,proto3" json:"status,omitempty"`
-	Details       string                 `protobuf:"bytes,8,opt,name=details,proto3" json:"details,omitempty"`
-	Timestamp     *timestamppb.Timestamp `protobuf:"bytes,9,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
-	Source        string                 `protobuf:"bytes,10,opt,name=source,proto3" json:"source,omitempty"`
-	Region        string                 `protobuf:"bytes,11,opt,name=region,proto3" json:"region,omitempty"`
-	Score         uint64                 `protobuf:"varint,12,opt,name=score,proto3" json:"score,omitempty"`
-	ClientIp      string                 `protobuf:"bytes,13,opt,name=client_ip,json=clientIp,proto3" json:"client_ip,omitempty"`
-	ClientCountry string                 `protobuf:"bytes,14,opt,name=client_country,json=clientCountry,proto3" json:"client_country,omitempty"`
-	SchemaVersion string                 `protobuf:"bytes,15,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
+	SelectedNode  string                 `protobuf:"bytes,1,opt,name=selected_node,json=selectedNode,proto3" json:"selected_node,omitempty"`
+	Latitude      float64                `protobuf:"fixed64,2,opt,name=latitude,proto3" json:"latitude,omitempty"`
+	Longitude     float64                `protobuf:"fixed64,3,opt,name=longitude,proto3" json:"longitude,omitempty"`
+	Status        string                 `protobuf:"bytes,4,opt,name=status,proto3" json:"status,omitempty"`
+	Details       string                 `protobuf:"bytes,5,opt,name=details,proto3" json:"details,omitempty"`
+	Score         uint64                 `protobuf:"varint,6,opt,name=score,proto3" json:"score,omitempty"`
+	ClientIp      string                 `protobuf:"bytes,7,opt,name=client_ip,json=clientIp,proto3" json:"client_ip,omitempty"`
+	ClientCountry string                 `protobuf:"bytes,8,opt,name=client_country,json=clientCountry,proto3" json:"client_country,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *BalancingEvent) Reset() {
-	*x = BalancingEvent{}
-	mi := &file_proto_decklog_proto_msgTypes[8]
+func (x *LoadBalancingData) Reset() {
+	*x = LoadBalancingData{}
+	mi := &file_decklog_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *BalancingEvent) String() string {
+func (x *LoadBalancingData) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*BalancingEvent) ProtoMessage() {}
+func (*LoadBalancingData) ProtoMessage() {}
 
-func (x *BalancingEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_decklog_proto_msgTypes[8]
+func (x *LoadBalancingData) ProtoReflect() protoreflect.Message {
+	mi := &file_decklog_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -953,112 +1067,63 @@ func (x *BalancingEvent) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use BalancingEvent.ProtoReflect.Descriptor instead.
-func (*BalancingEvent) Descriptor() ([]byte, []int) {
-	return file_proto_decklog_proto_rawDescGZIP(), []int{8}
+// Deprecated: Use LoadBalancingData.ProtoReflect.Descriptor instead.
+func (*LoadBalancingData) Descriptor() ([]byte, []int) {
+	return file_decklog_proto_rawDescGZIP(), []int{8}
 }
 
-func (x *BalancingEvent) GetEventId() string {
-	if x != nil {
-		return x.EventId
-	}
-	return ""
-}
-
-func (x *BalancingEvent) GetStreamId() string {
-	if x != nil {
-		return x.StreamId
-	}
-	return ""
-}
-
-func (x *BalancingEvent) GetSelectedNode() string {
+func (x *LoadBalancingData) GetSelectedNode() string {
 	if x != nil {
 		return x.SelectedNode
 	}
 	return ""
 }
 
-func (x *BalancingEvent) GetTenantId() string {
-	if x != nil {
-		return x.TenantId
-	}
-	return ""
-}
-
-func (x *BalancingEvent) GetLatitude() float64 {
+func (x *LoadBalancingData) GetLatitude() float64 {
 	if x != nil {
 		return x.Latitude
 	}
 	return 0
 }
 
-func (x *BalancingEvent) GetLongitude() float64 {
+func (x *LoadBalancingData) GetLongitude() float64 {
 	if x != nil {
 		return x.Longitude
 	}
 	return 0
 }
 
-func (x *BalancingEvent) GetStatus() string {
+func (x *LoadBalancingData) GetStatus() string {
 	if x != nil {
 		return x.Status
 	}
 	return ""
 }
 
-func (x *BalancingEvent) GetDetails() string {
+func (x *LoadBalancingData) GetDetails() string {
 	if x != nil {
 		return x.Details
 	}
 	return ""
 }
 
-func (x *BalancingEvent) GetTimestamp() *timestamppb.Timestamp {
-	if x != nil {
-		return x.Timestamp
-	}
-	return nil
-}
-
-func (x *BalancingEvent) GetSource() string {
-	if x != nil {
-		return x.Source
-	}
-	return ""
-}
-
-func (x *BalancingEvent) GetRegion() string {
-	if x != nil {
-		return x.Region
-	}
-	return ""
-}
-
-func (x *BalancingEvent) GetScore() uint64 {
+func (x *LoadBalancingData) GetScore() uint64 {
 	if x != nil {
 		return x.Score
 	}
 	return 0
 }
 
-func (x *BalancingEvent) GetClientIp() string {
+func (x *LoadBalancingData) GetClientIp() string {
 	if x != nil {
 		return x.ClientIp
 	}
 	return ""
 }
 
-func (x *BalancingEvent) GetClientCountry() string {
+func (x *LoadBalancingData) GetClientCountry() string {
 	if x != nil {
 		return x.ClientCountry
-	}
-	return ""
-}
-
-func (x *BalancingEvent) GetSchemaVersion() string {
-	if x != nil {
-		return x.SchemaVersion
 	}
 	return ""
 }
@@ -1074,7 +1139,7 @@ type EventResponse struct {
 
 func (x *EventResponse) Reset() {
 	*x = EventResponse{}
-	mi := &file_proto_decklog_proto_msgTypes[9]
+	mi := &file_decklog_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1086,7 +1151,7 @@ func (x *EventResponse) String() string {
 func (*EventResponse) ProtoMessage() {}
 
 func (x *EventResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_decklog_proto_msgTypes[9]
+	mi := &file_decklog_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1099,7 +1164,7 @@ func (x *EventResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EventResponse.ProtoReflect.Descriptor instead.
 func (*EventResponse) Descriptor() ([]byte, []int) {
-	return file_proto_decklog_proto_rawDescGZIP(), []int{9}
+	return file_decklog_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *EventResponse) GetStatus() string {
@@ -1131,7 +1196,7 @@ type HealthRequest struct {
 
 func (x *HealthRequest) Reset() {
 	*x = HealthRequest{}
-	mi := &file_proto_decklog_proto_msgTypes[10]
+	mi := &file_decklog_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1143,7 +1208,7 @@ func (x *HealthRequest) String() string {
 func (*HealthRequest) ProtoMessage() {}
 
 func (x *HealthRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_decklog_proto_msgTypes[10]
+	mi := &file_decklog_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1156,7 +1221,7 @@ func (x *HealthRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HealthRequest.ProtoReflect.Descriptor instead.
 func (*HealthRequest) Descriptor() ([]byte, []int) {
-	return file_proto_decklog_proto_rawDescGZIP(), []int{10}
+	return file_decklog_proto_rawDescGZIP(), []int{10}
 }
 
 type HealthResponse struct {
@@ -1170,7 +1235,7 @@ type HealthResponse struct {
 
 func (x *HealthResponse) Reset() {
 	*x = HealthResponse{}
-	mi := &file_proto_decklog_proto_msgTypes[11]
+	mi := &file_decklog_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1182,7 +1247,7 @@ func (x *HealthResponse) String() string {
 func (*HealthResponse) ProtoMessage() {}
 
 func (x *HealthResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_decklog_proto_msgTypes[11]
+	mi := &file_decklog_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1195,7 +1260,7 @@ func (x *HealthResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HealthResponse.ProtoReflect.Descriptor instead.
 func (*HealthResponse) Descriptor() ([]byte, []int) {
-	return file_proto_decklog_proto_rawDescGZIP(), []int{11}
+	return file_decklog_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *HealthResponse) GetStatus() string {
@@ -1219,11 +1284,11 @@ func (x *HealthResponse) GetTimestamp() *timestamppb.Timestamp {
 	return nil
 }
 
-var File_proto_decklog_proto protoreflect.FileDescriptor
+var File_decklog_proto protoreflect.FileDescriptor
 
-const file_proto_decklog_proto_rawDesc = "" +
+const file_decklog_proto_rawDesc = "" +
 	"\n" +
-	"\x13proto/decklog.proto\x12\adecklog\x1a\x1fgoogle/protobuf/timestamp.proto\"\xb4\x02\n" +
+	"\rdecklog.proto\x12\adecklog\x1a\x1fgoogle/protobuf/timestamp.proto\"\xb4\x02\n" +
 	"\x05Event\x12\x19\n" +
 	"\bbatch_id\x18\x01 \x01(\tR\abatchId\x12\x16\n" +
 	"\x06source\x18\x02 \x01(\tR\x06source\x12\x1b\n" +
@@ -1233,26 +1298,31 @@ const file_proto_decklog_proto_rawDesc = "" +
 	"\ttimestamp\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xce\x04\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x93\b\n" +
 	"\tEventData\x12\x19\n" +
 	"\bevent_id\x18\x01 \x01(\tR\aeventId\x121\n" +
 	"\n" +
 	"event_type\x18\x02 \x01(\x0e2\x12.decklog.EventTypeR\teventType\x128\n" +
 	"\ttimestamp\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\x12\x16\n" +
 	"\x06source\x18\x04 \x01(\tR\x06source\x12 \n" +
-	"\tstream_id\x18\x05 \x01(\tH\x00R\bstreamId\x88\x01\x01\x12\x1c\n" +
-	"\auser_id\x18\x06 \x01(\tH\x01R\x06userId\x88\x01\x01\x12$\n" +
-	"\vplayback_id\x18\a \x01(\tH\x02R\n" +
+	"\tstream_id\x18\x05 \x01(\tH\x01R\bstreamId\x88\x01\x01\x12\x1c\n" +
+	"\auser_id\x18\x06 \x01(\tH\x02R\x06userId\x88\x01\x01\x12$\n" +
+	"\vplayback_id\x18\a \x01(\tH\x03R\n" +
 	"playbackId\x88\x01\x01\x12(\n" +
-	"\rinternal_name\x18\b \x01(\tH\x03R\finternalName\x88\x01\x01\x12\x16\n" +
+	"\rinternal_name\x18\b \x01(\tH\x04R\finternalName\x88\x01\x01\x12\x16\n" +
 	"\x06region\x18\t \x01(\tR\x06region\x12\x1e\n" +
 	"\bnode_url\x18\n" +
-	" \x01(\tH\x04R\anodeUrl\x88\x01\x01\x120\n" +
-	"\x04data\x18\v \x03(\v2\x1c.decklog.EventData.DataEntryR\x04data\x12%\n" +
-	"\x0eschema_version\x18\f \x01(\tR\rschemaVersion\x1a7\n" +
-	"\tDataEntry\x12\x10\n" +
-	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B\f\n" +
+	" \x01(\tH\x05R\anodeUrl\x88\x01\x01\x12%\n" +
+	"\x0eschema_version\x18\f \x01(\tR\rschemaVersion\x12I\n" +
+	"\x12stream_ingest_data\x18\r \x01(\v2\x19.decklog.StreamIngestDataH\x00R\x10streamIngestData\x12C\n" +
+	"\x10stream_view_data\x18\x0e \x01(\v2\x17.decklog.StreamViewDataH\x00R\x0estreamViewData\x12R\n" +
+	"\x15stream_lifecycle_data\x18\x0f \x01(\v2\x1c.decklog.StreamLifecycleDataH\x00R\x13streamLifecycleData\x12O\n" +
+	"\x14user_connection_data\x18\x10 \x01(\v2\x1b.decklog.UserConnectionDataH\x00R\x12userConnectionData\x12L\n" +
+	"\x13stream_metrics_data\x18\x11 \x01(\v2\x1a.decklog.StreamMetricsDataH\x00R\x11streamMetricsData\x12O\n" +
+	"\x14node_monitoring_data\x18\x12 \x01(\v2\x1b.decklog.NodeMonitoringDataH\x00R\x12nodeMonitoringData\x12L\n" +
+	"\x13load_balancing_data\x18\x13 \x01(\v2\x1a.decklog.LoadBalancingDataH\x00R\x11loadBalancingDataB\f\n" +
+	"\n" +
+	"event_dataB\f\n" +
 	"\n" +
 	"_stream_idB\n" +
 	"\n" +
@@ -1335,24 +1405,16 @@ const file_proto_decklog_proto_rawDesc = "" +
 	"\x0enetwork_in_bps\x18\x06 \x01(\x04R\fnetworkInBps\x12&\n" +
 	"\x0fnetwork_out_bps\x18\a \x01(\x04R\rnetworkOutBps\x12%\n" +
 	"\x0eactive_streams\x18\b \x01(\rR\ractiveStreams\x12%\n" +
-	"\x0eactive_viewers\x18\t \x01(\rR\ractiveViewers\"\xe1\x03\n" +
-	"\x0eBalancingEvent\x12\x19\n" +
-	"\bevent_id\x18\x01 \x01(\tR\aeventId\x12\x1b\n" +
-	"\tstream_id\x18\x02 \x01(\tR\bstreamId\x12#\n" +
-	"\rselected_node\x18\x03 \x01(\tR\fselectedNode\x12\x1b\n" +
-	"\ttenant_id\x18\x04 \x01(\tR\btenantId\x12\x1a\n" +
-	"\blatitude\x18\x05 \x01(\x01R\blatitude\x12\x1c\n" +
-	"\tlongitude\x18\x06 \x01(\x01R\tlongitude\x12\x16\n" +
-	"\x06status\x18\a \x01(\tR\x06status\x12\x18\n" +
-	"\adetails\x18\b \x01(\tR\adetails\x128\n" +
-	"\ttimestamp\x18\t \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\x12\x16\n" +
-	"\x06source\x18\n" +
-	" \x01(\tR\x06source\x12\x16\n" +
-	"\x06region\x18\v \x01(\tR\x06region\x12\x14\n" +
-	"\x05score\x18\f \x01(\x04R\x05score\x12\x1b\n" +
-	"\tclient_ip\x18\r \x01(\tR\bclientIp\x12%\n" +
-	"\x0eclient_country\x18\x0e \x01(\tR\rclientCountry\x12%\n" +
-	"\x0eschema_version\x18\x0f \x01(\tR\rschemaVersion\"j\n" +
+	"\x0eactive_viewers\x18\t \x01(\rR\ractiveViewers\"\xfe\x01\n" +
+	"\x11LoadBalancingData\x12#\n" +
+	"\rselected_node\x18\x01 \x01(\tR\fselectedNode\x12\x1a\n" +
+	"\blatitude\x18\x02 \x01(\x01R\blatitude\x12\x1c\n" +
+	"\tlongitude\x18\x03 \x01(\x01R\tlongitude\x12\x16\n" +
+	"\x06status\x18\x04 \x01(\tR\x06status\x12\x18\n" +
+	"\adetails\x18\x05 \x01(\tR\adetails\x12\x14\n" +
+	"\x05score\x18\x06 \x01(\x04R\x05score\x12\x1b\n" +
+	"\tclient_ip\x18\a \x01(\tR\bclientIp\x12%\n" +
+	"\x0eclient_country\x18\b \x01(\tR\rclientCountry\"j\n" +
 	"\rEventResponse\x12\x16\n" +
 	"\x06status\x18\x01 \x01(\tR\x06status\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\x12'\n" +
@@ -1376,27 +1438,27 @@ const file_proto_decklog_proto_rawDesc = "" +
 	"\x15EVENT_TYPE_TRACK_LIST\x10\n" +
 	"\x12\x1c\n" +
 	"\x18EVENT_TYPE_STREAM_BUFFER\x10\v\x12\x19\n" +
-	"\x15EVENT_TYPE_STREAM_END\x10\f2\xd3\x01\n" +
+	"\x15EVENT_TYPE_STREAM_END\x10\f2\xc1\x01\n" +
 	"\x0eDecklogService\x12:\n" +
-	"\fStreamEvents\x12\x0e.decklog.Event\x1a\x16.decklog.EventResponse(\x010\x01\x12E\n" +
-	"\x12SendBalancingEvent\x12\x17.decklog.BalancingEvent\x1a\x16.decklog.EventResponse\x12>\n" +
+	"\fStreamEvents\x12\x0e.decklog.Event\x1a\x16.decklog.EventResponse(\x010\x01\x123\n" +
+	"\tSendEvent\x12\x0e.decklog.Event\x1a\x16.decklog.EventResponse\x12>\n" +
 	"\vCheckHealth\x12\x16.decklog.HealthRequest\x1a\x17.decklog.HealthResponseB\x1fZ\x1dframeworks/api_firehose/protob\x06proto3"
 
 var (
-	file_proto_decklog_proto_rawDescOnce sync.Once
-	file_proto_decklog_proto_rawDescData []byte
+	file_decklog_proto_rawDescOnce sync.Once
+	file_decklog_proto_rawDescData []byte
 )
 
-func file_proto_decklog_proto_rawDescGZIP() []byte {
-	file_proto_decklog_proto_rawDescOnce.Do(func() {
-		file_proto_decklog_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_proto_decklog_proto_rawDesc), len(file_proto_decklog_proto_rawDesc)))
+func file_decklog_proto_rawDescGZIP() []byte {
+	file_decklog_proto_rawDescOnce.Do(func() {
+		file_decklog_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_decklog_proto_rawDesc), len(file_decklog_proto_rawDesc)))
 	})
-	return file_proto_decklog_proto_rawDescData
+	return file_decklog_proto_rawDescData
 }
 
-var file_proto_decklog_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_proto_decklog_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
-var file_proto_decklog_proto_goTypes = []any{
+var file_decklog_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
+var file_decklog_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
+var file_decklog_proto_goTypes = []any{
 	(EventType)(0),                 // 0: decklog.EventType
 	(StreamLifecycleData_State)(0), // 1: decklog.StreamLifecycleData.State
 	(UserConnectionData_Action)(0), // 2: decklog.UserConnectionData.Action
@@ -1408,65 +1470,77 @@ var file_proto_decklog_proto_goTypes = []any{
 	(*UserConnectionData)(nil),     // 8: decklog.UserConnectionData
 	(*StreamMetricsData)(nil),      // 9: decklog.StreamMetricsData
 	(*NodeMonitoringData)(nil),     // 10: decklog.NodeMonitoringData
-	(*BalancingEvent)(nil),         // 11: decklog.BalancingEvent
+	(*LoadBalancingData)(nil),      // 11: decklog.LoadBalancingData
 	(*EventResponse)(nil),          // 12: decklog.EventResponse
 	(*HealthRequest)(nil),          // 13: decklog.HealthRequest
 	(*HealthResponse)(nil),         // 14: decklog.HealthResponse
 	nil,                            // 15: decklog.Event.MetadataEntry
-	nil,                            // 16: decklog.EventData.DataEntry
-	(*timestamppb.Timestamp)(nil),  // 17: google.protobuf.Timestamp
+	(*timestamppb.Timestamp)(nil),  // 16: google.protobuf.Timestamp
 }
-var file_proto_decklog_proto_depIdxs = []int32{
+var file_decklog_proto_depIdxs = []int32{
 	4,  // 0: decklog.Event.events:type_name -> decklog.EventData
 	15, // 1: decklog.Event.metadata:type_name -> decklog.Event.MetadataEntry
-	17, // 2: decklog.Event.timestamp:type_name -> google.protobuf.Timestamp
+	16, // 2: decklog.Event.timestamp:type_name -> google.protobuf.Timestamp
 	0,  // 3: decklog.EventData.event_type:type_name -> decklog.EventType
-	17, // 4: decklog.EventData.timestamp:type_name -> google.protobuf.Timestamp
-	16, // 5: decklog.EventData.data:type_name -> decklog.EventData.DataEntry
-	1,  // 6: decklog.StreamLifecycleData.state:type_name -> decklog.StreamLifecycleData.State
-	2,  // 7: decklog.UserConnectionData.action:type_name -> decklog.UserConnectionData.Action
-	17, // 8: decklog.BalancingEvent.timestamp:type_name -> google.protobuf.Timestamp
-	17, // 9: decklog.HealthResponse.timestamp:type_name -> google.protobuf.Timestamp
-	3,  // 10: decklog.DecklogService.StreamEvents:input_type -> decklog.Event
-	11, // 11: decklog.DecklogService.SendBalancingEvent:input_type -> decklog.BalancingEvent
-	13, // 12: decklog.DecklogService.CheckHealth:input_type -> decklog.HealthRequest
-	12, // 13: decklog.DecklogService.StreamEvents:output_type -> decklog.EventResponse
-	12, // 14: decklog.DecklogService.SendBalancingEvent:output_type -> decklog.EventResponse
-	14, // 15: decklog.DecklogService.CheckHealth:output_type -> decklog.HealthResponse
-	13, // [13:16] is the sub-list for method output_type
-	10, // [10:13] is the sub-list for method input_type
-	10, // [10:10] is the sub-list for extension type_name
-	10, // [10:10] is the sub-list for extension extendee
-	0,  // [0:10] is the sub-list for field type_name
+	16, // 4: decklog.EventData.timestamp:type_name -> google.protobuf.Timestamp
+	5,  // 5: decklog.EventData.stream_ingest_data:type_name -> decklog.StreamIngestData
+	6,  // 6: decklog.EventData.stream_view_data:type_name -> decklog.StreamViewData
+	7,  // 7: decklog.EventData.stream_lifecycle_data:type_name -> decklog.StreamLifecycleData
+	8,  // 8: decklog.EventData.user_connection_data:type_name -> decklog.UserConnectionData
+	9,  // 9: decklog.EventData.stream_metrics_data:type_name -> decklog.StreamMetricsData
+	10, // 10: decklog.EventData.node_monitoring_data:type_name -> decklog.NodeMonitoringData
+	11, // 11: decklog.EventData.load_balancing_data:type_name -> decklog.LoadBalancingData
+	1,  // 12: decklog.StreamLifecycleData.state:type_name -> decklog.StreamLifecycleData.State
+	2,  // 13: decklog.UserConnectionData.action:type_name -> decklog.UserConnectionData.Action
+	16, // 14: decklog.HealthResponse.timestamp:type_name -> google.protobuf.Timestamp
+	3,  // 15: decklog.DecklogService.StreamEvents:input_type -> decklog.Event
+	3,  // 16: decklog.DecklogService.SendEvent:input_type -> decklog.Event
+	13, // 17: decklog.DecklogService.CheckHealth:input_type -> decklog.HealthRequest
+	12, // 18: decklog.DecklogService.StreamEvents:output_type -> decklog.EventResponse
+	12, // 19: decklog.DecklogService.SendEvent:output_type -> decklog.EventResponse
+	14, // 20: decklog.DecklogService.CheckHealth:output_type -> decklog.HealthResponse
+	18, // [18:21] is the sub-list for method output_type
+	15, // [15:18] is the sub-list for method input_type
+	15, // [15:15] is the sub-list for extension type_name
+	15, // [15:15] is the sub-list for extension extendee
+	0,  // [0:15] is the sub-list for field type_name
 }
 
-func init() { file_proto_decklog_proto_init() }
-func file_proto_decklog_proto_init() {
-	if File_proto_decklog_proto != nil {
+func init() { file_decklog_proto_init() }
+func file_decklog_proto_init() {
+	if File_decklog_proto != nil {
 		return
 	}
-	file_proto_decklog_proto_msgTypes[1].OneofWrappers = []any{}
-	file_proto_decklog_proto_msgTypes[2].OneofWrappers = []any{}
-	file_proto_decklog_proto_msgTypes[3].OneofWrappers = []any{}
-	file_proto_decklog_proto_msgTypes[4].OneofWrappers = []any{}
-	file_proto_decklog_proto_msgTypes[5].OneofWrappers = []any{}
-	file_proto_decklog_proto_msgTypes[6].OneofWrappers = []any{}
+	file_decklog_proto_msgTypes[1].OneofWrappers = []any{
+		(*EventData_StreamIngestData)(nil),
+		(*EventData_StreamViewData)(nil),
+		(*EventData_StreamLifecycleData)(nil),
+		(*EventData_UserConnectionData)(nil),
+		(*EventData_StreamMetricsData)(nil),
+		(*EventData_NodeMonitoringData)(nil),
+		(*EventData_LoadBalancingData)(nil),
+	}
+	file_decklog_proto_msgTypes[2].OneofWrappers = []any{}
+	file_decklog_proto_msgTypes[3].OneofWrappers = []any{}
+	file_decklog_proto_msgTypes[4].OneofWrappers = []any{}
+	file_decklog_proto_msgTypes[5].OneofWrappers = []any{}
+	file_decklog_proto_msgTypes[6].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_decklog_proto_rawDesc), len(file_proto_decklog_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_decklog_proto_rawDesc), len(file_decklog_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   14,
+			NumMessages:   13,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
-		GoTypes:           file_proto_decklog_proto_goTypes,
-		DependencyIndexes: file_proto_decklog_proto_depIdxs,
-		EnumInfos:         file_proto_decklog_proto_enumTypes,
-		MessageInfos:      file_proto_decklog_proto_msgTypes,
+		GoTypes:           file_decklog_proto_goTypes,
+		DependencyIndexes: file_decklog_proto_depIdxs,
+		EnumInfos:         file_decklog_proto_enumTypes,
+		MessageInfos:      file_decklog_proto_msgTypes,
 	}.Build()
-	File_proto_decklog_proto = out.File
-	file_proto_decklog_proto_goTypes = nil
-	file_proto_decklog_proto_depIdxs = nil
+	File_decklog_proto = out.File
+	file_decklog_proto_goTypes = nil
+	file_decklog_proto_depIdxs = nil
 }

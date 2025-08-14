@@ -95,9 +95,6 @@ func main() {
 			protected.GET("/streams/:id/embed", handlers.GetStreamEmbed)
 			protected.POST("/streams/:id/refresh-key", handlers.RefreshStreamKey)
 
-			// Stream validation (used by MistServer triggers)
-			protected.GET("/validate-stream-key/:stream_key", handlers.ValidateStreamKey)
-
 			// Clipping
 			protected.POST("/clips", handlers.CreateClip)
 
@@ -115,6 +112,7 @@ func main() {
 			webhooks.POST("/stream-status", handlers.HandleStreamStatus)
 			webhooks.POST("/recording-status", handlers.HandleRecordingStatus)
 			webhooks.POST("/push-status", handlers.HandlePushStatus)
+			webhooks.GET("/validate-stream-key/:stream_key", handlers.ValidateStreamKey)
 			webhooks.GET("/resolve-playback-id/:playback_id", handlers.ResolvePlaybackID)
 			webhooks.GET("/resolve-internal-name/:internal_name", handlers.ResolveInternalName)
 		}

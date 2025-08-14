@@ -20,11 +20,14 @@ COPY pkg/ pkg/
 # Copy service source code
 COPY api_firehose/ api_firehose/
 
+# Generate proto files first
+WORKDIR /src/frameworks
+RUN cd pkg/proto && make proto
+
 # Build the application
 WORKDIR /src/frameworks/api_firehose
 RUN go mod download
-RUN make proto
-RUN CGO_ENABLED=0 make build
+RUN CGO_ENABLED=0 go build -ldflags "-X frameworks/pkg/version.Version=dev -X frameworks/pkg/version.GitCommit=docker -X frameworks/pkg/version.BuildDate=$(date -u '+%Y-%m-%dT%H:%M:%SZ')" -o bin/decklog cmd/decklog/main.go
 
 # Final stage
 FROM alpine:3.19

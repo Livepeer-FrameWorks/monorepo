@@ -11,7 +11,7 @@ service DecklogService {
   rpc StreamEvents(stream Event) returns (stream EventResponse);
   
   // Single event from Foghorn (load balancing decisions)
-  rpc SendBalancingEvent(BalancingEvent) returns (EventResponse);
+  rpc SendEvent(Event) returns (EventResponse);
   
   // Health check
   rpc CheckHealth(HealthRequest) returns (HealthResponse);
@@ -53,8 +53,18 @@ message EventData {
   optional string internal_name = 8;
   string region = 9;
   optional string node_url = 10;
-  map<string, string> data = 11;
   string schema_version = 12;
+  
+  // Typed event data using oneof for type safety
+  oneof event_data {
+    StreamIngestData stream_ingest_data = 13;
+    StreamViewData stream_view_data = 14;
+    StreamLifecycleData stream_lifecycle_data = 15;
+    UserConnectionData user_connection_data = 16;
+    StreamMetricsData stream_metrics_data = 17;
+    NodeMonitoringData node_monitoring_data = 18;
+    LoadBalancingData load_balancing_data = 19;
+  }
 }
 
 // Stream ingest specific data
@@ -126,23 +136,18 @@ message NodeMonitoringData {
   uint32 active_viewers = 9;
 }
 
-message BalancingEvent {
-  string event_id = 1;
-  string stream_id = 2;
-  string selected_node = 3;
-  string tenant_id = 4;
-  double latitude = 5;
-  double longitude = 6;
-  string status = 7;
-  string details = 8;
-  google.protobuf.Timestamp timestamp = 9;
-  string source = 10;
-  string region = 11;
-  uint64 score = 12;
-  string client_ip = 13;
-  string client_country = 14;
-  string schema_version = 15;
+// Load balancing specific data
+message LoadBalancingData {
+  string selected_node = 1;
+  double latitude = 2;
+  double longitude = 3;
+  string status = 4;
+  string details = 5;
+  uint64 score = 6;
+  string client_ip = 7;
+  string client_country = 8;
 }
+
 
 message EventResponse {
   string status = 1;

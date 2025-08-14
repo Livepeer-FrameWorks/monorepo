@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	qmclient "frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/config"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/middleware"
@@ -428,34 +430,39 @@ func HandleMollieWebhook(c middleware.Context) {
 	c.JSON(http.StatusOK, middleware.H{"status": "received"})
 }
 
-// getTenantInfo calls Quartermaster to get tenant information
+// getTenantInfo calls Quartermaster to get tenant information using shared client
 func getTenantInfo(tenantID string) (*models.Tenant, error) {
 	quartermasterURL := config.GetEnv("QUARTERMASTER_URL", "http://localhost:18002")
 	serviceToken := config.GetEnv("SERVICE_TOKEN", "")
 
-	req, err := http.NewRequest("GET", quartermasterURL+"/api/tenants/"+tenantID, nil)
+	client := qmclient.NewClient(qmclient.Config{
+		BaseURL:      quartermasterURL,
+		ServiceToken: serviceToken,
+		Timeout:      10 * time.Second,
+		Logger:       logger,
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	response, err := client.GetTenant(ctx, tenantID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return nil, fmt.Errorf("failed to get tenant from Quartermaster: %w", err)
 	}
 
-	req.Header.Set("X-Service-Token", serviceToken)
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to call Quartermaster: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("Quartermaster error (%d): %s", resp.StatusCode, string(body))
+	if response.Error != "" {
+		return nil, fmt.Errorf("Quartermaster error: %s", response.Error)
 	}
 
-	var tenant models.Tenant
-	if err := json.NewDecoder(resp.Body).Decode(&tenant); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
+	if response.Tenant == nil {
+		return nil, fmt.Errorf("tenant not found")
 	}
 
-	return &tenant, nil
+	// Convert TenantInfo to models.Tenant
+	tenant := &models.Tenant{
+		ID:   response.Tenant.ID,
+		Name: response.Tenant.Name,
+	}
+
+	return tenant, nil
 }

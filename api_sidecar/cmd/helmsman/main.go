@@ -1,10 +1,7 @@
 package main
 
 import (
-	"bytes"
-	"encoding/json"
-	"fmt"
-	"net/http"
+	"context"
 	"os"
 	"os/signal"
 	"syscall"
@@ -13,17 +10,18 @@ import (
 	"github.com/joho/godotenv"
 
 	"frameworks/api_sidecar/internal/handlers"
+	fclient "frameworks/pkg/clients/foghorn"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/middleware"
 	"frameworks/pkg/monitoring"
 	"frameworks/pkg/version"
 )
 
-// notifyFoghornShutdown sends a final health update to Foghorn before shutdown
+// notifyFoghornShutdown sends a final health update to Foghorn before shutdown using shared client
 func notifyFoghornShutdown() error {
 	foghornURL := os.Getenv("FOGHORN_URL")
 	if foghornURL == "" {
-		foghornURL = "http://foghorn:18008"
+		foghornURL = "http://localhost:18008"
 	}
 
 	nodeID := os.Getenv("NODE_NAME")
@@ -31,41 +29,29 @@ func notifyFoghornShutdown() error {
 		nodeID = "unknown-node"
 	}
 
-	update := map[string]interface{}{
-		"node_id":   nodeID,
-		"type":      "node_shutdown",
-		"timestamp": time.Now().Unix(),
-		"reason":    "graceful_shutdown",
-		"details": map[string]interface{}{
+	// Create shared Foghorn client with short timeout for shutdown
+	client := fclient.NewClient(fclient.Config{
+		BaseURL: foghornURL,
+		Timeout: 2 * time.Second,
+		Logger:  logging.NewLoggerWithService("helmsman-shutdown"),
+	})
+
+	// Build request with EXACT same payload structure as original
+	req := &fclient.NodeShutdownRequest{
+		NodeID:    nodeID,
+		Type:      "node_shutdown",
+		Timestamp: time.Now().Unix(),
+		Reason:    "graceful_shutdown",
+		Details: map[string]interface{}{
 			"initiated_at": time.Now().UTC(),
 			"source":       "helmsman",
 		},
 	}
 
-	jsonData, err := json.Marshal(update)
-	if err != nil {
-		return fmt.Errorf("failed to marshal shutdown notification: %w", err)
-	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
 
-	// Use short timeout since we're shutting down
-	client := &http.Client{Timeout: 2 * time.Second}
-	req, err := http.NewRequest("POST", foghornURL+"/node/shutdown", bytes.NewBuffer(jsonData))
-	if err != nil {
-		return fmt.Errorf("failed to create shutdown request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to send shutdown notification: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("foghorn returned error status: %d", resp.StatusCode)
-	}
-
-	return nil
+	return client.NotifyShutdown(ctx, req)
 }
 
 func main() {
@@ -119,7 +105,7 @@ func main() {
 
 	// Add the local MistServer node to monitoring with default location
 	if mistServerURL == "" {
-		mistServerURL = "http://mistserver:4242"
+		mistServerURL = "http://localhost:4242"
 	}
 
 	// Add node with default location data for development

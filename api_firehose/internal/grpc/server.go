@@ -16,8 +16,8 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	pb "frameworks/api_firehose/proto"
 	"frameworks/pkg/kafka"
+	pb "frameworks/pkg/proto"
 	"frameworks/pkg/validation"
 )
 
@@ -109,6 +109,35 @@ func (s *DecklogServer) StreamEvents(stream pb.DecklogService_StreamEventsServer
 		}
 
 		for i, e := range event.Events {
+			// Build data map from typed event data
+			data := make(map[string]interface{})
+			if e.EventData != nil {
+				switch eventData := e.EventData.(type) {
+				case *pb.EventData_StreamIngestData:
+					data["stream_key"] = eventData.StreamIngestData.StreamKey
+					data["protocol"] = eventData.StreamIngestData.Protocol
+					data["ingest_url"] = eventData.StreamIngestData.IngestUrl
+					if eventData.StreamIngestData.Encoder != nil {
+						data["encoder"] = *eventData.StreamIngestData.Encoder
+					}
+				case *pb.EventData_StreamViewData:
+					data["viewer_ip"] = eventData.StreamViewData.ViewerIp
+					data["user_agent"] = eventData.StreamViewData.UserAgent
+					if eventData.StreamViewData.Referrer != nil {
+						data["referrer"] = *eventData.StreamViewData.Referrer
+					}
+				case *pb.EventData_LoadBalancingData:
+					data["selected_node"] = eventData.LoadBalancingData.SelectedNode
+					data["latitude"] = eventData.LoadBalancingData.Latitude
+					data["longitude"] = eventData.LoadBalancingData.Longitude
+					data["status"] = eventData.LoadBalancingData.Status
+					data["details"] = eventData.LoadBalancingData.Details
+					data["score"] = eventData.LoadBalancingData.Score
+					data["client_ip"] = eventData.LoadBalancingData.ClientIp
+					data["client_country"] = eventData.LoadBalancingData.ClientCountry
+				}
+			}
+
 			batch.Events[i] = validation.BaseEvent{
 				EventID:       e.EventId,
 				EventType:     mapProtoEventTypeToValidation(e.EventType),
@@ -120,7 +149,7 @@ func (s *DecklogServer) StreamEvents(stream pb.DecklogService_StreamEventsServer
 				InternalName:  e.InternalName,
 				Region:        e.Region,
 				NodeURL:       e.NodeUrl,
-				Data:          convertStringMapToInterface(e.Data),
+				Data:          data,
 				SchemaVersion: "1.0",
 			}
 
@@ -169,8 +198,34 @@ func (s *DecklogServer) StreamEvents(stream pb.DecklogService_StreamEventsServer
 		}
 		var evts []map[string]interface{}
 		for _, e := range event.Events {
-			// Build data payload and merge typed extras
-			data := convertStringMapToInterface(e.Data)
+			// Build data payload from typed event data
+			data := make(map[string]interface{})
+			if e.EventData != nil {
+				switch eventData := e.EventData.(type) {
+				case *pb.EventData_StreamIngestData:
+					data["stream_key"] = eventData.StreamIngestData.StreamKey
+					data["protocol"] = eventData.StreamIngestData.Protocol
+					data["ingest_url"] = eventData.StreamIngestData.IngestUrl
+					if eventData.StreamIngestData.Encoder != nil {
+						data["encoder"] = *eventData.StreamIngestData.Encoder
+					}
+				case *pb.EventData_StreamViewData:
+					data["viewer_ip"] = eventData.StreamViewData.ViewerIp
+					data["user_agent"] = eventData.StreamViewData.UserAgent
+					if eventData.StreamViewData.Referrer != nil {
+						data["referrer"] = *eventData.StreamViewData.Referrer
+					}
+				case *pb.EventData_LoadBalancingData:
+					data["selected_node"] = eventData.LoadBalancingData.SelectedNode
+					data["latitude"] = eventData.LoadBalancingData.Latitude
+					data["longitude"] = eventData.LoadBalancingData.Longitude
+					data["status"] = eventData.LoadBalancingData.Status
+					data["details"] = eventData.LoadBalancingData.Details
+					data["score"] = eventData.LoadBalancingData.Score
+					data["client_ip"] = eventData.LoadBalancingData.ClientIp
+					data["client_country"] = eventData.LoadBalancingData.ClientCountry
+				}
+			}
 			if e.StreamId != nil {
 				data["stream_id"] = *e.StreamId
 			}
@@ -227,27 +282,47 @@ func (s *DecklogServer) StreamEvents(stream pb.DecklogService_StreamEventsServer
 	}
 }
 
-// SendBalancingEvent handles single events from Foghorn
-func (s *DecklogServer) SendBalancingEvent(ctx context.Context, event *pb.BalancingEvent) (*pb.EventResponse, error) {
+// SendEvent handles single events from Foghorn (replaces SendBalancingEvent)
+func (s *DecklogServer) SendEvent(ctx context.Context, event *pb.Event) (*pb.EventResponse, error) {
+	// Process single event the same way as batched events
+	if len(event.Events) == 0 {
+		return &pb.EventResponse{
+			Status:  "error",
+			Message: "no events in batch",
+		}, nil
+	}
+
+	// Take the first (and should be only) event
+	e := event.Events[0]
+
+	// Build data from typed event data
+	data := make(map[string]interface{})
+	if e.EventData != nil {
+		switch eventData := e.EventData.(type) {
+		case *pb.EventData_LoadBalancingData:
+			data["selected_node"] = eventData.LoadBalancingData.SelectedNode
+			data["latitude"] = eventData.LoadBalancingData.Latitude
+			data["longitude"] = eventData.LoadBalancingData.Longitude
+			data["status"] = eventData.LoadBalancingData.Status
+			data["details"] = eventData.LoadBalancingData.Details
+			data["score"] = eventData.LoadBalancingData.Score
+			data["client_ip"] = eventData.LoadBalancingData.ClientIp
+			data["client_country"] = eventData.LoadBalancingData.ClientCountry
+		}
+	}
+
+	// Add event metadata to data
+	if e.StreamId != nil {
+		data["stream_id"] = *e.StreamId
+	}
+	data["tenant_id"] = event.TenantId
+
 	// Convert to Kafka event format
 	kafkaEvent := &kafka.Event{
-		ID:   event.EventId,
-		Type: "load-balancing",
-		Data: map[string]interface{}{
-			"internal_name":    event.StreamId,
-			"selected_node":    event.SelectedNode,
-			"tenant_id":        event.TenantId,
-			"client_latitude":  event.Latitude,
-			"client_longitude": event.Longitude,
-			"status":           event.Status,
-			"details":          event.Details,
-			"timestamp":        event.Timestamp.AsTime(),
-			"client_ip":        event.ClientIp,
-			"client_country":   event.ClientCountry,
-			"score":            event.Score,
-			"region":           event.Region,
-		},
-		Timestamp: event.Timestamp.AsTime(),
+		ID:        e.EventId,
+		Type:      "load-balancing",
+		Data:      data,
+		Timestamp: e.Timestamp.AsTime(),
 	}
 
 	// Convert to JSON for Kafka

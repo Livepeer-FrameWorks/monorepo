@@ -22,9 +22,17 @@ COPY api_firehose/ ../api_firehose/
 # Copy service source code
 COPY api_sidecar/ ./
 
-# Build the application
+# Build the application with version injection
+ARG VERSION=dev
+ARG GIT_COMMIT=docker
+ARG BUILD_DATE
+
 RUN go mod download
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o helmsman ./cmd/helmsman
+RUN CGO_ENABLED=0 GOOS=linux go build \
+    -ldflags "-X frameworks/pkg/version.Version=${VERSION} \
+              -X frameworks/pkg/version.GitCommit=${GIT_COMMIT} \
+              -X frameworks/pkg/version.BuildDate=${BUILD_DATE}" \
+    -a -installsuffix cgo -o helmsman ./cmd/helmsman
 
 # Runtime stage
 FROM alpine:3.19

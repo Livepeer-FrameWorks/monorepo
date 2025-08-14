@@ -3,7 +3,6 @@ module frameworks/api_sidecar
 go 1.23.8
 
 require (
-	frameworks/api_firehose v0.0.0
 	frameworks/pkg v0.0.0
 	github.com/google/uuid v1.6.0
 	github.com/joho/godotenv v1.5.1

@@ -14,20 +14,16 @@ import (
 	"time"
 
 	"frameworks/api_balancing/internal/balancer"
-	"frameworks/api_firehose/proto"
+	"frameworks/pkg/clients/decklog"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/middleware"
-
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 var (
 	db            *sql.DB
 	logger        logging.Logger
 	lb            *balancer.LoadBalancer
-	decklogClient proto.DecklogServiceClient
+	decklogClient *decklog.Client
 )
 
 // StreamKeyRegex matches stream keys in format xxxx-xxxx-xxxx-xxxx
@@ -44,19 +40,26 @@ func Init(database *sql.DB, log logging.Logger, loadBalancer *balancer.LoadBalan
 
 	decklogURL := os.Getenv("DECKLOG_URL")
 	if decklogURL == "" {
-		decklogURL = "http://decklog:18006"
+		decklogURL = "decklog:18006"
 	}
+
+	// Remove protocol prefix if present
 	address := strings.TrimPrefix(decklogURL, "http://")
 	address = strings.TrimPrefix(address, "https://")
 
-	conn, err := grpc.Dial(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	config := decklog.ClientConfig{
+		Target:        address,
+		AllowInsecure: true, // Using insecure for internal service communication
+		Timeout:       10 * time.Second,
+	}
+
+	client, err := decklog.NewClient(config, logger)
 	if err != nil {
 		logger.WithError(err).Error("Failed to initialize Decklog gRPC client")
 		return
 	}
-	decklogClient = proto.NewDecklogServiceClient(conn)
+	decklogClient = client
 }
-
 
 // MistServerCompatibilityHandler handles ALL MistServer requests
 // This implements the exact same HTTP API as the C++ MistUtilLoad
@@ -705,51 +708,26 @@ func postBalancingEvent(c middleware.Context, streamName, selectedNode string, s
 	if tenantID == "" {
 		tenantID = "00000000-0000-0000-0000-000000000001"
 	}
-	// Create BalancingEvent
-	balancingEvent := &proto.BalancingEvent{
-		EventId:       fmt.Sprintf("lb_%d", time.Now().UnixNano()),
-		StreamId:      streamName,
-		SelectedNode:  selectedNode,
-		TenantId:      tenantID,
-		Latitude:      lat,
-		Longitude:     lon,
-		Status:        status,
-		Details:       details,
-		Timestamp:     timestamppb.Now(),
-		Source:        "foghorn",
-		Region:        os.Getenv("REGION"),
-		Score:         score,
-		ClientIp:      clientIP,
-		ClientCountry: country,
-		SchemaVersion: "1.0",
-	}
+
+	// Create Event with LoadBalancingData
+	event := decklog.NewLoadBalancingEvent(tenantID, streamName, selectedNode, clientIP, country, status, details, lat, lon, score)
 
 	if decklogClient == nil {
 		logger.Error("Decklog gRPC client not initialized")
 		return
 	}
 
-	// Send balancing event via gRPC
+	// Send event via gRPC
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	resp, err := decklogClient.SendBalancingEvent(ctx, balancingEvent)
+	err := decklogClient.SendEvent(ctx, event)
 	if err != nil {
 		logger.WithFields(logging.Fields{
 			"error":       err,
 			"stream_name": streamName,
 			"node":        selectedNode,
 		}).Error("Failed to send balancing event to Decklog")
-		return
-	}
-
-	if resp.Status != "success" {
-		logger.WithFields(logging.Fields{
-			"status":      resp.Status,
-			"message":     resp.Message,
-			"stream_name": streamName,
-			"node":        selectedNode,
-		}).Error("Decklog returned error for balancing event")
 		return
 	}
 

@@ -1,13 +1,12 @@
 package handlers
 
 import (
-	"bytes"
+	"context"
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	mathrand "math/rand"
 	"net/http"
 	"net/smtp"
@@ -21,8 +20,11 @@ import (
 
 	"github.com/google/uuid"
 
+	purserapi "frameworks/pkg/api/purser"
+	qmapi "frameworks/pkg/api/quartermaster"
 	"frameworks/pkg/auth"
-	"frameworks/pkg/config"
+	purserclient "frameworks/pkg/clients/purser"
+	qmclient "frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/models"
 )
 
@@ -35,8 +37,11 @@ var registrationAttempts = make(map[string][]time.Time)
 var registrationMutex sync.RWMutex
 
 var (
-	quartermasterURL string
-	serviceToken     string
+	quartermasterURL    string
+	purserURL           string
+	serviceToken        string
+	quartermasterClient *qmclient.Client
+	purserClient        *purserclient.Client
 )
 
 func Init(database *sql.DB, log logging.Logger, r Router) {
@@ -46,13 +51,32 @@ func Init(database *sql.DB, log logging.Logger, r Router) {
 
 	quartermasterURL = os.Getenv("QUARTERMASTER_URL")
 	if quartermasterURL == "" {
-		quartermasterURL = "http://quartermaster:9008"
+		quartermasterURL = "http://localhost:18002"
+	}
+
+	purserURL = os.Getenv("PURSER_URL")
+	if purserURL == "" {
+		purserURL = "http://localhost:18003"
 	}
 
 	serviceToken = os.Getenv("SERVICE_TOKEN")
 	if serviceToken == "" {
 		log.Fatal("SERVICE_TOKEN environment variable is required")
 	}
+
+	quartermasterClient = qmclient.NewClient(qmclient.Config{
+		BaseURL:      quartermasterURL,
+		ServiceToken: serviceToken,
+		Timeout:      10 * time.Second,
+		Logger:       logger,
+	})
+
+	purserClient = purserclient.NewClient(purserclient.Config{
+		BaseURL:      purserURL,
+		ServiceToken: serviceToken,
+		Timeout:      10 * time.Second,
+		Logger:       logger,
+	})
 }
 
 // Register handles user registration with comprehensive bot protection
@@ -106,48 +130,21 @@ func Register(c middleware.Context) {
 	}
 
 	// Check user limit by calling Purser to validate if user registration is allowed
-	purserURL := config.GetEnv("PURSER_URL", "http://localhost:18004")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
-	reqBody := map[string]string{
-		"tenant_id": tenantID,
-		"email":     req.Email,
-	}
-
-	jsonBody, err := json.Marshal(reqBody)
-	if err != nil {
-		logger.WithError(err).Error("Failed to marshal user registration check request")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Internal server error"})
-		return
-	}
-
-	checkReq, err := http.NewRequest("POST", purserURL+"/api/tenants/"+tenantID+"/check-user-limit", bytes.NewBuffer(jsonBody))
-	if err != nil {
-		logger.WithError(err).Error("Failed to create user limit check request")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Internal server error"})
-		return
-	}
-
-	checkReq.Header.Set("Content-Type", "application/json")
-	checkReq.Header.Set("X-Service-Token", serviceToken)
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(checkReq)
+	limitCheck, err := purserClient.CheckUserLimit(ctx, &purserapi.CheckUserLimitRequest{
+		TenantID: tenantID,
+		Email:    req.Email,
+	})
 	if err != nil {
 		logger.WithError(err).Error("Failed to check user limit with Purser")
 		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to validate user limit"})
 		return
 	}
-	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusForbidden {
+	if !limitCheck.Allowed {
 		c.JSON(http.StatusForbidden, middleware.H{"error": "Tenant user limit reached"})
-		return
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		logger.WithField("response", string(body)).Error("User limit check failed")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to validate user limit"})
 		return
 	}
 
@@ -1595,45 +1592,14 @@ func getTenantContext(c middleware.Context) string {
 	}
 
 	// Call Quartermaster to resolve tenant
-	reqBody := map[string]string{
-		"domain": domain,
-	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
-	jsonBody, err := json.Marshal(reqBody)
-	if err != nil {
-		logger.WithError(err).Error("Failed to marshal tenant resolution request")
-		return ""
-	}
-
-	req, err := http.NewRequest("POST", quartermasterURL+"/api/v1/tenant/resolve", bytes.NewBuffer(jsonBody))
-	if err != nil {
-		logger.WithError(err).Error("Failed to create tenant resolution request")
-		return ""
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+serviceToken)
-
-	resp, err := http.DefaultClient.Do(req)
+	resolution, err := quartermasterClient.ResolveTenant(ctx, &qmapi.ResolveTenantRequest{
+		Domain: domain,
+	})
 	if err != nil {
 		logger.WithError(err).Error("Failed to resolve tenant")
-		return ""
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		logger.WithField("response", string(body)).Error("Tenant resolution failed")
-		return ""
-	}
-
-	var resolution struct {
-		TenantID string `json:"tenant_id"`
-		Error    string `json:"error,omitempty"`
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&resolution); err != nil {
-		logger.WithError(err).Error("Failed to decode tenant resolution response")
 		return ""
 	}
 
@@ -1958,68 +1924,33 @@ func validateTenant(tenantID, userID string) (*models.TenantValidation, error) {
 
 // callQuartermasterValidation calls Quartermaster for basic tenant validation
 func callQuartermasterValidation(tenantID, userID string) (*models.ValidateTenantResponse, error) {
-	reqBody := map[string]string{
-		"tenant_id": tenantID,
-		"user_id":   userID,
-	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
-	jsonBody, err := json.Marshal(reqBody)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
-	}
-
-	req, err := http.NewRequest("POST", quartermasterURL+"/api/tenants/validate", bytes.NewBuffer(jsonBody))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	// Note: ValidateTenant is a public endpoint, no auth required
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
+	validation, err := quartermasterClient.ValidateTenant(ctx, &qmapi.ValidateTenantRequest{
+		TenantID: tenantID,
+		UserID:   userID,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to call Quartermaster: %w", err)
 	}
-	defer resp.Body.Close()
 
-	var validation models.ValidateTenantResponse
-	if err := json.NewDecoder(resp.Body).Decode(&validation); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
-	}
-
-	return &validation, nil
+	// Convert from API response type to models type
+	return (*models.ValidateTenantResponse)(validation), nil
 }
 
 // callPurserTierInfo calls Purser to get tenant billing tier information
 func callPurserTierInfo(tenantID string) (*models.TenantTierInfo, error) {
-	purserURL := config.GetEnv("PURSER_URL", "http://localhost:18004")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
-	req, err := http.NewRequest("GET", purserURL+"/api/tenants/"+tenantID+"/tier-info", nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("X-Service-Token", serviceToken)
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
+	tierInfo, err := purserClient.GetTenantTierInfo(ctx, tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to call Purser: %w", err)
 	}
-	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("Purser error (%d): %s", resp.StatusCode, string(body))
-	}
-
-	var tierInfo models.TenantTierInfo
-	if err := json.NewDecoder(resp.Body).Decode(&tierInfo); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
-	}
-
-	return &tierInfo, nil
+	// Convert from API response type to models type (they're the same via type alias)
+	return (*models.TenantTierInfo)(tierInfo), nil
 }
 
 // extractFeaturesFromTier converts tier features to TenantFeatures
@@ -2140,62 +2071,31 @@ func ResolveInternalName(c middleware.Context) {
 
 // createTenantForRegistration creates a new tenant through Quartermaster for user registration
 func createTenantForRegistration(email string) (string, error) {
-	quartermasterURL := config.GetEnv("QUARTERMASTER_URL", "http://localhost:18002")
-	serviceToken := config.GetEnv("SERVICE_TOKEN", "")
-
-	if serviceToken == "" {
-		return "", fmt.Errorf("SERVICE_TOKEN not configured")
-	}
-
 	// Generate tenant name from email domain or use email prefix
 	tenantName := strings.Split(email, "@")[0]
 
-	// Create tenant request
-	createTenantReq := map[string]interface{}{
-		"name":                     tenantName,
-		"deployment_model":         "shared",
-		"primary_deployment_tier":  "global",
-		"allowed_deployment_tiers": []string{"global"},
-	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 
-	reqBody, err := json.Marshal(createTenantReq)
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal create tenant request: %w", err)
-	}
-
-	req, err := http.NewRequest("POST", quartermasterURL+"/api/v1/tenants", bytes.NewBuffer(reqBody))
-	if err != nil {
-		return "", fmt.Errorf("failed to create tenant request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Service-Token", serviceToken)
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
+	createResp, err := quartermasterClient.CreateTenant(ctx, &qmapi.CreateTenantRequest{
+		Name:                   tenantName,
+		DeploymentModel:        "shared",
+		PrimaryDeploymentTier:  "global",
+		AllowedDeploymentTiers: []string{"global"},
+	})
 	if err != nil {
 		return "", fmt.Errorf("failed to call Quartermaster: %w", err)
 	}
-	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusCreated {
-		body, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("Quartermaster returned status %d: %s", resp.StatusCode, string(body))
-	}
-
-	var tenant struct {
-		ID string `json:"id"`
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&tenant); err != nil {
-		return "", fmt.Errorf("failed to decode tenant creation response: %w", err)
+	if createResp.Error != "" {
+		return "", fmt.Errorf("Quartermaster error: %s", createResp.Error)
 	}
 
 	logger.WithFields(logging.Fields{
-		"tenant_id":   tenant.ID,
+		"tenant_id":   createResp.ID,
 		"tenant_name": tenantName,
 		"email":       email,
 	}).Info("Created new tenant for user registration")
 
-	return tenant.ID, nil
+	return createResp.ID, nil
 }

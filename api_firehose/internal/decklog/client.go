@@ -15,7 +15,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	pb "frameworks/api_firehose/proto"
+	pb "frameworks/pkg/proto"
 )
 
 // Client represents a gRPC client for Decklog
@@ -80,16 +80,16 @@ func (c *Client) Close() error {
 	return c.conn.Close()
 }
 
-// SendBalancingEvent sends a prepared balancing event to Decklog.
+// SendEvent sends a prepared event to Decklog.
 // Any missing timestamp will be populated automatically.
-func (c *Client) SendBalancingEvent(ctx context.Context, event *pb.BalancingEvent) error {
+func (c *Client) SendEvent(ctx context.Context, event *pb.Event) error {
 	if event.Timestamp == nil {
 		event.Timestamp = timestamppb.Now()
 	}
 
-	_, err := c.client.SendBalancingEvent(ctx, event)
+	_, err := c.client.SendEvent(ctx, event)
 	if err != nil {
-		return fmt.Errorf("failed to send balancing event: %w", err)
+		return fmt.Errorf("failed to send event: %w", err)
 	}
 
 	return nil

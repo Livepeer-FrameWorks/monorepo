@@ -1,14 +1,15 @@
 package handlers
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
 	"time"
 
+	"frameworks/pkg/api/purser"
+	pclient "frameworks/pkg/clients/purser"
+	qmclient "frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/database"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/middleware"
@@ -17,28 +18,47 @@ import (
 
 // BillingSummarizer handles usage summarization for billing
 type BillingSummarizer struct {
-	yugaDB       database.PostgresConn
-	clickhouse   database.ClickHouseConn
-	logger       logging.Logger
-	purserURL    string
-	serviceToken string
+	yugaDB              database.PostgresConn
+	clickhouse          database.ClickHouseConn
+	logger              logging.Logger
+	purserClient        *pclient.Client
+	quartermasterClient *qmclient.Client
 }
 
 // NewBillingSummarizer creates a new billing summarizer instance
 func NewBillingSummarizer(yugaDB database.PostgresConn, clickhouse database.ClickHouseConn, logger logging.Logger) *BillingSummarizer {
 	purserURL := os.Getenv("PURSER_URL")
 	if purserURL == "" {
-		purserURL = "http://localhost:18003" // Default Purser URL
+		purserURL = "http://localhost:18003"
+	}
+
+	quartermasterURL := os.Getenv("QUARTERMASTER_URL")
+	if quartermasterURL == "" {
+		quartermasterURL = "http://localhost:18002"
 	}
 
 	serviceToken := os.Getenv("SERVICE_TOKEN")
 
+	purserClient := pclient.NewClient(pclient.Config{
+		BaseURL:      purserURL,
+		ServiceToken: serviceToken,
+		Timeout:      30 * time.Second,
+		Logger:       logger,
+	})
+
+	quartermasterClient := qmclient.NewClient(qmclient.Config{
+		BaseURL:      quartermasterURL,
+		ServiceToken: serviceToken,
+		Timeout:      10 * time.Second,
+		Logger:       logger,
+	})
+
 	return &BillingSummarizer{
-		yugaDB:       yugaDB,
-		clickhouse:   clickhouse,
-		logger:       logger,
-		purserURL:    purserURL,
-		serviceToken: serviceToken,
+		yugaDB:              yugaDB,
+		clickhouse:          clickhouse,
+		logger:              logger,
+		purserClient:        purserClient,
+		quartermasterClient: quartermasterClient,
 	}
 }
 
@@ -216,93 +236,48 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 
 // getTenantPrimaryCluster gets tenant's primary cluster by calling Quartermaster API
 func (bs *BillingSummarizer) getTenantPrimaryCluster(tenantID string) (string, error) {
-	// Call Quartermaster to get tenant info
-	quartermasterURL := os.Getenv("QUARTERMASTER_URL")
-	if quartermasterURL == "" {
-		quartermasterURL = "http://localhost:18002" // Default
-	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
-	serviceToken := os.Getenv("SERVICE_TOKEN")
-	if serviceToken == "" {
-		return "", fmt.Errorf("SERVICE_TOKEN not configured")
-	}
-
-	req, err := http.NewRequest("GET", fmt.Sprintf("%s/api/tenants/%s", quartermasterURL, tenantID), nil)
-	if err != nil {
-		return "", fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("X-Service-Token", serviceToken)
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
+	tenantResp, err := bs.quartermasterClient.GetTenant(ctx, tenantID)
 	if err != nil {
 		return "", fmt.Errorf("failed to call Quartermaster: %w", err)
 	}
-	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("Quartermaster returned status %d", resp.StatusCode)
+	if tenantResp.Error != "" {
+		return "", fmt.Errorf("Quartermaster returned error: %s", tenantResp.Error)
 	}
 
-	var tenantInfo struct {
-		PrimaryClusterID *string `json:"primary_cluster_id"`
+	if tenantResp.Tenant != nil && tenantResp.Tenant.PrimaryClusterID != nil && *tenantResp.Tenant.PrimaryClusterID != "" {
+		return *tenantResp.Tenant.PrimaryClusterID, nil
 	}
 
-	if err := json.NewDecoder(resp.Body).Decode(&tenantInfo); err != nil {
-		return "", fmt.Errorf("failed to decode response: %w", err)
-	}
-
-	if tenantInfo.PrimaryClusterID != nil && *tenantInfo.PrimaryClusterID != "" {
-		return *tenantInfo.PrimaryClusterID, nil
-	}
-
-	return "global-primary", nil // Default fallback
+	return "global-primary", nil // Default fallback when no primary cluster is set
 }
 
 // sendUsageToPurser sends usage summaries to the Purser billing service
 func (bs *BillingSummarizer) sendUsageToPurser(summaries []models.UsageSummary) error {
-	if bs.serviceToken == "" {
-		return fmt.Errorf("SERVICE_TOKEN not configured for Purser communication")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	req := &purser.UsageIngestRequest{
+		UsageSummaries: summaries,
+		Source:         "periscope",
+		Timestamp:      time.Now().Unix(),
 	}
 
-	// Prepare request payload
-	payload := map[string]interface{}{
-		"usage_summaries": summaries,
-		"source":          "periscope",
-		"timestamp":       time.Now(),
-	}
-
-	jsonData, err := json.Marshal(payload)
+	resp, err := bs.purserClient.IngestUsage(ctx, req)
 	if err != nil {
-		return fmt.Errorf("failed to marshal usage data: %w", err)
+		return fmt.Errorf("failed to send usage to Purser: %w", err)
 	}
 
-	// Send to Purser
-	url := fmt.Sprintf("%s/api/v1/usage/ingest", bs.purserURL)
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Service-Token", bs.serviceToken)
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to send request to Purser: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		return fmt.Errorf("Purser returned error status: %d", resp.StatusCode)
+	if !resp.Success {
+		return fmt.Errorf("Purser rejected usage data: %s", resp.Error)
 	}
 
 	bs.logger.WithFields(logging.Fields{
-		"summary_count": len(summaries),
-		"purser_url":    url,
-		"status_code":   resp.StatusCode,
+		"summary_count":   len(summaries),
+		"processed_count": resp.ProcessedCount,
 	}).Info("Successfully sent usage summaries to Purser")
 
 	return nil

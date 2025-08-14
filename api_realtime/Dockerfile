@@ -18,10 +18,18 @@ COPY pkg/ pkg/
 # Copy service source code
 COPY api_realtime/ api_realtime/
 
-# Build the application
+# Build the application with version injection
+ARG VERSION=dev
+ARG GIT_COMMIT=docker
+ARG BUILD_DATE
+
 WORKDIR /src/frameworks/api_realtime
 RUN go mod download
-RUN CGO_ENABLED=0 go build -o signalman ./cmd/signalman
+RUN CGO_ENABLED=0 go build \
+    -ldflags "-X frameworks/pkg/version.Version=${VERSION} \
+              -X frameworks/pkg/version.GitCommit=${GIT_COMMIT} \
+              -X frameworks/pkg/version.BuildDate=${BUILD_DATE}" \
+    -o signalman ./cmd/signalman
 
 # Final stage
 FROM alpine:3.19

@@ -14,9 +14,9 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	pb "frameworks/api_firehose/proto"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/models"
+	pb "frameworks/pkg/proto"
 )
 
 // DecklogClient handles batched analytics events to the regional ingest service via gRPC
@@ -44,7 +44,7 @@ const (
 func InitDecklogClient() {
 	decklogURL := os.Getenv("DECKLOG_URL")
 	if decklogURL == "" {
-		decklogURL = "http://decklog:18006"
+		decklogURL = "http://localhost:18006"
 	}
 
 	// Extract address from URL for gRPC (remove http:// prefix)
@@ -186,26 +186,83 @@ func (dc *DecklogClient) sendBatchGRPC(events []models.DecklogEvent) error {
 		// Convert event type string to enum
 		eventType := mapEventTypeToProto(event.EventType)
 
-		// Convert data map to string map
-		dataMap := make(map[string]string)
-		for k, v := range event.Data {
-			dataMap[k] = fmt.Sprintf("%v", v)
-		}
+		// Extract tenant_id for batch
 		if batchTenantID == "" {
 			if v, ok := event.Data["tenant_id"]; ok {
 				batchTenantID = fmt.Sprintf("%v", v)
 			}
 		}
 
-		eventData = append(eventData, &pb.EventData{
+		// Create typed event data based on event type
+		eventDataItem := &pb.EventData{
 			EventId:       uuid.New().String(),
 			EventType:     eventType,
 			Timestamp:     timestamppb.Now(),
 			Source:        "helmsman",
 			Region:        "local",
-			Data:          dataMap,
 			SchemaVersion: "1.0",
-		})
+		}
+
+		// Set stream_id and user_id from data if available
+		if v, ok := event.Data["stream_id"]; ok {
+			streamID := fmt.Sprintf("%v", v)
+			eventDataItem.StreamId = &streamID
+		}
+		if v, ok := event.Data["user_id"]; ok {
+			userID := fmt.Sprintf("%v", v)
+			eventDataItem.UserId = &userID
+		}
+		if v, ok := event.Data["internal_name"]; ok {
+			internalName := fmt.Sprintf("%v", v)
+			eventDataItem.InternalName = &internalName
+		}
+
+		// Create typed event data based on event type
+		switch eventType {
+		case pb.EventType_EVENT_TYPE_STREAM_INGEST:
+			eventDataItem.EventData = &pb.EventData_StreamIngestData{
+				StreamIngestData: &pb.StreamIngestData{
+					StreamKey: getStringFromData(event.Data, "stream_key"),
+					Protocol:  getStringFromData(event.Data, "protocol"),
+					IngestUrl: getStringFromData(event.Data, "push_url"),
+				},
+			}
+		case pb.EventType_EVENT_TYPE_STREAM_VIEW:
+			eventDataItem.EventData = &pb.EventData_StreamViewData{
+				StreamViewData: &pb.StreamViewData{
+					ViewerIp:  getStringFromData(event.Data, "viewer_ip"),
+					UserAgent: getStringFromData(event.Data, "user_agent"),
+				},
+			}
+		case pb.EventType_EVENT_TYPE_STREAM_LIFECYCLE:
+			eventDataItem.EventData = &pb.EventData_StreamLifecycleData{
+				StreamLifecycleData: &pb.StreamLifecycleData{
+					State:  pb.StreamLifecycleData_STATE_UNSPECIFIED, // Default, could be improved
+					Reason: getOptionalStringFromData(event.Data, "reason"),
+				},
+			}
+		case pb.EventType_EVENT_TYPE_USER_CONNECTION:
+			eventDataItem.EventData = &pb.EventData_UserConnectionData{
+				UserConnectionData: &pb.UserConnectionData{
+					Action:           pb.UserConnectionData_ACTION_UNSPECIFIED, // Default, could be improved
+					DisconnectReason: getOptionalStringFromData(event.Data, "disconnect_reason"),
+				},
+			}
+		case pb.EventType_EVENT_TYPE_NODE_LIFECYCLE:
+			eventDataItem.EventData = &pb.EventData_NodeMonitoringData{
+				NodeMonitoringData: &pb.NodeMonitoringData{
+					CpuLoad:       getFloatFromData(event.Data, "cpu_load"),
+					MemoryUsed:    getUint64FromData(event.Data, "memory_used"),
+					MemoryTotal:   getUint64FromData(event.Data, "memory_total"),
+					ActiveStreams: getUint32FromData(event.Data, "active_streams"),
+				},
+			}
+		default:
+			// For untyped events, we'll need to add a generic fallback or skip
+			continue
+		}
+
+		eventData = append(eventData, eventDataItem)
 	}
 
 	// Send the batch
@@ -339,4 +396,75 @@ func ShutdownDecklogClient() {
 			decklogClient.conn.Close()
 		}
 	}
+}
+
+// Helper functions for extracting typed data from map[string]interface{}
+
+func getStringFromData(data map[string]interface{}, key string) string {
+	if v, ok := data[key]; ok {
+		return fmt.Sprintf("%v", v)
+	}
+	return ""
+}
+
+func getOptionalStringFromData(data map[string]interface{}, key string) *string {
+	if v, ok := data[key]; ok {
+		str := fmt.Sprintf("%v", v)
+		return &str
+	}
+	return nil
+}
+
+func getFloatFromData(data map[string]interface{}, key string) float32 {
+	if v, ok := data[key]; ok {
+		switch val := v.(type) {
+		case float64:
+			return float32(val)
+		case float32:
+			return val
+		case int:
+			return float32(val)
+		case string:
+			if f, err := strconv.ParseFloat(val, 32); err == nil {
+				return float32(f)
+			}
+		}
+	}
+	return 0
+}
+
+func getUint64FromData(data map[string]interface{}, key string) uint64 {
+	if v, ok := data[key]; ok {
+		switch val := v.(type) {
+		case uint64:
+			return val
+		case int:
+			return uint64(val)
+		case int64:
+			return uint64(val)
+		case string:
+			if i, err := strconv.ParseUint(val, 10, 64); err == nil {
+				return i
+			}
+		}
+	}
+	return 0
+}
+
+func getUint32FromData(data map[string]interface{}, key string) uint32 {
+	if v, ok := data[key]; ok {
+		switch val := v.(type) {
+		case uint32:
+			return val
+		case int:
+			return uint32(val)
+		case int64:
+			return uint32(val)
+		case string:
+			if i, err := strconv.ParseUint(val, 10, 32); err == nil {
+				return uint32(i)
+			}
+		}
+	}
+	return 0
 }
