@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	purserapi "frameworks/pkg/api/purser"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/middleware"
 	"frameworks/pkg/models"
@@ -15,13 +16,19 @@ import (
 func IngestUsageData(c middleware.Context) {
 	var req models.UsageIngestRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, middleware.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, purserapi.UsageIngestResponse{
+			Success: false,
+			Error:   err.Error(),
+		})
 		return
 	}
 
 	summaries := req.UsageSummaries
 	if len(summaries) == 0 {
-		c.JSON(http.StatusBadRequest, middleware.H{"error": "No usage summaries provided"})
+		c.JSON(http.StatusBadRequest, purserapi.UsageIngestResponse{
+			Success: false,
+			Error:   "No usage summaries provided",
+		})
 		return
 	}
 
@@ -61,14 +68,13 @@ func IngestUsageData(c middleware.Context) {
 	}
 
 	// Response with results
-	response := middleware.H{
-		"message":         "Usage data ingested successfully",
-		"processed_count": processedCount,
-		"failed_count":    len(errors),
+	response := purserapi.UsageIngestResponse{
+		ProcessedCount: processedCount,
+		Success:        len(errors) == 0,
 	}
 
 	if len(errors) > 0 {
-		response["errors"] = errors
+		response.Error = fmt.Sprintf("Failed to process %d summaries: %v", len(errors), errors)
 		logger.WithField("error_count", len(errors)).Warn("Some usage summaries failed to process")
 	}
 

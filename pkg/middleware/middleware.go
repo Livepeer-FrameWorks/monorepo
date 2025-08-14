@@ -23,36 +23,6 @@ type H = gin.H
 // Engine represents a gin engine
 type Engine = *gin.Engine
 
-// NewEngine creates a new gin engine
-func NewEngine() Engine {
-	return gin.New()
-}
-
-// SetGinMode sets the gin mode
-func SetGinMode(mode string) {
-	gin.SetMode(mode)
-}
-
-// GetGinMode gets the current gin mode
-func GetGinMode() string {
-	return gin.Mode()
-}
-
-// SetupGinRouter creates a new gin router with common setup
-func SetupGinRouter(logger logging.Logger) Engine {
-	router := gin.New()
-	router.Use(RequestIDMiddleware())
-	router.Use(LoggingMiddleware(logger))
-	router.Use(RecoveryMiddleware(logger))
-	router.Use(CORSMiddleware())
-	return router
-}
-
-// NewGinRouter creates a new gin router (alias for NewEngine)
-func NewGinRouter() Engine {
-	return gin.New()
-}
-
 // LoggingMiddleware provides structured request logging
 func LoggingMiddleware(logger logging.Logger) HandlerFunc {
 	return func(c Context) {

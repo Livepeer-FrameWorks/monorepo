@@ -14,6 +14,7 @@ import (
 	"frameworks/pkg/config"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/middleware"
+	"frameworks/pkg/monitoring"
 )
 
 // Config represents server configuration
@@ -34,45 +35,6 @@ func DefaultConfig(serviceName, defaultPort string) Config {
 		WriteTimeout: 30 * time.Second,
 		IdleTimeout:  120 * time.Second,
 	}
-}
-
-// SetupRouter creates a Gin router with common middleware
-func SetupRouter(logger logging.Logger) *gin.Engine {
-	return SetupRouterWithService(logger, "unknown")
-}
-
-// SetupRouterWithService creates a Gin router with common middleware and service name
-func SetupRouterWithService(logger logging.Logger, serviceName string) *gin.Engine {
-	// Set Gin mode based on environment
-	if config.GetEnv("GIN_MODE", "debug") == "release" {
-		gin.SetMode(gin.ReleaseMode)
-	}
-
-	router := gin.New()
-
-	// Add common middleware
-	router.Use(middleware.RequestIDMiddleware())
-	router.Use(middleware.LoggingMiddleware(logger))
-	router.Use(middleware.RecoveryMiddleware(logger))
-	router.Use(middleware.CORSMiddleware())
-
-	// Health check endpoint
-	router.GET("/health", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{
-			"status":  "healthy",
-			"service": serviceName,
-			"version": "1.0.0",
-		})
-	})
-
-	// Basic metrics endpoint for Prometheus
-	router.GET("/metrics", func(c *gin.Context) {
-		c.Header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-		c.String(http.StatusOK, fmt.Sprintf("# HELP %s_up Service availability\n# TYPE %s_up gauge\n%s_up 1\n",
-			serviceName, serviceName, serviceName))
-	})
-
-	return router
 }
 
 // Start starts the HTTP server with graceful shutdown
@@ -114,4 +76,34 @@ func Start(cfg Config, router *gin.Engine, logger logging.Logger) error {
 
 	logger.WithField("service", cfg.ServiceName).Info("Server stopped")
 	return nil
+}
+
+// SetupServiceRouter creates a fully configured router with monitoring
+func SetupServiceRouter(
+	logger logging.Logger,
+	serviceName string,
+	healthChecker *monitoring.HealthChecker,
+	metricsCollector *monitoring.MetricsCollector,
+) *gin.Engine {
+	// Set Gin mode based on environment
+	if config.GetEnv("GIN_MODE", "debug") == "release" {
+		gin.SetMode(gin.ReleaseMode)
+	}
+
+	router := gin.New()
+
+	// Add common middleware
+	router.Use(middleware.RequestIDMiddleware())
+	router.Use(middleware.LoggingMiddleware(logger))
+	router.Use(middleware.RecoveryMiddleware(logger))
+	router.Use(middleware.CORSMiddleware())
+
+	// Add metrics middleware
+	router.Use(metricsCollector.MetricsMiddleware())
+
+	// Register real monitoring endpoints
+	router.GET("/health", healthChecker.Handler())
+	router.GET("/metrics", metricsCollector.Handler())
+
+	return router
 }

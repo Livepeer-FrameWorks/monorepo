@@ -1,19 +1,13 @@
 package main
 
 import (
-	"fmt"
-	"os"
-	"os/signal"
-	"syscall"
-	"time"
-
 	"frameworks/api_balancing/internal/balancer"
 	"frameworks/api_balancing/internal/handlers"
 	"frameworks/pkg/config"
 	"frameworks/pkg/database"
 	"frameworks/pkg/logging"
-	"frameworks/pkg/middleware"
 	"frameworks/pkg/monitoring"
+	"frameworks/pkg/server"
 	"frameworks/pkg/version"
 )
 
@@ -71,22 +65,8 @@ func main() {
 	// Initialize handlers
 	handlers.Init(db, logger, lb)
 
-	// Create Gin router
-	if config.GetEnv("GIN_MODE", "") == "release" {
-		middleware.SetGinMode("release")
-	}
-
-	router := middleware.NewEngine()
-	middleware.SetupCommonMiddleware(router, logger)
-
-	// Add monitoring middleware
-	router.Use(metricsCollector.MetricsMiddleware())
-
-	// Health check endpoint with proper checks
-	router.GET("/health", healthChecker.Handler())
-
-	// Metrics endpoint for Prometheus
-	router.GET("/metrics", metricsCollector.Handler())
+	// Setup router with unified monitoring
+	router := server.SetupServiceRouter(logger, "foghorn", healthChecker, metricsCollector)
 
 	// Node update endpoint for Helmsman
 	router.POST("/node/update", handlers.HandleNodeUpdate)
@@ -101,29 +81,9 @@ func main() {
 	// All requests go through the compatibility handler
 	router.NoRoute(handlers.MistServerCompatibilityHandler)
 
-	// Start HTTP server
-	port := config.GetEnv("PORT", "18008")
-	server := fmt.Sprintf(":%s", port)
-
-	logger.WithFields(logging.Fields{
-		"port":          port,
-		"mode":          middleware.GetGinMode(),
-		"compatibility": "MistServer API Only",
-	}).Info("Foghorn server starting")
-
-	// Graceful shutdown handling
-	go func() {
-		sigChan := make(chan os.Signal, 1)
-		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-		<-sigChan
-
-		logger.Info("Shutting down Foghorn server...")
-		time.Sleep(2 * time.Second)
-		os.Exit(0)
-	}()
-
-	// Start server
-	if err := router.Run(server); err != nil {
-		logger.WithError(err).Fatal("Failed to start HTTP server")
+	// Start server with graceful shutdown
+	serverConfig := server.DefaultConfig("foghorn", "18008")
+	if err := server.Start(serverConfig, router, logger); err != nil {
+		logger.WithError(err).Fatal("Server startup failed")
 	}
 }

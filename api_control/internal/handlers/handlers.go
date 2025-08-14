@@ -20,9 +20,11 @@ import (
 
 	"github.com/google/uuid"
 
+	commodoreapi "frameworks/pkg/api/commodore"
 	purserapi "frameworks/pkg/api/purser"
 	qmapi "frameworks/pkg/api/quartermaster"
 	"frameworks/pkg/auth"
+	"frameworks/pkg/clients"
 	purserclient "frameworks/pkg/clients/purser"
 	qmclient "frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/models"
@@ -69,6 +71,11 @@ func Init(database *sql.DB, log logging.Logger, r Router) {
 		ServiceToken: serviceToken,
 		Timeout:      10 * time.Second,
 		Logger:       logger,
+		CircuitBreakerConfig: &clients.CircuitBreakerConfig{
+			FailureThreshold: 5,
+			SuccessThreshold: 2,
+			Timeout:          30 * time.Second,
+		},
 	})
 
 	purserClient = purserclient.NewClient(purserclient.Config{
@@ -76,6 +83,11 @@ func Init(database *sql.DB, log logging.Logger, r Router) {
 		ServiceToken: serviceToken,
 		Timeout:      10 * time.Second,
 		Logger:       logger,
+		CircuitBreakerConfig: &clients.CircuitBreakerConfig{
+			FailureThreshold: 5,
+			SuccessThreshold: 2,
+			Timeout:          30 * time.Second,
+		},
 	})
 }
 
@@ -574,7 +586,7 @@ func ValidateStreamKey(c middleware.Context) {
 	`, streamKey).Scan(&streamID, &userID, &tenantID, &internalName, &isActive)
 
 	if err == sql.ErrNoRows {
-		c.JSON(http.StatusNotFound, middleware.H{"error": "Invalid stream key"})
+		c.JSON(http.StatusNotFound, commodoreapi.ValidateStreamKeyResponse{Error: "Invalid stream key"})
 		return
 	}
 
@@ -583,12 +595,12 @@ func ValidateStreamKey(c middleware.Context) {
 			"stream_key": streamKey,
 			"error":      err,
 		}).Error("Database error validating stream key")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Database error"})
+		c.JSON(http.StatusInternalServerError, commodoreapi.ValidateStreamKeyResponse{Error: "Database error"})
 		return
 	}
 
 	if !isActive {
-		c.JSON(http.StatusForbidden, middleware.H{"error": "User account is inactive"})
+		c.JSON(http.StatusForbidden, commodoreapi.ValidateStreamKeyResponse{Error: "User account is inactive"})
 		return
 	}
 
@@ -606,12 +618,12 @@ func ValidateStreamKey(c middleware.Context) {
 		}).Error("Failed to update stream key usage")
 	}
 
-	c.JSON(http.StatusOK, middleware.H{
-		"valid":         true,
-		"stream_id":     streamID,
-		"user_id":       userID,
-		"tenant_id":     tenantID,
-		"internal_name": internalName,
+	c.JSON(http.StatusOK, commodoreapi.ValidateStreamKeyResponse{
+		Valid:        true,
+		StreamID:     streamID,
+		UserID:       userID,
+		TenantID:     tenantID,
+		InternalName: internalName,
 	})
 }
 
@@ -1168,7 +1180,7 @@ func ResolvePlaybackID(c middleware.Context) {
 	`, playbackID).Scan(&internalName, &tenantID, &status)
 
 	if err == sql.ErrNoRows {
-		c.JSON(http.StatusNotFound, middleware.H{"error": "Playback ID not found"})
+		c.JSON(http.StatusNotFound, commodoreapi.ErrorResponse{Error: "Playback ID not found"})
 		return
 	}
 
@@ -1177,21 +1189,21 @@ func ResolvePlaybackID(c middleware.Context) {
 			"playback_id": playbackID,
 			"error":       err,
 		}).Error("Database error resolving playback ID")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Database error"})
+		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Database error"})
 		return
 	}
 
 	// Only allow viewing of live streams (could be extended for recorded streams later)
 	if status != "live" {
-		c.JSON(http.StatusNotFound, middleware.H{"error": "Stream not live"})
+		c.JSON(http.StatusNotFound, commodoreapi.ErrorResponse{Error: "Stream not live"})
 		return
 	}
 
-	c.JSON(http.StatusOK, middleware.H{
-		"internal_name": internalName,
-		"tenant_id":     tenantID,
-		"status":        status,
-		"playback_id":   playbackID,
+	c.JSON(http.StatusOK, commodoreapi.ResolvePlaybackIDResponse{
+		InternalName: internalName,
+		TenantID:     tenantID,
+		Status:       status,
+		PlaybackID:   playbackID,
 	})
 }
 

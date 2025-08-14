@@ -12,8 +12,8 @@ import (
 	"frameworks/pkg/database"
 	"frameworks/pkg/kafka"
 	"frameworks/pkg/logging"
-	"frameworks/pkg/middleware"
 	"frameworks/pkg/monitoring"
+	"frameworks/pkg/server"
 	"frameworks/pkg/version"
 )
 
@@ -123,25 +123,10 @@ func main() {
 }
 
 func startHealthServer(healthChecker *monitoring.HealthChecker, metricsCollector *monitoring.MetricsCollector, logger logging.Logger) {
-	middleware.SetGinMode("release")
-	r := middleware.NewEngine()
+	router := server.SetupServiceRouter(logger, "periscope-ingest", healthChecker, metricsCollector)
 
-	// Add shared middleware
-	middleware.SetupCommonMiddleware(r, logger)
-
-	// Add monitoring middleware
-	r.Use(metricsCollector.MetricsMiddleware())
-
-	// Health check endpoint with proper checks
-	r.GET("/health", healthChecker.Handler())
-
-	// Metrics endpoint for Prometheus
-	r.GET("/metrics", metricsCollector.Handler())
-
-	port := config.GetEnv("HEALTH_PORT", "18005")
-	logger.Infof("Health endpoint available on port %s", port)
-
-	if err := r.Run(":" + port); err != nil {
+	serverConfig := server.DefaultConfig("periscope-ingest", "18005")
+	if err := server.Start(serverConfig, router, logger); err != nil {
 		logger.WithError(err).Error("Health server error")
 	}
 }

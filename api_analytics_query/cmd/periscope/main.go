@@ -1,21 +1,14 @@
 package main
 
 import (
-	"context"
-	"net/http"
-	"os"
-	"os/signal"
-	"syscall"
-	"time"
-
 	"frameworks/api_analytics_query/internal/handlers"
 	"frameworks/api_analytics_query/internal/scheduler"
 	"frameworks/pkg/auth"
 	"frameworks/pkg/config"
 	"frameworks/pkg/database"
 	"frameworks/pkg/logging"
-	"frameworks/pkg/middleware"
 	"frameworks/pkg/monitoring"
+	"frameworks/pkg/server"
 	"frameworks/pkg/version"
 )
 
@@ -77,25 +70,8 @@ func main() {
 	taskScheduler.Start()
 	defer taskScheduler.Stop()
 
-	// Setup Gin
-	if config.GetEnv("GIN_MODE", "") == "release" {
-		middleware.SetGinMode("release")
-	}
-
-	router := middleware.NewEngine()
-	router.Use(middleware.RequestIDMiddleware())
-	router.Use(middleware.LoggingMiddleware(logger))
-	router.Use(middleware.RecoveryMiddleware(logger))
-	router.Use(middleware.CORSMiddleware())
-
-	// Add monitoring middleware
-	router.Use(metricsCollector.MetricsMiddleware())
-
-	// Health check endpoint with proper checks
-	router.GET("/health", healthChecker.Handler())
-
-	// Metrics endpoint for Prometheus
-	router.GET("/metrics", metricsCollector.Handler())
+	// Setup router with unified monitoring
+	router := server.SetupServiceRouter(logger, "periscope-query", healthChecker, metricsCollector)
 
 	// API routes with authentication
 	v1 := router.Group("/api/v1")
@@ -149,32 +125,9 @@ func main() {
 		}
 	}
 
-	// Start HTTP server
-	port := config.GetEnv("PORT", "18004")
-	srv := &http.Server{
-		Addr:    ":" + port,
-		Handler: router,
+	// Start server with graceful shutdown
+	serverConfig := server.DefaultConfig("periscope-query", "18004")
+	if err := server.Start(serverConfig, router, logger); err != nil {
+		logger.WithError(err).Fatal("Server startup failed")
 	}
-
-	// Graceful shutdown
-	go func() {
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.WithError(err).Fatal("Failed to start server")
-		}
-	}()
-
-	// Wait for interrupt signal to gracefully shutdown
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
-
-	logger.Info("Shutting down server...")
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := srv.Shutdown(ctx); err != nil {
-		logger.WithError(err).Fatal("Server forced to shutdown")
-	}
-
-	logger.Info("Server exiting")
 }

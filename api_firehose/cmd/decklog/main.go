@@ -14,8 +14,8 @@ import (
 	"frameworks/pkg/config"
 	"frameworks/pkg/kafka"
 	"frameworks/pkg/logging"
-	"frameworks/pkg/middleware"
 	"frameworks/pkg/monitoring"
+	"frameworks/pkg/server"
 	"frameworks/pkg/version"
 )
 
@@ -83,19 +83,10 @@ func main() {
 		logger.WithError(err).Fatal("Failed to listen")
 	}
 
-	// Setup Gin router for HTTP endpoints (health/metrics)
+	// Setup router with unified monitoring
+	router := server.SetupServiceRouter(logger, "decklog", healthChecker, metricsCollector)
+
 	metricsPort := config.GetEnv("METRICS_PORT", "18026")
-	router := middleware.NewEngine()
-	router.Use(middleware.RequestIDMiddleware())
-	router.Use(middleware.LoggingMiddleware(logger))
-	router.Use(middleware.RecoveryMiddleware(logger))
-
-	// Health check endpoint with proper checks
-	router.GET("/health", healthChecker.Handler())
-
-	// Metrics endpoint for Prometheus
-	router.GET("/metrics", metricsCollector.Handler())
-
 	httpSrv := &http.Server{Addr: ":" + metricsPort, Handler: router}
 
 	logger.WithFields(logging.Fields{"grpc_port": port, "http_port": metricsPort}).Info("Starting Decklog servers")

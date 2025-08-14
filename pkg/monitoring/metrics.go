@@ -2,6 +2,7 @@ package monitoring
 
 import (
 	"strconv"
+	"strings"
 	"time"
 
 	"frameworks/pkg/middleware"
@@ -25,15 +26,18 @@ type MetricsCollector struct {
 
 // NewMetricsCollector creates a new metrics collector for a service
 func NewMetricsCollector(serviceName, version, commit string) *MetricsCollector {
+	// Sanitize service name for Prometheus (replace hyphens with underscores)
+	sanitizedServiceName := strings.ReplaceAll(serviceName, "-", "_")
+
 	mc := &MetricsCollector{
-		serviceName:   serviceName,
+		serviceName:   sanitizedServiceName,
 		customMetrics: make(map[string]prometheus.Collector),
 	}
 
 	// Standard HTTP metrics
 	mc.httpRequestsTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: serviceName + "_http_requests_total",
+			Name: mc.serviceName + "_http_requests_total",
 			Help: "Total number of HTTP requests",
 		},
 		[]string{"method", "endpoint", "status"},
@@ -41,7 +45,7 @@ func NewMetricsCollector(serviceName, version, commit string) *MetricsCollector 
 
 	mc.httpRequestDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
-			Name:    serviceName + "_http_request_duration_seconds",
+			Name:    mc.serviceName + "_http_request_duration_seconds",
 			Help:    "HTTP request duration in seconds",
 			Buckets: prometheus.DefBuckets,
 		},
@@ -50,14 +54,14 @@ func NewMetricsCollector(serviceName, version, commit string) *MetricsCollector 
 
 	mc.activeConnections = prometheus.NewGauge(
 		prometheus.GaugeOpts{
-			Name: serviceName + "_active_connections",
+			Name: mc.serviceName + "_active_connections",
 			Help: "Number of active connections",
 		},
 	)
 
 	mc.serviceInfo = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: serviceName + "_service_info",
+			Name: mc.serviceName + "_service_info",
 			Help: "Service information",
 		},
 		[]string{"version", "commit"},

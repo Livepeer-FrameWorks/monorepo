@@ -2,19 +2,14 @@ package main
 
 import (
 	"context"
-	"net/http"
-	"os"
-	"os/signal"
-	"syscall"
-	"time"
 
 	"frameworks/api_billing/internal/handlers"
 	"frameworks/pkg/auth"
 	"frameworks/pkg/config"
 	"frameworks/pkg/database"
 	"frameworks/pkg/logging"
-	"frameworks/pkg/middleware"
 	"frameworks/pkg/monitoring"
+	"frameworks/pkg/server"
 	"frameworks/pkg/version"
 )
 
@@ -69,25 +64,8 @@ func main() {
 
 	logger.Info("JobManager started - background billing jobs active")
 
-	// Setup Gin router
-	if config.GetEnv("GIN_MODE", "") == "release" {
-		middleware.SetGinMode("release")
-	}
-
-	router := middleware.NewEngine()
-	router.Use(middleware.RequestIDMiddleware())
-	router.Use(middleware.LoggingMiddleware(logger))
-	router.Use(middleware.RecoveryMiddleware(logger))
-	router.Use(middleware.CORSMiddleware())
-
-	// Add monitoring middleware
-	router.Use(metricsCollector.MetricsMiddleware())
-
-	// Health check endpoint with proper checks
-	router.GET("/health", healthChecker.Handler())
-
-	// Metrics endpoint for Prometheus
-	router.GET("/metrics", metricsCollector.Handler())
+	// Setup router with unified monitoring
+	router := server.SetupServiceRouter(logger, "purser", healthChecker, metricsCollector)
 
 	// API routes
 	api := router.Group("/api/v1")
@@ -110,49 +88,16 @@ func main() {
 
 	// Usage ingestion endpoints (service-to-service)
 	serviceAPI := router.Group("/api/v1")
-	serviceAPI.Use(middleware.ServiceAuthMiddleware(config.GetEnv("SERVICE_TOKEN", "")))
+	serviceAPI.Use(auth.ServiceAuthMiddleware(config.GetEnv("SERVICE_TOKEN", "")))
 	{
 		serviceAPI.POST("/usage/ingest", handlers.IngestUsageData)
 		serviceAPI.GET("/usage/ledger/:tenant_id", handlers.GetUsageRecords) // Legacy endpoint name
 		serviceAPI.GET("/usage/records", handlers.GetUsageRecords)           // New endpoint
 	}
 
-	// Start server
-	port := config.GetEnv("PORT", "18003")
-	srv := &http.Server{
-		Addr:         ":" + port,
-		Handler:      router,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
-		IdleTimeout:  120 * time.Second,
+	// Start server with graceful shutdown
+	serverConfig := server.DefaultConfig("purser", "18003")
+	if err := server.Start(serverConfig, router, logger); err != nil {
+		logger.WithError(err).Fatal("Server startup failed")
 	}
-
-	// Start server in a goroutine
-	go func() {
-		logger.WithFields(logging.Fields{
-			"port":    port,
-			"service": "purser",
-		}).Info("Starting HTTP server")
-
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.WithError(err).Fatal("Failed to start server")
-		}
-	}()
-
-	// Wait for interrupt
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
-
-	logger.Info("Shutting down Purser...")
-
-	// Graceful shutdown
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer shutdownCancel()
-
-	if err := srv.Shutdown(shutdownCtx); err != nil {
-		logger.WithError(err).Fatal("Server forced to shutdown")
-	}
-
-	logger.Info("Purser stopped")
 }

@@ -115,4 +115,3 @@ func (f *FoghornClient) GetStreamInfo(streamName string) (map[string]interface{}
 		"status":      "discovered",
 	}, nil
 }
-

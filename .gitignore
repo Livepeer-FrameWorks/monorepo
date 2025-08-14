@@ -68,6 +68,7 @@ docker-compose.override.yml
 *.log
 *.pid
 *.seed
+bin
 
 # Security & Sensitive
 *.pem

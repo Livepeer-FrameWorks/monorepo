@@ -6,8 +6,8 @@ import (
 	"frameworks/pkg/config"
 	"frameworks/pkg/database"
 	"frameworks/pkg/logging"
-	"frameworks/pkg/middleware"
 	"frameworks/pkg/monitoring"
+	"frameworks/pkg/server"
 	"frameworks/pkg/version"
 )
 
@@ -58,18 +58,8 @@ func main() {
 	_ = dbDuration
 	_ = dbConnections
 
-	// Create Gin engine
-	app := middleware.NewEngine()
-	middleware.SetupCommonMiddleware(app, logger)
-
-	// Add monitoring middleware
-	app.Use(metricsCollector.MetricsMiddleware())
-
-	// Health check endpoint with proper checks
-	app.GET("/health", healthChecker.Handler())
-
-	// Metrics endpoint for Prometheus
-	app.GET("/metrics", metricsCollector.Handler())
+	// Setup router with unified monitoring
+	app := server.SetupServiceRouter(logger, "commodore", healthChecker, metricsCollector)
 
 	// API routes
 	api := app.Group("/api/v1")
@@ -106,7 +96,7 @@ func main() {
 
 		// Webhook endpoints for external services (Helmsman, etc.)
 		webhooks := api.Group("")
-		webhooks.Use(middleware.ServiceAuthMiddleware(config.GetEnv("SERVICE_TOKEN", "")))
+		webhooks.Use(auth.ServiceAuthMiddleware(config.GetEnv("SERVICE_TOKEN", "")))
 		{
 			webhooks.POST("/stream-start", handlers.HandleStreamStart)
 			webhooks.POST("/stream-status", handlers.HandleStreamStatus)
@@ -120,6 +110,16 @@ func main() {
 		// Stream node discovery (cluster-aware)
 		api.GET("/stream-node/:stream_key", handlers.GetStreamNode)
 
+		// Developer API routes (using API token authentication)
+		devAPI := api.Group("/api/v1/dev")
+		devAPI.Use(auth.APIAuthMiddleware(db))
+		{
+			devAPI.GET("/streams", handlers.GetStreams)
+			devAPI.GET("/streams/:id", handlers.GetStream)
+			devAPI.GET("/streams/:id/metrics", handlers.GetStreamMetrics)
+			devAPI.POST("/clips", handlers.CreateClip)
+		}
+
 		// Admin routes
 		admin := api.Group("/admin")
 		admin.Use(auth.JWTAuthMiddleware([]byte(config.GetEnv("JWT_SECRET", ""))))
@@ -130,13 +130,9 @@ func main() {
 		}
 	}
 
-	// Start server
-	port := config.GetEnv("PORT", "18001")
-	logger.WithFields(logging.Fields{
-		"port": port,
-	}).Info("Starting server")
-
-	if err := app.Run(":" + port); err != nil {
-		logger.WithError(err).Fatal("Server failed")
+	// Start server with graceful shutdown
+	serverConfig := server.DefaultConfig("commodore", "18001")
+	if err := server.Start(serverConfig, app, logger); err != nil {
+		logger.WithError(err).Fatal("Server startup failed")
 	}
 }

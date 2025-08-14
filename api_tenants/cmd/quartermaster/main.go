@@ -2,10 +2,10 @@ package main
 
 import (
 	"frameworks/api_tenants/internal/handlers"
+	"frameworks/pkg/auth"
 	"frameworks/pkg/config"
 	"frameworks/pkg/database"
 	"frameworks/pkg/logging"
-	"frameworks/pkg/middleware"
 	"frameworks/pkg/monitoring"
 	"frameworks/pkg/server"
 	"frameworks/pkg/version"
@@ -52,15 +52,8 @@ func main() {
 	// Initialize handlers
 	handlers.Init(db, logger)
 
-	// Setup router with common middleware
-	router := server.SetupRouterWithService(logger, "quartermaster")
-
-	// Add monitoring middleware
-	router.Use(metricsCollector.MetricsMiddleware())
-
-	// Add monitoring endpoints
-	router.GET("/health", healthChecker.Handler())
-	router.GET("/metrics", metricsCollector.Handler())
+	// Setup router with unified monitoring
+	router := server.SetupServiceRouter(logger, "quartermaster", healthChecker, metricsCollector)
 
 	// Public routes
 	public := router.Group("/api")
@@ -70,7 +63,7 @@ func main() {
 
 	// Protected routes (require service token authentication)
 	protected := router.Group("/api")
-	protected.Use(middleware.ServiceAuthMiddleware(config.GetEnv("SERVICE_TOKEN", "default-service-token")))
+	protected.Use(auth.ServiceAuthMiddleware(config.GetEnv("SERVICE_TOKEN", "default-service-token")))
 	{
 		// Tenant management
 		protected.POST("/tenants", handlers.CreateTenant)

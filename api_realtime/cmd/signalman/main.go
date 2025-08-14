@@ -2,20 +2,16 @@ package main
 
 import (
 	"context"
-	"net/http"
-	"os"
-	"os/signal"
 	"strings"
-	"syscall"
-	"time"
 
 	"frameworks/api_realtime/internal/handlers"
 	"frameworks/api_realtime/internal/websocket"
+	"frameworks/pkg/auth"
 	"frameworks/pkg/config"
 	"frameworks/pkg/kafka"
 	"frameworks/pkg/logging"
-	"frameworks/pkg/middleware"
 	"frameworks/pkg/monitoring"
+	"frameworks/pkg/server"
 	"frameworks/pkg/version"
 )
 
@@ -90,19 +86,8 @@ func main() {
 		}
 	}()
 
-	// Setup Gin router
-	if config.GetEnv("GIN_MODE", "") == "release" {
-		middleware.SetGinMode("release")
-	}
-
-	router := middleware.NewEngine()
-	router.Use(middleware.RequestIDMiddleware())
-	router.Use(middleware.LoggingMiddleware(logger))
-	router.Use(middleware.RecoveryMiddleware(logger))
-	router.Use(middleware.CORSMiddleware())
-
-	// Add monitoring middleware
-	router.Use(metricsCollector.MetricsMiddleware())
+	// Setup router with unified monitoring
+	router := server.SetupServiceRouter(logger, "signalman", healthChecker, metricsCollector)
 
 	// Setup WebSocket routes
 	router.GET("/ws/streams", signalmanHandlers.HandleWebSocketStreams)
@@ -110,50 +95,14 @@ func main() {
 	router.GET("/ws/system", signalmanHandlers.HandleWebSocketSystem)
 	router.GET("/ws", signalmanHandlers.HandleWebSocketAll)
 
-	// Setup monitoring routes
-	router.GET("/health", healthChecker.Handler())
-	router.GET("/metrics", metricsCollector.Handler())
-
 	// Admin routes with service auth
 	admin := router.Group("/admin")
-	admin.Use(middleware.ServiceAuthMiddleware(config.GetEnv("SERVICE_TOKEN", "")))
+	admin.Use(auth.ServiceAuthMiddleware(config.GetEnv("SERVICE_TOKEN", "")))
 	router.NoRoute(signalmanHandlers.HandleNotFound)
 
-	// Setup HTTP server
-	port := config.GetEnv("PORT", "18009")
-	server := &http.Server{
-		Addr:         ":" + port,
-		Handler:      router,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
-		IdleTimeout:  120 * time.Second,
+	// Start server with graceful shutdown
+	serverConfig := server.DefaultConfig("signalman", "18009")
+	if err := server.Start(serverConfig, router, logger); err != nil {
+		logger.WithError(err).Fatal("Server startup failed")
 	}
-
-	// Start server
-	go func() {
-		logger.WithFields(logging.Fields{
-			"port":    port,
-			"service": "signalman",
-		}).Info("Starting HTTP server")
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.WithError(err).Fatal("Failed to start HTTP server")
-		}
-	}()
-
-	// Wait for interrupt
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
-
-	logger.Info("Shutting down Signalman...")
-
-	// Graceful shutdown
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer shutdownCancel()
-
-	if err := server.Shutdown(shutdownCtx); err != nil {
-		logger.WithError(err).Error("Server forced to shutdown")
-	}
-
-	logger.Info("Server exiting")
 }

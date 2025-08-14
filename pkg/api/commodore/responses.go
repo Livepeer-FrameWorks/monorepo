@@ -10,6 +10,7 @@ type ResolvePlaybackIDResponse struct {
 	InternalName string `json:"internal_name"`
 	TenantID     string `json:"tenant_id"`
 	Status       string `json:"status"`
+	PlaybackID   string `json:"playback_id"`
 }
 
 // ErrorResponse represents a standard error response from Commodore

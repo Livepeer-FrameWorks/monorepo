@@ -12,8 +12,8 @@ import (
 	"frameworks/api_sidecar/internal/handlers"
 	fclient "frameworks/pkg/clients/foghorn"
 	"frameworks/pkg/logging"
-	"frameworks/pkg/middleware"
 	"frameworks/pkg/monitoring"
+	"frameworks/pkg/server"
 	"frameworks/pkg/version"
 )
 
@@ -113,14 +113,8 @@ func main() {
 
 	logger.WithField("mistserver_url", mistServerURL).Info("Added MistServer node for monitoring")
 
-	// Setup Gin router
-	r := middleware.SetupGinRouter(logger)
-
-	// Add shared middleware
-	middleware.SetupCommonMiddleware(r, logger)
-
-	// Add monitoring middleware
-	r.Use(metricsCollector.MetricsMiddleware())
+	// Setup router with unified monitoring
+	r := server.SetupServiceRouter(logger, "helmsman", healthChecker, metricsCollector)
 
 	// API routes - for external API calls and monitoring
 	api := r.Group("/api")
@@ -148,12 +142,6 @@ func main() {
 		webhooks.POST("/mist/live_track_list", handlers.HandleLiveTrackList)
 		webhooks.POST("/mist/live_bandwidth", handlers.HandleLiveBandwidth)
 	}
-
-	// Health check endpoint with proper checks
-	r.GET("/health", healthChecker.Handler())
-
-	// Metrics endpoint for Prometheus
-	r.GET("/metrics", metricsCollector.Handler())
 
 	// Graceful shutdown handling
 	quit := make(chan os.Signal, 1)
@@ -185,18 +173,9 @@ func main() {
 		os.Exit(0)
 	}()
 
-	// Start server
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "18007"
-	}
-
-	logger.WithFields(logging.Fields{
-		"port":         port,
-		"api_base_url": os.Getenv("COMMODORE_URL"),
-	}).Info("Starting Helmsman (stateless webhook proxy)")
-
-	if err := r.Run(":" + port); err != nil {
-		logger.WithError(err).Fatal("Failed to start server")
+	// Start server with graceful shutdown
+	serverConfig := server.DefaultConfig("helmsman", "18007")
+	if err := server.Start(serverConfig, r, logger); err != nil {
+		logger.WithError(err).Fatal("Server startup failed")
 	}
 }
