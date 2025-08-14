@@ -449,7 +449,7 @@ func (h *AnalyticsHandler) processNodeLifecycle(ctx context.Context, event kafka
 		event.Timestamp,
 		getTenantIDFromEvent(event),
 		event.Data["node_id"],
-		convertToFloat64(event.Data["cpu_usage"]),
+		convertToFloat32(event.Data["cpu_usage"]),
 		convertToInt64(event.Data["ram_max"]),
 		convertToInt64(event.Data["ram_current"]),
 		convertToInt64(event.Data["up_speed"]),
@@ -616,7 +616,7 @@ func (h *AnalyticsHandler) writeStreamMetrics(ctx context.Context, event kafka.A
 		event.Data["node_id"],
 		convertToInt(event.Data["bitrate"]),
 		convertToFloat64(event.Data["fps"]),
-		convertToFloat64(event.Data["buffer_health"]),
+		convertToFloat32(event.Data["buffer_health"]),
 		convertToInt64(event.Data["packets_sent"]),
 		convertToInt64(event.Data["packets_lost"]),
 		convertToInt64(event.Data["packets_retransmitted"]),
@@ -666,7 +666,7 @@ func (h *AnalyticsHandler) writeViewerMetric(ctx context.Context, event kafka.An
 	}
 
 	// Buffer health
-	bh := convertToFloat64(event.Data["buffer_health"]) // may be nil, driver handles NULL
+	bh := convertToFloat32(event.Data["buffer_health"]) // may be nil, driver handles NULL
 
 	if err := batch.Append(
 		event.Timestamp,
@@ -758,22 +758,38 @@ func convertToInt64(v interface{}) int64 {
 	return 0
 }
 
-func convertToFloat64(v interface{}) *float64 {
+func convertToFloat64(v interface{}) float64 {
 	switch val := v.(type) {
 	case float64:
-		return &val
+		return val
 	case int:
-		f := float64(val)
-		return &f
+		return float64(val)
 	case int64:
-		f := float64(val)
-		return &f
+		return float64(val)
 	case string:
 		if f, err := strconv.ParseFloat(val, 64); err == nil {
-			return &f
+			return f
 		}
 	}
-	return nil
+	return 0
+}
+
+func convertToFloat32(v interface{}) float32 {
+	switch val := v.(type) {
+	case float32:
+		return val
+	case float64:
+		return float32(val)
+	case int:
+		return float32(val)
+	case int64:
+		return float32(val)
+	case string:
+		if f, err := strconv.ParseFloat(val, 64); err == nil {
+			return float32(f)
+		}
+	}
+	return 0
 }
 
 func marshalEventData(m map[string]interface{}) string {
