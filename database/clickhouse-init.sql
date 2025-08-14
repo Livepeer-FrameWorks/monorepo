@@ -279,30 +279,49 @@ TTL timestamp + INTERVAL 90 DAY;
 -- ADDITIONAL MATERIALIZED VIEWS FOR GRAFANA DASHBOARDS
 -- ============================================================================
 
--- Hourly stream summary for business dashboards
-CREATE TABLE IF NOT EXISTS stream_summary_hourly (
+-- Hourly viewer summary from viewer_metrics
+CREATE TABLE IF NOT EXISTS stream_viewer_hourly (
     hour DateTime,
     tenant_id UUID,
     internal_name String,
     total_viewers AggregateFunction(sum, UInt32),
     peak_viewers AggregateFunction(max, UInt32),
-    avg_viewers AggregateFunction(avg, UInt32),
-    total_bytes AggregateFunction(sum, UInt64),
-    unique_viewers AggregateFunction(uniq, String)
+    avg_viewers AggregateFunction(avg, UInt32)
 ) ENGINE = AggregatingMergeTree()
 PARTITION BY toYYYYMM(hour)
 ORDER BY (hour, tenant_id, internal_name);
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS stream_summary_hourly_mv TO stream_summary_hourly AS
+CREATE MATERIALIZED VIEW IF NOT EXISTS stream_viewer_hourly_mv TO stream_viewer_hourly AS
 SELECT
     toStartOfHour(timestamp) as hour,
     tenant_id,
     internal_name,
     sumState(viewer_count) as total_viewers,
     maxState(viewer_count) as peak_viewers,
-    avgState(viewer_count) as avg_viewers,
+    avgState(viewer_count) as avg_viewers
+FROM viewer_metrics
+GROUP BY hour, tenant_id, internal_name;
+
+-- Hourly connection summary from connection_events  
+CREATE TABLE IF NOT EXISTS stream_connection_hourly (
+    hour DateTime,
+    tenant_id UUID,
+    internal_name String,
+    total_bytes AggregateFunction(sum, UInt64),
+    unique_viewers AggregateFunction(uniq, String),
+    total_sessions AggregateFunction(count, UInt8)
+) ENGINE = AggregatingMergeTree()
+PARTITION BY toYYYYMM(hour)
+ORDER BY (hour, tenant_id, internal_name);
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS stream_connection_hourly_mv TO stream_connection_hourly AS
+SELECT
+    toStartOfHour(timestamp) as hour,
+    tenant_id,
+    internal_name,
     sumState(bytes_transferred) as total_bytes,
-    uniqState(user_id) as unique_viewers
+    uniqState(user_id) as unique_viewers,
+    countState() as total_sessions
 FROM connection_events
 GROUP BY hour, tenant_id, internal_name;
 
@@ -335,29 +354,48 @@ SELECT
 FROM node_metrics
 GROUP BY timestamp_5m, node_id;
 
--- Daily tenant usage summary for business metrics
-CREATE TABLE IF NOT EXISTS tenant_usage_daily (
+-- Daily tenant viewer metrics from viewer_metrics table
+CREATE TABLE IF NOT EXISTS tenant_viewer_daily (
     day Date,
     tenant_id UUID,
     viewer_minutes UInt64,
     peak_concurrent_viewers UInt32,
-    total_bytes UInt64,
     unique_streams UInt32,
     total_stream_hours Float32
 ) ENGINE = SummingMergeTree()
 PARTITION BY toYYYYMM(day)
 ORDER BY (day, tenant_id);
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS tenant_usage_daily_mv TO tenant_usage_daily AS
+CREATE MATERIALIZED VIEW IF NOT EXISTS tenant_viewer_daily_mv TO tenant_viewer_daily AS
 SELECT
     toDate(timestamp) as day,
     tenant_id,
     sum(viewer_count * 5) as viewer_minutes, -- 5-minute samples to viewer-minutes
     max(viewer_count) as peak_concurrent_viewers,
-    sum(bytes_transferred) as total_bytes,
     uniq(internal_name) as unique_streams,
     count() * 5 / 60.0 as total_stream_hours -- Convert 5-minute samples to hours
 FROM viewer_metrics
+GROUP BY day, tenant_id;
+
+-- Daily tenant connection metrics from connection_events table
+CREATE TABLE IF NOT EXISTS tenant_connection_daily (
+    day Date,
+    tenant_id UUID,
+    total_bytes UInt64,
+    unique_sessions UInt32,
+    total_connections UInt32
+) ENGINE = SummingMergeTree()
+PARTITION BY toYYYYMM(day)
+ORDER BY (day, tenant_id);
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS tenant_connection_daily_mv TO tenant_connection_daily AS
+SELECT
+    toDate(timestamp) as day,
+    tenant_id,
+    sum(bytes_transferred) as total_bytes,
+    uniq(session_id) as unique_sessions,
+    count() as total_connections
+FROM connection_events
 GROUP BY day, tenant_id;
 
 -- Geographic viewer distribution for maps
