@@ -116,16 +116,3 @@ func (f *FoghornClient) GetStreamInfo(streamName string) (map[string]interface{}
 	}, nil
 }
 
-// CreateClip creates a clip on the appropriate MistServer node
-func (f *FoghornClient) CreateClip(streamName string, startTime, duration int64) (string, error) {
-	nodeURL, err := f.DiscoverStreamNode(streamName)
-	if err != nil {
-		return "", fmt.Errorf("failed to discover stream node: %w", err)
-	}
-
-	// This would make a POST request to create the clip
-	// For now, return the node URL where the clip would be created
-	clipURL := fmt.Sprintf("%s/clips/%s_%d_%d.mp4", nodeURL, streamName, startTime, duration)
-
-	return clipURL, nil
-}

@@ -615,97 +615,18 @@ func ValidateStreamKey(c middleware.Context) {
 	})
 }
 
-// CreateClip creates a clip from a stream
+// CreateClip creates a clip from a stream (STUB - not implemented)
 func CreateClip(c middleware.Context) {
-	userID := c.GetString("user_id")
-	tenantID := c.GetString("tenant_id")
-
 	var req models.ClipRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, middleware.H{"error": err.Error()})
 		return
 	}
 
-	// Verify user owns the stream
-	var streamKey string
-	err := db.QueryRow(`
-		SELECT s.stream_key FROM streams s 
-		JOIN users u ON s.user_id = u.id 
-		WHERE u.id = $1 AND s.id = $2
-	`, userID, req.StreamID).Scan(&streamKey)
-
-	if err == sql.ErrNoRows {
-		c.JSON(http.StatusNotFound, middleware.H{"error": "Stream not found or not owned by user"})
-		return
-	}
-
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Database error"})
-		return
-	}
-
-	// Get best cluster for stream
-	cluster, err := router.GetBestClusterForStream(models.StreamRequest{
-		TenantID: tenantID,
-		StreamID: req.StreamID,
-	})
-	if err != nil {
-		logger.WithError(err).Error("Failed to get cluster for stream")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to get cluster for stream"})
-		return
-	}
-
-	// Create clip using cluster's API
-	clipURL := fmt.Sprintf("%s/api/clips/%s/%d/%d", cluster.BaseURL, streamKey, req.StartTime, req.Duration)
-	resp, err := http.Post(clipURL, "application/json", nil)
-	if err != nil {
-		logger.WithFields(logging.Fields{
-			"user_id":    userID,
-			"stream_key": streamKey,
-			"start_time": req.StartTime,
-			"duration":   req.Duration,
-			"error":      err,
-		}).Error("Failed to create clip")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to create clip"})
-		return
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		logger.WithFields(logging.Fields{
-			"user_id":     userID,
-			"stream_key":  streamKey,
-			"status_code": resp.StatusCode,
-		}).Error("Clip creation failed")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to create clip"})
-		return
-	}
-
-	// Store clip record in database
-	clipID := uuid.New().String()
-	_, err = db.Exec(`
-		INSERT INTO clips (id, stream_id, user_id, start_time, duration, clip_url, status) 
-		VALUES ($1, $2, $3, $4, $5, $6, 'processing')
-	`, clipID, req.StreamID, userID, req.StartTime, req.Duration, clipURL)
-
-	if err != nil {
-		logger.WithFields(logging.Fields{
-			"user_id":   userID,
-			"stream_id": req.StreamID,
-			"clip_id":   clipID,
-			"error":     err,
-		}).Error("Failed to store clip record")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to store clip record"})
-		return
-	}
-
-	c.JSON(http.StatusCreated, middleware.H{
-		"clip_id":    clipID,
-		"clip_url":   clipURL,
-		"status":     "processing",
-		"stream_id":  req.StreamID,
-		"start_time": req.StartTime,
-		"duration":   req.Duration,
+	c.JSON(http.StatusNotImplemented, middleware.H{
+		"error":   "Clip creation is not currently implemented",
+		"message": "This feature requires Foghorn service discovery in Commodore, which is not yet deployed",
+		"status":  "not_implemented",
 	})
 }
 
