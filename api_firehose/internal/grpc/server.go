@@ -111,6 +111,27 @@ func (s *DecklogServer) StreamEvents(stream pb.DecklogService_StreamEventsServer
 		for i, e := range event.Events {
 			// Build data map from typed event data
 			data := make(map[string]interface{})
+
+			// First, populate from batch-level metadata (contains original data fields)
+			for key, value := range event.Metadata {
+				// Try to convert string values back to appropriate types
+				if num, err := strconv.ParseFloat(value, 64); err == nil {
+					// Check if it's actually an integer
+					if num == float64(int64(num)) {
+						data[key] = int64(num)
+					} else {
+						data[key] = num
+					}
+				} else if value == "true" {
+					data[key] = true
+				} else if value == "false" {
+					data[key] = false
+				} else {
+					data[key] = value
+				}
+			}
+
+			// Then add/override with typed event data if available
 			if e.EventData != nil {
 				switch eventData := e.EventData.(type) {
 				case *pb.EventData_StreamIngestData:
@@ -135,6 +156,33 @@ func (s *DecklogServer) StreamEvents(stream pb.DecklogService_StreamEventsServer
 					data["score"] = eventData.LoadBalancingData.Score
 					data["client_ip"] = eventData.LoadBalancingData.ClientIp
 					data["client_country"] = eventData.LoadBalancingData.ClientCountry
+				case *pb.EventData_NodeMonitoringData:
+					data["cpu_load"] = eventData.NodeMonitoringData.CpuLoad
+					data["memory_used"] = eventData.NodeMonitoringData.MemoryUsed
+					data["memory_total"] = eventData.NodeMonitoringData.MemoryTotal
+					data["active_streams"] = eventData.NodeMonitoringData.ActiveStreams
+				case *pb.EventData_StreamLifecycleData:
+					data["state"] = eventData.StreamLifecycleData.State.String()
+					if eventData.StreamLifecycleData.Reason != nil {
+						data["reason"] = *eventData.StreamLifecycleData.Reason
+					}
+				case *pb.EventData_UserConnectionData:
+					data["action"] = eventData.UserConnectionData.Action.String()
+					if eventData.UserConnectionData.DisconnectReason != nil {
+						data["disconnect_reason"] = *eventData.UserConnectionData.DisconnectReason
+					}
+				case *pb.EventData_StreamMetricsData:
+					data["bandwidth_bps"] = eventData.StreamMetricsData.BandwidthBps
+					data["viewer_count"] = eventData.StreamMetricsData.ViewerCount
+					if eventData.StreamMetricsData.CpuUsage != nil {
+						data["cpu_usage"] = *eventData.StreamMetricsData.CpuUsage
+					}
+					if eventData.StreamMetricsData.MemoryBytes != nil {
+						data["memory_bytes"] = *eventData.StreamMetricsData.MemoryBytes
+					}
+					if eventData.StreamMetricsData.PacketLoss != nil {
+						data["packet_loss"] = *eventData.StreamMetricsData.PacketLoss
+					}
 				}
 			}
 

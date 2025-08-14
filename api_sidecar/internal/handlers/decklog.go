@@ -265,12 +265,24 @@ func (dc *DecklogClient) sendBatchGRPC(events []models.DecklogEvent) error {
 		eventData = append(eventData, eventDataItem)
 	}
 
+	// Collect all original data fields for metadata preservation
+	metadata := make(map[string]string)
+	for _, event := range events {
+		for key, value := range event.Data {
+			// Convert all data values to strings for metadata
+			if str := fmt.Sprintf("%v", value); str != "" {
+				metadata[key] = str
+			}
+		}
+	}
+
 	// Send the batch
 	batchEvent := &pb.Event{
 		BatchId:   uuid.New().String(),
 		Source:    "helmsman",
 		TenantId:  batchTenantID,
 		Events:    eventData,
+		Metadata:  metadata,
 		Timestamp: timestamppb.Now(),
 	}
 
