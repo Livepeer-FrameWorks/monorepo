@@ -579,9 +579,9 @@ services:
       context: ./website_application
       dockerfile: Dockerfile
       args:
-        - VITE_API_URL=http://localhost:18090
-        - VITE_ANALYTICS_API_URL=http://localhost:18090/periscope/api/v1
-        - VITE_BILLING_API_URL=http://localhost:18090/api/v1
+        - VITE_API_URL=http://localhost:18090/api/control
+        - VITE_ANALYTICS_API_URL=http://localhost:18090/api/analytics
+        - VITE_BILLING_API_URL=http://localhost:18090/api/billing
         - VITE_REALTIME_WS_URL=ws://localhost:18090/ws
         - VITE_RTMP_DOMAIN=localhost:1935
         - VITE_HTTP_DOMAIN=localhost:8080
@@ -620,7 +620,7 @@ services:
       context: ./website_marketing
       dockerfile: Dockerfile
       args:
-        - VITE_APP_URL=http://localhost:18090
+        - VITE_APP_URL=http://localhost:18090/app
         - VITE_API_URL=http://localhost:18001
         - VITE_GITHUB_URL=https://github.com/livepeer-frameworks/monorepo
         - VITE_LIVEPEER_URL=https://livepeer.org
