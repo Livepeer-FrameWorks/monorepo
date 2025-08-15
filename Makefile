@@ -1,4 +1,6 @@
-.PHONY: build build-all proto clean version install-tools test test-all docker-build docker-build-all
+.PHONY: build build-images build-bin-commodore build-bin-quartermaster build-bin-purser build-bin-decklog build-bin-foghorn build-bin-helmsman build-bin-periscope-ingest build-bin-periscope-query build-bin-signalman \
+	build-image-commodore build-image-quartermaster build-image-purser build-image-decklog build-image-foghorn build-image-helmsman build-image-periscope-ingest build-image-periscope-query build-image-signalman \
+	proto clean version install-tools verify test coverage
 
 # Version information
 VERSION ?= $(shell git describe --tags --exact-match 2>/dev/null || echo "dev")
@@ -20,24 +22,27 @@ GO_SERVICES = $(shell find . -name "go.mod" -exec dirname {} \;)
 proto:
 	cd pkg/proto && make proto
 
-# Build all services
-build-all: proto bin
-	@echo "Building all services with version: $(VERSION)"
+# Build all service binaries
+build: proto
+	@echo "Building service binaries with version: $(VERSION)"
+	@mkdir -p bin
 	@for service in $(SERVICES); do \
 		echo "Building $$service..."; \
-		$(MAKE) build-$$service; \
+		$(MAKE) build-bin-$$service; \
 	done
 
-# Test all Go modules (consolidates scripts/test-builds.sh functionality)
-test-all: proto
-	@echo "Testing all Go modules..."
+# Verify (tidy, fmt, vet, test, build) all Go modules and build images when present
+verify: proto
+	@echo "Verifying all Go modules (fmt/vet/test/build + images)..."
 	@failed=0; \
 	for service_dir in $(GO_SERVICES); do \
 		service_name=$$(basename $$service_dir); \
-		echo "Testing $$service_name..."; \
+		echo "==> $$service_name"; \
 		(cd $$service_dir && \
 			go mod tidy && \
 			go fmt ./... && \
+			go vet ./... && \
+			go test ./... -race -count=1 && \
 			go build ./...) || failed=1; \
 		if [ -f "$$service_dir/Dockerfile" ]; then \
 			echo "Building Docker image for $$service_name..."; \
@@ -45,109 +50,109 @@ test-all: proto
 		fi; \
 	done; \
 	if [ $$failed -eq 0 ]; then \
-		echo "✓ All tests passed!"; \
+		echo "✓ Verification passed"; \
 	else \
-		echo "✗ Some tests failed!"; \
+		echo "✗ Verification failed"; \
 		exit 1; \
 	fi
 
-# Docker build all services
-docker-build-all: proto
+# Build all Docker images
+build-images: proto
 	@echo "Building Docker images for all services..."
 	@for service in $(SERVICES); do \
-		$(MAKE) docker-build-$$service 2>/dev/null || echo "Skipping $$service (no Dockerfile)"; \
+		$(MAKE) build-image-$$service 2>/dev/null || echo "Skipping $$service (no Dockerfile)"; \
 	done
 
 # Individual Docker builds
-docker-build-commodore: proto
+build-image-commodore: proto
 	docker build -t frameworks-commodore:$(VERSION) \
 		--build-arg VERSION=$(VERSION) \
 		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
 		--build-arg BUILD_DATE=$(BUILD_DATE) \
 		-f api_control/Dockerfile .
 
-docker-build-quartermaster: proto
+build-image-quartermaster: proto
 	docker build -t frameworks-quartermaster:$(VERSION) \
 		--build-arg VERSION=$(VERSION) \
 		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
 		--build-arg BUILD_DATE=$(BUILD_DATE) \
 		-f api_tenants/Dockerfile .
 
-docker-build-purser: proto
+build-image-purser: proto
 	docker build -t frameworks-purser:$(VERSION) \
 		--build-arg VERSION=$(VERSION) \
 		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
 		--build-arg BUILD_DATE=$(BUILD_DATE) \
 		-f api_billing/Dockerfile .
 
-docker-build-decklog: proto
+build-image-decklog: proto
 	docker build -t frameworks-decklog:$(VERSION) \
 		--build-arg VERSION=$(VERSION) \
 		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
 		--build-arg BUILD_DATE=$(BUILD_DATE) \
 		-f api_firehose/Dockerfile .
 
-docker-build-foghorn: proto
+build-image-foghorn: proto
 	docker build -t frameworks-foghorn:$(VERSION) \
 		--build-arg VERSION=$(VERSION) \
 		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
 		--build-arg BUILD_DATE=$(BUILD_DATE) \
 		-f api_balancing/Dockerfile .
 
-docker-build-helmsman: proto
+build-image-helmsman: proto
 	docker build -t frameworks-helmsman:$(VERSION) \
 		--build-arg VERSION=$(VERSION) \
 		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
 		--build-arg BUILD_DATE=$(BUILD_DATE) \
 		-f api_sidecar/Dockerfile .
 
-docker-build-periscope-ingest: proto
+build-image-periscope-ingest: proto
 	docker build -t frameworks-periscope-ingest:$(VERSION) \
 		--build-arg VERSION=$(VERSION) \
 		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
 		--build-arg BUILD_DATE=$(BUILD_DATE) \
 		-f api_analytics_ingest/Dockerfile .
 
-docker-build-periscope-query: proto
+build-image-periscope-query: proto
 	docker build -t frameworks-periscope-query:$(VERSION) \
 		--build-arg VERSION=$(VERSION) \
 		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
 		--build-arg BUILD_DATE=$(BUILD_DATE) \
 		-f api_analytics_query/Dockerfile .
 
-docker-build-signalman: proto
+build-image-signalman: proto
 	docker build -t frameworks-signalman:$(VERSION) \
 		--build-arg VERSION=$(VERSION) \
 		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
 		--build-arg BUILD_DATE=$(BUILD_DATE) \
 		-f api_realtime/Dockerfile .
 
-# Individual service builds
-build-commodore: proto
+# Individual service bin builds (explicit)
+build-bin-commodore: proto
 	cd api_control && go build $(LDFLAGS) -o ../bin/commodore cmd/commodore/main.go
 
-build-quartermaster: proto
+build-bin-quartermaster: proto
 	cd api_tenants && go build $(LDFLAGS) -o ../bin/quartermaster cmd/quartermaster/main.go
 
-build-purser: proto
+build-bin-purser: proto
 	cd api_billing && go build $(LDFLAGS) -o ../bin/purser cmd/purser/main.go
 
-build-decklog: proto
+build-bin-decklog: proto
 	cd api_firehose && go build $(LDFLAGS) -o ../bin/decklog cmd/decklog/main.go
 
-build-foghorn: proto
+build-bin-foghorn: proto
 	cd api_balancing && go build $(LDFLAGS) -o ../bin/foghorn cmd/foghorn/main.go
 
-build-helmsman: proto
+build-bin-helmsman: proto
 	cd api_sidecar && go build $(LDFLAGS) -o ../bin/helmsman cmd/helmsman/main.go
 
-build-periscope-ingest: proto
+build-bin-periscope-ingest: proto
 	cd api_analytics_ingest && go build $(LDFLAGS) -o ../bin/periscope-ingest cmd/periscope/main.go
 
-build-periscope-query: proto
+build-bin-periscope-query: proto
 	cd api_analytics_query && go build $(LDFLAGS) -o ../bin/periscope-query cmd/periscope/main.go
 
-build-signalman: proto
+build-bin-signalman: proto
 	cd api_realtime && go build $(LDFLAGS) -o ../bin/signalman cmd/signalman/main.go
 
 # Clean build artifacts
@@ -166,6 +171,46 @@ install-tools:
 	cd pkg/proto && make install-tools
 	go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
 
-# Create bin directory
-bin:
-	mkdir -p bin
+# Run unit tests in every Go module
+test: proto
+	@echo "Running unit tests for all Go modules..."
+	@failed=0; \
+	for service_dir in $(GO_SERVICES); do \
+		service_name=$$(basename $$service_dir); \
+		echo "==> $$service_name"; \
+		(cd $$service_dir && \
+			go mod tidy && \
+			go test ./... -race -count=1) || failed=1; \
+	done; \
+	if [ $$failed -eq 0 ]; then \
+		echo "✓ Unit tests passed"; \
+	else \
+		echo "✗ Unit tests failed"; \
+		exit 1; \
+	fi
+
+# Generate a single combined coverage report at ./coverage
+coverage: proto
+	@echo "Generating combined coverage for all Go modules..."
+	@rm -rf coverage && mkdir -p coverage
+	@echo "mode: atomic" > coverage/coverage.out
+	@for service_dir in $(GO_SERVICES); do \
+		service_name=$$(basename $$service_dir); \
+		echo "==> $$service_name"; \
+		( cd $$service_dir && \
+			go mod tidy >/dev/null 2>&1 && \
+			tmpfile=$$(mktemp); \
+			if go test ./... -coverpkg=./... -coverprofile="$$tmpfile" -covermode=atomic -count=1 >/dev/null 2>&1; then \
+				if [ -s "$$tmpfile" ]; then \
+					tail -n +2 "$$tmpfile" >> "../coverage/coverage.out"; \
+					cov=$$(go tool cover -func="$$tmpfile" | awk '/total:/ {print $$3}'); \
+					echo "   coverage: $$cov"; \
+				else \
+					echo "   no coverage data"; \
+				fi; \
+			else \
+				echo "   tests failed, skipping"; \
+			fi; \
+			rm -f "$$tmpfile" ); \
+	done;
+	@echo "Combined coverage saved to coverage/coverage.out"

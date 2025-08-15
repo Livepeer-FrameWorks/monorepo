@@ -334,7 +334,7 @@ func (pm *PrometheusMonitor) emitStreamLifecycle(nodeID, baseURL string) {
 			"api_url": apiURL,
 			"node_id": nodeID,
 			"error":   err,
-		}).Error("Failed to fetch active streams from %s", apiURL)
+		}).Error("Failed to fetch active streams")
 		return
 	}
 	defer resp.Body.Close()
@@ -344,7 +344,7 @@ func (pm *PrometheusMonitor) emitStreamLifecycle(nodeID, baseURL string) {
 			"api_url": apiURL,
 			"node_id": nodeID,
 			"status":  resp.StatusCode,
-		}).Error("HTTP %d from MistServer TCP API %s", resp.StatusCode, apiURL)
+		}).Error("MistServer TCP API returned non-200 status")
 		if body, readErr := io.ReadAll(resp.Body); readErr == nil {
 			monitorLogger.WithFields(logging.Fields{
 				"api_url": apiURL,
@@ -392,7 +392,7 @@ func (pm *PrometheusMonitor) emitStreamLifecycle(nodeID, baseURL string) {
 			"api_url": apiURL,
 			"node_id": nodeID,
 			"count":   len(activeStreams),
-		}).Info("Found %d active streams via TCP API", len(activeStreams))
+		}).Info("Found active streams via TCP API")
 		for streamName, streamData := range activeStreams {
 			if streamInfo, ok := streamData.(map[string]interface{}); ok {
 				pm.processActiveStreamData(nodeID, streamName, streamInfo)
@@ -741,12 +741,12 @@ func (pm *PrometheusMonitor) processActiveStreamData(nodeID, streamName string, 
 			"node_id":     nodeID,
 			"stream_name": streamName,
 			"count":       len(trackDetails),
-		}).Info("Extracted %d tracks from health data", len(trackDetails))
+		}).WithField("count", len(trackDetails)).Info("Extracted tracks from health data")
 	} else {
 		monitorLogger.WithFields(logging.Fields{
 			"node_id":     nodeID,
 			"stream_name": streamName,
-		}).Warn("No health data found for stream %s", streamName)
+		}).WithField("stream_name", streamName).Warn("No health data found for stream")
 	}
 
 	// Get node geographic information
@@ -767,7 +767,7 @@ func (pm *PrometheusMonitor) processActiveStreamData(nodeID, streamName string, 
 		"upbytes":       upbytes,
 		"downbytes":     downbytes,
 		"health_tracks": len(trackDetails),
-	}).Info("Active stream %s", streamName)
+	}).WithField("stream_name", streamName).Info("Active stream")
 
 	// Forward essential stream state to Data API (for business logic)
 	go forwardEventToCommodore("stream-status", map[string]interface{}{
@@ -826,7 +826,7 @@ func (pm *PrometheusMonitor) processUpdates() {
 			monitorLogger.WithFields(logging.Fields{
 				"node_id": update.NodeID,
 				"error":   update.Error,
-			}).Error("Error monitoring node %s", update.NodeID)
+			}).Error("Error monitoring node")
 		} else {
 			pm.isHealthy = true
 			pm.lastJSONData = update.JSONData // Store the fetched JSON data
@@ -847,7 +847,7 @@ func (pm *PrometheusMonitor) processUpdates() {
 					// If no location data from MistServer, log it
 					monitorLogger.WithFields(logging.Fields{
 						"node_id": update.NodeID,
-					}).Warn("No location data from MistServer for node %s", update.NodeID)
+					}).Warn("No location data from MistServer for node")
 				}
 			}
 		}
