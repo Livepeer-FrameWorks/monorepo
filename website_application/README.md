@@ -32,26 +32,16 @@ npm install
 cp env.example .env
 npm run dev
 ```
-App: http://localhost:3000
+App: http://localhost:18030
 
 ## 🔧 Configuration
-Copy `env.example` to `.env` and configure:
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `VITE_API_URL` | Commodore API URL | `http://localhost:18001` |
-| `VITE_MARKETING_SITE_URL` | Marketing website URL | `http://localhost:18031` |
-| `VITE_RTMP_DOMAIN` | RTMP ingest host:port | `localhost:1935` |
-| `VITE_HTTP_DOMAIN` | MistServer HTTP host:port | `localhost:8080` |
-| `VITE_CDN_DOMAIN` | Delivery domain | `localhost:8080` |
-| `VITE_RTMP_PATH` | RTMP path | `/live` |
-| `VITE_HLS_PATH` | HLS path | `/hls` |
-| `VITE_WEBRTC_PATH` | WebRTC path | `/webrtc` |
-| `VITE_EMBED_PATH` | Embed player path | `/embed` |
+Copy `env.example` to `.env` and configure as needed. See `env.example` for all available environment variables and their defaults.
 
 ## 🏗️ Architecture
-- Svelte stores for auth
-- Axios client pointing to Commodore
-- JWT handling with interceptors
+- **SvelteKit** frontend with server-side rendering
+- **GraphQL** client connecting to Bridge API Gateway
+- **Authentication** handled via JWT tokens with Bridge auth proxy
+- **Real-time updates** via GraphQL subscriptions over WebSocket
+- **State management** using Svelte stores
 
 Troubleshooting: ensure backend services are up and ports match the root README.

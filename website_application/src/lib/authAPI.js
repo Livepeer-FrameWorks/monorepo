@@ -1,11 +1,11 @@
 import axios from 'axios';
 
 // API configuration for authentication endpoints  
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:18000';
-export { API_URL };
+const AUTH_URL = import.meta.env.VITE_AUTH_URL || 'http://localhost:18000/auth';
+export { AUTH_URL };
 
 export const authAPI = axios.create({
-  baseURL: `${API_URL}/auth`,
+  baseURL: AUTH_URL,
   headers: {
     'Content-Type': 'application/json',
   },

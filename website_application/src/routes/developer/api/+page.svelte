@@ -7,17 +7,14 @@
   import SkeletonLoader from "$lib/components/SkeletonLoader.svelte";
   import EmptyState from "$lib/components/EmptyState.svelte";
 
-  // API URL for endpoint testing (still needed for REST API documentation/testing)
-  const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:18000';
-
   let isAuthenticated = false;
   /** @type {any} */
   let user = null;
   let loading = true;
 
-  // API Testing
+  // Disabled REST API testing (endpoints migrated to GraphQL)
   let selectedEndpoint = null;
-  let apiResponse = "";
+  let apiResponse = "REST API endpoints have been migrated to GraphQL. Use the GraphQL playground instead.";
   let requestBody = "";
   let testingInProgress = false;
 

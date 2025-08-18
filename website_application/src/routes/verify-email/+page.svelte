@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import { page } from "$app/stores";
   import { base } from "$app/paths";
-  import { API_URL } from "$lib/authAPI.js";
+  import { AUTH_URL } from "$lib/authAPI.js";
 
   let verificationStatus = "pending"; // pending, success, error
   let message = "";
@@ -16,7 +16,7 @@
       loading = true;
       try {
         const response = await fetch(
-          `${API_URL}/api/verify?token=${encodeURIComponent(token)}`,
+          `${AUTH_URL}/verify/${encodeURIComponent(token)}`,
           {
             method: "GET",
           }
