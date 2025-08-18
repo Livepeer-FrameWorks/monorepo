@@ -92,8 +92,8 @@ Aim: rock‑solid basics. These are the services and controls everything else de
   - 🔄 Crypto monitoring (BTC, ETH, USDC, LPT)
   - 🔍 Mollie integration (stubs only)
   - ❌ Usage-based billing automation
-- **UI Components**: ❌ **Missing** - No billing UI
-- **Missing**: Automated invoicing, production crypto wallets
+- **UI Components**: 🔍 **Surface Level** - UI exists but backend methods return empty data
+- **Missing**: Automated invoicing, production crypto wallets, GetInvoices/GetBillingTiers implementations
 
 ---
 
@@ -115,8 +115,8 @@ Aim: rock‑solid basics. These are the services and controls everything else de
   - ✅ Data captured in ClickHouse
   - ❌ No aggregation queries
   - ❌ No backend API
-- **UI Components**: ❌ Mock data only
-- **Missing**: Actual geographic API and visualization
+- **UI Components**: 🔍 **Surface Level** - UI exists but shows infrastructure nodes, not analytics
+- **Missing**: Actual geographic analytics API and proper visualization
 
 ### Performance Metrics
 - **Status**: ✅ **Complete**
@@ -130,8 +130,8 @@ Aim: rock‑solid basics. These are the services and controls everything else de
   - 🔍 Basic queries exist
   - ❌ No billing aggregation
   - ❌ No automated invoicing
-- **UI Components**: ❌ **Missing** - No usage billing UI
-- **Missing**: Usage-to-billing pipeline
+- **UI Components**: 🔍 **Surface Level** - UI exists but no actual usage-to-billing pipeline
+- **Missing**: Usage-to-billing pipeline, automated invoicing
 
 ---
 
@@ -241,8 +241,8 @@ Aim: rock‑solid basics. These are the services and controls everything else de
 
 ### API Access Management
 - **Status**: 🔍 **Surface Level**
-- **Implementation**: Tokens work, no management
-- **UI Components**: ❌ **Missing**
+- **Implementation**: Tokens work, basic management
+- **UI Components**: 🔍 **Surface Level** - UI exists at `/developer/api` but incomplete management functions
 
 ### Prepaid Credits
 - **Status**: ❌ **Not Started**

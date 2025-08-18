@@ -1,7 +1,7 @@
 // Environment configuration for the marketing website
 const config = {
   // Application URLs
-  appUrl: import.meta.env.VITE_APP_URL || 'http://localhost:9090',
+  appUrl: import.meta.env.VITE_APP_URL || 'http://localhost:18090/app',
   contactApiUrl: import.meta.env.VITE_CONTACT_API_URL || 'http://localhost:18032',
 
   // External URLs
