@@ -128,7 +128,7 @@ services:
         max-size: "50m"
         max-file: "3"
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:4242/ >/dev/null 2>&1"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:4242/"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -166,6 +166,20 @@ services:
     restart: unless-stopped
     networks:
       - frameworks
+    mem_limit: 512m
+    mem_reservation: 256m
+    cpus: 1.0
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:18008/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   # Add Kafka infrastructure for event-driven analytics
   zookeeper:
@@ -463,6 +477,20 @@ services:
       - "18007:18007"
     networks:
       - frameworks
+    mem_limit: 512m
+    mem_reservation: 256m
+    cpus: 1.0
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:18007/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
   
   # Periscope-Ingest: High-throughput event processing from Kafka
   periscope-ingest:
@@ -651,12 +679,6 @@ services:
       options:
         max-size: "50m"
         max-file: "3"
-    healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
 
   # Marketing Website
   website:
