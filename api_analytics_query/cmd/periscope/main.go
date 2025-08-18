@@ -73,55 +73,58 @@ func main() {
 	// Setup router with unified monitoring
 	router := server.SetupServiceRouter(logger, "periscope-query", healthChecker, metricsCollector)
 
-	// API routes with authentication
-	v1 := router.Group("/api/v1")
-	v1.Use(auth.JWTAuthMiddleware([]byte(config.GetEnv("JWT_SECRET", ""))))
+	// API routes (root level - nginx adds /api/analytics/ prefix)
 	{
-		// Stream analytics endpoints
-		streams := v1.Group("/analytics/streams")
+		// All routes require authentication
+		protected := router.Group("")
+		protected.Use(auth.JWTAuthMiddleware([]byte(config.GetEnv("JWT_SECRET", ""))))
 		{
-			streams.GET("", handlers.GetStreamAnalytics)
-			streams.GET("/:internal_name", handlers.GetStreamDetails)
-			streams.GET("/:internal_name/events", handlers.GetStreamEvents)
-			streams.GET("/:internal_name/viewers", handlers.GetViewerStats)
-			streams.GET("/:internal_name/track-list", handlers.GetTrackListEvents)
-			streams.GET("/:internal_name/buffer", handlers.GetStreamBufferEvents)
-			streams.GET("/:internal_name/end", handlers.GetStreamEndEvents)
-		}
+			// Stream analytics endpoints
+			streams := protected.Group("/analytics/streams")
+			{
+				streams.GET("", handlers.GetStreamAnalytics)
+				streams.GET("/:internal_name", handlers.GetStreamDetails)
+				streams.GET("/:internal_name/events", handlers.GetStreamEvents)
+				streams.GET("/:internal_name/viewers", handlers.GetViewerStats)
+				streams.GET("/:internal_name/track-list", handlers.GetTrackListEvents)
+				streams.GET("/:internal_name/buffer", handlers.GetStreamBufferEvents)
+				streams.GET("/:internal_name/end", handlers.GetStreamEndEvents)
+			}
 
-		// Time-series analytics endpoints
-		v1.GET("/analytics/viewer-metrics", handlers.GetViewerMetrics)
-		v1.GET("/analytics/connection-events", handlers.GetConnectionEvents)
-		v1.GET("/analytics/node-metrics", handlers.GetNodeMetrics)
-		v1.GET("/analytics/routing-events", handlers.GetRoutingEvents)
-		v1.GET("/analytics/stream-health", handlers.GetStreamHealthMetrics)
+			// Time-series analytics endpoints
+			protected.GET("/analytics/viewer-metrics", handlers.GetViewerMetrics)
+			protected.GET("/analytics/connection-events", handlers.GetConnectionEvents)
+			protected.GET("/analytics/node-metrics", handlers.GetNodeMetrics)
+			protected.GET("/analytics/routing-events", handlers.GetRoutingEvents)
+			protected.GET("/analytics/stream-health", handlers.GetStreamHealthMetrics)
 
-		// Aggregated analytics endpoints
-		v1.GET("/analytics/viewer-metrics/5m", handlers.GetViewerMetrics5m)
-		v1.GET("/analytics/node-metrics/1h", handlers.GetNodeMetrics1h)
+			// Aggregated analytics endpoints
+			protected.GET("/analytics/viewer-metrics/5m", handlers.GetViewerMetrics5m)
+			protected.GET("/analytics/node-metrics/1h", handlers.GetNodeMetrics1h)
 
-		// Platform analytics endpoints
-		platform := v1.Group("/analytics/platform")
-		{
-			platform.GET("/overview", handlers.GetPlatformOverview)
-			platform.GET("/metrics", handlers.GetPlatformMetrics)
-			platform.GET("/events", handlers.GetPlatformEvents)
-		}
+			// Platform analytics endpoints
+			platform := protected.Group("/analytics/platform")
+			{
+				platform.GET("/overview", handlers.GetPlatformOverview)
+				platform.GET("/metrics", handlers.GetPlatformMetrics)
+				platform.GET("/events", handlers.GetPlatformEvents)
+			}
 
-		// Realtime analytics endpoints
-		realtime := v1.Group("/analytics/realtime")
-		{
-			realtime.GET("/streams", handlers.GetRealtimeStreams)
-			realtime.GET("/viewers", handlers.GetRealtimeViewers)
-			realtime.GET("/events", handlers.GetRealtimeEvents)
-		}
+			// Realtime analytics endpoints
+			realtime := protected.Group("/analytics/realtime")
+			{
+				realtime.GET("/streams", handlers.GetRealtimeStreams)
+				realtime.GET("/viewers", handlers.GetRealtimeViewers)
+				realtime.GET("/events", handlers.GetRealtimeEvents)
+			}
 
-		// Usage endpoints
-		usage := v1.Group("/usage")
-		{
-			usage.GET("/summary", handlers.GetUsageSummary)
-			usage.POST("/trigger-hourly", handlers.TriggerHourlySummary)
-			usage.POST("/trigger-daily", handlers.TriggerDailySummary)
+			// Usage endpoints
+			usage := protected.Group("/usage")
+			{
+				usage.GET("/summary", handlers.GetUsageSummary)
+				usage.POST("/trigger-hourly", handlers.TriggerHourlySummary)
+				usage.POST("/trigger-daily", handlers.TriggerDailySummary)
+			}
 		}
 	}
 

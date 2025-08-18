@@ -100,7 +100,7 @@ func (c *Client) ResolveTenant(ctx context.Context, req *quartermaster.ResolveTe
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	url := c.baseURL + "/api/v1/tenant/resolve"
+	url := c.baseURL + "/tenant/resolve"
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonBody))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
@@ -145,7 +145,7 @@ func (c *Client) GetTenantRouting(ctx context.Context, req *quartermaster.Tenant
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	url := c.baseURL + "/api/v1/tenant/routing"
+	url := c.baseURL + "/tenant/routing"
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonBody))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
@@ -222,7 +222,7 @@ func (c *Client) CreateTenant(ctx context.Context, req *quartermaster.CreateTena
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	url := c.baseURL + "/api/v1/tenants"
+	url := c.baseURL + "/tenants"
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonBody))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)

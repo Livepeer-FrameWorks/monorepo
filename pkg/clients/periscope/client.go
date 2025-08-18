@@ -113,7 +113,7 @@ func (c *Client) GetStreamAnalytics(ctx context.Context, tenantID, streamID, sta
 		params.Set("end_time", endTime)
 	}
 
-	body, err := c.makeRequest(ctx, "GET", "/api/v1/analytics/streams", params)
+	body, err := c.makeRequest(ctx, "GET", "/analytics/streams", params)
 	if err != nil {
 		return nil, err
 	}
@@ -128,7 +128,7 @@ func (c *Client) GetStreamAnalytics(ctx context.Context, tenantID, streamID, sta
 
 // GetStreamDetails returns detailed analytics for a specific stream
 func (c *Client) GetStreamDetails(ctx context.Context, internalName string) (*periscope.StreamDetailsResponse, error) {
-	endpoint := fmt.Sprintf("/api/v1/analytics/streams/%s", url.PathEscape(internalName))
+	endpoint := fmt.Sprintf("/analytics/streams/%s", url.PathEscape(internalName))
 	body, err := c.makeRequest(ctx, "GET", endpoint, nil)
 	if err != nil {
 		return nil, err
@@ -144,7 +144,7 @@ func (c *Client) GetStreamDetails(ctx context.Context, internalName string) (*pe
 
 // GetStreamEvents returns events for a specific stream
 func (c *Client) GetStreamEvents(ctx context.Context, internalName string) (*periscope.StreamEventsResponse, error) {
-	endpoint := fmt.Sprintf("/api/v1/analytics/streams/%s/events", url.PathEscape(internalName))
+	endpoint := fmt.Sprintf("/analytics/streams/%s/events", url.PathEscape(internalName))
 	body, err := c.makeRequest(ctx, "GET", endpoint, nil)
 	if err != nil {
 		return nil, err
@@ -160,7 +160,7 @@ func (c *Client) GetStreamEvents(ctx context.Context, internalName string) (*per
 
 // GetViewerStats returns viewer statistics for a specific stream
 func (c *Client) GetViewerStats(ctx context.Context, internalName string) (*periscope.ViewerStatsResponse, error) {
-	endpoint := fmt.Sprintf("/api/v1/analytics/streams/%s/viewers", url.PathEscape(internalName))
+	endpoint := fmt.Sprintf("/analytics/streams/%s/viewers", url.PathEscape(internalName))
 	body, err := c.makeRequest(ctx, "GET", endpoint, nil)
 	if err != nil {
 		return nil, err
@@ -176,7 +176,7 @@ func (c *Client) GetViewerStats(ctx context.Context, internalName string) (*peri
 
 // GetTrackListEvents returns track list updates for a specific stream
 func (c *Client) GetTrackListEvents(ctx context.Context, internalName string, startTime, endTime *time.Time) (*periscope.TrackListEventsResponse, error) {
-	endpoint := fmt.Sprintf("/api/v1/analytics/streams/%s/track-list", url.PathEscape(internalName))
+	endpoint := fmt.Sprintf("/analytics/streams/%s/track-list", url.PathEscape(internalName))
 
 	params := url.Values{}
 	if startTime != nil {
@@ -201,7 +201,7 @@ func (c *Client) GetTrackListEvents(ctx context.Context, internalName string, st
 
 // GetStreamBufferEvents returns buffer events for a specific stream
 func (c *Client) GetStreamBufferEvents(ctx context.Context, internalName string, startTime, endTime *time.Time) (*periscope.BufferEventsResponse, error) {
-	endpoint := fmt.Sprintf("/api/v1/analytics/streams/%s/buffer", url.PathEscape(internalName))
+	endpoint := fmt.Sprintf("/analytics/streams/%s/buffer", url.PathEscape(internalName))
 
 	params := url.Values{}
 	if startTime != nil {
@@ -226,7 +226,7 @@ func (c *Client) GetStreamBufferEvents(ctx context.Context, internalName string,
 
 // GetStreamEndEvents returns end events for a specific stream
 func (c *Client) GetStreamEndEvents(ctx context.Context, internalName string, startTime, endTime *time.Time) (*periscope.EndEventsResponse, error) {
-	endpoint := fmt.Sprintf("/api/v1/analytics/streams/%s/end", url.PathEscape(internalName))
+	endpoint := fmt.Sprintf("/analytics/streams/%s/end", url.PathEscape(internalName))
 
 	params := url.Values{}
 	if startTime != nil {
@@ -262,7 +262,7 @@ func (c *Client) GetViewerMetrics(ctx context.Context, tenantID, streamID string
 		params.Set("end_time", endTime.Format(time.RFC3339))
 	}
 
-	body, err := c.makeRequest(ctx, "GET", "/api/v1/analytics/viewer-metrics", params)
+	body, err := c.makeRequest(ctx, "GET", "/analytics/viewer-metrics", params)
 	if err != nil {
 		return nil, err
 	}
@@ -285,7 +285,7 @@ func (c *Client) GetConnectionEvents(ctx context.Context, startTime, endTime *ti
 		params.Set("end_time", endTime.Format(time.RFC3339))
 	}
 
-	body, err := c.makeRequest(ctx, "GET", "/api/v1/analytics/connection-events", params)
+	body, err := c.makeRequest(ctx, "GET", "/analytics/connection-events", params)
 	if err != nil {
 		return nil, err
 	}
@@ -308,7 +308,7 @@ func (c *Client) GetNodeMetrics(ctx context.Context, startTime, endTime *time.Ti
 		params.Set("end_time", endTime.Format(time.RFC3339))
 	}
 
-	body, err := c.makeRequest(ctx, "GET", "/api/v1/analytics/node-metrics", params)
+	body, err := c.makeRequest(ctx, "GET", "/analytics/node-metrics", params)
 	if err != nil {
 		return nil, err
 	}
@@ -331,7 +331,7 @@ func (c *Client) GetRoutingEvents(ctx context.Context, startTime, endTime *time.
 		params.Set("end_time", endTime.Format(time.RFC3339))
 	}
 
-	body, err := c.makeRequest(ctx, "GET", "/api/v1/analytics/routing-events", params)
+	body, err := c.makeRequest(ctx, "GET", "/analytics/routing-events", params)
 	if err != nil {
 		return nil, err
 	}
@@ -354,7 +354,7 @@ func (c *Client) GetStreamHealthMetrics(ctx context.Context, startTime, endTime 
 		params.Set("end_time", endTime.Format(time.RFC3339))
 	}
 
-	body, err := c.makeRequest(ctx, "GET", "/api/v1/analytics/stream-health", params)
+	body, err := c.makeRequest(ctx, "GET", "/analytics/stream-health", params)
 	if err != nil {
 		return nil, err
 	}
@@ -377,7 +377,7 @@ func (c *Client) GetViewerMetrics5m(ctx context.Context, startTime, endTime *tim
 		params.Set("end_time", endTime.Format(time.RFC3339))
 	}
 
-	body, err := c.makeRequest(ctx, "GET", "/api/v1/analytics/viewer-metrics/5m", params)
+	body, err := c.makeRequest(ctx, "GET", "/analytics/viewer-metrics/5m", params)
 	if err != nil {
 		return nil, err
 	}
@@ -400,7 +400,7 @@ func (c *Client) GetNodeMetrics1h(ctx context.Context, startTime, endTime *time.
 		params.Set("end_time", endTime.Format(time.RFC3339))
 	}
 
-	body, err := c.makeRequest(ctx, "GET", "/api/v1/analytics/node-metrics/1h", params)
+	body, err := c.makeRequest(ctx, "GET", "/analytics/node-metrics/1h", params)
 	if err != nil {
 		return nil, err
 	}
@@ -423,7 +423,7 @@ func (c *Client) GetPlatformOverview(ctx context.Context, tenantID, startTime, e
 		params.Set("end_time", endTime)
 	}
 
-	body, err := c.makeRequest(ctx, "GET", "/api/v1/analytics/platform/overview", params)
+	body, err := c.makeRequest(ctx, "GET", "/analytics/platform/overview", params)
 	if err != nil {
 		return nil, err
 	}
@@ -438,7 +438,7 @@ func (c *Client) GetPlatformOverview(ctx context.Context, tenantID, startTime, e
 
 // GetRealtimeStreams returns current live streams with analytics
 func (c *Client) GetRealtimeStreams(ctx context.Context) (*periscope.RealtimeStreamsResponse, error) {
-	body, err := c.makeRequest(ctx, "GET", "/api/v1/analytics/realtime/streams", nil)
+	body, err := c.makeRequest(ctx, "GET", "/analytics/realtime/streams", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -453,7 +453,7 @@ func (c *Client) GetRealtimeStreams(ctx context.Context) (*periscope.RealtimeStr
 
 // GetRealtimeViewers returns current viewer counts across all streams
 func (c *Client) GetRealtimeViewers(ctx context.Context) (*periscope.RealtimeViewersResponse, error) {
-	body, err := c.makeRequest(ctx, "GET", "/api/v1/analytics/realtime/viewers", nil)
+	body, err := c.makeRequest(ctx, "GET", "/analytics/realtime/viewers", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -468,7 +468,7 @@ func (c *Client) GetRealtimeViewers(ctx context.Context) (*periscope.RealtimeVie
 
 // GetRealtimeEvents returns recent events across all streams
 func (c *Client) GetRealtimeEvents(ctx context.Context) (*periscope.RealtimeEventsResponse, error) {
-	body, err := c.makeRequest(ctx, "GET", "/api/v1/analytics/realtime/events", nil)
+	body, err := c.makeRequest(ctx, "GET", "/analytics/realtime/events", nil)
 	if err != nil {
 		return nil, err
 	}

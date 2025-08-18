@@ -116,12 +116,11 @@ func main() {
 	// Setup router with unified monitoring
 	r := server.SetupServiceRouter(logger, "helmsman", healthChecker, metricsCollector)
 
-	// API routes - for external API calls and monitoring
-	api := r.Group("/api")
+	// API routes (root level - nginx adds /api/sidecar/ prefix)
 	{
-		api.GET("/prometheus/nodes", handlers.GetPrometheusNodes)
-		api.POST("/prometheus/nodes", handlers.AddPrometheusNode)
-		api.DELETE("/prometheus/nodes/:node_id", handlers.RemovePrometheusNode)
+		r.GET("/prometheus/nodes", handlers.GetPrometheusNodes)
+		r.POST("/prometheus/nodes", handlers.AddPrometheusNode)
+		r.DELETE("/prometheus/nodes/:node_id", handlers.RemovePrometheusNode)
 	}
 
 	// Webhook routes - MistServer triggers and webhooks

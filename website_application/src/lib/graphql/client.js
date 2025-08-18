@@ -7,8 +7,8 @@ import { createClient } from 'graphql-ws';
 import { errorBoundary } from '$lib/stores/errorBoundary.js';
 
 // Configuration
-const GRAPHQL_HTTP_URL = import.meta.env.VITE_GRAPHQL_HTTP_URL || 'http://localhost:18000/api/gateway/';
-const GRAPHQL_WS_URL = import.meta.env.VITE_GRAPHQL_WS_URL || 'ws://localhost:18000/api/gateway/';
+const GRAPHQL_HTTP_URL = import.meta.env.VITE_GRAPHQL_HTTP_URL || 'http://localhost:18000/graphql/';
+const GRAPHQL_WS_URL = import.meta.env.VITE_GRAPHQL_WS_URL || 'ws://localhost:18000/graphql/';
 
 // HTTP Link for queries and mutations
 const httpLink = createHttpLink({

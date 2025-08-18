@@ -55,38 +55,38 @@ func main() {
 	// Setup router with unified monitoring
 	router := server.SetupServiceRouter(logger, "quartermaster", healthChecker, metricsCollector)
 
-	// Public routes
-	public := router.Group("/api")
+	// API routes (root level - nginx adds /api/tenants/ prefix)
 	{
-		public.POST("/tenants/validate", handlers.ValidateTenant)
-	}
+		// Public routes
+		router.POST("/tenants/validate", handlers.ValidateTenant)
 
-	// Protected routes (require service token authentication)
-	protected := router.Group("/api")
-	protected.Use(auth.ServiceAuthMiddleware(config.GetEnv("SERVICE_TOKEN", "default-service-token")))
-	{
-		// Tenant management
-		protected.POST("/tenants", handlers.CreateTenant)
-		protected.GET("/tenants/:id", handlers.GetTenant)
-		protected.PUT("/tenants/:id", handlers.UpdateTenant)
-		protected.DELETE("/tenants/:id", handlers.DeleteTenant)
+		// Protected routes (require service token authentication)
+		protected := router.Group("")
+		protected.Use(auth.ServiceAuthMiddleware(config.GetEnv("SERVICE_TOKEN", "default-service-token")))
+		{
+			// Tenant management
+			protected.POST("/tenants", handlers.CreateTenant)
+			protected.GET("/tenants/:id", handlers.GetTenant)
+			protected.PUT("/tenants/:id", handlers.UpdateTenant)
+			protected.DELETE("/tenants/:id", handlers.DeleteTenant)
 
-		// Cluster management
-		protected.GET("/clusters", handlers.GetClusters)
-		protected.GET("/clusters/:id", handlers.GetCluster)
+			// Cluster management
+			protected.GET("/clusters", handlers.GetClusters)
+			protected.GET("/clusters/:id", handlers.GetCluster)
 
-		// Service management
-		protected.GET("/services", handlers.GetServices)
-		protected.GET("/services/:id", handlers.GetService)
-		protected.GET("/clusters/:id/services", handlers.GetClusterServices)
-		protected.PUT("/clusters/:cluster_id/services/:service_id", handlers.UpdateClusterServiceState)
-		protected.GET("/service-instances", handlers.GetServiceInstances)
+			// Service management
+			protected.GET("/services", handlers.GetServices)
+			protected.GET("/services/:id", handlers.GetService)
+			protected.GET("/clusters/:id/services", handlers.GetClusterServices)
+			protected.PUT("/clusters/:cluster_id/services/:service_id", handlers.UpdateClusterServiceState)
+			protected.GET("/service-instances", handlers.GetServiceInstances)
 
-		// Node management
-		protected.GET("/nodes", handlers.GetNodes)
-		protected.GET("/nodes/:id", handlers.GetNode)
-		protected.POST("/nodes", handlers.CreateNode)
-		protected.PUT("/nodes/:id/health", handlers.UpdateNodeHealth)
+			// Node management
+			protected.GET("/nodes", handlers.GetNodes)
+			protected.GET("/nodes/:id", handlers.GetNode)
+			protected.POST("/nodes", handlers.CreateNode)
+			protected.PUT("/nodes/:id/health", handlers.UpdateNodeHealth)
+		}
 	}
 
 	// Start server with graceful shutdown

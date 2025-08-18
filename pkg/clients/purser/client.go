@@ -240,7 +240,7 @@ func (c *Client) IngestUsage(ctx context.Context, req *purser.UsageIngestRequest
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/api/v1/usage/ingest", c.baseURL)
+	url := fmt.Sprintf("%s/usage/ingest", c.baseURL)
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonBody))
 	if err != nil {

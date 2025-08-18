@@ -81,13 +81,12 @@ func main() {
 	})
 
 	// Public API routes (no auth required)
-	public := router.Group("/api/v1")
 	{
-		public.GET("/status", func(c *gin.Context) {
+		router.GET("/status", func(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{
 				"service": "bridge",
 				"status":  "ready",
-				"message": "GraphQL Gateway - Coming Soon",
+				"message": "GraphQL Gateway - Ready",
 			})
 		})
 	}
@@ -95,17 +94,17 @@ func main() {
 	// Auth endpoints (proxied to Commodore)
 	auth := router.Group("/auth")
 	{
-		auth.POST("/login", authProxy.ProxyToCommodore("/api/v1/login"))
-		auth.POST("/register", authProxy.ProxyToCommodore("/api/v1/register"))
-		auth.POST("/logout", authProxy.ProxyToCommodore("/api/v1/logout"))
-		auth.GET("/verify/:token", authProxy.ProxyToCommodore("/api/v1/verify/:token"))
-		auth.POST("/refresh", authProxy.ProxyToCommodore("/api/v1/refresh"))
-		auth.POST("/forgot-password", authProxy.ProxyToCommodore("/api/v1/forgot-password"))
-		auth.POST("/reset-password", authProxy.ProxyToCommodore("/api/v1/reset-password"))
+		auth.POST("/login", authProxy.ProxyToCommodore("/login"))
+		auth.POST("/register", authProxy.ProxyToCommodore("/register"))
+		auth.POST("/logout", authProxy.ProxyToCommodore("/logout"))
+		auth.GET("/verify/:token", authProxy.ProxyToCommodore("/verify/:token"))
+		auth.POST("/refresh", authProxy.ProxyToCommodore("/refresh"))
+		auth.POST("/forgot-password", authProxy.ProxyToCommodore("/forgot-password"))
+		auth.POST("/reset-password", authProxy.ProxyToCommodore("/reset-password"))
 	}
 
 	// GraphQL endpoint with optional auth (some queries are public)
-	graphqlGroup := router.Group("/api/gateway")
+	graphqlGroup := router.Group("/graphql")
 	jwtSecret := config.GetEnv("JWT_SECRET", "default-secret-key-change-in-production")
 	graphqlGroup.Use(pkgauth.JWTAuthMiddleware([]byte(jwtSecret))) // Using pkg/auth
 	graphqlGroup.Use(middleware.GraphQLContextMiddleware())        // Bridge user context to GraphQL
@@ -115,7 +114,7 @@ func main() {
 
 		// GraphQL playground in development
 		if config.GetEnv("GIN_MODE", "debug") != "release" {
-			graphqlGroup.GET("/", gin.WrapH(playground.Handler("GraphQL Playground", "/api/gateway/")))
+			graphqlGroup.GET("/", gin.WrapH(playground.Handler("GraphQL Playground", "/graphql/")))
 		}
 	}
 

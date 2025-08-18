@@ -67,11 +67,10 @@ func main() {
 	// Setup router with unified monitoring
 	router := server.SetupServiceRouter(logger, "purser", healthChecker, metricsCollector)
 
-	// API routes
-	api := router.Group("/api/v1")
+	// API routes (root level - nginx adds /api/billing/ prefix)
 	{
 		// Authentication required endpoints
-		protected := api.Group("")
+		protected := router.Group("")
 		protected.Use(auth.JWTAuthMiddleware([]byte(config.GetEnv("JWT_SECRET", ""))))
 		{
 			// Billing endpoints
@@ -82,17 +81,17 @@ func main() {
 		}
 
 		// Webhook endpoints (no auth required)
-		api.POST("/webhooks/mollie", handlers.HandleMollieWebhook)
-		api.POST("/webhooks/stripe", handlers.HandleStripeWebhook)
-	}
+		router.POST("/webhooks/mollie", handlers.HandleMollieWebhook)
+		router.POST("/webhooks/stripe", handlers.HandleStripeWebhook)
 
-	// Usage ingestion endpoints (service-to-service)
-	serviceAPI := router.Group("/api/v1")
-	serviceAPI.Use(auth.ServiceAuthMiddleware(config.GetEnv("SERVICE_TOKEN", "")))
-	{
-		serviceAPI.POST("/usage/ingest", handlers.IngestUsageData)
-		serviceAPI.GET("/usage/ledger/:tenant_id", handlers.GetUsageRecords) // Legacy endpoint name
-		serviceAPI.GET("/usage/records", handlers.GetUsageRecords)           // New endpoint
+		// Usage ingestion endpoints (service-to-service)
+		serviceAPI := router.Group("")
+		serviceAPI.Use(auth.ServiceAuthMiddleware(config.GetEnv("SERVICE_TOKEN", "")))
+		{
+			serviceAPI.POST("/usage/ingest", handlers.IngestUsageData)
+			serviceAPI.GET("/usage/ledger/:tenant_id", handlers.GetUsageRecords) // Legacy endpoint name
+			serviceAPI.GET("/usage/records", handlers.GetUsageRecords)           // New endpoint
+		}
 	}
 
 	// Start server with graceful shutdown

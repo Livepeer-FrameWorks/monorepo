@@ -29,7 +29,7 @@ func getTenantForInternalName(internalName string) string {
 	tenantCache.mu.RUnlock()
 
 	// Resolve via Commodore service route with service auth
-	url := apiBaseURL + "/api/v1/resolve-internal-name/" + internalName
+	url := apiBaseURL + "/resolve-internal-name/" + internalName
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return ""

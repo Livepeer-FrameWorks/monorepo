@@ -675,7 +675,7 @@ func createMolliePayment(invoice models.Invoice) (string, string, error) {
 		},
 		"description": fmt.Sprintf("Invoice %s", invoice.ID),
 		"redirectUrl": fmt.Sprintf("%s/payment/success", os.Getenv("BASE_URL")),
-		"webhookUrl":  fmt.Sprintf("%s/api/v1/webhooks/mollie", os.Getenv("BASE_URL")),
+		"webhookUrl":  fmt.Sprintf("%s/webhooks/mollie", os.Getenv("BASE_URL")),
 		"metadata": map[string]string{
 			"invoice_id": invoice.ID,
 			"tenant_id":  invoice.TenantID,

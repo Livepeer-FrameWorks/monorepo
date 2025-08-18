@@ -66,7 +66,7 @@ func NewClient(config Config) *Client {
 
 // ValidateStreamKey validates a stream key against Commodore
 func (c *Client) ValidateStreamKey(ctx context.Context, streamKey string) (*commodore.ValidateStreamKeyResponse, error) {
-	endpoint := fmt.Sprintf("/api/validate-stream-key/%s", url.PathEscape(streamKey))
+	endpoint := fmt.Sprintf("/validate-stream-key/%s", url.PathEscape(streamKey))
 	url := c.baseURL + endpoint
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
@@ -112,7 +112,7 @@ func (c *Client) ValidateStreamKey(ctx context.Context, streamKey string) (*comm
 
 // ResolvePlaybackID resolves a playback ID to an internal stream name
 func (c *Client) ResolvePlaybackID(ctx context.Context, playbackID string) (*commodore.ResolvePlaybackIDResponse, error) {
-	endpoint := fmt.Sprintf("/api/resolve-playback-id/%s", url.PathEscape(playbackID))
+	endpoint := fmt.Sprintf("/resolve-playback-id/%s", url.PathEscape(playbackID))
 	url := c.baseURL + endpoint
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
@@ -159,7 +159,7 @@ func (c *Client) ForwardStreamEvent(ctx context.Context, endpoint string, eventD
 		return fmt.Errorf("failed to marshal event data: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/api/%s", c.baseURL, endpoint)
+	url := fmt.Sprintf("%s/%s", c.baseURL, endpoint)
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
@@ -211,7 +211,7 @@ func (c *Client) Login(ctx context.Context, email, password string) (*commodore.
 		return nil, fmt.Errorf("failed to marshal login request: %w", err)
 	}
 
-	url := c.baseURL + "/api/v1/login"
+	url := c.baseURL + "/login"
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
@@ -260,7 +260,7 @@ func (c *Client) Register(ctx context.Context, email, password, firstName, lastN
 		return nil, fmt.Errorf("failed to marshal register request: %w", err)
 	}
 
-	url := c.baseURL + "/api/v1/register"
+	url := c.baseURL + "/register"
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
@@ -297,7 +297,7 @@ func (c *Client) Register(ctx context.Context, email, password, firstName, lastN
 
 // GetMe gets the current user profile (requires authentication)
 func (c *Client) GetMe(ctx context.Context, userToken string) (*models.User, error) {
-	url := c.baseURL + "/api/v1/me"
+	url := c.baseURL + "/me"
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
@@ -336,7 +336,7 @@ func (c *Client) GetMe(ctx context.Context, userToken string) (*models.User, err
 
 // GetStreams gets all streams for the authenticated user
 func (c *Client) GetStreams(ctx context.Context, userToken string) (*commodore.StreamsResponse, error) {
-	url := c.baseURL + "/api/v1/streams"
+	url := c.baseURL + "/streams"
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
@@ -378,7 +378,7 @@ func (c *Client) CreateStream(ctx context.Context, userToken string, req *commod
 		return nil, fmt.Errorf("failed to marshal stream request: %w", err)
 	}
 
-	url := c.baseURL + "/api/v1/streams"
+	url := c.baseURL + "/streams"
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
@@ -416,7 +416,7 @@ func (c *Client) CreateStream(ctx context.Context, userToken string, req *commod
 
 // DeleteStream deletes a stream by ID
 func (c *Client) DeleteStream(ctx context.Context, userToken, streamID string) error {
-	url := fmt.Sprintf("%s/api/v1/streams/%s", c.baseURL, url.PathEscape(streamID))
+	url := fmt.Sprintf("%s/streams/%s", c.baseURL, url.PathEscape(streamID))
 	req, err := http.NewRequestWithContext(ctx, "DELETE", url, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
@@ -451,7 +451,7 @@ func (c *Client) CreateClip(ctx context.Context, userToken string, req *commodor
 		return nil, fmt.Errorf("failed to marshal clip request: %w", err)
 	}
 
-	url := c.baseURL + "/api/v1/clips"
+	url := c.baseURL + "/clips"
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)

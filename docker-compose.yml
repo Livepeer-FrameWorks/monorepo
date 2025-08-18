@@ -624,9 +624,9 @@ services:
       context: ./website_application
       dockerfile: Dockerfile
       args:
-        - VITE_API_URL=http://localhost:18090/api/gateway
-        - VITE_GRAPHQL_HTTP_URL=http://localhost:18090/api/gateway/
-        - VITE_GRAPHQL_WS_URL=ws://localhost:18090/api/gateway/
+        - VITE_API_URL=http://localhost:18090/auth
+        - VITE_GRAPHQL_HTTP_URL=http://localhost:18090/graphql/
+        - VITE_GRAPHQL_WS_URL=ws://localhost:18090/graphql/
         - VITE_RTMP_DOMAIN=localhost:1935
         - VITE_HTTP_DOMAIN=localhost:8080
         - VITE_CDN_DOMAIN=localhost:18090

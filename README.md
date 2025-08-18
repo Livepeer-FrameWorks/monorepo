@@ -41,8 +41,8 @@ docker-compose up
 ```
 
 Endpoints (local)
-- GraphQL Gateway: http://localhost:18090/api/gateway
-- GraphQL WebSocket: ws://localhost:18090/api/gateway (subscriptions)
+- GraphQL Gateway: http://localhost:18090/graphql
+- GraphQL WebSocket: ws://localhost:18090/graphql (subscriptions)
 - App via Nginx: http://localhost:18090
 - Web Console: http://localhost:18030
 - Marketing site: http://localhost:18031
