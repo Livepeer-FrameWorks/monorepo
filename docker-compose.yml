@@ -764,9 +764,11 @@ services:
     environment:
       # Start with default user for initialization
       CLICKHOUSE_USER: default
-      CLICKHOUSE_PASSWORD: ""
       CLICKHOUSE_DB: frameworks
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+      # Environment variables for users.xml
+      CLICKHOUSE_PASSWORD: frameworks_dev  # For frameworks user
+      CLICKHOUSE_READONLY_PASSWORD: readonly_dev
     ulimits:
       nofile:
         soft: 262144

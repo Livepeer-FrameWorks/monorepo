@@ -4,10 +4,19 @@
         <default>
             <log_queries>1</log_queries>
             <log_query_threads>1</log_query_threads>
+            <allow_ddl>1</allow_ddl>
+            <readonly>0</readonly>
         </default>
+        
+        <readonly>
+            <log_queries>0</log_queries>
+            <readonly>1</readonly>
+            <allow_ddl>0</allow_ddl>
+        </readonly>
     </profiles>
 
     <users>
+        <!-- Default user with no password - disabled in production -->
         <default>
             <password></password>
             <profile>default</profile>
@@ -19,10 +28,12 @@
             <access_management>1</access_management>
         </default>
 
+        <!-- FrameWorks application user -->
+        <!-- Set CLICKHOUSE_PASSWORD environment variable in production -->
         <frameworks>
-            <password>frameworks_dev</password>
+            <password from_env="CLICKHOUSE_PASSWORD"></password>
             <profile>default</profile>
-            <quota>default</quota>
+            <quota>frameworks_quota</quota>
             <networks>
                 <ip>::/0</ip>
             </networks>
@@ -31,6 +42,19 @@
                 <database>frameworks</database>
             </allow_databases>
         </frameworks>
+        
+        <!-- Read-only user for monitoring/analytics -->
+        <readonly_user>
+            <password from_env="CLICKHOUSE_READONLY_PASSWORD"></password>
+            <profile>readonly</profile>
+            <quota>readonly_quota</quota>
+            <networks>
+                <ip>::/0</ip>
+            </networks>
+            <allow_databases>
+                <database>frameworks</database>
+            </allow_databases>
+        </readonly_user>
     </users>
 
     <quotas>
@@ -44,5 +68,29 @@
                 <execution_time>0</execution_time>
             </interval>
         </default>
+        
+        <!-- Production quota for FrameWorks application -->
+        <frameworks_quota>
+            <interval>
+                <duration>3600</duration>
+                <queries>10000</queries>
+                <errors>100</errors>
+                <result_rows>100000000</result_rows>
+                <read_rows>1000000000</read_rows>
+                <execution_time>7200</execution_time>
+            </interval>
+        </frameworks_quota>
+        
+        <!-- Limited quota for readonly access -->
+        <readonly_quota>
+            <interval>
+                <duration>3600</duration>
+                <queries>1000</queries>
+                <errors>50</errors>
+                <result_rows>10000000</result_rows>
+                <read_rows>100000000</read_rows>
+                <execution_time>1800</execution_time>
+            </interval>
+        </readonly_quota>
     </quotas>
 </clickhouse> 

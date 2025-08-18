@@ -1,4 +1,61 @@
 <?xml version="1.0"?>
 <clickhouse>
-    <interserver_http_port>9011</interserver_http_port>
+    <!-- Network -->
+    <http_port>8123</http_port>
+    <tcp_port>9000</tcp_port>
+    <interserver_http_port>9009</interserver_http_port>
+    
+    <!-- Listen on all interfaces in production -->
+    <listen_host>::</listen_host>
+    <listen_host>0.0.0.0</listen_host>
+    
+    <!-- Performance -->
+    <max_connections>500</max_connections>
+    <keep_alive_timeout>5</keep_alive_timeout>
+    <max_concurrent_queries>100</max_concurrent_queries>
+    <max_server_memory_usage>0</max_server_memory_usage> <!-- Use all available RAM -->
+    
+    <!-- Storage -->
+    <path>/var/lib/clickhouse/</path>
+    <tmp_path>/var/lib/clickhouse/tmp/</tmp_path>
+    <user_files_path>/var/lib/clickhouse/user_files/</user_files_path>
+    <format_schema_path>/var/lib/clickhouse/format_schemas/</format_schema_path>
+    
+    <!-- Logging -->
+    <logger>
+        <level>information</level>
+        <log>/var/log/clickhouse-server/clickhouse-server.log</log>
+        <errorlog>/var/log/clickhouse-server/clickhouse-server.err.log</errorlog>
+        <size>1000M</size>
+        <count>10</count>
+    </logger>
+    
+    <!-- Timezone -->
+    <timezone>UTC</timezone>
+    
+    <!-- Background pool sizes -->
+    <background_pool_size>16</background_pool_size>
+    <background_merges_mutations_concurrency_ratio>2</background_merges_mutations_concurrency_ratio>
+    <background_move_pool_size>8</background_move_pool_size>
+    <background_fetches_pool_size>8</background_fetches_pool_size>
+    
+    <!-- ClickHouse specific settings for time-series analytics workload -->
+    <merge_tree>
+        <max_suspicious_broken_parts>5</max_suspicious_broken_parts>
+        <max_bytes_to_merge_at_min_space_in_pool>1048576</max_bytes_to_merge_at_min_space_in_pool>
+        <max_bytes_to_merge_at_max_space_in_pool>161061273600</max_bytes_to_merge_at_max_space_in_pool>
+    </merge_tree>
+    
+    <!-- Compression for analytics data -->
+    <compression>
+        <case>
+            <method>zstd</method>
+            <level>1</level>
+        </case>
+    </compression>
+    
+    <!-- TTL settings for time-series data -->
+    <merge_tree>
+        <ttl_only_drop_parts>1</ttl_only_drop_parts>
+    </merge_tree>
 </clickhouse> 
