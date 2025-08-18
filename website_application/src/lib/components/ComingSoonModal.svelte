@@ -29,6 +29,8 @@
 
 {#if show && item}
   <!-- Modal Backdrop -->
+  <!-- svelte-ignore a11y-click-events-have-key-events -->
+  <!-- svelte-ignore a11y-no-noninteractive-element-interactions -->
   <div
     class="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4"
     on:click={close}
@@ -37,8 +39,11 @@
     aria-labelledby="modal-title"
   >
     <!-- Modal Content -->
+    <!-- svelte-ignore a11y-click-events-have-key-events -->
+    <!-- svelte-ignore a11y-no-noninteractive-element-interactions -->
     <div
       class="glow-card max-w-md w-full p-6 relative"
+      role="document"
       on:click|stopPropagation
     >
       <!-- Close Button -->

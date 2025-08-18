@@ -15,6 +15,7 @@
   /** @type {any} */
   let user = null;
   let loading = true;
+  let initialized = false;
   let mobileMenuOpen = false;
 
   // Coming Soon Modal state
@@ -30,11 +31,13 @@
     isAuthenticated = authState.isAuthenticated;
     user = authState.user;
     loading = authState.loading;
+    initialized = authState.initialized;
   });
 
   // Reactive statement to handle route protection
   $: {
-    if (!loading) {
+    // Only run route protection when not loading AND after initialization
+    if (!loading && initialized) {
       const currentPath = $page.url.pathname;
       const isPublicRoute = publicRoutes.includes(currentPath);
 
@@ -75,7 +78,7 @@
   }
 </script>
 
-{#if loading}
+{#if loading && !initialized}
   <!-- Loading Screen -->
   <div class="min-h-screen bg-tokyo-night-bg flex items-center justify-center">
     <div class="text-center">

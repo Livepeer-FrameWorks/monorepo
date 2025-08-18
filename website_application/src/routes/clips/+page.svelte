@@ -204,12 +204,12 @@
                 </div>
                 
                 <div class="mt-4 pt-4 border-t border-tokyo-night-selection">
-                  <a
-                    href="#"
-                    class="text-tokyo-night-blue hover:text-blue-400 text-sm font-medium"
+                  <button
+                    type="button"
+                    class="text-tokyo-night-blue hover:text-blue-400 text-sm font-medium bg-transparent border-none cursor-pointer"
                   >
                     View Clip →
-                  </a>
+                  </button>
                 </div>
               </div>
             {/each}
@@ -228,8 +228,9 @@
       
       <form on:submit|preventDefault={createClip} class="space-y-4">
         <div>
-          <label class="block text-sm font-medium mb-2">Stream</label>
+          <label for="stream-select" class="block text-sm font-medium mb-2">Stream</label>
           <select
+            id="stream-select"
             bind:value={selectedStreamId}
             class="w-full px-3 py-2 bg-tokyo-night-bg border border-tokyo-night-selection rounded-lg focus:outline-none focus:border-tokyo-night-blue"
             required
@@ -242,8 +243,9 @@
         </div>
         
         <div>
-          <label class="block text-sm font-medium mb-2">Title</label>
+          <label for="clip-title" class="block text-sm font-medium mb-2">Title</label>
           <input
+            id="clip-title"
             type="text"
             bind:value={clipTitle}
             placeholder="Enter clip title"
@@ -253,8 +255,9 @@
         </div>
         
         <div>
-          <label class="block text-sm font-medium mb-2">Description (optional)</label>
+          <label for="clip-description" class="block text-sm font-medium mb-2">Description (optional)</label>
           <textarea
+            id="clip-description"
             bind:value={clipDescription}
             placeholder="Enter clip description"
             rows="3"
@@ -264,8 +267,9 @@
         
         <div class="grid grid-cols-2 gap-4">
           <div>
-            <label class="block text-sm font-medium mb-2">Start Time (seconds)</label>
+            <label for="start-time" class="block text-sm font-medium mb-2">Start Time (seconds)</label>
             <input
+              id="start-time"
               type="number"
               bind:value={startTime}
               min="0"
@@ -275,8 +279,9 @@
           </div>
           
           <div>
-            <label class="block text-sm font-medium mb-2">End Time (seconds)</label>
+            <label for="end-time" class="block text-sm font-medium mb-2">End Time (seconds)</label>
             <input
+              id="end-time"
               type="number"
               bind:value={endTime}
               min="1"

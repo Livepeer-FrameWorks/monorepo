@@ -5,18 +5,13 @@
   import { developerService } from "$lib/graphql/services/developer.js";
   import { toast } from "$lib/stores/toast.js";
   import SkeletonLoader from "$lib/components/SkeletonLoader.svelte";
-  import EmptyState from "$lib/components/EmptyState.svelte";
+  import GraphQLExplorer from "$lib/components/GraphQLExplorer.svelte";
 
   let isAuthenticated = false;
   /** @type {any} */
   let user = null;
   let loading = true;
-
-  // Disabled REST API testing (endpoints migrated to GraphQL)
-  let selectedEndpoint = null;
-  let apiResponse = "REST API endpoints have been migrated to GraphQL. Use the GraphQL playground instead.";
-  let requestBody = "";
-  let testingInProgress = false;
+  let authToken = null;
 
   // API Token Management
   let apiTokens = [];
@@ -26,235 +21,11 @@
   let newTokenExpiry = 0; // 0 = never expires
   let newlyCreatedToken = null;
 
-  // API endpoints documentation
-  const apiSections = [
-    {
-      title: "Stream Management",
-      icon: "🎥",
-      endpoints: [
-        {
-          method: "GET",
-          path: "/api/streams",
-          description: "List all user streams with detailed information",
-          response: `[
-  {
-    "id": "stream-id",
-    "user_id": "user-id",
-    "stream_key": "sk_...",
-    "playback_id": "pb_...",
-    "internal_name": "internal-uuid",
-    "title": "My Live Stream",
-    "description": "Stream description",
-    "status": "live",
-    "viewers": 42,
-    "resolution": "1920x1080",
-    "bitrate": "2500 kbps",
-    "is_recording_enabled": false,
-    "is_public": true,
-    "max_viewers": 156,
-    "created_at": "2025-01-24T10:00:00Z",
-    "updated_at": "2025-01-24T11:30:00Z"
-  }
-]`,
-          requiresAuth: true,
-        },
-        {
-          method: "POST",
-          path: "/api/streams",
-          description: "Create a new stream",
-          body: `{
-  "title": "My New Stream",
-  "description": "Optional description"
-}`,
-          response: `{
-  "id": "new-stream-id",
-  "stream_key": "sk_new_key",
-  "playback_id": "pb_new_id",
-  "internal_name": "internal-uuid",
-  "title": "My New Stream",
-  "description": "Optional description",
-  "status": "offline",
-  "ingest_url": "rtmp://localhost:1935/live/sk_new_key",
-  "playback_url": "https://localhost:9080/hls/pb_new_id.m3u8"
-}`,
-          requiresAuth: true,
-        },
-        {
-          method: "GET",
-          path: "/api/streams/:id",
-          description: "Get specific stream details",
-          response: `{
-  "id": "stream-id",
-  "user_id": "user-id",
-  "stream_key": "sk_...",
-  "title": "My Stream",
-  "status": "live",
-  "viewers": 42,
-  "start_time": "2025-01-24T10:00:00Z",
-  "end_time": null,
-  "bitrate": "2500 kbps",
-  "resolution": "1920x1080",
-  "created_at": "2025-01-24T09:00:00Z",
-  "updated_at": "2025-01-24T11:30:00Z"
-}`,
-          requiresAuth: true,
-        },
-        {
-          method: "DELETE",
-          path: "/api/streams/:id",
-          description: "Delete a stream permanently",
-          response: `{
-  "message": "Stream deleted successfully",
-  "stream_id": "stream-id",
-  "stream_title": "My Stream",
-  "deleted_at": "2025-01-24T11:30:00Z"
-}`,
-          requiresAuth: true,
-        },
-        {
-          method: "GET",
-          path: "/api/streams/:id/metrics",
-          description: "Get real-time metrics for a specific stream",
-          response: `{
-  "viewers": 42,
-  "status": "live",
-  "bandwidth_in": 2500000,
-  "bandwidth_out": 5000000,
-  "resolution": "1920x1080",
-  "bitrate": "2500 kbps",
-  "max_viewers": 156,
-  "updated_at": "2025-01-24T11:30:00Z"
-}`,
-          requiresAuth: true,
-        },
-        {
-          method: "POST",
-          path: "/api/streams/:id/refresh-key",
-          description: "Generate new stream key for security",
-          response: `{
-  "message": "Stream key refreshed successfully",
-  "stream_id": "stream-id",
-  "stream_key": "sk_new_refreshed_key",
-  "playback_id": "pb_same_id",
-  "ingest_url": "rtmp://localhost:1935/live/sk_new_refreshed_key",
-  "old_key_invalidated": true
-}`,
-          requiresAuth: true,
-        },
-      ],
-    },
-    {
-      title: "Analytics",
-      icon: "📊",
-      endpoints: [
-        {
-          method: "GET",
-          path: "/api/streams/:id/embed",
-          description: "Get embed code and playback URLs for a stream",
-          response: `{
-  "embed_code": "<iframe src='https://localhost:9080/embed/pb_id' frameborder='0' allowfullscreen></iframe>",
-  "playback_id": "pb_id",
-  "hls_url": "https://localhost:9080/hls/pb_id.m3u8",
-  "webrtc_url": "https://localhost:9080/webrtc/pb_id"
-}`,
-          requiresAuth: true,
-        },
-      ],
-    },
-    {
-      title: "User Info",
-      icon: "👤",
-      endpoints: [
-        {
-          method: "GET",
-          path: "/api/me",
-          description: "Get current user profile and streams",
-          response: `{
-  "user": {
-    "id": "user-id",
-    "email": "user@example.com",
-    "created_at": "2025-01-24T10:00:00Z",
-    "is_active": true
-  },
-  "streams": [
-    {
-      "id": "stream-id",
-      "stream_key": "sk_...",
-      "playback_id": "pb_...",
-      "title": "My Stream",
-      "status": "offline",
-      "viewers": 0
-    }
-  ]
-}`,
-          requiresAuth: true,
-        },
-      ],
-    },
-    {
-      title: "Developer Tokens",
-      icon: "🔑",
-      endpoints: [
-        {
-          method: "POST",
-          path: "/api/developer/tokens",
-          description: "Create a new API access token",
-          body: `{
-  "token_name": "My App Token",
-  "permissions": "read,write",
-  "expires_in": 365
-}`,
-          response: `{
-  "id": "token-id",
-  "token_value": "at_1234567890abcdef...",
-  "token_name": "My App Token",
-  "permissions": "read,write",
-  "expires_at": "2026-01-24T10:00:00Z",
-  "created_at": "2025-01-24T10:00:00Z",
-  "message": "API token created successfully. Store this token securely - it won't be shown again."
-}`,
-          requiresAuth: true,
-        },
-        {
-          method: "GET",
-          path: "/api/developer/tokens",
-          description: "List all your API tokens (without values)",
-          response: `{
-  "tokens": [
-    {
-      "id": "token-id",
-      "token_name": "My App Token",
-      "permissions": "read,write",
-      "status": "active",
-      "last_used_at": "2025-01-24T11:00:00Z",
-      "expires_at": "2026-01-24T10:00:00Z",
-      "created_at": "2025-01-24T10:00:00Z"
-    }
-  ],
-  "count": 1
-}`,
-          requiresAuth: true,
-        },
-        {
-          method: "DELETE",
-          path: "/api/developer/tokens/:id",
-          description: "Revoke an API token",
-          response: `{
-  "message": "API token revoked successfully",
-  "token_id": "token-id",
-  "token_name": "My App Token",
-  "revoked_at": "2025-01-24T11:30:00Z"
-}`,
-          requiresAuth: true,
-        },
-      ],
-    },
-  ];
-
   // Subscribe to auth store
   auth.subscribe((authState) => {
     isAuthenticated = authState.isAuthenticated;
     user = authState.user?.user || null;
+    authToken = authState.token || null;
   });
 
   onMount(async () => {
@@ -329,116 +100,8 @@
     }
   }
 
-  async function testEndpoint(endpoint) {
-    if (!apiTokens.length) {
-      apiResponse = `Error: No API tokens available. Please create an API token first to test endpoints.
-
-To create a token:
-1. Click "Create New Token" button
-2. Give it a name (e.g., "Testing Token")
-3. Copy the generated token
-4. Use it in the Authorization header as: Bearer at_your_token_here`;
-      return;
-    }
-
-    const activeToken = apiTokens.find((t) => t.status === "active");
-    if (!activeToken) {
-      apiResponse = `Error: No active API tokens available. Please create a new API token.`;
-      return;
-    }
-
-    try {
-      testingInProgress = true;
-
-      const headers = {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${
-          activeToken.token || "at_your_token_here"
-        }`,
-      };
-
-      const options = {
-        method: endpoint.method,
-        headers,
-      };
-
-      if (endpoint.method === "POST" && requestBody) {
-        try {
-          JSON.parse(requestBody); // Validate JSON
-          options.body = requestBody;
-        } catch (e) {
-          apiResponse = `Error: Invalid JSON in request body\n${e.message}`;
-          return;
-        }
-      }
-
-      // Replace :id with example ID for demo
-      let url = endpoint.path.replace(":id", "example-stream-id");
-
-      // Make actual API call
-      const response = await fetch(`${API_URL}${url}`, options);
-      const responseData = await response.text();
-
-      let statusColor = response.ok ? "✅" : "❌";
-
-      apiResponse = `${statusColor} ${endpoint.method} ${url}
-Status: ${response.status} ${response.statusText}
-
-Request Headers:
-${JSON.stringify(headers, null, 2)}
-
-${
-  endpoint.method === "POST" && requestBody
-    ? `Request Body:
-${requestBody}
-
-`
-    : ""
-}Response:
-${responseData}
-
-${
-  !response.ok
-    ? `\nNote: This might be expected if the endpoint requires specific data or if you don't have the referenced resource.`
-    : ""
-}`;
-    } catch (error) {
-      apiResponse = `❌ Error making request:
-${error.message}
-
-This could be due to:
-- Network connectivity issues
-- CORS restrictions
-- Server not running
-- Invalid endpoint URL`;
-    } finally {
-      testingInProgress = false;
-    }
-  }
-
-  function selectEndpoint(endpoint) {
-    selectedEndpoint = endpoint;
-    requestBody = endpoint.body || "";
-    apiResponse = "";
-  }
-
   function copyToClipboard(text) {
     navigator.clipboard.writeText(text);
-  }
-
-  function getMethodColor(method) {
-    switch (method) {
-      case "GET":
-        return "text-tokyo-night-green";
-      case "POST":
-        return "text-tokyo-night-blue";
-      case "PUT":
-        return "text-tokyo-night-yellow";
-      case "DELETE":
-        return "text-tokyo-night-red";
-      default:
-        return "text-tokyo-night-comment";
-    }
   }
 
   function formatDate(dateString) {
@@ -461,7 +124,7 @@ This could be due to:
 </script>
 
 <svelte:head>
-  <title>Developer API - FrameWorks</title>
+  <title>GraphQL API - FrameWorks</title>
 </svelte:head>
 
 <div class="space-y-8 page-transition">
@@ -469,11 +132,10 @@ This could be due to:
   <div class="flex justify-between items-start">
     <div>
       <h1 class="text-3xl font-bold text-tokyo-night-fg mb-2">
-        🛠️ Developer API
+        🛠️ GraphQL API
       </h1>
       <p class="text-tokyo-night-fg-dark">
-        Generate API tokens, test endpoints, and integrate FrameWorks into your
-        applications
+        Interactive GraphQL explorer with schema introspection, query templates, and code generation
       </p>
     </div>
 
@@ -525,19 +187,19 @@ This could be due to:
         Authentication Required
       </h3>
       <p class="text-tokyo-night-fg-dark mb-6">
-        Please sign in to access the API documentation and manage your API keys.
+        Please sign in to access the GraphQL API explorer and manage your API keys.
       </p>
       <a href="{base}/login" class="btn-primary"> Sign In </a>
     </div>
   {:else}
-    <!-- API Overview -->
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+    <!-- GraphQL API Overview -->
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-6">
       <div class="glow-card p-6">
         <div class="flex items-center justify-between">
           <div>
-            <p class="text-sm text-tokyo-night-comment">Base URL</p>
-            <p class="text-lg font-mono text-tokyo-night-fg">
-              {API_URL}/api
+            <p class="text-sm text-tokyo-night-comment">GraphQL Endpoint</p>
+            <p class="text-lg font-mono text-tokyo-night-fg break-all">
+              {import.meta.env.VITE_GRAPHQL_HTTP_URL || 'http://localhost:18000/graphql/'}
             </p>
           </div>
           <span class="text-2xl">🌐</span>
@@ -547,8 +209,20 @@ This could be due to:
       <div class="glow-card p-6">
         <div class="flex items-center justify-between">
           <div>
+            <p class="text-sm text-tokyo-night-comment">WebSocket</p>
+            <p class="text-lg font-mono text-tokyo-night-fg break-all">
+              {import.meta.env.VITE_GRAPHQL_WS_URL || 'ws://localhost:18000/graphql/'}
+            </p>
+          </div>
+          <span class="text-2xl">⚡</span>
+        </div>
+      </div>
+
+      <div class="glow-card p-6">
+        <div class="flex items-center justify-between">
+          <div>
             <p class="text-sm text-tokyo-night-comment">Authentication</p>
-            <p class="text-lg font-semibold text-tokyo-night-fg">API Token</p>
+            <p class="text-lg font-semibold text-tokyo-night-fg">JWT Bearer</p>
           </div>
           <span class="text-2xl">🔑</span>
         </div>
@@ -562,7 +236,7 @@ This could be due to:
               {apiTokens.filter((t) => t.status === "active").length}
             </p>
           </div>
-          <span class="text-2xl">⚡</span>
+          <span class="text-2xl">🎯</span>
         </div>
       </div>
     </div>
@@ -585,7 +259,7 @@ This could be due to:
             No API Tokens
           </h3>
           <p class="text-tokyo-night-comment mb-4">
-            Create your first API token to start using the FrameWorks API
+            Create your first API token to start using the FrameWorks GraphQL API
           </p>
           <button
             class="btn-primary"
@@ -663,326 +337,61 @@ This could be due to:
       {/if}
     </div>
 
-    <!-- Interactive API Explorer -->
-    <div class="grid grid-cols-1 xl:grid-cols-2 gap-8">
-      <!-- Endpoint List -->
-      <div class="card">
-        <div class="card-header">
-          <h2 class="text-xl font-semibold text-tokyo-night-fg mb-2">
-            🔗 API Endpoints
-          </h2>
-          <p class="text-tokyo-night-fg-dark">
-            Click any endpoint to test it with your API tokens
-          </p>
-        </div>
-
-        <div class="space-y-6">
-          {#each apiSections as section}
-            <div>
-              <h3
-                class="flex items-center space-x-2 font-semibold text-tokyo-night-fg mb-3"
-              >
-                <span>{section.icon}</span>
-                <span>{section.title}</span>
-              </h3>
-
-              <div class="space-y-2">
-                {#each section.endpoints as endpoint}
-                  <button
-                    on:click={() => selectEndpoint(endpoint)}
-                    class="w-full text-left p-3 rounded-lg border border-tokyo-night-fg-gutter hover:bg-tokyo-night-bg-highlight transition-colors {selectedEndpoint ===
-                    endpoint
-                      ? 'bg-tokyo-night-bg-highlight border-tokyo-night-blue'
-                      : ''}"
-                  >
-                    <div class="flex items-center justify-between mb-1">
-                      <div class="flex items-center space-x-3">
-                        <span
-                          class="text-xs font-mono px-2 py-1 rounded {getMethodColor(
-                            endpoint.method
-                          )} bg-tokyo-night-bg"
-                        >
-                          {endpoint.method}
-                        </span>
-                        <span class="font-mono text-sm text-tokyo-night-fg">
-                          {endpoint.path}
-                        </span>
-                      </div>
-                      <span class="text-xs text-tokyo-night-comment"
-                        >🔒 Token</span
-                      >
-                    </div>
-                    <p class="text-xs text-tokyo-night-comment">
-                      {endpoint.description}
-                    </p>
-                  </button>
-                {/each}
-              </div>
-            </div>
-          {/each}
-        </div>
-      </div>
-
-      <!-- API Tester -->
-      <div class="card">
-        <div class="card-header">
-          <h2 class="text-xl font-semibold text-tokyo-night-fg mb-2">
-            🧪 Live API Tester
-          </h2>
-          <p class="text-tokyo-night-fg-dark">
-            Test endpoints with real API calls using your tokens
-          </p>
-        </div>
-
-        {#if selectedEndpoint}
-          <div class="space-y-4">
-            <!-- Request Body (for POST endpoints) -->
-            {#if selectedEndpoint.method === "POST"}
-              <div>
-                <label
-                  class="block text-sm font-medium text-tokyo-night-fg mb-2"
-                >
-                  Request Body (JSON)
-                </label>
-                <textarea
-                  bind:value={requestBody}
-                  class="input w-full h-32 font-mono text-sm"
-                  placeholder="Enter JSON request body..."
-                />
-              </div>
-            {/if}
-
-            <!-- Test Button -->
-            <button
-              on:click={() => testEndpoint(selectedEndpoint)}
-              class="btn-primary w-full"
-              disabled={testingInProgress}
-            >
-              <span class="mr-2">{testingInProgress ? "⏳" : "🚀"}</span>
-              {testingInProgress
-                ? "Testing..."
-                : `Test ${selectedEndpoint.method} ${selectedEndpoint.path}`}
-            </button>
-
-            <!-- Response -->
-            {#if apiResponse}
-              <div>
-                <label
-                  class="block text-sm font-medium text-tokyo-night-fg mb-2"
-                >
-                  Response
-                </label>
-                <div class="relative">
-                  <pre
-                    class="bg-tokyo-night-bg p-4 rounded-lg text-sm font-mono text-tokyo-night-fg overflow-x-auto border border-tokyo-night-fg-gutter max-h-96 overflow-y-auto">{apiResponse}</pre>
-                  <button
-                    on:click={() => copyToClipboard(apiResponse)}
-                    class="absolute top-2 right-2 btn-secondary text-xs px-2 py-1"
-                  >
-                    📋
-                  </button>
-                </div>
-              </div>
-            {/if}
-          </div>
-        {:else}
-          <div class="text-center py-12">
-            <div class="text-4xl mb-4">🔗</div>
-            <h3 class="text-lg font-semibold text-tokyo-night-fg mb-2">
-              Select an Endpoint
-            </h3>
-            <p class="text-tokyo-night-comment">
-              Choose an endpoint from the list to test it with live API calls
-            </p>
-          </div>
-        {/if}
-      </div>
-    </div>
-
-    <!-- Code Examples -->
+    <!-- GraphQL Explorer -->
     <div class="card">
       <div class="card-header">
         <h2 class="text-xl font-semibold text-tokyo-night-fg mb-2">
-          💻 Code Examples
+          🚀 GraphQL API Explorer
         </h2>
         <p class="text-tokyo-night-fg-dark">
-          Ready-to-use code snippets with your API tokens
+          Interactive GraphQL query builder and tester with live schema introspection
         </p>
       </div>
-
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <!-- JavaScript Example -->
-        <div>
-          <h3 class="font-semibold text-tokyo-night-fg mb-3">
-            JavaScript (Fetch)
-          </h3>
-          <div class="relative">
-            <pre
-              class="bg-tokyo-night-bg p-4 rounded-lg text-sm font-mono text-tokyo-night-fg overflow-x-auto"><code
-                >{`// Using your API token
-const API_TOKEN = '${
-                  apiTokens.find((t) => t.status === "active")?.token ||
-                  "at_your_token_here"
-                }';
-
-// Get all streams
-const streams = await fetch('${API_URL}/api/streams', {
-  headers: { 
-    'Authorization': \`Bearer \${API_TOKEN}\`
-  }
-});
-
-const streamData = await streams.json();
-console.log(streamData);
-
-// Create a new stream
-const newStream = await fetch('${API_URL}/api/streams', {
-  method: 'POST',
-  headers: {
-    'Authorization': \`Bearer \${API_TOKEN}\`,
-    'Content-Type': 'application/json'
-  },
-  body: JSON.stringify({
-    title: 'My New Stream',
-    description: 'Created via API'
-  })
-});`}</code
-              ></pre>
-            <button
-              on:click={() =>
-                copyToClipboard(`// Using your API token
-const API_TOKEN = '${
-                  apiTokens.find((t) => t.status === "active")?.token ||
-                  "at_your_token_here"
-                }';
-
-// Get all streams
-const streams = await fetch('${API_URL}/api/streams', {
-  headers: { 
-    'Authorization': \`Bearer \${API_TOKEN}\`
-  }
-});
-
-const streamData = await streams.json();
-console.log(streamData);
-
-// Create a new stream
-const newStream = await fetch('${API_URL}/api/streams', {
-  method: 'POST',
-  headers: {
-    'Authorization': \`Bearer \${API_TOKEN}\`,
-    'Content-Type': 'application/json'
-  },
-  body: JSON.stringify({
-    title: 'My New Stream',
-    description: 'Created via API'
-  })
-});`)}
-              class="absolute top-2 right-2 btn-secondary text-xs px-2 py-1"
-            >
-              📋
-            </button>
-          </div>
-        </div>
-
-        <!-- cURL Example -->
-        <div>
-          <h3 class="font-semibold text-tokyo-night-fg mb-3">cURL</h3>
-          <div class="relative">
-            <pre
-              class="bg-tokyo-night-bg p-4 rounded-lg text-sm font-mono text-tokyo-night-fg overflow-x-auto"><code
-                >{`# Get all streams
-curl -X GET ${API_URL}/api/streams \\
-  -H "Authorization: Bearer ${
-    apiTokens.find((t) => t.status === "active")?.token ||
-    "at_your_token_here"
-  }"
-
-# Create new stream
-curl -X POST ${API_URL}/api/streams \\
-  -H "Authorization: Bearer ${
-    apiTokens.find((t) => t.status === "active")?.token ||
-    "at_your_token_here"
-  }" \\
-  -H "Content-Type: application/json" \\
-  -d '{"title":"My New Stream","description":"Created via cURL"}'
-
-# Get stream metrics
-curl -X GET ${API_URL}/api/streams/STREAM_ID/metrics \\
-  -H "Authorization: Bearer ${
-    apiTokens.find((t) => t.status === "active")?.token ||
-    "at_your_token_here"
-  }"`}</code
-              ></pre>
-            <button
-              on:click={() =>
-                copyToClipboard(`# Get all streams
-curl -X GET ${API_URL}/api/streams \\
-  -H "Authorization: Bearer ${
-    apiTokens.find((t) => t.status === "active")?.token ||
-    "at_your_token_here"
-  }"
-
-# Create new stream
-curl -X POST ${API_URL}/api/streams \\
-  -H "Authorization: Bearer ${
-    apiTokens.find((t) => t.status === "active")?.token ||
-    "at_your_token_here"
-  }" \\
-  -H "Content-Type: application/json" \\
-  -d '{"title":"My New Stream","description":"Created via cURL"}'
-
-# Get stream metrics
-curl -X GET ${API_URL}/api/streams/STREAM_ID/metrics \\
-  -H "Authorization: Bearer ${
-    apiTokens.find((t) => t.status === "active")?.token ||
-    "at_your_token_here"
-  }"`)}
-              class="absolute top-2 right-2 btn-secondary text-xs px-2 py-1"
-            >
-              📋
-            </button>
-          </div>
-        </div>
-      </div>
+      
+      <GraphQLExplorer {authToken} />
     </div>
 
-    <!-- Authentication Guide -->
+    <!-- GraphQL Guide -->
     <div class="card">
       <div class="card-header">
         <h2 class="text-xl font-semibold text-tokyo-night-fg mb-2">
-          🔐 API Authentication Guide
+          📚 GraphQL API Guide
         </h2>
         <p class="text-tokyo-night-fg-dark">
-          How to authenticate with the FrameWorks API using tokens
+          Everything you need to know about our GraphQL API
         </p>
       </div>
 
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         <div class="text-center">
-          <div class="text-3xl mb-3">1️⃣</div>
-          <h3 class="font-semibold text-tokyo-night-fg mb-2">Generate Token</h3>
+          <div class="text-3xl mb-3">🏗️</div>
+          <h3 class="font-semibold text-tokyo-night-fg mb-2">Schema First</h3>
           <p class="text-sm text-tokyo-night-comment">
-            Create an API token from this page. Tokens work like stream keys and
-            don't expire unless you set an expiration.
+            All operations use a single GraphQL endpoint. Query exactly the data you need with strong typing.
           </p>
         </div>
 
         <div class="text-center">
-          <div class="text-3xl mb-3">2️⃣</div>
-          <h3 class="font-semibold text-tokyo-night-fg mb-2">Include Header</h3>
+          <div class="text-3xl mb-3">🔄</div>
+          <h3 class="font-semibold text-tokyo-night-fg mb-2">Real-time</h3>
           <p class="text-sm text-tokyo-night-comment">
-            Add "Authorization: Bearer at_your_token" header to all API
-            requests. Tokens start with "at_".
+            Use GraphQL subscriptions over WebSocket for real-time stream events and viewer metrics.
           </p>
         </div>
 
         <div class="text-center">
-          <div class="text-3xl mb-3">3️⃣</div>
-          <h3 class="font-semibold text-tokyo-night-fg mb-2">Manage Tokens</h3>
+          <div class="text-3xl mb-3">🔑</div>
+          <h3 class="font-semibold text-tokyo-night-fg mb-2">JWT Auth</h3>
           <p class="text-sm text-tokyo-night-comment">
-            Revoke tokens you no longer need. Create separate tokens for
-            different applications or environments.
+            Include your JWT token in the Authorization header. The explorer handles this automatically.
+          </p>
+        </div>
+
+        <div class="text-center">
+          <div class="text-3xl mb-3">🎯</div>
+          <h3 class="font-semibold text-tokyo-night-fg mb-2">Type Safe</h3>
+          <p class="text-sm text-tokyo-night-comment">
+            Generate TypeScript types from the schema for full type safety in your applications.
           </p>
         </div>
       </div>
@@ -1007,23 +416,26 @@ curl -X GET ${API_URL}/api/streams/STREAM_ID/metrics \\
         <div class="space-y-4">
           <div>
             <label
+              for="token-name-display"
               class="block text-sm font-medium text-tokyo-night-fg-dark mb-2"
             >
               Token Name
             </label>
-            <p class="text-tokyo-night-fg font-semibold">
+            <p id="token-name-display" class="text-tokyo-night-fg font-semibold">
               {newlyCreatedToken.token_name}
             </p>
           </div>
 
           <div>
             <label
+              for="api-token-display"
               class="block text-sm font-medium text-tokyo-night-fg-dark mb-2"
             >
               API Token (Copy this now - it won't be shown again!)
             </label>
             <div class="flex space-x-2">
               <input
+                id="api-token-display"
                 type="text"
                 value={newlyCreatedToken.token_value}
                 readonly

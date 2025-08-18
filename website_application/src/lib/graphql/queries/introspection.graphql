@@ -1,0 +1,163 @@
+# GraphQL introspection queries for explorer
+
+query IntrospectSchema {
+  __schema {
+    queryType {
+      name
+      fields {
+        name
+        description
+        type {
+          ...TypeRef
+        }
+        args {
+          name
+          description
+          type {
+            ...TypeRef
+          }
+          defaultValue
+        }
+      }
+    }
+    mutationType {
+      name
+      fields {
+        name
+        description
+        type {
+          ...TypeRef
+        }
+        args {
+          name
+          description
+          type {
+            ...TypeRef
+          }
+          defaultValue
+        }
+      }
+    }
+    subscriptionType {
+      name
+      fields {
+        name
+        description
+        type {
+          ...TypeRef
+        }
+        args {
+          name
+          description
+          type {
+            ...TypeRef
+          }
+          defaultValue
+        }
+      }
+    }
+    types {
+      ...FullType
+    }
+  }
+}
+
+fragment FullType on __Type {
+  kind
+  name
+  description
+  fields(includeDeprecated: true) {
+    name
+    description
+    args {
+      ...InputValue
+    }
+    type {
+      ...TypeRef
+    }
+    isDeprecated
+    deprecationReason
+  }
+  inputFields {
+    ...InputValue
+  }
+  interfaces {
+    ...TypeRef
+  }
+  enumValues(includeDeprecated: true) {
+    name
+    description
+    isDeprecated
+    deprecationReason
+  }
+  possibleTypes {
+    ...TypeRef
+  }
+}
+
+fragment InputValue on __InputValue {
+  name
+  description
+  type { ...TypeRef }
+  defaultValue
+}
+
+fragment TypeRef on __Type {
+  kind
+  name
+  ofType {
+    kind
+    name
+    ofType {
+      kind
+      name
+      ofType {
+        kind
+        name
+        ofType {
+          kind
+          name
+          ofType {
+            kind
+            name
+            ofType {
+              kind
+              name
+              ofType {
+                kind
+                name
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+# Query to get just the root types for quick overview
+query GetRootTypes {
+  __schema {
+    queryType {
+      name
+      fields {
+        name
+        description
+      }
+    }
+    mutationType {
+      name
+      fields {
+        name
+        description
+      }
+    }
+    subscriptionType {
+      name
+      fields {
+        name
+        description
+      }
+    }
+  }
+}

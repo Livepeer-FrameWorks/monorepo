@@ -22,9 +22,25 @@ const wsLink = typeof window !== 'undefined'
         url: GRAPHQL_WS_URL,
         connectionParams: () => {
           const token = localStorage.getItem('token');
-          return {
+          /** @type {Record<string, string>} */
+          const connectionParams = {
             Authorization: token ? `Bearer ${token}` : '',
           };
+
+          // Add tenant ID from user data if available
+          const userData = localStorage.getItem('user');
+          if (userData) {
+            try {
+              const user = JSON.parse(userData);
+              if (user.tenant_id) {
+                connectionParams['X-Tenant-ID'] = user.tenant_id;
+              }
+            } catch (e) {
+              console.warn('Failed to parse user data from localStorage:', e);
+            }
+          }
+
+          return connectionParams;
         },
         retryAttempts: 5,
         shouldRetry: () => true,
@@ -32,20 +48,37 @@ const wsLink = typeof window !== 'undefined'
     )
   : null;
 
-// Auth Link - adds JWT token to requests
+// Auth Link - adds JWT token and tenant ID to requests
 const authLink = setContext((_, { headers }) => {
   const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
   
+  const authHeaders = {
+    ...headers,
+    authorization: token ? `Bearer ${token}` : '',
+  };
+
+  // Add tenant ID from user data if available
+  if (typeof window !== 'undefined') {
+    const userData = localStorage.getItem('user');
+    if (userData) {
+      try {
+        const user = JSON.parse(userData);
+        if (user.tenant_id) {
+          authHeaders['X-Tenant-ID'] = user.tenant_id;
+        }
+      } catch (e) {
+        console.warn('Failed to parse user data from localStorage:', e);
+      }
+    }
+  }
+  
   return {
-    headers: {
-      ...headers,
-      authorization: token ? `Bearer ${token}` : '',
-    },
+    headers: authHeaders,
   };
 });
 
 // Error Link - handles authentication errors
-const errorLink = onError(({ graphQLErrors, networkError, operation, forward }) => {
+const errorLink = onError(({ graphQLErrors, networkError }) => {
   // Handle GraphQL errors
   if (graphQLErrors) {
     graphQLErrors.forEach(({ message, locations, path, extensions }) => {

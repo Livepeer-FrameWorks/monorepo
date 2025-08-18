@@ -6,6 +6,7 @@ function createAuthStore() {
   const { subscribe, set, update } = writable({
     isAuthenticated: false,
     user: null,
+    token: null,
     loading: true, // Start with loading true
     error: null,
     initialized: false // Track if we've done initial auth check

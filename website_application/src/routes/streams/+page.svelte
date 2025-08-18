@@ -463,7 +463,10 @@
         {#each streams as stream}
           <div 
             class="bg-tokyo-night-bg-highlight p-4 rounded-lg border border-tokyo-night-fg-gutter cursor-pointer transition-all hover:border-tokyo-night-cyan {selectedStream?.id === stream.id ? 'border-tokyo-night-cyan bg-tokyo-night-bg-highlight' : ''}"
+            role="button"
+            tabindex="0"
             on:click={() => selectStream(stream)}
+            on:keydown={(e) => e.key === 'Enter' && selectStream(stream)}
           >
             <div class="flex items-center justify-between mb-3">
               <h3 class="font-semibold text-tokyo-night-fg truncate">
@@ -615,7 +618,7 @@
               class="bg-tokyo-night-bg-highlight p-4 rounded-lg border border-tokyo-night-fg-gutter"
             >
               <div class="flex items-center justify-between mb-3">
-                <label class="block text-sm font-medium text-tokyo-night-fg"
+                <label for="stream-key-input" class="block text-sm font-medium text-tokyo-night-fg"
                   >Stream Key</label
                 >
                 <button
@@ -628,6 +631,7 @@
               </div>
               <div class="flex items-center space-x-3">
                 <input
+                  id="stream-key-input"
                   type="text"
                   value={selectedStream?.stream_key || "Loading..."}
                   readonly

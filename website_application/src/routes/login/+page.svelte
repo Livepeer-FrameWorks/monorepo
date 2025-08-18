@@ -1,5 +1,5 @@
 <script>
-  import { onMount } from "svelte";
+  import { onMount, onDestroy } from "svelte";
   import { goto } from "$app/navigation";
   import { base } from "$app/paths";
   import { auth } from "$lib/stores/auth";
@@ -18,7 +18,10 @@
 
   // Note: Authentication redirects are handled by +layout.svelte
 
-  async function handleSubmit() {
+  async function handleSubmit(event) {
+    event.preventDefault();
+    event.stopPropagation();
+    
     if (!email || !password) {
       error = "Please fill in all fields";
       return;
@@ -35,6 +38,7 @@
         error = result.error || "Login failed";
       }
     } catch (err) {
+      console.error('Login error:', err);
       error = /** @type {any} */ (err).message || "Login failed";
     } finally {
       loading = false;
@@ -73,7 +77,6 @@
             bind:value={email}
             placeholder="Enter your email"
             class="input"
-            required
           />
         </div>
 
@@ -90,7 +93,6 @@
             bind:value={password}
             placeholder="Enter your password"
             class="input"
-            required
           />
         </div>
 
