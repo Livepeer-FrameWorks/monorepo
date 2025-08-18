@@ -15,6 +15,7 @@ import (
 	// HTTP client for direct API calls (we'll use this for all payment providers)
 	"github.com/go-resty/resty/v2"
 
+	purserapi "frameworks/pkg/api/purser"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/middleware"
 	"frameworks/pkg/models"
@@ -88,7 +89,7 @@ func GetTiers(c middleware.Context) {
 		logger.WithFields(logging.Fields{
 			"error": err,
 		}).Error("Failed to fetch billing tiers")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to fetch tiers"})
+		c.JSON(http.StatusInternalServerError, purserapi.ErrorResponse{Error: "Failed to fetch tiers"})
 		return
 	}
 	defer rows.Close()
@@ -117,10 +118,10 @@ func GetTiers(c middleware.Context) {
 		"method":     "GetTiers",
 	}).Info("Retrieved billing tiers")
 
-	c.JSON(http.StatusOK, middleware.H{
-		"tiers":           tiers,
-		"count":           len(tiers),
-		"payment_methods": []string{"mollie", "crypto_btc", "crypto_eth", "crypto_usdc", "crypto_lpt"},
+	c.JSON(http.StatusOK, purserapi.GetBillingTiersResponse{
+		Tiers:          tiers,
+		Count:          len(tiers),
+		PaymentMethods: []string{"mollie", "crypto_btc", "crypto_eth", "crypto_usdc", "crypto_lpt"},
 	})
 }
 
@@ -128,13 +129,13 @@ func GetTiers(c middleware.Context) {
 func GetInvoice(c middleware.Context) {
 	tenantID := c.GetString("tenant_id")
 	if tenantID == "" {
-		c.JSON(http.StatusBadRequest, middleware.H{"error": "Tenant context required"})
+		c.JSON(http.StatusBadRequest, purserapi.ErrorResponse{Error: "Tenant context required"})
 		return
 	}
 
 	invoiceID := c.Param("invoice_id")
 	if invoiceID == "" {
-		c.JSON(http.StatusBadRequest, middleware.H{"error": "Invoice ID required"})
+		c.JSON(http.StatusBadRequest, purserapi.ErrorResponse{Error: "Invoice ID required"})
 		return
 	}
 
@@ -161,13 +162,13 @@ func GetInvoice(c middleware.Context) {
 	)
 
 	if err == sql.ErrNoRows {
-		c.JSON(http.StatusNotFound, middleware.H{"error": "Invoice not found"})
+		c.JSON(http.StatusNotFound, purserapi.ErrorResponse{Error: "Invoice not found"})
 		return
 	}
 
 	if err != nil {
 		logger.WithError(err).Error("Failed to fetch invoice")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to fetch invoice"})
+		c.JSON(http.StatusInternalServerError, purserapi.ErrorResponse{Error: "Failed to fetch invoice"})
 		return
 	}
 
@@ -195,9 +196,9 @@ func GetInvoice(c middleware.Context) {
 	}
 
 	// Return invoice with tier details
-	c.JSON(http.StatusOK, middleware.H{
-		"invoice": invoice,
-		"tier":    tier,
+	c.JSON(http.StatusOK, purserapi.GetInvoiceResponse{
+		Invoice: invoice,
+		Tier:    tier,
 	})
 }
 
@@ -205,7 +206,7 @@ func GetInvoice(c middleware.Context) {
 func GetInvoices(c middleware.Context) {
 	tenantID := c.GetString("tenant_id")
 	if tenantID == "" {
-		c.JSON(http.StatusBadRequest, middleware.H{"error": "Tenant context required"})
+		c.JSON(http.StatusBadRequest, purserapi.ErrorResponse{Error: "Tenant context required"})
 		return
 	}
 
@@ -237,7 +238,7 @@ func GetInvoices(c middleware.Context) {
 	rows, err := db.Query(query, args...)
 	if err != nil {
 		logger.WithError(err).Error("Failed to fetch invoices")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to fetch invoices"})
+		c.JSON(http.StatusInternalServerError, purserapi.ErrorResponse{Error: "Failed to fetch invoices"})
 		return
 	}
 	defer rows.Close()
@@ -289,11 +290,14 @@ func GetInvoices(c middleware.Context) {
 		// Continue without total count
 	}
 
-	c.JSON(http.StatusOK, middleware.H{
-		"invoices": invoices,
-		"total":    totalCount,
-		"limit":    limit,
-		"offset":   offset,
+	limitInt, _ := strconv.Atoi(limit)
+	offsetInt, _ := strconv.Atoi(offset)
+
+	c.JSON(http.StatusOK, purserapi.GetInvoicesResponse{
+		Invoices: invoices,
+		Total:    totalCount,
+		Limit:    limitInt,
+		Offset:   offsetInt,
 	})
 }
 
@@ -301,9 +305,9 @@ func GetInvoices(c middleware.Context) {
 func CreatePayment(c middleware.Context) {
 	tenantID := c.GetString("tenant_id")
 
-	var req models.PaymentRequest
+	var req purserapi.PaymentRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, middleware.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, purserapi.ErrorResponse{Error: err.Error()})
 		return
 	}
 
@@ -318,9 +322,9 @@ func CreatePayment(c middleware.Context) {
 	}
 
 	if !methodAvailable {
-		c.JSON(http.StatusBadRequest, middleware.H{
-			"error":             "Payment method not available",
-			"available_methods": availableMethods,
+		c.JSON(http.StatusBadRequest, purserapi.PaymentMethodErrorResponse{
+			Error:            "Payment method not available",
+			AvailableMethods: availableMethods,
 		})
 		return
 	}
@@ -336,7 +340,7 @@ func CreatePayment(c middleware.Context) {
 		&invoice.DueDate, &invoice.CreatedAt)
 
 	if err == sql.ErrNoRows {
-		c.JSON(http.StatusNotFound, middleware.H{"error": "Invoice not found or already paid"})
+		c.JSON(http.StatusNotFound, purserapi.ErrorResponse{Error: "Invoice not found or already paid"})
 		return
 	} else if err != nil {
 		logger.WithFields(logging.Fields{
@@ -344,13 +348,13 @@ func CreatePayment(c middleware.Context) {
 			"invoice_id": req.InvoiceID,
 			"tenant_id":  tenantID,
 		}).Error("Database error fetching invoice")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Database error"})
+		c.JSON(http.StatusInternalServerError, purserapi.ErrorResponse{Error: "Database error"})
 		return
 	}
 
 	// Create payment record
 	paymentID := uuid.New().String()
-	var paymentResponse models.PaymentResponse
+	var paymentResponse purserapi.PaymentResponse
 
 	// Route to appropriate payment handler
 	switch {
@@ -364,7 +368,7 @@ func CreatePayment(c middleware.Context) {
 				"invoice_id": req.InvoiceID,
 				"tenant_id":  tenantID,
 			}).Error("Failed to create traditional payment")
-			c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to create payment"})
+			c.JSON(http.StatusInternalServerError, purserapi.ErrorResponse{Error: "Failed to create payment"})
 			return
 		}
 
@@ -380,11 +384,11 @@ func CreatePayment(c middleware.Context) {
 				"payment_id": paymentID,
 				"invoice_id": req.InvoiceID,
 			}).Error("Failed to store payment record")
-			c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to store payment"})
+			c.JSON(http.StatusInternalServerError, purserapi.ErrorResponse{Error: "Failed to store payment"})
 			return
 		}
 
-		paymentResponse = models.PaymentResponse{
+		paymentResponse = purserapi.PaymentResponse{
 			ID:         paymentID,
 			PaymentURL: paymentURL,
 			Amount:     invoice.Amount,
@@ -404,7 +408,7 @@ func CreatePayment(c middleware.Context) {
 				"invoice_id": req.InvoiceID,
 				"tenant_id":  tenantID,
 			}).Error("Failed to create crypto payment")
-			c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to create crypto payment"})
+			c.JSON(http.StatusInternalServerError, purserapi.ErrorResponse{Error: "Failed to create crypto payment"})
 			return
 		}
 
@@ -420,11 +424,11 @@ func CreatePayment(c middleware.Context) {
 				"payment_id": paymentID,
 				"invoice_id": req.InvoiceID,
 			}).Error("Failed to store crypto payment record")
-			c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to store payment"})
+			c.JSON(http.StatusInternalServerError, purserapi.ErrorResponse{Error: "Failed to store payment"})
 			return
 		}
 
-		paymentResponse = models.PaymentResponse{
+		paymentResponse = purserapi.PaymentResponse{
 			ID:            paymentID,
 			WalletAddress: walletAddress,
 			Amount:        invoice.Amount,
@@ -434,7 +438,7 @@ func CreatePayment(c middleware.Context) {
 		}
 
 	default:
-		c.JSON(http.StatusBadRequest, middleware.H{"error": "Unsupported payment method"})
+		c.JSON(http.StatusBadRequest, purserapi.ErrorResponse{Error: "Unsupported payment method"})
 		return
 	}
 
@@ -493,7 +497,7 @@ func GetBillingStatus(c middleware.Context) {
 			"error":     err,
 			"tenant_id": tenantID,
 		}).Error("Failed to fetch tenant subscription")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to fetch billing status"})
+		c.JSON(http.StatusInternalServerError, purserapi.ErrorResponse{Error: "Failed to fetch billing status"})
 		return
 	}
 

@@ -7,14 +7,14 @@ import (
 	"sync"
 	"time"
 
+	commodoreapi "frameworks/pkg/api/commodore"
 	"frameworks/pkg/api/quartermaster"
 	"frameworks/pkg/logging"
-	"frameworks/pkg/models"
 )
 
 // Router handles tenant-to-cluster routing
 type Router interface {
-	GetBestClusterForStream(req models.StreamRequest) (*ClusterInfo, error)
+	GetBestClusterForStream(req commodoreapi.StreamRequest) (*ClusterInfo, error)
 	GetKafkaConfigForTenant(tenantID string) (brokers []string, topicPrefix string, err error)
 }
 
@@ -53,7 +53,7 @@ type QuartermasterRouter struct {
 	mutex  sync.RWMutex
 }
 
-func (r *QuartermasterRouter) GetBestClusterForStream(req models.StreamRequest) (*ClusterInfo, error) {
+func (r *QuartermasterRouter) GetBestClusterForStream(req commodoreapi.StreamRequest) (*ClusterInfo, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -97,7 +97,7 @@ func (r *QuartermasterRouter) GetKafkaConfigForTenant(tenantID string) (brokers 
 	r.mutex.RUnlock()
 
 	// Get fresh routing info
-	info, err := r.GetBestClusterForStream(models.StreamRequest{TenantID: tenantID})
+	info, err := r.GetBestClusterForStream(commodoreapi.StreamRequest{TenantID: tenantID})
 	if err != nil {
 		return nil, "", err
 	}

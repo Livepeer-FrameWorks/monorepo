@@ -25,11 +25,12 @@ This guide demonstrates a **production-ready FrameWorks deployment** based on ou
 │   CENTRAL       │    │   REGIONAL      │    │   EDGE          │
 │                 │    │                 │    │                 │
 ├─────────────────┤    ├─────────────────┤    ├─────────────────┤
-│ • Commodore     │    │ • Sales Website │    │ • MistServer    │
-│ • Quartermaster │    │ • WebApp        │    │ • Helmsman      │
-│ • Periscope     │    │ • Signalman     │    │ • Nginx         │
-│ • Purser        │    │ • Decklog       │    │                 │
-│ • Foghorn       │    │ • Kafka         │    │                 │
+│ • Bridge        │    │ • Sales Website │    │ • MistServer    │
+│ • Commodore     │    │ • WebApp        │    │ • Helmsman      │
+│ • Quartermaster │    │ • Signalman     │    │ • Nginx         │
+│ • Periscope     │    │ • Decklog       │    │                 │
+│ • Purser        │    │ • Kafka         │    │                 │
+│ • Foghorn       │    │ • Nginx         │    │                 │
 │ • Forms         │    │ • Nginx         │    │                 │
 │ • Forum         │    │ • Parlor 🚧     │    │                 │
 │ • Metrics       │    │                 │    │                 │
@@ -56,6 +57,7 @@ This guide demonstrates a **production-ready FrameWorks deployment** based on ou
 ```
 frameworks.network (primary)
 ├── app.frameworks.network          → Regional WebApp
+├── api.frameworks.network          → Regional GraphQL Gateway (Bridge)
 ├── commodore.frameworks.network    → Central Control API
 ├── quartermaster.frameworks.network → Central Tenant API
 ├── periscope.frameworks.network    → Central Analytics API
@@ -1440,8 +1442,15 @@ set -e
 # Build services
 cd /opt/frameworks/monorepo
 
+# Bridge
+cd api_gateway
+go build -o bridge ./cmd/bridge
+sudo systemctl stop bridge || true
+sudo cp bridge /usr/local/bin/
+sudo systemctl start bridge
+
 # Commodore
-cd api_control
+cd ../api_control
 go build -o commodore ./cmd/api
 sudo systemctl stop commodore || true
 sudo cp commodore /usr/local/bin/
@@ -1479,6 +1488,36 @@ echo "Central services deployed successfully!"
 ```
 
 ### Systemd Service Example
+
+**`/etc/systemd/system/bridge.service`:**
+```ini
+[Unit]
+Description=FrameWorks Bridge API Gateway
+After=network.target
+
+[Service]
+Type=simple
+User=frameworks
+Group=frameworks
+WorkingDirectory=/opt/frameworks/bridge
+Environment=BRIDGE_PORT=18000
+Environment=GIN_MODE=release
+Environment=LOG_LEVEL=info
+Environment=GRAPHQL_PLAYGROUND_ENABLED=false
+Environment=GRAPHQL_COMPLEXITY_LIMIT=200
+Environment=COMMODORE_URL=http://127.0.0.1:18001
+Environment=PERISCOPE_QUERY_URL=http://127.0.0.1:18004
+Environment=PURSER_URL=http://127.0.0.1:18003
+Environment=SIGNALMAN_WS_URL=ws://127.0.0.1:18009
+Environment=JWT_SECRET=your-jwt-secret-here
+Environment=SERVICE_TOKEN=your-service-token-here
+ExecStart=/opt/frameworks/bridge/bridge
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
 
 **`/etc/systemd/system/commodore.service`:**
 ```ini

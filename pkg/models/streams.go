@@ -54,7 +54,7 @@ type StreamAnalytics struct {
 }
 
 // ViewerMetrics represents viewer metrics for analytics
-type ViewerMetrics struct {
+type ViewerSession struct {
 	ID             string     `json:"id"`
 	TenantID       string     `json:"tenant_id"`
 	StreamID       string     `json:"stream_id"`
@@ -95,7 +95,7 @@ type RoutingEvent struct {
 }
 
 // ViewerMetrics5m represents 5-minute aggregated viewer metrics
-type ViewerMetrics5m struct {
+type ViewerSession5m struct {
 	TenantID       string    `json:"tenant_id"`
 	StreamID       string    `json:"stream_id"`
 	TimeWindow     time.Time `json:"time_window"`

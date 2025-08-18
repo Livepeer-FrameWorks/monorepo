@@ -3,9 +3,13 @@ package websocket
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
+	"frameworks/pkg/api/signalman"
+	"frameworks/pkg/auth"
+	"frameworks/pkg/config"
 	"frameworks/pkg/logging"
 
 	"github.com/gorilla/websocket"
@@ -32,22 +36,7 @@ type Client struct {
 	logger   logging.Logger
 }
 
-// Message represents a real-time message sent to clients
-type Message struct {
-	Type      string                 `json:"type"`
-	Channel   string                 `json:"channel"`
-	Data      map[string]interface{} `json:"data"`
-	Timestamp time.Time              `json:"timestamp"`
-	TenantID  *string                `json:"tenant_id,omitempty"` // For tenant-scoped messages
-}
-
-// SubscriptionMessage represents a subscription request from client
-type SubscriptionMessage struct {
-	Action   string   `json:"action"`   // "subscribe" or "unsubscribe"
-	Channels []string `json:"channels"` // ["streams", "analytics", "system"]
-	UserID   *string  `json:"user_id,omitempty"`
-	TenantID *string  `json:"tenant_id,omitempty"` // Required for tenant-scoped channels
-}
+// Message and SubscriptionMessage are now imported from pkg/api/signalman
 
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
@@ -101,7 +90,7 @@ func (h *Hub) Run() {
 
 // broadcastMessage sends a message to all relevant clients
 func (h *Hub) broadcastMessage(message []byte) {
-	var msg Message
+	var msg signalman.Message
 	if err := json.Unmarshal(message, &msg); err != nil {
 		h.logger.WithError(err).Error("Failed to unmarshal broadcast message")
 		return
@@ -149,7 +138,7 @@ func (h *Hub) broadcastMessage(message []byte) {
 
 // BroadcastToTenant sends a message to all clients of a specific tenant
 func (h *Hub) BroadcastToTenant(tenantID string, msgType, channel string, data map[string]interface{}) {
-	message := Message{
+	message := signalman.Message{
 		Type:      msgType,
 		Channel:   channel,
 		Data:      data,
@@ -168,7 +157,7 @@ func (h *Hub) BroadcastToTenant(tenantID string, msgType, channel string, data m
 
 // BroadcastInfrastructure sends infrastructure messages to all clients subscribed to system channel
 func (h *Hub) BroadcastInfrastructure(msgType string, data map[string]interface{}) {
-	message := Message{
+	message := signalman.Message{
 		Type:      msgType,
 		Channel:   "system",
 		Data:      data,
@@ -186,7 +175,7 @@ func (h *Hub) BroadcastInfrastructure(msgType string, data map[string]interface{
 }
 
 // shouldReceiveMessage determines if a client should receive a message
-func (h *Hub) shouldReceiveMessage(client *Client, msg *Message) bool {
+func (h *Hub) shouldReceiveMessage(client *Client, msg *signalman.Message) bool {
 	// Check if client is subscribed to the channel
 	for _, channel := range client.channels {
 		if channel == msg.Channel || channel == "all" {
@@ -218,7 +207,7 @@ func (h *Hub) unregisterClient(client *Client) {
 
 // BroadcastEvent sends an event to all subscribed clients
 func (h *Hub) BroadcastEvent(eventType, channel string, data map[string]interface{}) {
-	message := Message{
+	message := signalman.Message{
 		Type:      eventType,
 		Channel:   channel,
 		Data:      data,
@@ -258,17 +247,46 @@ func (h *Hub) GetStats() map[string]interface{} {
 
 // ServeWS handles WebSocket requests from clients
 func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
+	// Check for JWT token in Authorization header
+	var userID, tenantID string
+	authHeader := r.Header.Get("Authorization")
+	if authHeader != "" {
+		parts := strings.Split(authHeader, " ")
+		if len(parts) == 2 && parts[0] == "Bearer" {
+			jwtSecret := config.GetEnv("JWT_SECRET", "default-secret-key-change-in-production")
+			claims, err := auth.ValidateJWT(parts[1], []byte(jwtSecret))
+			if err != nil {
+				h.logger.WithError(err).Warn("Invalid JWT token for WebSocket connection")
+				http.Error(w, "Invalid authentication", http.StatusUnauthorized)
+				return
+			}
+			userID = claims.UserID
+			tenantID = claims.TenantID
+		}
+	}
+
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		h.logger.WithError(err).Error("Failed to upgrade WebSocket connection")
 		return
 	}
 
+	// Create client with optional authentication
+	var userIDPtr, tenantIDPtr *string
+	if userID != "" {
+		userIDPtr = &userID
+	}
+	if tenantID != "" {
+		tenantIDPtr = &tenantID
+	}
+
 	client := &Client{
 		hub:      h,
 		conn:     conn,
 		send:     make(chan []byte, 256),
-		channels: []string{}, // No subscriptions initially
+		channels: []string{},  // No subscriptions initially
+		userID:   userIDPtr,   // Set authenticated user ID (nil if not authenticated)
+		tenantID: tenantIDPtr, // Set authenticated tenant ID (nil if not authenticated)
 		logger:   h.logger,
 	}
 
@@ -317,7 +335,7 @@ func (c *Client) readPump() {
 		}
 
 		// Handle subscription messages
-		var subMsg SubscriptionMessage
+		var subMsg signalman.SubscriptionMessage
 		if err := json.Unmarshal(message, &subMsg); err != nil {
 			c.logger.WithError(err).Warn("Invalid subscription message")
 			continue
@@ -371,7 +389,7 @@ func (c *Client) writePump() {
 }
 
 // handleSubscription processes subscription/unsubscription requests
-func (c *Client) handleSubscription(msg *SubscriptionMessage) {
+func (c *Client) handleSubscription(msg *signalman.SubscriptionMessage) {
 	switch msg.Action {
 	case "subscribe":
 		c.channels = append(c.channels, msg.Channels...)
@@ -388,11 +406,11 @@ func (c *Client) handleSubscription(msg *SubscriptionMessage) {
 		}).Info("Client subscribed to channels")
 
 		// Send confirmation
-		response := map[string]interface{}{
-			"type":     "subscription_confirmed",
-			"channels": c.channels,
+		response := signalman.SubscriptionConfirmation{
+			Type:     signalman.TypeSubscriptionConfirmed,
+			Channels: c.channels,
 		}
-		c.sendMessage(response)
+		c.sendTypedMessage(response)
 
 	case "unsubscribe":
 		// Remove channels from subscription
@@ -411,11 +429,11 @@ func (c *Client) handleSubscription(msg *SubscriptionMessage) {
 		}).Info("Client unsubscribed from channels")
 
 		// Send confirmation
-		response := map[string]interface{}{
-			"type":     "unsubscription_confirmed",
-			"channels": c.channels,
+		response := signalman.SubscriptionConfirmation{
+			Type:     signalman.TypeUnsubscriptionConfirmed,
+			Channels: c.channels,
 		}
-		c.sendMessage(response)
+		c.sendTypedMessage(response)
 	}
 }
 
@@ -424,6 +442,22 @@ func (c *Client) sendMessage(data map[string]interface{}) {
 	message, err := json.Marshal(data)
 	if err != nil {
 		c.logger.WithError(err).Error("Failed to marshal client message")
+		return
+	}
+
+	select {
+	case c.send <- message:
+	default:
+		// Channel full, disconnect client
+		close(c.send)
+	}
+}
+
+// sendTypedMessage sends a typed message to the client
+func (c *Client) sendTypedMessage(data interface{}) {
+	message, err := json.Marshal(data)
+	if err != nil {
+		c.logger.WithError(err).Error("Failed to marshal typed client message")
 		return
 	}
 

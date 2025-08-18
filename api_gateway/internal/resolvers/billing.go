@@ -1,0 +1,181 @@
+package resolvers
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"frameworks/api_gateway/graph/model"
+	"frameworks/pkg/api/purser"
+	"frameworks/pkg/models"
+)
+
+// DoGetBillingTiers returns available billing tiers
+func (r *Resolver) DoGetBillingTiers(ctx context.Context) ([]*models.BillingTier, error) {
+	r.Logger.Info("Getting billing tiers")
+
+	// TODO: Add GetBillingTiers method to Purser client
+	// For now, return empty slice until method is added
+	return []*models.BillingTier{}, nil
+}
+
+// DoGetInvoices returns tenant invoices
+func (r *Resolver) DoGetInvoices(ctx context.Context) ([]*models.Invoice, error) {
+	tenantID, ok := ctx.Value("tenant_id").(string)
+	if !ok {
+		return nil, fmt.Errorf("tenant context required")
+	}
+
+	r.Logger.WithField("tenant_id", tenantID).Info("Getting invoices")
+
+	// TODO: Add GetInvoices method to Purser client
+	return []*models.Invoice{}, nil
+}
+
+// DoGetInvoice returns a specific invoice by ID
+func (r *Resolver) DoGetInvoice(ctx context.Context, id string) (*models.Invoice, error) {
+	tenantID, ok := ctx.Value("tenant_id").(string)
+	if !ok {
+		return nil, fmt.Errorf("tenant context required")
+	}
+
+	r.Logger.WithField("tenant_id", tenantID).WithField("invoice_id", id).Info("Getting invoice")
+
+	// TODO: Add GetInvoice method to Purser client
+	return nil, fmt.Errorf("invoice not found")
+}
+
+// DoGetBillingStatus returns current billing status for tenant
+func (r *Resolver) DoGetBillingStatus(ctx context.Context) (*models.BillingStatus, error) {
+	tenantID, ok := ctx.Value("tenant_id").(string)
+	if !ok {
+		return nil, fmt.Errorf("tenant context required")
+	}
+
+	r.Logger.WithField("tenant_id", tenantID).Info("Getting billing status")
+
+	// Get subscription info from Purser
+	subscription, err := r.Clients.Purser.GetSubscription(ctx, tenantID)
+	if err != nil {
+		r.Logger.WithError(err).Error("Failed to get subscription")
+		return nil, fmt.Errorf("failed to get billing status: %w", err)
+	}
+
+	// Build BillingStatus from available subscription data
+	status := &models.BillingStatus{
+		TenantID: tenantID,
+		Status:   "active",
+	}
+
+	if subscription.Subscription != nil {
+		status.Status = subscription.Subscription.Status
+		// Convert subscription info to tenant subscription
+		status.Subscription = models.TenantSubscription{
+			ID:       subscription.Subscription.ID,
+			TenantID: subscription.Subscription.TenantID,
+			TierID:   subscription.Subscription.TierID,
+			Status:   subscription.Subscription.Status,
+		}
+	}
+
+	return status, nil
+}
+
+// DoGetUsageRecords returns usage records for tenant
+func (r *Resolver) DoGetUsageRecords(ctx context.Context, timeRange *model.TimeRangeInput) ([]*models.UsageRecord, error) {
+	tenantID, ok := ctx.Value("tenant_id").(string)
+	if !ok {
+		return nil, fmt.Errorf("tenant context required")
+	}
+
+	r.Logger.WithField("tenant_id", tenantID).Info("Getting usage records")
+
+	// Build request for Purser
+	req := &purser.TenantUsageRequest{
+		TenantID: tenantID,
+	}
+
+	if timeRange != nil {
+		req.StartDate = timeRange.Start.Format("2006-01-02")
+		req.EndDate = timeRange.End.Format("2006-01-02")
+	} else {
+		// Default to last 30 days
+		now := time.Now()
+		req.EndDate = now.Format("2006-01-02")
+		req.StartDate = now.AddDate(0, 0, -30).Format("2006-01-02")
+	}
+
+	// Get usage from Purser
+	usage, err := r.Clients.Purser.GetTenantUsage(ctx, req)
+	if err != nil {
+		r.Logger.WithError(err).Error("Failed to get usage records")
+		return nil, fmt.Errorf("failed to get usage records: %w", err)
+	}
+
+	// Convert usage map to UsageRecord models
+	var records []*models.UsageRecord
+	for resourceType, amount := range usage.Usage {
+		cost := 0.0
+		if c, exists := usage.Costs[resourceType]; exists {
+			cost = c
+		}
+
+		record := &models.UsageRecord{
+			ID:           fmt.Sprintf("%s_%s_%s", tenantID, resourceType, usage.BillingPeriod),
+			TenantID:     tenantID,
+			UsageType:    resourceType,
+			UsageValue:   amount,
+			BillingMonth: usage.BillingPeriod,
+			CreatedAt:    time.Now(),
+		}
+
+		// Store cost in usage details
+		record.UsageDetails = models.JSONB{
+			"cost":     cost,
+			"currency": usage.Currency,
+		}
+
+		records = append(records, record)
+	}
+
+	return records, nil
+}
+
+// DoCreatePayment processes a payment
+func (r *Resolver) DoCreatePayment(ctx context.Context, input model.CreatePaymentInput) (*models.Payment, error) {
+	tenantID, ok := ctx.Value("tenant_id").(string)
+	if !ok {
+		return nil, fmt.Errorf("tenant context required")
+	}
+
+	r.Logger.WithField("tenant_id", tenantID).
+		WithField("amount", input.Amount).
+		WithField("method", input.Method).
+		Info("Creating payment")
+
+	// TODO: Add CreatePayment method to Purser client
+	// For now, return a mock payment
+	return &models.Payment{
+		ID:       "payment_" + tenantID,
+		Amount:   input.Amount,
+		Currency: *input.Currency,
+		Method:   string(input.Method),
+		Status:   "pending",
+	}, nil
+}
+
+// DoUpdateBillingTier changes the tenant's billing tier
+func (r *Resolver) DoUpdateBillingTier(ctx context.Context, tierID string) (*models.BillingStatus, error) {
+	tenantID, ok := ctx.Value("tenant_id").(string)
+	if !ok {
+		return nil, fmt.Errorf("tenant context required")
+	}
+
+	r.Logger.WithField("tenant_id", tenantID).
+		WithField("tier_id", tierID).
+		Info("Updating billing tier")
+
+	// TODO: Add UpdateBillingTier method to Purser client
+	// For now, return current status
+	return r.DoGetBillingStatus(ctx)
+}

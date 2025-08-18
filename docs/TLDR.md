@@ -18,6 +18,7 @@ FrameWorks is a distributed microservices platform for multi-tenant video stream
 | Service | Port | Tier | Purpose |
 |---------|------|------|---------|
 | **Control Plane** | | | |
+| Bridge | 18000 | Regional | GraphQL API Gateway (aggregates all services) |
 | Commodore | 18001 | Central | Business logic & orchestration API |
 | Quartermaster | 18002 | Central | Tenant management API |
 | Purser | 18003 | Central | Billing API |
@@ -72,7 +73,7 @@ Note: State/aggregates live in PostgreSQL (YugabyteDB-compatible). Time‑series
 ## 🌍 **Deployment Tiers**
 
 - **Central**: Commodore, Quartermaster, Periscope, Purser, PostgreSQL, ClickHouse, Foghorn
-- **Regional**: Decklog, Kafka, Signalman, Web Console, Marketing Site
+- **Regional**: Bridge, Decklog, Kafka, Signalman, Web Console, Marketing Site
 - **Edge**: MistServer, Helmsman, Livepeer Gateway
 
 ---

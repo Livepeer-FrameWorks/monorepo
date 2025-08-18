@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"net/http"
 
+	qmapi "frameworks/pkg/api/quartermaster"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/middleware"
 	"frameworks/pkg/models"
@@ -26,7 +27,7 @@ func Init(database *sql.DB, log logging.Logger) {
 func ValidateTenant(c middleware.Context) {
 	var req models.ValidateTenantRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, middleware.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, qmapi.ErrorResponse{Error: err.Error()})
 		return
 	}
 
@@ -66,7 +67,7 @@ func ValidateTenant(c middleware.Context) {
 func ResolveTenant(c middleware.Context) {
 	var req models.ResolveTenantRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, middleware.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, qmapi.ErrorResponse{Error: err.Error()})
 		return
 	}
 
@@ -81,7 +82,7 @@ func ResolveTenant(c middleware.Context) {
 		query = `SELECT id, name FROM tenants WHERE custom_domain = $1 AND is_active = true`
 		param = req.Domain
 	} else {
-		c.JSON(http.StatusBadRequest, middleware.H{"error": "Either subdomain or domain required"})
+		c.JSON(http.StatusBadRequest, qmapi.ErrorResponse{Error: "Either subdomain or domain required"})
 		return
 	}
 
@@ -94,7 +95,7 @@ func ResolveTenant(c middleware.Context) {
 
 	if err != nil {
 		logger.WithError(err).Error("Failed to resolve tenant")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Internal server error"})
+		c.JSON(http.StatusInternalServerError, qmapi.ErrorResponse{Error: "Internal server error"})
 		return
 	}
 
@@ -103,9 +104,9 @@ func ResolveTenant(c middleware.Context) {
 
 // GetClusterRouting returns the best cluster for a tenant's stream
 func GetClusterRouting(c middleware.Context) {
-	var req models.GetClusterRoutingRequest
+	var req qmapi.GetClusterRoutingRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, middleware.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, qmapi.ErrorResponse{Error: err.Error()})
 		return
 	}
 
@@ -118,13 +119,13 @@ func GetClusterRouting(c middleware.Context) {
 	`, req.TenantID).Scan(&primaryClusterID, &deploymentTier)
 
 	if err == sql.ErrNoRows {
-		c.JSON(http.StatusNotFound, middleware.H{"error": "Tenant not found"})
+		c.JSON(http.StatusNotFound, qmapi.ErrorResponse{Error: "Tenant not found"})
 		return
 	}
 
 	if err != nil {
 		logger.WithError(err).Error("Failed to get tenant cluster info")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Internal server error"})
+		c.JSON(http.StatusInternalServerError, qmapi.ErrorResponse{Error: "Internal server error"})
 		return
 	}
 
@@ -168,17 +169,17 @@ func GetClusterRouting(c middleware.Context) {
 	)
 
 	if err == sql.ErrNoRows {
-		c.JSON(http.StatusNotFound, middleware.H{"error": "No suitable cluster found"})
+		c.JSON(http.StatusNotFound, qmapi.ErrorResponse{Error: "No suitable cluster found"})
 		return
 	}
 
 	if err != nil {
 		logger.WithError(err).Error("Failed to get cluster routing")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Internal server error"})
+		c.JSON(http.StatusInternalServerError, qmapi.ErrorResponse{Error: "Internal server error"})
 		return
 	}
 
-	c.JSON(http.StatusOK, middleware.H{"routing": routing})
+	c.JSON(http.StatusOK, qmapi.GetRoutingResponse{Routing: routing})
 }
 
 // GetTenant retrieves a tenant by ID
@@ -206,26 +207,26 @@ func GetTenant(c middleware.Context) {
 
 	if err == sql.ErrNoRows {
 		logger.WithField("tenant_id", tenantID).Warn("Tenant not found")
-		c.JSON(http.StatusNotFound, middleware.H{"error": "Tenant not found"})
+		c.JSON(http.StatusNotFound, qmapi.ErrorResponse{Error: "Tenant not found"})
 		return
 	}
 
 	if err != nil {
 		logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to get tenant")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Internal server error"})
+		c.JSON(http.StatusInternalServerError, qmapi.ErrorResponse{Error: "Internal server error"})
 		return
 	}
 
 	logger.WithField("tenant_id", tenantID).Debug("Retrieved tenant successfully")
-	c.JSON(http.StatusOK, tenant)
+	c.JSON(http.StatusOK, qmapi.SingleTenantResponse{Tenant: tenant})
 }
 
 // CreateTenant creates a new tenant
 func CreateTenant(c middleware.Context) {
-	var req models.CreateTenantRequest
+	var req qmapi.CreateTenantRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		logger.WithError(err).Warn("Invalid create tenant request")
-		c.JSON(http.StatusBadRequest, middleware.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, qmapi.ErrorResponse{Error: err.Error()})
 		return
 	}
 
@@ -267,7 +268,7 @@ func CreateTenant(c middleware.Context) {
 
 	if err != nil {
 		logger.WithError(err).WithField("tenant_name", req.Name).Error("Failed to create tenant")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to create tenant"})
+		c.JSON(http.StatusInternalServerError, qmapi.ErrorResponse{Error: "Failed to create tenant"})
 		return
 	}
 
@@ -276,17 +277,17 @@ func CreateTenant(c middleware.Context) {
 		"tenant_name": req.Name,
 	}).Info("Created tenant successfully")
 
-	c.JSON(http.StatusCreated, tenant)
+	c.JSON(http.StatusCreated, qmapi.CreateTenantResponse{Tenant: tenant})
 }
 
 // UpdateTenant updates an existing tenant
 func UpdateTenant(c middleware.Context) {
 	tenantID := c.Param("id")
 
-	var req models.UpdateTenantRequest
+	var req qmapi.UpdateTenantRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		logger.WithError(err).Warn("Invalid update tenant request")
-		c.JSON(http.StatusBadRequest, middleware.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, qmapi.ErrorResponse{Error: err.Error()})
 		return
 	}
 
@@ -365,7 +366,7 @@ func UpdateTenant(c middleware.Context) {
 	args = append(args, tenantID)
 
 	if len(setParts) == 1 { // Only updated_at
-		c.JSON(http.StatusBadRequest, middleware.H{"error": "No fields to update"})
+		c.JSON(http.StatusBadRequest, qmapi.ErrorResponse{Error: "No fields to update"})
 		return
 	}
 
@@ -378,19 +379,19 @@ func UpdateTenant(c middleware.Context) {
 	result, err := db.Exec(query, args...)
 	if err != nil {
 		logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to update tenant")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to update tenant"})
+		c.JSON(http.StatusInternalServerError, qmapi.ErrorResponse{Error: "Failed to update tenant"})
 		return
 	}
 
 	rowsAffected, _ := result.RowsAffected()
 	if rowsAffected == 0 {
 		logger.WithField("tenant_id", tenantID).Warn("Tenant not found for update")
-		c.JSON(http.StatusNotFound, middleware.H{"error": "Tenant not found"})
+		c.JSON(http.StatusNotFound, qmapi.ErrorResponse{Error: "Tenant not found"})
 		return
 	}
 
 	logger.WithField("tenant_id", tenantID).Info("Updated tenant successfully")
-	c.JSON(http.StatusOK, middleware.H{"message": "Tenant updated successfully"})
+	c.JSON(http.StatusOK, qmapi.SuccessResponse{Message: "Tenant updated successfully"})
 }
 
 // DeleteTenant soft deletes a tenant
@@ -402,19 +403,19 @@ func DeleteTenant(c middleware.Context) {
 	result, err := db.Exec(query, tenantID)
 	if err != nil {
 		logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to delete tenant")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to delete tenant"})
+		c.JSON(http.StatusInternalServerError, qmapi.ErrorResponse{Error: "Failed to delete tenant"})
 		return
 	}
 
 	rowsAffected, _ := result.RowsAffected()
 	if rowsAffected == 0 {
 		logger.WithField("tenant_id", tenantID).Warn("Tenant not found for deletion")
-		c.JSON(http.StatusNotFound, middleware.H{"error": "Tenant not found"})
+		c.JSON(http.StatusNotFound, qmapi.ErrorResponse{Error: "Tenant not found"})
 		return
 	}
 
 	logger.WithField("tenant_id", tenantID).Info("Deleted tenant successfully")
-	c.JSON(http.StatusOK, middleware.H{"message": "Tenant deleted successfully"})
+	c.JSON(http.StatusOK, qmapi.SuccessResponse{Message: "Tenant deleted successfully"})
 }
 
 // GetTenantCluster retrieves cluster information for a tenant
@@ -438,17 +439,17 @@ func GetTenantCluster(c middleware.Context) {
 	)
 
 	if err == sql.ErrNoRows {
-		c.JSON(http.StatusNotFound, middleware.H{"error": "Tenant not found"})
+		c.JSON(http.StatusNotFound, qmapi.ErrorResponse{Error: "Tenant not found"})
 		return
 	}
 
 	if err != nil {
 		logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to get tenant cluster")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Internal server error"})
+		c.JSON(http.StatusInternalServerError, qmapi.ErrorResponse{Error: "Internal server error"})
 		return
 	}
 
-	c.JSON(http.StatusOK, tenant)
+	c.JSON(http.StatusOK, qmapi.SingleTenantResponse{Tenant: tenant})
 }
 
 // UpdateTenantCluster updates the cluster routing information for a tenant
@@ -463,7 +464,7 @@ func UpdateTenantCluster(c middleware.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, middleware.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, qmapi.ErrorResponse{Error: err.Error()})
 		return
 	}
 
@@ -482,18 +483,18 @@ func UpdateTenantCluster(c middleware.Context) {
 
 	if err != nil {
 		logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to update tenant cluster")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to update tenant cluster"})
+		c.JSON(http.StatusInternalServerError, qmapi.ErrorResponse{Error: "Failed to update tenant cluster"})
 		return
 	}
 
 	rowsAffected, _ := result.RowsAffected()
 	if rowsAffected == 0 {
-		c.JSON(http.StatusNotFound, middleware.H{"error": "Tenant not found"})
+		c.JSON(http.StatusNotFound, qmapi.ErrorResponse{Error: "Tenant not found"})
 		return
 	}
 
 	logger.WithField("tenant_id", tenantID).Info("Updated tenant cluster successfully")
-	c.JSON(http.StatusOK, middleware.H{"message": "Tenant cluster updated successfully"})
+	c.JSON(http.StatusOK, qmapi.SuccessResponse{Message: "Tenant cluster updated successfully"})
 }
 
 // GetTenantsBatch retrieves multiple tenants by IDs
@@ -503,12 +504,12 @@ func GetTenantsBatch(c middleware.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, middleware.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, qmapi.ErrorResponse{Error: err.Error()})
 		return
 	}
 
 	if len(req.TenantIDs) == 0 {
-		c.JSON(http.StatusBadRequest, middleware.H{"error": "No tenant IDs provided"})
+		c.JSON(http.StatusBadRequest, qmapi.ErrorResponse{Error: "No tenant IDs provided"})
 		return
 	}
 
@@ -523,7 +524,7 @@ func GetTenantsBatch(c middleware.Context) {
 	rows, err := db.Query(query, pq.Array(req.TenantIDs))
 	if err != nil {
 		logger.WithError(err).Error("Failed to get tenants batch")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Internal server error"})
+		c.JSON(http.StatusInternalServerError, qmapi.ErrorResponse{Error: "Internal server error"})
 		return
 	}
 	defer rows.Close()
@@ -544,7 +545,7 @@ func GetTenantsBatch(c middleware.Context) {
 		tenants = append(tenants, tenant)
 	}
 
-	c.JSON(http.StatusOK, middleware.H{"tenants": tenants})
+	c.JSON(http.StatusOK, qmapi.GetTenantsResponse{Tenants: tenants})
 }
 
 // GetTenantsByCluster retrieves all tenants assigned to a specific cluster
@@ -563,7 +564,7 @@ func GetTenantsByCluster(c middleware.Context) {
 	rows, err := db.Query(query, clusterID)
 	if err != nil {
 		logger.WithError(err).WithField("cluster_id", clusterID).Error("Failed to get tenants by cluster")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Internal server error"})
+		c.JSON(http.StatusInternalServerError, qmapi.ErrorResponse{Error: "Internal server error"})
 		return
 	}
 	defer rows.Close()
@@ -583,5 +584,5 @@ func GetTenantsByCluster(c middleware.Context) {
 		tenants = append(tenants, tenant)
 	}
 
-	c.JSON(http.StatusOK, middleware.H{"tenants": tenants, "cluster_id": clusterID})
+	c.JSON(http.StatusOK, qmapi.GetTenantsByClusterResponse{Tenants: tenants, ClusterID: clusterID})
 }

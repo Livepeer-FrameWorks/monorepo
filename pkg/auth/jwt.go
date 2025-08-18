@@ -8,8 +8,9 @@ import (
 )
 
 var (
-	ErrInvalidJWT = errors.New("invalid JWT token")
-	ErrExpiredJWT = errors.New("JWT token expired")
+	ErrInvalidJWT      = errors.New("invalid JWT token")
+	ErrExpiredJWT      = errors.New("JWT token expired")
+	ErrUnauthenticated = errors.New("authentication required")
 )
 
 // Claims represents JWT claims with tenant context

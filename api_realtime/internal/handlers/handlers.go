@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"frameworks/api_realtime/internal/websocket"
+	"frameworks/pkg/api/common"
+	"frameworks/pkg/api/signalman"
 	"frameworks/pkg/kafka"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/middleware"
@@ -51,28 +53,28 @@ func (h *SignalmanHandlers) HandleWebSocketAll(c middleware.Context) {
 
 // HandleHealth provides health check endpoint
 func (h *SignalmanHandlers) HandleHealth(c middleware.Context) {
-	health := middleware.H{
-		"status":    "healthy",
-		"service":   "signalman",
-		"version":   "1.0.0",
-		"timestamp": time.Now().UTC(),
-		"uptime":    time.Since(h.startTime).String(),
+	health := signalman.HealthResponse{
+		Status:    "healthy",
+		Service:   "signalman",
+		Version:   "1.0.0",
+		Timestamp: time.Now().UTC(),
+		Uptime:    time.Since(h.startTime).String(),
 	}
 
 	// Check Kafka connectivity
 	if err := h.consumer.HealthCheck(); err != nil {
 		h.logger.WithError(err).Error("Kafka health check failed")
-		health["status"] = "unhealthy"
-		health["kafka_error"] = err.Error()
+		health.Status = "unhealthy"
+		health.KafkaError = err.Error()
 		c.JSON(http.StatusServiceUnavailable, health)
 		return
 	}
 
-	health["kafka"] = "connected"
+	health.Kafka = "connected"
 
 	// Add WebSocket hub stats
 	hubStats := h.hub.GetStats()
-	health["websocket"] = hubStats
+	health.WebSocket = hubStats
 
 	c.JSON(http.StatusOK, health)
 }
@@ -101,11 +103,14 @@ func (h *SignalmanHandlers) HandleMetrics(c middleware.Context) {
 
 // HandleNotFound provides a custom 404 handler
 func (h *SignalmanHandlers) HandleNotFound(c middleware.Context) {
-	c.JSON(http.StatusNotFound, middleware.H{
-		"error":   "not_found",
-		"message": "Endpoint not found",
-		"service": "signalman",
-	})
+	errorResponse := signalman.ErrorResponse{
+		ErrorResponse: common.ErrorResponse{
+			Error:   "not_found",
+			Service: "signalman",
+		},
+		Message: "Endpoint not found",
+	}
+	c.JSON(http.StatusNotFound, errorResponse)
 }
 
 func mapEventTypeToChannel(eventType string) string {
@@ -132,7 +137,13 @@ func (h *SignalmanHandlers) HandleEvent(event kafka.Event) error {
 	}
 
 	if channel == "system" {
-		h.hub.BroadcastInfrastructure(event.Type, event.Data)
+		if tenantID != "" {
+			// Tenant-scoped system message (e.g., tenant's cluster/node events)
+			h.hub.BroadcastToTenant(tenantID, event.Type, channel, event.Data)
+		} else {
+			// Global infrastructure message (e.g., platform-wide events)
+			h.hub.BroadcastInfrastructure(event.Type, event.Data)
+		}
 	} else if tenantID != "" {
 		h.hub.BroadcastToTenant(tenantID, event.Type, channel, event.Data)
 	} else {

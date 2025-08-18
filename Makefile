@@ -1,6 +1,6 @@
-.PHONY: build build-images build-bin-commodore build-bin-quartermaster build-bin-purser build-bin-decklog build-bin-foghorn build-bin-helmsman build-bin-periscope-ingest build-bin-periscope-query build-bin-signalman \
-	build-image-commodore build-image-quartermaster build-image-purser build-image-decklog build-image-foghorn build-image-helmsman build-image-periscope-ingest build-image-periscope-query build-image-signalman \
-	proto clean version install-tools verify test coverage
+.PHONY: build build-images build-bin-commodore build-bin-quartermaster build-bin-purser build-bin-decklog build-bin-foghorn build-bin-helmsman build-bin-periscope-ingest build-bin-periscope-query build-bin-signalman build-bin-bridge \
+	build-image-commodore build-image-quartermaster build-image-purser build-image-decklog build-image-foghorn build-image-helmsman build-image-periscope-ingest build-image-periscope-query build-image-signalman build-image-bridge \
+	proto graphql clean version install-tools verify test coverage
 
 # Version information
 VERSION ?= $(shell git describe --tags --exact-match 2>/dev/null || echo "dev")
@@ -13,7 +13,7 @@ LDFLAGS = -ldflags "-X frameworks/pkg/version.Version=$(VERSION) \
 					-X frameworks/pkg/version.BuildDate=$(BUILD_DATE)"
 
 # All microservices (only services with actual binaries)
-SERVICES = commodore quartermaster purser decklog foghorn helmsman periscope-ingest periscope-query signalman
+SERVICES = commodore quartermaster purser decklog foghorn helmsman periscope-ingest periscope-query signalman bridge
 
 # All Go modules (including pkg for testing)
 GO_SERVICES = $(shell find . -name "go.mod" -exec dirname {} \;)
@@ -22,8 +22,12 @@ GO_SERVICES = $(shell find . -name "go.mod" -exec dirname {} \;)
 proto:
 	cd pkg/proto && make proto
 
+# Generate GraphQL files
+graphql:
+	cd api_gateway && make graphql
+
 # Build all service binaries
-build: proto
+build: proto graphql
 	@echo "Building service binaries with version: $(VERSION)"
 	@mkdir -p bin
 	@for service in $(SERVICES); do \
@@ -32,7 +36,7 @@ build: proto
 	done
 
 # Verify (tidy, fmt, vet, test, build) all Go modules and build images when present
-verify: proto
+verify: proto graphql
 	@echo "Verifying all Go modules (fmt/vet/test/build + images)..."
 	@failed=0; \
 	for service_dir in $(GO_SERVICES); do \
@@ -57,7 +61,7 @@ verify: proto
 	fi
 
 # Build all Docker images
-build-images: proto
+build-images: proto graphql
 	@echo "Building Docker images for all services..."
 	@for service in $(SERVICES); do \
 		$(MAKE) build-image-$$service 2>/dev/null || echo "Skipping $$service (no Dockerfile)"; \
@@ -127,6 +131,13 @@ build-image-signalman: proto
 		--build-arg BUILD_DATE=$(BUILD_DATE) \
 		-f api_realtime/Dockerfile .
 
+build-image-bridge: proto
+	docker build -t frameworks-bridge:$(VERSION) \
+		--build-arg VERSION=$(VERSION) \
+		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
+		--build-arg BUILD_DATE=$(BUILD_DATE) \
+		-f api_gateway/Dockerfile .
+
 # Individual service bin builds (explicit)
 build-bin-commodore: proto
 	cd api_control && go build $(LDFLAGS) -o ../bin/commodore cmd/commodore/main.go
@@ -155,6 +166,9 @@ build-bin-periscope-query: proto
 build-bin-signalman: proto
 	cd api_realtime && go build $(LDFLAGS) -o ../bin/signalman cmd/signalman/main.go
 
+build-bin-bridge: proto
+	cd api_gateway && go build $(LDFLAGS) -o ../bin/bridge cmd/bridge/main.go
+
 # Clean build artifacts
 clean:
 	rm -rf bin/
@@ -169,10 +183,11 @@ version:
 # Install required development tools
 install-tools:
 	cd pkg/proto && make install-tools
+	cd api_gateway && make install-tools
 	go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
 
 # Run unit tests in every Go module
-test: proto
+test: proto graphql
 	@echo "Running unit tests for all Go modules..."
 	@failed=0; \
 	for service_dir in $(GO_SERVICES); do \
@@ -190,7 +205,7 @@ test: proto
 	fi
 
 # Generate a single combined coverage report at ./coverage
-coverage: proto
+coverage: proto graphql
 	@echo "Generating combined coverage for all Go modules..."
 	@rm -rf coverage && mkdir -p coverage
 	@echo "mode: atomic" > coverage/coverage.out

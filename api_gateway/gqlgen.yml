@@ -1,0 +1,30 @@
+# GraphQL schema location (shared schema)
+schema:
+  - ../pkg/graphql/schema.graphql
+
+# Where should the generated server code go?
+exec:
+  filename: graph/generated/generated.go
+  package: generated
+
+# Where should any generated models go?
+model:
+  filename: graph/model/models_gen.go
+  package: model
+
+# Where should the resolver implementations go?
+resolver:
+  layout: follow-schema
+  dir: graph
+  package: graph
+  filename_template: "{name}.resolvers.go"
+
+# Optional: turn on or off automatic camelCase marshaling for field names
+autobind:
+  - frameworks/pkg/models
+
+# Existing models to reuse (map GraphQL types to Go types)
+models:
+
+# Skip generation for these types (we'll implement them manually)
+skip_validation: true

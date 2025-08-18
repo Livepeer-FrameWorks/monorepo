@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"time"
 
+	"frameworks/pkg/api/periscope"
 	"frameworks/pkg/database"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/middleware"
@@ -27,12 +28,29 @@ func Init(ydb database.PostgresConn, ch database.ClickHouseConn, log logging.Log
 func GetStreamAnalytics(c middleware.Context) {
 	tenantID := c.GetString("tenant_id")
 	if tenantID == "" {
-		c.JSON(http.StatusBadRequest, middleware.H{"error": "Tenant context required"})
+		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Tenant context required"})
 		return
 	}
 
-	// Query YugaDB for state data
-	rows, err := yugaDB.QueryContext(c.Request.Context(), `
+	// Parse optional query parameters
+	streamID := c.Query("stream_id")
+	startTime := c.DefaultQuery("start_time", time.Now().Add(-24*time.Hour).Format(time.RFC3339))
+	endTime := c.DefaultQuery("end_time", time.Now().Format(time.RFC3339))
+
+	// Parse time parameters
+	startParsed, err := time.Parse(time.RFC3339, startTime)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Invalid start_time format"})
+		return
+	}
+	endParsed, err := time.Parse(time.RFC3339, endTime)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Invalid end_time format"})
+		return
+	}
+
+	// Build query with optional stream filtering
+	query := `
 		SELECT sa.id, sa.tenant_id, sa.internal_name, sa.internal_name, 
 		       sa.session_start_time, sa.session_end_time, sa.total_session_duration,
 		       sa.current_viewers, sa.peak_viewers, sa.total_connections, 
@@ -42,16 +60,26 @@ func GetStreamAnalytics(c middleware.Context) {
 		       sa.track_count, sa.inputs, sa.outputs, sa.node_id, sa.node_name, sa.latitude,
 		       sa.longitude, sa.location, sa.status, sa.last_updated, sa.created_at
 		FROM stream_analytics sa
-		WHERE sa.tenant_id = $1 AND sa.last_updated > NOW() - INTERVAL '24 hours'
-		ORDER BY sa.last_updated DESC
-	`, tenantID)
+		WHERE sa.tenant_id = $1 AND sa.last_updated >= $2 AND sa.last_updated <= $3`
+
+	args := []interface{}{tenantID, startParsed, endParsed}
+
+	if streamID != "" {
+		query += " AND sa.internal_name = $4"
+		args = append(args, streamID)
+	}
+
+	query += " ORDER BY sa.last_updated DESC"
+
+	// Query YugaDB for state data
+	rows, err := yugaDB.QueryContext(c.Request.Context(), query, args...)
 
 	if err != nil {
 		logger.WithFields(logging.Fields{
 			"tenant_id": tenantID,
 			"error":     err,
 		}).Error("Failed to fetch stream analytics from PostgreSQL")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to fetch analytics"})
+		c.JSON(http.StatusInternalServerError, periscope.ErrorResponse{Error: "Failed to fetch analytics"})
 		return
 	}
 	defer rows.Close()
@@ -137,23 +165,26 @@ func GetStreamAnalytics(c middleware.Context) {
 		}
 	}
 
-	c.JSON(http.StatusOK, analytics)
+	// Convert to API response type
+	response := periscope.StreamAnalyticsResponse(analytics)
+	c.JSON(http.StatusOK, response)
 }
 
 // GetViewerMetrics returns viewer metrics from ClickHouse
 func GetViewerMetrics(c middleware.Context) {
 	tenantID := c.GetString("tenant_id")
 	if tenantID == "" {
-		c.JSON(http.StatusBadRequest, middleware.H{"error": "Tenant context required"})
+		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Tenant context required"})
 		return
 	}
 
-	// Parse time range from query params
+	// Parse query parameters
+	streamID := c.Query("stream_id")
 	startTime := c.DefaultQuery("start_time", time.Now().Add(-24*time.Hour).Format(time.RFC3339))
 	endTime := c.DefaultQuery("end_time", time.Now().Format(time.RFC3339))
 
-	// Query ClickHouse for viewer metrics
-	rows, err := clickhouse.QueryContext(c.Request.Context(), `
+	// Build query with optional stream filtering
+	query := `
 		SELECT 
 			timestamp,
 			internal_name,
@@ -168,23 +199,33 @@ func GetViewerMetrics(c middleware.Context) {
 			buffer_health
 		FROM viewer_metrics
 		WHERE tenant_id = $1
-		AND timestamp BETWEEN $2 AND $3
-		ORDER BY timestamp DESC
-	`, tenantID, startTime, endTime)
+		AND timestamp BETWEEN $2 AND $3`
+
+	args := []interface{}{tenantID, startTime, endTime}
+
+	if streamID != "" {
+		query += " AND internal_name = $4"
+		args = append(args, streamID)
+	}
+
+	query += " ORDER BY timestamp DESC"
+
+	// Query ClickHouse for viewer metrics
+	rows, err := clickhouse.QueryContext(c.Request.Context(), query, args...)
 
 	if err != nil {
 		logger.WithFields(logging.Fields{
 			"tenant_id": tenantID,
 			"error":     err,
 		}).Error("Failed to fetch viewer metrics from ClickHouse")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to fetch viewer metrics"})
+		c.JSON(http.StatusInternalServerError, periscope.ErrorResponse{Error: "Failed to fetch viewer metrics"})
 		return
 	}
 	defer rows.Close()
 
-	var metrics []models.AnalyticsViewerMetric
+	var metrics []models.AnalyticsViewerSession
 	for rows.Next() {
-		var m models.AnalyticsViewerMetric
+		var m models.AnalyticsViewerSession
 		if err := rows.Scan(
 			&m.Timestamp,
 			&m.InternalName,
@@ -204,14 +245,16 @@ func GetViewerMetrics(c middleware.Context) {
 		metrics = append(metrics, m)
 	}
 
-	c.JSON(http.StatusOK, metrics)
+	// Convert to API response type
+	response := periscope.ViewerMetricsResponse(metrics)
+	c.JSON(http.StatusOK, response)
 }
 
 // GetRoutingEvents returns routing events from ClickHouse
 func GetRoutingEvents(c middleware.Context) {
 	tenantID := c.GetString("tenant_id")
 	if tenantID == "" {
-		c.JSON(http.StatusBadRequest, middleware.H{"error": "Tenant context required"})
+		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Tenant context required"})
 		return
 	}
 
@@ -247,7 +290,7 @@ func GetRoutingEvents(c middleware.Context) {
 			"tenant_id": tenantID,
 			"error":     err,
 		}).Error("Failed to fetch routing events from ClickHouse")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to fetch routing events"})
+		c.JSON(http.StatusInternalServerError, periscope.ErrorResponse{Error: "Failed to fetch routing events"})
 		return
 	}
 	defer rows.Close()
@@ -277,14 +320,15 @@ func GetRoutingEvents(c middleware.Context) {
 		events = append(events, e)
 	}
 
-	c.JSON(http.StatusOK, events)
+	response := periscope.RoutingEventsResponse(events)
+	c.JSON(http.StatusOK, response)
 }
 
 // GetViewerMetrics5m returns aggregated viewer metrics from ClickHouse materialized view
 func GetViewerMetrics5m(c middleware.Context) {
 	tenantID := c.GetString("tenant_id")
 	if tenantID == "" {
-		c.JSON(http.StatusBadRequest, middleware.H{"error": "Tenant context required"})
+		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Tenant context required"})
 		return
 	}
 
@@ -315,14 +359,14 @@ func GetViewerMetrics5m(c middleware.Context) {
 			"tenant_id": tenantID,
 			"error":     err,
 		}).Error("Failed to fetch aggregated viewer metrics from ClickHouse")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to fetch aggregated metrics"})
+		c.JSON(http.StatusInternalServerError, periscope.ErrorResponse{Error: "Failed to fetch aggregated metrics"})
 		return
 	}
 	defer rows.Close()
 
-	var metrics []models.AnalyticsViewerMetrics5m
+	var metrics []models.AnalyticsViewerSession5m
 	for rows.Next() {
-		var m models.AnalyticsViewerMetrics5m
+		var m models.AnalyticsViewerSession5m
 		if err := rows.Scan(
 			&m.Timestamp,
 			&m.InternalName,
@@ -340,14 +384,15 @@ func GetViewerMetrics5m(c middleware.Context) {
 		metrics = append(metrics, m)
 	}
 
-	c.JSON(http.StatusOK, metrics)
+	response := periscope.ViewerMetrics5mResponse(metrics)
+	c.JSON(http.StatusOK, response)
 }
 
 // GetStreamDetails returns detailed analytics for a specific stream
 func GetStreamDetails(c middleware.Context) {
 	tenantID := c.GetString("tenant_id")
 	if tenantID == "" {
-		c.JSON(http.StatusBadRequest, middleware.H{"error": "Tenant context required"})
+		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Tenant context required"})
 		return
 	}
 
@@ -379,13 +424,13 @@ func GetStreamDetails(c middleware.Context) {
 	)
 
 	if err == database.ErrNoRows {
-		c.JSON(http.StatusNotFound, middleware.H{"error": "Stream analytics not found"})
+		c.JSON(http.StatusNotFound, periscope.ErrorResponse{Error: "Stream analytics not found"})
 		return
 	}
 
 	if err != nil {
 		logger.WithError(err).Error("Failed to fetch stream details from YugaDB")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to fetch stream details"})
+		c.JSON(http.StatusInternalServerError, periscope.ErrorResponse{Error: "Failed to fetch stream details"})
 		return
 	}
 	// Do not expose StreamID
@@ -432,7 +477,9 @@ func GetStreamDetails(c middleware.Context) {
 		sa.PacketLossRate = viewerMetrics.PacketLossRate
 	}
 
-	c.JSON(http.StatusOK, sa)
+	// Convert to API response type
+	response := periscope.StreamDetailsResponse(sa)
+	c.JSON(http.StatusOK, response)
 }
 
 // GetStreamEvents returns events for a specific stream
@@ -441,7 +488,7 @@ func GetStreamEvents(c middleware.Context) {
 	internalName := c.Param("internal_name")
 
 	if tenantID == "" {
-		c.JSON(http.StatusBadRequest, middleware.H{"error": "Tenant context required"})
+		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Tenant context required"})
 		return
 	}
 
@@ -456,12 +503,12 @@ func GetStreamEvents(c middleware.Context) {
 
 	if err != nil {
 		logger.WithError(err).Error("Failed to fetch stream events from ClickHouse")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to fetch events"})
+		c.JSON(http.StatusInternalServerError, periscope.ErrorResponse{Error: "Failed to fetch events"})
 		return
 	}
 	defer rows.Close()
 
-	var events []map[string]interface{}
+	var events []periscope.StreamEvent
 	for rows.Next() {
 		var timestamp time.Time
 		var eventID, eventType, status, nodeID, eventData string
@@ -471,24 +518,25 @@ func GetStreamEvents(c middleware.Context) {
 			continue
 		}
 
-		events = append(events, map[string]interface{}{
-			"timestamp":  timestamp,
-			"event_id":   eventID,
-			"event_type": eventType,
-			"status":     status,
-			"node_id":    nodeID,
-			"event_data": eventData,
+		events = append(events, periscope.StreamEvent{
+			Timestamp: timestamp,
+			EventID:   eventID,
+			EventType: eventType,
+			Status:    status,
+			NodeID:    nodeID,
+			EventData: eventData,
 		})
 	}
 
-	c.JSON(http.StatusOK, events)
+	response := periscope.StreamEventsResponse(events)
+	c.JSON(http.StatusOK, response)
 }
 
 // GetTrackListEvents returns track list updates for a specific stream
 func GetTrackListEvents(c middleware.Context) {
 	tenantID := c.GetString("tenant_id")
 	if tenantID == "" {
-		c.JSON(http.StatusBadRequest, middleware.H{"error": "Tenant context required"})
+		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Tenant context required"})
 		return
 	}
 
@@ -505,12 +553,12 @@ func GetTrackListEvents(c middleware.Context) {
 	`, tenantID, internalName, startTime, endTime)
 	if err != nil {
 		logger.WithError(err).Error("Failed to fetch track list events from ClickHouse")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to fetch track list events"})
+		c.JSON(http.StatusInternalServerError, periscope.ErrorResponse{Error: "Failed to fetch track list events"})
 		return
 	}
 	defer rows.Close()
 
-	var events []map[string]interface{}
+	var events []periscope.AnalyticsTrackListEvent
 	for rows.Next() {
 		var ts time.Time
 		var nodeID, trackList string
@@ -519,15 +567,16 @@ func GetTrackListEvents(c middleware.Context) {
 			logger.WithError(err).Error("Failed to scan track list event")
 			continue
 		}
-		events = append(events, map[string]interface{}{
-			"timestamp":   ts,
-			"node_id":     nodeID,
-			"track_list":  trackList,
-			"track_count": trackCount,
+		events = append(events, periscope.AnalyticsTrackListEvent{
+			Timestamp:  ts,
+			NodeID:     nodeID,
+			TrackList:  trackList,
+			TrackCount: trackCount,
 		})
 	}
 
-	c.JSON(http.StatusOK, events)
+	response := periscope.TrackListEventsResponse(events)
+	c.JSON(http.StatusOK, response)
 }
 
 // GetViewerStats returns viewer statistics for a specific stream
@@ -536,7 +585,7 @@ func GetViewerStats(c middleware.Context) {
 	internalName := c.Param("internal_name")
 
 	if tenantID == "" {
-		c.JSON(http.StatusBadRequest, middleware.H{"error": "Tenant context required"})
+		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Tenant context required"})
 		return
 	}
 
@@ -549,13 +598,13 @@ func GetViewerStats(c middleware.Context) {
 	`, tenantID, internalName).Scan(&currentViewers, &peakViewers, &totalConnections)
 
 	if err == database.ErrNoRows {
-		c.JSON(http.StatusNotFound, middleware.H{"error": "Stream analytics not found"})
+		c.JSON(http.StatusNotFound, periscope.ErrorResponse{Error: "Stream analytics not found"})
 		return
 	}
 
 	if err != nil {
 		logger.WithError(err).Error("Failed to fetch viewer stats from YugaDB")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to fetch viewer stats"})
+		c.JSON(http.StatusInternalServerError, periscope.ErrorResponse{Error: "Failed to fetch viewer stats"})
 		return
 	}
 
@@ -577,7 +626,7 @@ func GetViewerStats(c middleware.Context) {
 
 	if err != nil {
 		logger.WithError(err).Error("Failed to fetch viewer history from ClickHouse")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to fetch viewer history"})
+		c.JSON(http.StatusInternalServerError, periscope.ErrorResponse{Error: "Failed to fetch viewer history"})
 		return
 	}
 	defer rows.Close()
@@ -633,25 +682,61 @@ func GetViewerStats(c middleware.Context) {
 		logger.WithError(err).Error("Failed to fetch geographic stats from ClickHouse")
 	}
 
-	c.JSON(http.StatusOK, middleware.H{
-		"current_viewers":   currentViewers,
-		"peak_viewers":      peakViewers,
-		"total_connections": totalConnections,
-		"viewer_history":    viewerHistory,
-		"geo_stats":         geoStats,
-	})
+	// Convert viewer history to typed format
+	var typedViewerHistory []periscope.ViewerHistoryEntry
+	for _, entry := range viewerHistory {
+		typedViewerHistory = append(typedViewerHistory, periscope.ViewerHistoryEntry{
+			Timestamp:         entry["timestamp"].(time.Time),
+			ViewerCount:       entry["viewer_count"].(int),
+			ConnectionType:    entry["connection_type"].(string),
+			BufferHealth:      entry["buffer_health"].(float32),
+			ConnectionQuality: entry["connection_quality"].(float32),
+			CountryCode:       entry["country_code"].(string),
+			City:              entry["city"].(string),
+		})
+	}
+
+	// Create typed geo stats
+	typedGeoStats := periscope.ViewerGeographicStats{
+		UniqueCountries:  geoStats.UniqueCountries,
+		UniqueCities:     geoStats.UniqueCities,
+		CountryBreakdown: geoStats.CountryBreakdown,
+		CityBreakdown:    geoStats.CityBreakdown,
+	}
+
+	response := periscope.ViewerStatsResponse{
+		CurrentViewers:   currentViewers,
+		PeakViewers:      peakViewers,
+		TotalConnections: totalConnections,
+		ViewerHistory:    typedViewerHistory,
+		GeoStats:         typedGeoStats,
+	}
+	c.JSON(http.StatusOK, response)
 }
 
 // GetPlatformOverview returns high-level platform metrics
 func GetPlatformOverview(c middleware.Context) {
 	tenantID := c.GetString("tenant_id")
 	if tenantID == "" {
-		c.JSON(http.StatusBadRequest, middleware.H{"error": "Tenant context required"})
+		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Tenant context required"})
 		return
 	}
 
-	// Define time window for overview (last 1 hour)
-	overviewSince := time.Now().Add(-1 * time.Hour)
+	// Parse time range from query params (defaults to last 1 hour)
+	startTime := c.DefaultQuery("start_time", time.Now().Add(-1*time.Hour).Format(time.RFC3339))
+	endTime := c.DefaultQuery("end_time", time.Now().Format(time.RFC3339))
+
+	// Parse time parameters
+	startParsed, err := time.Parse(time.RFC3339, startTime)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Invalid start_time format"})
+		return
+	}
+	endParsed, err := time.Parse(time.RFC3339, endTime)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Invalid end_time format"})
+		return
+	}
 
 	// Get metrics from analytics data instead of directly querying users/streams tables
 	var metrics struct {
@@ -661,15 +746,15 @@ func GetPlatformOverview(c middleware.Context) {
 		ActiveStreams int `json:"active_streams"`
 	}
 
-	// Get user counts from ClickHouse analytics (last 24 hours)
-	err := clickhouse.QueryRowContext(c.Request.Context(), `
+	// Get user counts from ClickHouse analytics for the specified time range
+	err = clickhouse.QueryRowContext(c.Request.Context(), `
 		SELECT 
 			uniq(user_id) as total_users,
-			uniqIf(user_id, timestamp > now() - INTERVAL 1 HOUR) as active_users
+			uniqIf(user_id, timestamp >= $2) as active_users
 		FROM connection_events 
 		WHERE tenant_id = $1 
-		AND timestamp > now() - INTERVAL 24 HOUR
-	`, tenantID).Scan(&metrics.TotalUsers, &metrics.ActiveUsers)
+		AND timestamp BETWEEN $2 AND $3
+	`, tenantID, startParsed, endParsed).Scan(&metrics.TotalUsers, &metrics.ActiveUsers)
 
 	if err != nil && err != database.ErrNoRows {
 		logger.WithError(err).Warn("Failed to get user metrics from ClickHouse, using defaults")
@@ -689,7 +774,7 @@ func GetPlatformOverview(c middleware.Context) {
 
 	if err != nil {
 		logger.WithError(err).Error("Failed to fetch stream metrics from analytics")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to fetch platform overview"})
+		c.JSON(http.StatusInternalServerError, periscope.ErrorResponse{Error: "Failed to fetch platform overview"})
 		return
 	}
 
@@ -704,11 +789,11 @@ func GetPlatformOverview(c middleware.Context) {
 		SELECT 
 			sum(viewer_count) as total_viewers,
 			avg(viewer_count) as average_viewers,
-			(SELECT COALESCE(max(bandwidth_out) / (1024*1024), 0) FROM stream_health_metrics WHERE tenant_id = $1 AND timestamp > $2) as peak_bandwidth_mbps
+			(SELECT COALESCE(max(bandwidth_out) / (1024*1024), 0) FROM stream_health_metrics WHERE tenant_id = $1 AND timestamp BETWEEN $2 AND $3) as peak_bandwidth_mbps
 		FROM viewer_metrics 
 		WHERE tenant_id = $1 
-		AND timestamp > $2
-	`, tenantID, overviewSince).Scan(
+		AND timestamp BETWEEN $2 AND $3
+	`, tenantID, startParsed, endParsed).Scan(
 		&timeseriesMetrics.TotalViewers,
 		&timeseriesMetrics.AverageViewers,
 		&timeseriesMetrics.PeakBandwidth,
@@ -721,17 +806,17 @@ func GetPlatformOverview(c middleware.Context) {
 		timeseriesMetrics.PeakBandwidth = 0
 	}
 
-	// Combine metrics
-	response := map[string]interface{}{
-		"tenant_id":       tenantID,
-		"total_users":     metrics.TotalUsers,
-		"active_users":    metrics.ActiveUsers,
-		"total_streams":   metrics.TotalStreams,
-		"active_streams":  metrics.ActiveStreams,
-		"total_viewers":   timeseriesMetrics.TotalViewers,
-		"average_viewers": timeseriesMetrics.AverageViewers,
-		"peak_bandwidth":  timeseriesMetrics.PeakBandwidth,
-		"generated_at":    time.Now(),
+	// Build structured response
+	response := periscope.PlatformOverviewResponse{
+		TenantID:       tenantID,
+		TotalUsers:     metrics.TotalUsers,
+		ActiveUsers:    metrics.ActiveUsers,
+		TotalStreams:   metrics.TotalStreams,
+		ActiveStreams:  metrics.ActiveStreams,
+		TotalViewers:   timeseriesMetrics.TotalViewers,
+		AverageViewers: timeseriesMetrics.AverageViewers,
+		PeakBandwidth:  timeseriesMetrics.PeakBandwidth,
+		GeneratedAt:    time.Now(),
 	}
 
 	c.JSON(http.StatusOK, response)
@@ -741,7 +826,7 @@ func GetPlatformOverview(c middleware.Context) {
 func GetRealtimeStreams(c middleware.Context) {
 	tenantID := c.GetString("tenant_id")
 	if tenantID == "" {
-		c.JSON(http.StatusBadRequest, middleware.H{"error": "Tenant context required"})
+		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Tenant context required"})
 		return
 	}
 
@@ -757,12 +842,12 @@ func GetRealtimeStreams(c middleware.Context) {
 
 	if err != nil {
 		logger.WithError(err).Error("Failed to fetch realtime streams from YugaDB")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to fetch realtime streams"})
+		c.JSON(http.StatusInternalServerError, periscope.ErrorResponse{Error: "Failed to fetch realtime streams"})
 		return
 	}
 	defer rows.Close()
 
-	var streams []map[string]interface{}
+	var streams []periscope.RealtimeStream
 	for rows.Next() {
 		var internalName, status, nodeID, location string
 		var currentViewers int
@@ -802,32 +887,33 @@ func GetRealtimeStreams(c middleware.Context) {
 			logger.WithError(err).Error("Failed to fetch stream metrics from ClickHouse")
 		}
 
-		streams = append(streams, map[string]interface{}{
-			"internal_name":      internalName,
-			"current_viewers":    currentViewers,
-			"bandwidth_in":       bandwidthIn,
-			"bandwidth_out":      bandwidthOut,
-			"status":             status,
-			"node_id":            nodeID,
-			"location":           location,
-			"viewer_trend":       metrics.ViewerTrend,
-			"buffer_health":      metrics.BufferHealth,
-			"connection_quality": metrics.ConnectionQuality,
-			"unique_countries":   metrics.UniqueCountries,
+		streams = append(streams, periscope.RealtimeStream{
+			InternalName:      internalName,
+			CurrentViewers:    currentViewers,
+			BandwidthIn:       bandwidthIn,
+			BandwidthOut:      bandwidthOut,
+			Status:            status,
+			NodeID:            nodeID,
+			Location:          location,
+			ViewerTrend:       metrics.ViewerTrend,
+			BufferHealth:      metrics.BufferHealth,
+			ConnectionQuality: metrics.ConnectionQuality,
+			UniqueCountries:   metrics.UniqueCountries,
 		})
 	}
 
-	c.JSON(http.StatusOK, middleware.H{
-		"streams": streams,
-		"count":   len(streams),
-	})
+	response := periscope.RealtimeStreamsResponse{
+		Streams: streams,
+		Count:   len(streams),
+	}
+	c.JSON(http.StatusOK, response)
 }
 
 // GetRealtimeViewers returns current viewer counts across all streams
 func GetRealtimeViewers(c middleware.Context) {
 	tenantID := c.GetString("tenant_id")
 	if tenantID == "" {
-		c.JSON(http.StatusBadRequest, middleware.H{"error": "Tenant context required"})
+		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Tenant context required"})
 		return
 	}
 
@@ -842,7 +928,7 @@ func GetRealtimeViewers(c middleware.Context) {
 
 	if err != nil && err != database.ErrNoRows {
 		logger.WithError(err).Error("Failed to fetch total viewers from ClickHouse")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to fetch viewer count"})
+		c.JSON(http.StatusInternalServerError, periscope.ErrorResponse{Error: "Failed to fetch viewer count"})
 		return
 	}
 
@@ -863,12 +949,12 @@ func GetRealtimeViewers(c middleware.Context) {
 
 	if err != nil {
 		logger.WithError(err).Error("Failed to fetch stream viewers from ClickHouse")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to fetch stream viewers"})
+		c.JSON(http.StatusInternalServerError, periscope.ErrorResponse{Error: "Failed to fetch stream viewers"})
 		return
 	}
 	defer rows.Close()
 
-	var streamViewers []map[string]interface{}
+	var streamViewers []periscope.RealtimeStreamViewer
 	for rows.Next() {
 		var internalName string
 		var avgViewers, peakViewers float64
@@ -878,30 +964,31 @@ func GetRealtimeViewers(c middleware.Context) {
 			continue
 		}
 
-		streamViewers = append(streamViewers, map[string]interface{}{
-			"internal_name":    internalName,
-			"avg_viewers":      avgViewers,
-			"peak_viewers":     peakViewers,
-			"unique_countries": uniqueCountries,
-			"unique_cities":    uniqueCities,
+		streamViewers = append(streamViewers, periscope.RealtimeStreamViewer{
+			InternalName:    internalName,
+			AvgViewers:      avgViewers,
+			PeakViewers:     peakViewers,
+			UniqueCountries: uniqueCountries,
+			UniqueCities:    uniqueCities,
 		})
 	}
 
-	c.JSON(http.StatusOK, middleware.H{
-		"total_viewers":  totalViewers,
-		"stream_viewers": streamViewers,
-	})
+	response := periscope.RealtimeViewersResponse{
+		TotalViewers:  totalViewers,
+		StreamViewers: streamViewers,
+	}
+	c.JSON(http.StatusOK, response)
 }
 
 // GetRealtimeEvents returns recent events across all streams
 func GetRealtimeEvents(c middleware.Context) {
 	tenantID := c.GetString("tenant_id")
 	if tenantID == "" {
-		c.JSON(http.StatusBadRequest, middleware.H{"error": "Tenant context required"})
+		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Tenant context required"})
 		return
 	}
 
-	var events []map[string]interface{}
+	var events []interface{}
 
 	// Fetch recent stream_events from ClickHouse
 	rows, err := clickhouse.QueryContext(c.Request.Context(), `
@@ -990,17 +1077,18 @@ func GetRealtimeEvents(c middleware.Context) {
 		}
 	}
 
-	c.JSON(http.StatusOK, middleware.H{
-		"events": events,
-		"count":  len(events),
-	})
+	response := periscope.RealtimeEventsResponse{
+		Events: events,
+		Count:  len(events),
+	}
+	c.JSON(http.StatusOK, response)
 }
 
 // GetConnectionEvents returns connection events from ClickHouse
 func GetConnectionEvents(c middleware.Context) {
 	tenantID := c.GetString("tenant_id")
 	if tenantID == "" {
-		c.JSON(http.StatusBadRequest, middleware.H{"error": "Tenant context required"})
+		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Tenant context required"})
 		return
 	}
 
@@ -1039,12 +1127,12 @@ func GetConnectionEvents(c middleware.Context) {
 			"tenant_id": tenantID,
 			"error":     err,
 		}).Error("Failed to fetch connection events from ClickHouse")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to fetch connection events"})
+		c.JSON(http.StatusInternalServerError, periscope.ErrorResponse{Error: "Failed to fetch connection events"})
 		return
 	}
 	defer rows.Close()
 
-	var events []map[string]interface{}
+	var events []periscope.ConnectionEvent
 	for rows.Next() {
 		var e struct {
 			EventID          string    `json:"event_id"`
@@ -1089,35 +1177,36 @@ func GetConnectionEvents(c middleware.Context) {
 			continue
 		}
 
-		events = append(events, map[string]interface{}{
-			"event_id":          e.EventID,
-			"timestamp":         e.Timestamp,
-			"tenant_id":         e.TenantID,
-			"internal_name":     e.InternalName,
-			"user_id":           e.UserID,
-			"session_id":        e.SessionID,
-			"connection_addr":   e.ConnectionAddr,
-			"user_agent":        e.UserAgent,
-			"connector":         e.Connector,
-			"node_id":           e.NodeID,
-			"country_code":      e.CountryCode,
-			"city":              e.City,
-			"latitude":          e.Latitude,
-			"longitude":         e.Longitude,
-			"event_type":        e.EventType,
-			"session_duration":  e.SessionDuration,
-			"bytes_transferred": e.BytesTransferred,
+		events = append(events, periscope.ConnectionEvent{
+			EventID:          e.EventID,
+			Timestamp:        e.Timestamp,
+			TenantID:         e.TenantID,
+			InternalName:     e.InternalName,
+			UserID:           e.UserID,
+			SessionID:        e.SessionID,
+			ConnectionAddr:   e.ConnectionAddr,
+			UserAgent:        e.UserAgent,
+			Connector:        e.Connector,
+			NodeID:           e.NodeID,
+			CountryCode:      e.CountryCode,
+			City:             e.City,
+			Latitude:         e.Latitude,
+			Longitude:        e.Longitude,
+			EventType:        e.EventType,
+			SessionDuration:  e.SessionDuration,
+			BytesTransferred: e.BytesTransferred,
 		})
 	}
 
-	c.JSON(http.StatusOK, events)
+	response := periscope.ConnectionEventsResponse(events)
+	c.JSON(http.StatusOK, response)
 }
 
 // GetNodeMetrics returns node metrics from ClickHouse
 func GetNodeMetrics(c middleware.Context) {
 	tenantID := c.GetString("tenant_id")
 	if tenantID == "" {
-		c.JSON(http.StatusBadRequest, middleware.H{"error": "Tenant context required"})
+		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Tenant context required"})
 		return
 	}
 
@@ -1159,7 +1248,7 @@ func GetNodeMetrics(c middleware.Context) {
 			"start_time": startTime,
 			"end_time":   endTime,
 		}).Error("Failed to fetch node metrics from ClickHouse")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to fetch node metrics"})
+		c.JSON(http.StatusInternalServerError, periscope.ErrorResponse{Error: "Failed to fetch node metrics"})
 		return
 	}
 	defer rows.Close()
@@ -1236,19 +1325,46 @@ func GetNodeMetrics(c middleware.Context) {
 		})
 	}
 
-	c.JSON(http.StatusOK, middleware.H{
-		"metrics":    metrics,
-		"count":      len(metrics),
-		"start_time": startTime,
-		"end_time":   endTime,
-	})
+	// Convert to typed response
+	var typedMetrics []periscope.NodeMetric
+	for _, m := range metrics {
+		typedMetrics = append(typedMetrics, periscope.NodeMetric{
+			Timestamp:          m["timestamp"].(time.Time),
+			NodeID:             m["node_id"].(string),
+			CPUUsage:           m["cpu_usage"].(float32),
+			MemoryUsage:        m["memory_usage"].(float32),
+			DiskUsage:          m["disk_usage"].(float32),
+			RAMMax:             m["ram_max"].(uint64),
+			RAMCurrent:         m["ram_current"].(uint64),
+			BandwidthIn:        m["bandwidth_in"].(int64),
+			BandwidthOut:       m["bandwidth_out"].(int64),
+			UpSpeed:            m["up_speed"].(uint64),
+			DownSpeed:          m["down_speed"].(uint64),
+			ConnectionsCurrent: m["connections_current"].(int),
+			StreamCount:        m["stream_count"].(int),
+			HealthScore:        m["health_score"].(float32),
+			IsHealthy:          m["is_healthy"].(bool),
+			Latitude:           m["latitude"].(float64),
+			Longitude:          m["longitude"].(float64),
+			Tags:               m["tags"].([]string),
+			Metadata:           m["metadata"].(string),
+		})
+	}
+
+	response := periscope.NodeMetricsResponse{
+		Metrics:   typedMetrics,
+		Count:     len(typedMetrics),
+		StartTime: startTime,
+		EndTime:   endTime,
+	}
+	c.JSON(http.StatusOK, response)
 }
 
 // GetNodeMetrics1h returns hourly aggregated node metrics from ClickHouse materialized view
 func GetNodeMetrics1h(c middleware.Context) {
 	tenantID := c.GetString("tenant_id")
 	if tenantID == "" {
-		c.JSON(http.StatusBadRequest, middleware.H{"error": "Tenant context required"})
+		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Tenant context required"})
 		return
 	}
 
@@ -1276,12 +1392,12 @@ func GetNodeMetrics1h(c middleware.Context) {
 
 	if err != nil {
 		logger.WithError(err).Error("Failed to fetch hourly node metrics from ClickHouse")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to fetch hourly metrics"})
+		c.JSON(http.StatusInternalServerError, periscope.ErrorResponse{Error: "Failed to fetch hourly metrics"})
 		return
 	}
 	defer rows.Close()
 
-	var metrics []map[string]interface{}
+	var metrics []periscope.NodeMetricHourly
 	for rows.Next() {
 		var m struct {
 			Timestamp         time.Time `json:"timestamp"`
@@ -1312,28 +1428,29 @@ func GetNodeMetrics1h(c middleware.Context) {
 			continue
 		}
 
-		metrics = append(metrics, map[string]interface{}{
-			"timestamp":           m.Timestamp,
-			"node_id":             m.NodeID,
-			"avg_cpu":             m.AvgCPU,
-			"peak_cpu":            m.PeakCPU,
-			"avg_memory":          m.AvgMemory,
-			"peak_memory":         m.PeakMemory,
-			"total_bandwidth_in":  m.TotalBandwidthIn,
-			"total_bandwidth_out": m.TotalBandwidthOut,
-			"avg_health_score":    m.AvgHealthScore,
-			"was_healthy":         m.WasHealthy,
+		metrics = append(metrics, periscope.NodeMetricHourly{
+			Timestamp:         m.Timestamp,
+			NodeID:            m.NodeID,
+			AvgCPU:            m.AvgCPU,
+			PeakCPU:           m.PeakCPU,
+			AvgMemory:         m.AvgMemory,
+			PeakMemory:        m.PeakMemory,
+			TotalBandwidthIn:  m.TotalBandwidthIn,
+			TotalBandwidthOut: m.TotalBandwidthOut,
+			AvgHealthScore:    m.AvgHealthScore,
+			WasHealthy:        m.WasHealthy,
 		})
 	}
 
-	c.JSON(http.StatusOK, metrics)
+	response := periscope.NodeMetrics1hResponse(metrics)
+	c.JSON(http.StatusOK, response)
 }
 
 // GetStreamHealthMetrics returns stream health metrics from ClickHouse
 func GetStreamHealthMetrics(c middleware.Context) {
 	tenantID := c.GetString("tenant_id")
 	if tenantID == "" {
-		c.JSON(http.StatusBadRequest, middleware.H{"error": "Tenant context required"})
+		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Tenant context required"})
 		return
 	}
 
@@ -1375,12 +1492,12 @@ func GetStreamHealthMetrics(c middleware.Context) {
 			"tenant_id": tenantID,
 			"error":     err,
 		}).Error("Failed to fetch stream health metrics from ClickHouse")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to fetch stream health metrics"})
+		c.JSON(http.StatusInternalServerError, periscope.ErrorResponse{Error: "Failed to fetch stream health metrics"})
 		return
 	}
 	defer rows.Close()
 
-	var metrics []map[string]interface{}
+	var metrics []periscope.StreamHealthMetric
 	for rows.Next() {
 		var m struct {
 			Timestamp            time.Time `json:"timestamp"`
@@ -1431,38 +1548,39 @@ func GetStreamHealthMetrics(c middleware.Context) {
 			continue
 		}
 
-		metrics = append(metrics, map[string]interface{}{
-			"timestamp":             m.Timestamp,
-			"tenant_id":             m.TenantID,
-			"internal_name":         m.InternalName,
-			"node_id":               m.NodeID,
-			"bitrate":               m.Bitrate,
-			"fps":                   m.FPS,
-			"gop_size":              m.GOPSize,
-			"width":                 m.Width,
-			"height":                m.Height,
-			"buffer_size":           m.BufferSize,
-			"buffer_used":           m.BufferUsed,
-			"buffer_health":         m.BufferHealth,
-			"packets_sent":          m.PacketsSent,
-			"packets_lost":          m.PacketsLost,
-			"packets_retransmitted": m.PacketsRetransmitted,
-			"bandwidth_in":          m.BandwidthIn,
-			"bandwidth_out":         m.BandwidthOut,
-			"codec":                 m.Codec,
-			"profile":               m.Profile,
-			"track_metadata":        m.TrackMetadata,
+		metrics = append(metrics, periscope.StreamHealthMetric{
+			Timestamp:            m.Timestamp,
+			TenantID:             m.TenantID,
+			InternalName:         m.InternalName,
+			NodeID:               m.NodeID,
+			Bitrate:              m.Bitrate,
+			FPS:                  m.FPS,
+			GOPSize:              m.GOPSize,
+			Width:                m.Width,
+			Height:               m.Height,
+			BufferSize:           m.BufferSize,
+			BufferUsed:           m.BufferUsed,
+			BufferHealth:         m.BufferHealth,
+			PacketsSent:          m.PacketsSent,
+			PacketsLost:          m.PacketsLost,
+			PacketsRetransmitted: m.PacketsRetransmitted,
+			BandwidthIn:          m.BandwidthIn,
+			BandwidthOut:         m.BandwidthOut,
+			Codec:                m.Codec,
+			Profile:              m.Profile,
+			TrackMetadata:        m.TrackMetadata,
 		})
 	}
 
-	c.JSON(http.StatusOK, metrics)
+	response := periscope.StreamHealthMetricsResponse(metrics)
+	c.JSON(http.StatusOK, response)
 }
 
 // GetStreamBufferEvents returns buffer events for a specific stream
 func GetStreamBufferEvents(c middleware.Context) {
 	tenantID := c.GetString("tenant_id")
 	if tenantID == "" {
-		c.JSON(http.StatusBadRequest, middleware.H{"error": "Tenant context required"})
+		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Tenant context required"})
 		return
 	}
 	internalName := c.Param("internal_name")
@@ -1478,34 +1596,35 @@ func GetStreamBufferEvents(c middleware.Context) {
 	`, tenantID, internalName, startTime, endTime)
 	if err != nil {
 		logger.WithError(err).Error("Failed to fetch buffer events")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to fetch buffer events"})
+		c.JSON(http.StatusInternalServerError, periscope.ErrorResponse{Error: "Failed to fetch buffer events"})
 		return
 	}
 	defer rows.Close()
 
-	var events []map[string]interface{}
+	var events []periscope.BufferEvent
 	for rows.Next() {
 		var ts time.Time
 		var eventID, status, nodeID, eventData string
 		if err := rows.Scan(&ts, &eventID, &status, &nodeID, &eventData); err != nil {
 			continue
 		}
-		events = append(events, map[string]interface{}{
-			"timestamp":  ts,
-			"event_id":   eventID,
-			"status":     status,
-			"node_id":    nodeID,
-			"event_data": eventData,
+		events = append(events, periscope.BufferEvent{
+			Timestamp: ts,
+			EventID:   eventID,
+			Status:    status,
+			NodeID:    nodeID,
+			EventData: eventData,
 		})
 	}
-	c.JSON(http.StatusOK, events)
+	response := periscope.BufferEventsResponse(events)
+	c.JSON(http.StatusOK, response)
 }
 
 // GetStreamEndEvents returns end events for a specific stream
 func GetStreamEndEvents(c middleware.Context) {
 	tenantID := c.GetString("tenant_id")
 	if tenantID == "" {
-		c.JSON(http.StatusBadRequest, middleware.H{"error": "Tenant context required"})
+		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Tenant context required"})
 		return
 	}
 	internalName := c.Param("internal_name")
@@ -1521,25 +1640,26 @@ func GetStreamEndEvents(c middleware.Context) {
 	`, tenantID, internalName, startTime, endTime)
 	if err != nil {
 		logger.WithError(err).Error("Failed to fetch end events")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to fetch end events"})
+		c.JSON(http.StatusInternalServerError, periscope.ErrorResponse{Error: "Failed to fetch end events"})
 		return
 	}
 	defer rows.Close()
 
-	var events []map[string]interface{}
+	var events []periscope.EndEvent
 	for rows.Next() {
 		var ts time.Time
 		var eventID, status, nodeID, eventData string
 		if err := rows.Scan(&ts, &eventID, &status, &nodeID, &eventData); err != nil {
 			continue
 		}
-		events = append(events, map[string]interface{}{
-			"timestamp":  ts,
-			"event_id":   eventID,
-			"status":     status,
-			"node_id":    nodeID,
-			"event_data": eventData,
+		events = append(events, periscope.EndEvent{
+			Timestamp: ts,
+			EventID:   eventID,
+			Status:    status,
+			NodeID:    nodeID,
+			EventData: eventData,
 		})
 	}
-	c.JSON(http.StatusOK, events)
+	response := periscope.EndEventsResponse(events)
+	c.JSON(http.StatusOK, response)
 }

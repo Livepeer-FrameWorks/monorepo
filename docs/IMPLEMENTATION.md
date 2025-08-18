@@ -20,6 +20,11 @@ FrameWorks is a **distributed microservices platform** for **multi-tenant video 
 **Purpose**: Business logic, orchestration, and immediate consistency operations
 
 **Services**:
+- **Bridge** (`api_gateway`): GraphQL API Gateway - unified service aggregation
+  - Single GraphQL endpoint aggregating all FrameWorks services
+  - Client authentication and request routing
+  - Query optimization and response caching
+  - Real-time subscriptions via GraphQL websockets
 - **Commodore** (`api_control`): Core business logic and tenant routing
   - User authentication and account management
   - Stream metadata and configuration

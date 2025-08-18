@@ -23,6 +23,7 @@ An open streaming stack for live video: apps, real‑time APIs, and analytics. S
   - MistServer: ingest/processing/edge
   - Livepeer Gateway (golivepeer): transcoding/AI processing
 - Realtime & UI
+  - Bridge (`api_gateway`): GraphQL gateway, aggregates all services
   - Signalman (`api_realtime`): WebSocket hub
   - Web Console (`website_application`)
 
@@ -40,6 +41,7 @@ docker-compose up
 ```
 
 Endpoints (local)
+- GraphQL Gateway: http://localhost:18000/api/gateway/
 - App via Nginx: http://localhost:18090
 - Web Console: http://localhost:18030
 - Marketing site: http://localhost:18031
@@ -54,6 +56,7 @@ Endpoints (local)
 
 | Plane | Service | Port | Notes |
 | --- | --- | --- | --- |
+| Regional | Bridge | 18000 | GraphQL Gateway |
 | Control | Commodore | 18001 | API |
 | Control | Quartermaster | 18002 | API |
 | Control | Purser | 18003 | API |
@@ -85,7 +88,7 @@ Endpoints (local)
 | Deferred | Navigator | 18011 | DNS management (use Cloudflare DNS API from Quartermaster) |
 | Planned | Privateer (api_mesh) | 18012 | WireGuard mesh orchestration |
 | Planned | Lookout (api_incidents) | 18013 | Incident management |
-| Planned | Parlor (api_rooms) | 18014 | Interactive room service |
+| Planned | Parlor (api_rooms) | 18014 | Channel rooms for interactive features |
 | Planned | Deckhand (api_ticketing) | 18015 | Support ticketing |
 
 ## Docs

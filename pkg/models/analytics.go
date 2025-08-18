@@ -2,8 +2,8 @@ package models
 
 import "time"
 
-// AnalyticsViewerMetric represents a single viewer metric row from ClickHouse
-type AnalyticsViewerMetric struct {
+// AnalyticsViewerSession represents a single viewer metric row from ClickHouse
+type AnalyticsViewerSession struct {
 	Timestamp         time.Time `json:"timestamp"`
 	InternalName      string    `json:"internal_name"`
 	ViewerCount       int       `json:"viewer_count"`
@@ -35,8 +35,8 @@ type AnalyticsRoutingEvent struct {
 	RoutingMetadata string    `json:"routing_metadata"`
 }
 
-// AnalyticsViewerMetrics5m represents a 5-minute aggregated viewer metric row
-type AnalyticsViewerMetrics5m struct {
+// AnalyticsViewerSession5m represents a 5-minute aggregated viewer metric row
+type AnalyticsViewerSession5m struct {
 	Timestamp            time.Time `json:"timestamp"`
 	InternalName         string    `json:"internal_name"`
 	NodeID               string    `json:"node_id"`

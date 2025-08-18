@@ -15,7 +15,52 @@ volumes:
   prometheus_data:
   grafana_data:
 
-services: 
+services:
+  # Bridge - GraphQL API Gateway
+  bridge:
+    container_name: frameworks-bridge
+    build:
+      context: .
+      dockerfile: api_gateway/Dockerfile
+    environment:
+      - BRIDGE_PORT=18000
+      - LOG_LEVEL=info
+      - GIN_MODE=debug
+      - GRAPHQL_PLAYGROUND_ENABLED=true
+      - GRAPHQL_COMPLEXITY_LIMIT=200
+      - COMMODORE_URL=http://commodore:18001
+      - QUARTERMASTER_URL=http://quartermaster:18002
+      - PERISCOPE_QUERY_URL=http://periscope-query:18004
+      - PURSER_URL=http://purser:18003
+      - SIGNALMAN_WS_URL=ws://signalman:18009
+      - JWT_SECRET=your-jwt-secret-change-in-production
+      - SERVICE_TOKEN=your-service-token-change-in-production
+    ports:
+      - "18000:18000"
+    depends_on:
+      commodore:
+        condition: service_started
+      periscope-query:
+        condition: service_started
+      purser:
+        condition: service_started
+    networks:
+      - frameworks
+    mem_limit: 512m
+    mem_reservation: 256m
+    cpus: 1.0
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:18000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
   # PostgreSQL
   postgres:
     image: postgres:15
@@ -580,6 +625,7 @@ services:
       dockerfile: Dockerfile
       args:
         - VITE_API_URL=http://localhost:18090/api/control
+        - VITE_GRAPHQL_URL=http://localhost:18090/api/gateway
         - VITE_ANALYTICS_API_URL=http://localhost:18090/api/analytics
         - VITE_BILLING_API_URL=http://localhost:18090/api/billing
         - VITE_REALTIME_WS_URL=ws://localhost:18090/ws
@@ -667,6 +713,8 @@ services:
     volumes:
       - ./infrastructure/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
+      bridge:
+        condition: service_started
       mistserver:
         condition: service_started
       foghorn:

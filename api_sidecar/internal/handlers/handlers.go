@@ -11,11 +11,11 @@ import (
 	"strings"
 	"time"
 
+	commodoreapi "frameworks/pkg/api/commodore"
 	"frameworks/pkg/clients/commodore"
 	"frameworks/pkg/clients/foghorn"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/middleware"
-	"frameworks/pkg/models"
 )
 
 var (
@@ -117,7 +117,7 @@ func getCurrentNodeID() string {
 	return "unknown"
 }
 
-func validateStreamKeyViaAPI(streamKey string) (*models.StreamValidationResponse, error) {
+func validateStreamKeyViaAPI(streamKey string) (*commodoreapi.ValidateStreamKeyResponse, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 

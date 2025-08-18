@@ -95,7 +95,7 @@ func Init(database *sql.DB, log logging.Logger, r Router) {
 func Register(c middleware.Context) {
 	var req models.RegisterRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, middleware.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: err.Error()})
 		return
 	}
 
@@ -109,9 +109,9 @@ func Register(c middleware.Context) {
 		}).Warn("Registration rate limit exceeded")
 
 		// Return fake success to avoid revealing rate limiting to attackers
-		c.JSON(http.StatusOK, middleware.H{
-			"success": true,
-			"message": "Registration successful. Please check your email to verify your account.",
+		c.JSON(http.StatusOK, commodoreapi.RegisterResponse{
+			Success: true,
+			Message: "Registration successful. Please check your email to verify your account.",
 		})
 		return
 	}
@@ -126,9 +126,9 @@ func Register(c middleware.Context) {
 		}).Warn("Bot protection validation failed")
 
 		// Return fake success to avoid revealing bot detection to attackers
-		c.JSON(http.StatusOK, middleware.H{
-			"success": true,
-			"message": "Registration successful. Please check your email to verify your account.",
+		c.JSON(http.StatusOK, commodoreapi.RegisterResponse{
+			Success: true,
+			Message: "Registration successful. Please check your email to verify your account.",
 		})
 		return
 	}
@@ -137,7 +137,7 @@ func Register(c middleware.Context) {
 	tenantID, err := createTenantForRegistration(req.Email)
 	if err != nil {
 		logger.WithError(err).WithField("email", req.Email).Error("Failed to create tenant for registration")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to create tenant"})
+		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Failed to create tenant"})
 		return
 	}
 
@@ -151,12 +151,12 @@ func Register(c middleware.Context) {
 	})
 	if err != nil {
 		logger.WithError(err).Error("Failed to check user limit with Purser")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to validate user limit"})
+		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Failed to validate user limit"})
 		return
 	}
 
 	if !limitCheck.Allowed {
-		c.JSON(http.StatusForbidden, middleware.H{"error": "Tenant user limit reached"})
+		c.JSON(http.StatusForbidden, commodoreapi.ErrorResponse{Error: "Tenant user limit reached"})
 		return
 	}
 
@@ -164,14 +164,14 @@ func Register(c middleware.Context) {
 	var existingID string
 	err = db.QueryRow("SELECT id FROM users WHERE tenant_id = $1 AND email = $2", tenantID, req.Email).Scan(&existingID)
 	if err != sql.ErrNoRows {
-		c.JSON(http.StatusConflict, middleware.H{"error": "User already exists in this tenant"})
+		c.JSON(http.StatusConflict, commodoreapi.ErrorResponse{Error: "User already exists in this tenant"})
 		return
 	}
 
 	// Hash password
 	hashedPassword, err := auth.HashPassword(req.Password)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to hash password"})
+		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Failed to hash password"})
 		return
 	}
 
@@ -201,7 +201,7 @@ func Register(c middleware.Context) {
 			"email":     req.Email,
 			"error":     err,
 		}).Error("Failed to create user")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to create user"})
+		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Failed to create user"})
 		return
 	}
 
@@ -224,9 +224,9 @@ func Register(c middleware.Context) {
 		"role":      role,
 	}).Info("User registered successfully, verification email sent")
 
-	c.JSON(http.StatusOK, middleware.H{
-		"success": true,
-		"message": "Registration successful. Please check your email to verify your account.",
+	c.JSON(http.StatusOK, commodoreapi.RegisterResponse{
+		Success: true,
+		Message: "Registration successful. Please check your email to verify your account.",
 	})
 }
 
@@ -234,7 +234,7 @@ func Register(c middleware.Context) {
 func Login(c middleware.Context) {
 	var req models.LoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, middleware.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: err.Error()})
 		return
 	}
 
@@ -249,20 +249,20 @@ func Login(c middleware.Context) {
 		logger.WithFields(logging.Fields{
 			"email": req.Email,
 		}).Warn("Login attempt with non-existent user")
-		c.JSON(http.StatusUnauthorized, middleware.H{"error": "Invalid credentials"})
+		c.JSON(http.StatusUnauthorized, commodoreapi.ErrorResponse{Error: "Invalid credentials"})
 		return
 	} else if err != nil {
 		logger.WithFields(logging.Fields{
 			"error": err,
 			"email": req.Email,
 		}).Error("Database error during login")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Database error"})
+		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Database error"})
 		return
 	}
 
 	// Check if user account is active
 	if !user.IsActive {
-		c.JSON(http.StatusUnauthorized, middleware.H{"error": "Account is deactivated"})
+		c.JSON(http.StatusUnauthorized, commodoreapi.ErrorResponse{Error: "Account is deactivated"})
 		return
 	}
 
@@ -273,9 +273,7 @@ func Login(c middleware.Context) {
 			"tenant_id": user.TenantID,
 			"email":     req.Email,
 		}).Warn("Login attempt with unverified email")
-		c.JSON(http.StatusUnauthorized, middleware.H{
-			"error": "Please verify your email address before logging in. Check your inbox for the verification email.",
-		})
+		c.JSON(http.StatusUnauthorized, commodoreapi.ErrorResponse{Error: "Please verify your email address before logging in. Check your inbox for the verification email."})
 		return
 	}
 
@@ -286,7 +284,7 @@ func Login(c middleware.Context) {
 			"tenant_id": user.TenantID,
 			"email":     req.Email,
 		}).Warn("Login attempt with incorrect password")
-		c.JSON(http.StatusUnauthorized, middleware.H{"error": "Invalid credentials"})
+		c.JSON(http.StatusUnauthorized, commodoreapi.ErrorResponse{Error: "Invalid credentials"})
 		return
 	}
 
@@ -307,7 +305,7 @@ func Login(c middleware.Context) {
 			"error":   err,
 			"user_id": user.ID,
 		}).Error("Failed to generate JWT token")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to generate token"})
+		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Failed to generate token"})
 		return
 	}
 
@@ -319,14 +317,15 @@ func Login(c middleware.Context) {
 	}).Info("User logged in successfully")
 
 	// Return token and user info
-	c.JSON(http.StatusOK, middleware.H{
-		"token": token,
-		"user": map[string]interface{}{
-			"id":          user.ID,
-			"email":       user.Email,
-			"role":        user.Role,
-			"permissions": user.Permissions,
+	c.JSON(http.StatusOK, commodoreapi.AuthResponse{
+		Token: token,
+		User: models.User{
+			ID:          user.ID,
+			Email:       user.Email,
+			Role:        user.Role,
+			Permissions: user.Permissions,
 		},
+		ExpiresAt: time.Now().Add(24 * time.Hour),
 	})
 }
 
@@ -341,7 +340,7 @@ func GetMe(c middleware.Context) {
 	`, userID).Scan(&user.ID, &user.TenantID, &user.Email, &user.Role, &user.CreatedAt, &user.IsActive)
 
 	if err != nil {
-		c.JSON(http.StatusNotFound, middleware.H{"error": "User not found"})
+		c.JSON(http.StatusNotFound, commodoreapi.ErrorResponse{Error: "User not found"})
 		return
 	}
 
@@ -357,15 +356,15 @@ func GetMe(c middleware.Context) {
 			"user_id": userID,
 			"error":   err,
 		}).Error("Failed to fetch user streams")
-		c.JSON(http.StatusOK, middleware.H{
-			"user":    user,
-			"streams": []interface{}{},
+		c.JSON(http.StatusOK, commodoreapi.UserWithStreamsResponse{
+			User:    user,
+			Streams: []commodoreapi.UserStreamInfo{},
 		})
 		return
 	}
 	defer rows.Close()
 
-	var streams []middleware.H
+	var streams []commodoreapi.UserStreamInfo
 	for rows.Next() {
 		var streamID, streamKey, playbackID, title, status string
 		err := rows.Scan(&streamID, &streamKey, &playbackID, &title, &status)
@@ -376,18 +375,18 @@ func GetMe(c middleware.Context) {
 			}).Error("Error scanning stream in user profile")
 			continue
 		}
-		streams = append(streams, middleware.H{
-			"id":          streamID,
-			"stream_key":  streamKey,
-			"playback_id": playbackID,
-			"title":       title,
-			"status":      status,
+		streams = append(streams, commodoreapi.UserStreamInfo{
+			ID:         streamID,
+			StreamKey:  streamKey,
+			PlaybackID: playbackID,
+			Title:      title,
+			Status:     status,
 		})
 	}
 
-	c.JSON(http.StatusOK, middleware.H{
-		"user":    user,
-		"streams": streams,
+	c.JSON(http.StatusOK, commodoreapi.UserWithStreamsResponse{
+		User:    user,
+		Streams: streams,
 	})
 }
 
@@ -410,7 +409,7 @@ func GetStreams(c middleware.Context) {
 			"user_id":   userID,
 			"error":     err,
 		}).Error("Database error fetching user streams")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Database error"})
+		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Database error"})
 		return
 	}
 	defer rows.Close()
@@ -465,7 +464,7 @@ func GetStream(c middleware.Context) {
 		&startTime, &endTime, &stream.CreatedAt)
 
 	if err == sql.ErrNoRows {
-		c.JSON(http.StatusNotFound, middleware.H{"error": "Stream not found"})
+		c.JSON(http.StatusNotFound, commodoreapi.ErrorResponse{Error: "Stream not found"})
 		return
 	}
 
@@ -476,7 +475,7 @@ func GetStream(c middleware.Context) {
 			"stream_id": streamID,
 			"error":     err,
 		}).Error("Database error fetching stream")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to fetch stream"})
+		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Failed to fetch stream"})
 		return
 	}
 
@@ -503,12 +502,12 @@ func GetStreamMetrics(c middleware.Context) {
 	`, streamID, userID).Scan(&streamExists)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Database error"})
+		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Database error"})
 		return
 	}
 
 	if !streamExists {
-		c.JSON(http.StatusNotFound, middleware.H{"error": "Stream not found"})
+		c.JSON(http.StatusNotFound, commodoreapi.ErrorResponse{Error: "Stream not found"})
 		return
 	}
 
@@ -537,12 +536,30 @@ func GetStreamMetrics(c middleware.Context) {
 			"stream_id": streamID,
 			"error":     err,
 		}).Error("Failed to fetch stream metrics")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to fetch metrics"})
+		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Failed to fetch metrics"})
 		return
 	}
 
-	c.JSON(http.StatusOK, middleware.H{
-		"metrics": metrics,
+	c.JSON(http.StatusOK, commodoreapi.StreamMetricsResponse{
+		Metrics: struct {
+			Viewers      int       `json:"viewers"`
+			Status       string    `json:"status"`
+			BandwidthIn  *int64    `json:"bandwidth_in"`
+			BandwidthOut *int64    `json:"bandwidth_out"`
+			Resolution   *string   `json:"resolution"`
+			Bitrate      *string   `json:"bitrate"`
+			MaxViewers   *int      `json:"max_viewers"`
+			UpdatedAt    time.Time `json:"updated_at"`
+		}{
+			Viewers:      metrics.Viewers,
+			Status:       metrics.Status,
+			BandwidthIn:  metrics.BandwidthIn,
+			BandwidthOut: metrics.BandwidthOut,
+			Resolution:   metrics.Resolution,
+			Bitrate:      metrics.Bitrate,
+			MaxViewers:   metrics.MaxViewers,
+			UpdatedAt:    metrics.UpdatedAt,
+		},
 	})
 }
 
@@ -557,18 +574,18 @@ func GetStreamEmbed(c middleware.Context) {
 	`, streamID, userID).Scan(&playbackID)
 
 	if err == sql.ErrNoRows {
-		c.JSON(http.StatusNotFound, middleware.H{"error": "Stream not found"})
+		c.JSON(http.StatusNotFound, commodoreapi.ErrorResponse{Error: "Stream not found"})
 		return
 	}
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to fetch stream"})
+		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Failed to fetch stream"})
 		return
 	}
 
 	// Return only the playback identifier - URL construction is Media Plane responsibility
-	c.JSON(http.StatusOK, middleware.H{
-		"playback_id": playbackID,
+	c.JSON(http.StatusOK, commodoreapi.StreamEmbedResponse{
+		PlaybackID: playbackID,
 	})
 }
 
@@ -629,16 +646,16 @@ func ValidateStreamKey(c middleware.Context) {
 
 // CreateClip creates a clip from a stream (STUB - not implemented)
 func CreateClip(c middleware.Context) {
-	var req models.ClipRequest
+	var req commodoreapi.CreateClipRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, middleware.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusNotImplemented, middleware.H{
-		"error":   "Clip creation is not currently implemented",
-		"message": "This feature requires Foghorn service discovery in Commodore, which is not yet deployed",
-		"status":  "not_implemented",
+	c.JSON(http.StatusNotImplemented, commodoreapi.NotImplementedResponse{
+		Error:   "Clip creation is not currently implemented",
+		Message: "This feature requires Foghorn service discovery in Commodore, which is not yet deployed",
+		Status:  "not_implemented",
 	})
 }
 
@@ -646,7 +663,7 @@ func CreateClip(c middleware.Context) {
 func GetStreamNode(c middleware.Context) {
 	streamKey := c.Param("stream_key")
 	if streamKey == "" {
-		c.JSON(http.StatusBadRequest, middleware.H{"error": "stream_key is required"})
+		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: "stream_key is required"})
 		return
 	}
 
@@ -659,28 +676,28 @@ func GetStreamNode(c middleware.Context) {
 	`, streamKey).Scan(&tenantID, &streamID)
 
 	if err == sql.ErrNoRows {
-		c.JSON(http.StatusNotFound, middleware.H{"error": "Stream key not found"})
+		c.JSON(http.StatusNotFound, commodoreapi.ErrorResponse{Error: "Stream key not found"})
 		return
 	} else if err != nil {
 		logger.WithError(err).Error("Failed to query stream key")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to query stream key"})
+		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Failed to query stream key"})
 		return
 	}
 
 	// Get best cluster for stream
-	cluster, err := router.GetBestClusterForStream(models.StreamRequest{
+	cluster, err := router.GetBestClusterForStream(commodoreapi.StreamRequest{
 		TenantID: tenantID,
 		StreamID: streamID,
 	})
 	if err != nil {
 		logger.WithError(err).Error("Failed to get cluster for stream")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to get cluster for stream"})
+		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Failed to get cluster for stream"})
 		return
 	}
 
-	c.JSON(http.StatusOK, middleware.H{
-		"base_url":   cluster.BaseURL,
-		"cluster_id": cluster.ClusterID,
+	c.JSON(http.StatusOK, commodoreapi.NodeLookupResponse{
+		BaseURL:   cluster.BaseURL,
+		ClusterID: cluster.ClusterID,
 	})
 }
 
@@ -688,9 +705,9 @@ func GetStreamNode(c middleware.Context) {
 func CreateStream(c middleware.Context) {
 	userID := c.GetString("user_id")
 
-	var req models.CreateStreamRequest
+	var req commodoreapi.CreateStreamRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, middleware.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: err.Error()})
 		return
 	}
 
@@ -706,7 +723,7 @@ func CreateStream(c middleware.Context) {
 			"title":   req.Title,
 			"error":   err,
 		}).Error("Failed to create stream")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to create stream"})
+		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Failed to create stream"})
 		return
 	}
 
@@ -725,14 +742,14 @@ func CreateStream(c middleware.Context) {
 		}
 	}
 
-	c.JSON(http.StatusCreated, middleware.H{
-		"id":            streamID,
-		"stream_key":    streamKey,
-		"playback_id":   playbackID,
-		"internal_name": internalName,
-		"title":         req.Title,
-		"description":   req.Description,
-		"status":        "offline", // Default status for new streams
+	c.JSON(http.StatusCreated, commodoreapi.CreateStreamResponse{
+		ID:           streamID,
+		StreamKey:    streamKey,
+		PlaybackID:   playbackID,
+		InternalName: internalName,
+		Title:        req.Title,
+		Description:  req.Description,
+		Status:       "offline", // Default status for new streams
 	})
 }
 
@@ -750,7 +767,7 @@ func DeleteStream(c middleware.Context) {
 	`, streamID, userID).Scan(&streamKey, &internalName, &title)
 
 	if err == sql.ErrNoRows {
-		c.JSON(http.StatusNotFound, middleware.H{"error": "Stream not found or not owned by user"})
+		c.JSON(http.StatusNotFound, commodoreapi.ErrorResponse{Error: "Stream not found or not owned by user"})
 		return
 	}
 
@@ -760,7 +777,7 @@ func DeleteStream(c middleware.Context) {
 			"stream_id": streamID,
 			"error":     err,
 		}).Error("Database error fetching stream for deletion")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Database error"})
+		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Database error"})
 		return
 	}
 
@@ -772,7 +789,7 @@ func DeleteStream(c middleware.Context) {
 			"stream_id": streamID,
 			"error":     err,
 		}).Error("Failed to begin transaction for stream deletion")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Database error"})
+		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Database error"})
 		return
 	}
 	defer tx.Rollback()
@@ -785,7 +802,7 @@ func DeleteStream(c middleware.Context) {
 			"stream_id": streamID,
 			"error":     err,
 		}).Error("Failed to delete stream keys")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to cleanup stream keys"})
+		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Failed to cleanup stream keys"})
 		return
 	}
 
@@ -797,7 +814,7 @@ func DeleteStream(c middleware.Context) {
 			"stream_id": streamID,
 			"error":     err,
 		}).Error("Failed to delete clips")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to cleanup clips"})
+		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Failed to cleanup clips"})
 		return
 	}
 
@@ -809,7 +826,7 @@ func DeleteStream(c middleware.Context) {
 			"stream_id": streamID,
 			"error":     err,
 		}).Error("Failed to delete stream")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to delete stream"})
+		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Failed to delete stream"})
 		return
 	}
 
@@ -820,7 +837,7 @@ func DeleteStream(c middleware.Context) {
 			"stream_id": streamID,
 			"error":     err,
 		}).Error("Failed to commit stream deletion")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to complete stream deletion"})
+		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Failed to complete stream deletion"})
 		return
 	}
 
@@ -830,11 +847,11 @@ func DeleteStream(c middleware.Context) {
 		"title":     title,
 	}).Info("Stream deleted successfully")
 
-	c.JSON(http.StatusOK, middleware.H{
-		"message":      "Stream deleted successfully",
-		"stream_id":    streamID,
-		"stream_title": title,
-		"deleted_at":   time.Now(),
+	c.JSON(http.StatusOK, commodoreapi.StreamDeleteResponse{
+		Message:     "Stream deleted successfully",
+		StreamID:    streamID,
+		StreamTitle: title,
+		DeletedAt:   time.Now(),
 	})
 }
 
@@ -848,7 +865,7 @@ func GetUsers(c middleware.Context) {
 	`)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to fetch users"})
+		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Failed to fetch users"})
 		return
 	}
 	defer rows.Close()
@@ -879,7 +896,7 @@ func GetAllStreams(c middleware.Context) {
 	`)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to fetch streams"})
+		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Failed to fetch streams"})
 		return
 	}
 	defer rows.Close()
@@ -923,11 +940,11 @@ func TerminateStream(c middleware.Context) {
 	`, streamID)
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to terminate stream"})
+		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Failed to terminate stream"})
 		return
 	}
 
-	c.JSON(http.StatusOK, middleware.H{"message": "Stream terminated successfully"})
+	c.JSON(http.StatusOK, commodoreapi.SuccessResponse{Success: true, Message: "Stream terminated successfully"})
 }
 
 // RefreshStreamKey generates a new stream key for an existing stream
@@ -944,7 +961,7 @@ func RefreshStreamKey(c middleware.Context) {
 	`, streamID, userID).Scan(&currentStreamKey, &playbackID, &internalName)
 
 	if err == sql.ErrNoRows {
-		c.JSON(http.StatusNotFound, middleware.H{"error": "Stream not found or not owned by user"})
+		c.JSON(http.StatusNotFound, commodoreapi.ErrorResponse{Error: "Stream not found or not owned by user"})
 		return
 	}
 
@@ -954,7 +971,7 @@ func RefreshStreamKey(c middleware.Context) {
 			"stream_id": streamID,
 			"error":     err,
 		}).Error("Database error fetching stream for key refresh")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Database error"})
+		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Database error"})
 		return
 	}
 
@@ -967,7 +984,7 @@ func RefreshStreamKey(c middleware.Context) {
 			"stream_id": streamID,
 			"error":     err,
 		}).Error("Failed to generate new stream key")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to generate new stream key"})
+		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Failed to generate new stream key"})
 		return
 	}
 
@@ -984,7 +1001,7 @@ func RefreshStreamKey(c middleware.Context) {
 			"stream_id": streamID,
 			"error":     err,
 		}).Error("Failed to update stream key")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to update stream key"})
+		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Failed to update stream key"})
 		return
 	}
 
@@ -1015,12 +1032,12 @@ func RefreshStreamKey(c middleware.Context) {
 		}).Error("Failed to add new stream key")
 	}
 
-	c.JSON(http.StatusOK, middleware.H{
-		"message":             "Stream key refreshed successfully",
-		"stream_id":           streamID,
-		"stream_key":          newStreamKey,
-		"playback_id":         playbackID,
-		"old_key_invalidated": true,
+	c.JSON(http.StatusOK, commodoreapi.RefreshKeyResponse{
+		Message:           "Stream key refreshed successfully",
+		StreamID:          streamID,
+		StreamKey:         newStreamKey,
+		PlaybackID:        playbackID,
+		OldKeyInvalidated: true,
 	})
 }
 
@@ -1044,7 +1061,7 @@ func HandleStreamStart(c middleware.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&eventData); err != nil {
-		c.JSON(http.StatusBadRequest, middleware.H{"error": "Invalid payload"})
+		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: "Invalid payload"})
 		return
 	}
 
@@ -1063,7 +1080,7 @@ func HandleStreamStart(c middleware.Context) {
 				"node_id":       eventData.NodeID,
 				"error":         err,
 			}).Error("Failed to update stream status by ID")
-			c.JSON(http.StatusInternalServerError, middleware.H{"error": "Database error"})
+			c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Database error"})
 			return
 		}
 	} else if eventData.InternalName != "" {
@@ -1079,7 +1096,7 @@ func HandleStreamStart(c middleware.Context) {
 				"node_id":       eventData.NodeID,
 				"error":         err,
 			}).Error("Failed to update stream status by internal name")
-			c.JSON(http.StatusInternalServerError, middleware.H{"error": "Database error"})
+			c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Database error"})
 			return
 		}
 	}
@@ -1098,7 +1115,7 @@ func HandleStreamStart(c middleware.Context) {
 		}
 	}
 
-	c.JSON(http.StatusOK, middleware.H{"status": "success"})
+	c.JSON(http.StatusOK, commodoreapi.SuccessResponse{Success: true})
 }
 
 // HandleStreamStatus handles stream status updates from Helmsman
@@ -1113,7 +1130,7 @@ func HandleStreamStatus(c middleware.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&eventData); err != nil {
-		c.JSON(http.StatusBadRequest, middleware.H{"error": "Invalid payload"})
+		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: "Invalid payload"})
 		return
 	}
 
@@ -1125,7 +1142,7 @@ func HandleStreamStatus(c middleware.Context) {
 		"event_type":    eventData.EventType,
 	}).Info("Stream lifecycle event (status now tracked in Data Plane)")
 
-	c.JSON(http.StatusOK, middleware.H{"status": "success", "message": "Event logged"})
+	c.JSON(http.StatusOK, commodoreapi.SuccessResponse{Success: true, Message: "Event logged"})
 }
 
 // HandleRecordingStatus handles recording status updates from Helmsman
@@ -1138,7 +1155,7 @@ func HandleRecordingStatus(c middleware.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&eventData); err != nil {
-		c.JSON(http.StatusBadRequest, middleware.H{"error": "Invalid payload"})
+		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: "Invalid payload"})
 		return
 	}
 
@@ -1155,7 +1172,7 @@ func HandleRecordingStatus(c middleware.Context) {
 			"is_recording":  eventData.IsRecording,
 			"error":         err,
 		}).Error("Failed to update recording status")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Database error"})
+		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Database error"})
 		return
 	}
 
@@ -1167,7 +1184,7 @@ func HandleRecordingStatus(c middleware.Context) {
 		"timestamp":     eventData.Timestamp,
 	}).Info("Stream event processed")
 
-	c.JSON(http.StatusOK, middleware.H{"status": "success"})
+	c.JSON(http.StatusOK, commodoreapi.SuccessResponse{Success: true})
 }
 
 // ResolvePlaybackID resolves a playback ID to internal name for MistServer DEFAULT_STREAM trigger
@@ -1211,7 +1228,7 @@ func ResolvePlaybackID(c middleware.Context) {
 func HandlePushStatus(c middleware.Context) {
 	var eventData map[string]interface{}
 	if err := c.ShouldBindJSON(&eventData); err != nil {
-		c.JSON(http.StatusBadRequest, middleware.H{"error": "Invalid payload"})
+		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: "Invalid payload"})
 		return
 	}
 
@@ -1234,7 +1251,7 @@ func HandlePushStatus(c middleware.Context) {
 		}).Info("Push status event processed")
 	}
 
-	c.JSON(http.StatusOK, middleware.H{"status": "success"})
+	c.JSON(http.StatusOK, commodoreapi.SuccessResponse{Success: true})
 }
 
 func min(a, b int) int {
@@ -1253,7 +1270,7 @@ func CreateAPIToken(c middleware.Context) {
 
 	var req models.CreateAPITokenRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, middleware.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: err.Error()})
 		return
 	}
 
@@ -1265,7 +1282,7 @@ func CreateAPIToken(c middleware.Context) {
 			"user_id": userID,
 			"error":   err,
 		}).Error("Failed to generate API token")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to generate token"})
+		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Failed to generate token"})
 		return
 	}
 
@@ -1298,18 +1315,18 @@ func CreateAPIToken(c middleware.Context) {
 			"token_name": req.TokenName,
 			"error":      err,
 		}).Error("Failed to create API token")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to create token"})
+		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Failed to create token"})
 		return
 	}
 
-	c.JSON(http.StatusCreated, middleware.H{
-		"id":          tokenID,
-		"token_value": tokenValue,
-		"token_name":  req.TokenName,
-		"permissions": permissions,
-		"expires_at":  expiresAt,
-		"created_at":  time.Now(),
-		"message":     "API token created successfully. Store this token securely - it won't be shown again.",
+	c.JSON(http.StatusCreated, commodoreapi.CreateAPITokenResponse{
+		ID:          tokenID,
+		TokenValue:  tokenValue,
+		TokenName:   req.TokenName,
+		Permissions: permissions,
+		ExpiresAt:   expiresAt,
+		CreatedAt:   time.Now(),
+		Message:     "API token created successfully. Store this token securely - it won't be shown again.",
 	})
 }
 
@@ -1329,12 +1346,12 @@ func GetAPITokens(c middleware.Context) {
 			"user_id": userID,
 			"error":   err,
 		}).Error("Failed to fetch API tokens")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to fetch tokens"})
+		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Failed to fetch tokens"})
 		return
 	}
 	defer rows.Close()
 
-	var tokens []middleware.H
+	var tokens []commodoreapi.APITokenInfo
 	for rows.Next() {
 		var id, tokenName string
 		var permissions []string
@@ -1359,20 +1376,20 @@ func GetAPITokens(c middleware.Context) {
 			status = "expired"
 		}
 
-		tokens = append(tokens, middleware.H{
-			"id":           id,
-			"token_name":   tokenName,
-			"permissions":  permissions,
-			"status":       status,
-			"last_used_at": lastUsedAt,
-			"expires_at":   expiresAt,
-			"created_at":   createdAt,
+		tokens = append(tokens, commodoreapi.APITokenInfo{
+			ID:          id,
+			TokenName:   tokenName,
+			Permissions: permissions,
+			Status:      status,
+			LastUsedAt:  lastUsedAt,
+			ExpiresAt:   expiresAt,
+			CreatedAt:   createdAt,
 		})
 	}
 
-	c.JSON(http.StatusOK, middleware.H{
-		"tokens": tokens,
-		"count":  len(tokens),
+	c.JSON(http.StatusOK, commodoreapi.APITokenListResponse{
+		Tokens: tokens,
+		Count:  len(tokens),
 	})
 }
 
@@ -1389,7 +1406,7 @@ func RevokeAPIToken(c middleware.Context) {
 	`, tokenID, userID).Scan(&tokenName)
 
 	if err == sql.ErrNoRows {
-		c.JSON(http.StatusNotFound, middleware.H{"error": "API token not found or already revoked"})
+		c.JSON(http.StatusNotFound, commodoreapi.ErrorResponse{Error: "API token not found or already revoked"})
 		return
 	}
 
@@ -1399,7 +1416,7 @@ func RevokeAPIToken(c middleware.Context) {
 			"token_id": tokenID,
 			"error":    err,
 		}).Error("Database error fetching API token")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Database error"})
+		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Database error"})
 		return
 	}
 
@@ -1417,7 +1434,7 @@ func RevokeAPIToken(c middleware.Context) {
 			"token_name": tokenName,
 			"error":      err,
 		}).Error("Failed to revoke API token")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to revoke token"})
+		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Failed to revoke token"})
 		return
 	}
 
@@ -1427,11 +1444,11 @@ func RevokeAPIToken(c middleware.Context) {
 		"token_name": tokenName,
 	}).Info("API token revoked successfully")
 
-	c.JSON(http.StatusOK, middleware.H{
-		"message":    "API token revoked successfully",
-		"token_id":   tokenID,
-		"token_name": tokenName,
-		"revoked_at": time.Now(),
+	c.JSON(http.StatusOK, commodoreapi.RevokeAPITokenResponse{
+		Message:   "API token revoked successfully",
+		TokenID:   tokenID,
+		TokenName: tokenName,
+		RevokedAt: time.Now(),
 	})
 }
 
@@ -1439,7 +1456,7 @@ func RevokeAPIToken(c middleware.Context) {
 func VerifyEmail(c middleware.Context) {
 	token := c.Query("token")
 	if token == "" {
-		c.JSON(http.StatusBadRequest, middleware.H{"error": "Verification token required"})
+		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: "Verification token required"})
 		return
 	}
 
@@ -1453,20 +1470,20 @@ func VerifyEmail(c middleware.Context) {
 	`, token).Scan(&userID, &tenantID, &email, &tokenExpiry)
 
 	if err == sql.ErrNoRows {
-		c.JSON(http.StatusNotFound, middleware.H{"error": "Invalid or expired verification token"})
+		c.JSON(http.StatusNotFound, commodoreapi.ErrorResponse{Error: "Invalid or expired verification token"})
 		return
 	} else if err != nil {
 		logger.WithFields(logging.Fields{
 			"error": err,
 			"token": token,
 		}).Error("Database error during verification")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Database error"})
+		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Database error"})
 		return
 	}
 
 	// Check if token has expired
 	if time.Now().After(tokenExpiry) {
-		c.JSON(http.StatusBadRequest, middleware.H{"error": "Verification token has expired"})
+		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: "Verification token has expired"})
 		return
 	}
 
@@ -1483,7 +1500,7 @@ func VerifyEmail(c middleware.Context) {
 			"user_id":   userID,
 			"tenant_id": tenantID,
 		}).Error("Failed to verify user")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to verify user"})
+		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Failed to verify user"})
 		return
 	}
 
@@ -1493,9 +1510,9 @@ func VerifyEmail(c middleware.Context) {
 		"email":     email,
 	}).Info("User email verified successfully")
 
-	c.JSON(http.StatusOK, middleware.H{
-		"success": true,
-		"message": "Email verified successfully! You can now log in to your account.",
+	c.JSON(http.StatusOK, commodoreapi.EmailVerificationResponse{
+		Success: true,
+		Message: "Email verified successfully! You can now log in to your account.",
 	})
 }
 
@@ -1791,7 +1808,7 @@ func sendVerificationEmail(email, token, tenantName string) error {
 func GetTenantKafkaConfig(c middleware.Context) {
 	tenantID := c.Param("tenant_id")
 	if tenantID == "" {
-		c.JSON(http.StatusBadRequest, middleware.H{"error": "tenant_id is required"})
+		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: "tenant_id is required"})
 		return
 	}
 
@@ -1799,13 +1816,13 @@ func GetTenantKafkaConfig(c middleware.Context) {
 	brokers, topicPrefix, err := router.GetKafkaConfigForTenant(tenantID)
 	if err != nil {
 		logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to get Kafka config")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to get Kafka config"})
+		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Failed to get Kafka config"})
 		return
 	}
 
-	c.JSON(http.StatusOK, middleware.H{
-		"brokers":      brokers,
-		"topic_prefix": topicPrefix,
+	c.JSON(http.StatusOK, commodoreapi.KafkaConfigResponse{
+		Brokers:     brokers,
+		TopicPrefix: topicPrefix,
 	})
 }
 
@@ -1980,25 +1997,25 @@ func getIntFromMap(m map[string]interface{}, key string, defaultVal int) int {
 func ResolveInternalName(c middleware.Context) {
 	internalName := c.Param("internal_name")
 	if internalName == "" {
-		c.JSON(http.StatusBadRequest, middleware.H{"error": "internal_name required"})
+		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: "internal_name required"})
 		return
 	}
 
 	var tenantID string
 	err := db.QueryRow(`SELECT tenant_id FROM streams WHERE internal_name = $1`, internalName).Scan(&tenantID)
 	if err == sql.ErrNoRows {
-		c.JSON(http.StatusNotFound, middleware.H{"error": "Not found"})
+		c.JSON(http.StatusNotFound, commodoreapi.ErrorResponse{Error: "Not found"})
 		return
 	}
 	if err != nil {
 		logger.WithError(err).Error("Failed to resolve internal_name")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Database error"})
+		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Database error"})
 		return
 	}
 
-	c.JSON(http.StatusOK, middleware.H{
-		"internal_name": internalName,
-		"tenant_id":     tenantID,
+	c.JSON(http.StatusOK, commodoreapi.InternalNameResponse{
+		InternalName: internalName,
+		TenantID:     tenantID,
 	})
 }
 
@@ -2025,10 +2042,10 @@ func createTenantForRegistration(email string) (string, error) {
 	}
 
 	logger.WithFields(logging.Fields{
-		"tenant_id":   createResp.ID,
+		"tenant_id":   createResp.Tenant.ID,
 		"tenant_name": tenantName,
 		"email":       email,
 	}).Info("Created new tenant for user registration")
 
-	return createResp.ID, nil
+	return createResp.Tenant.ID, nil
 }
