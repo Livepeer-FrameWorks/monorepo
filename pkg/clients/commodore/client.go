@@ -74,7 +74,12 @@ func (c *Client) ValidateStreamKey(ctx context.Context, streamKey string) (*comm
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	if c.serviceToken != "" {
+	// Use user's JWT from context if available, otherwise fall back to service token
+	if jwtToken := ctx.Value("jwt_token"); jwtToken != nil {
+		if tokenStr, ok := jwtToken.(string); ok && tokenStr != "" {
+			req.Header.Set("Authorization", "Bearer "+tokenStr)
+		}
+	} else if c.serviceToken != "" {
 		req.Header.Set("Authorization", "Bearer "+c.serviceToken)
 	}
 
@@ -120,7 +125,12 @@ func (c *Client) ResolvePlaybackID(ctx context.Context, playbackID string) (*com
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	if c.serviceToken != "" {
+	// Use user's JWT from context if available, otherwise fall back to service token
+	if jwtToken := ctx.Value("jwt_token"); jwtToken != nil {
+		if tokenStr, ok := jwtToken.(string); ok && tokenStr != "" {
+			req.Header.Set("Authorization", "Bearer "+tokenStr)
+		}
+	} else if c.serviceToken != "" {
 		req.Header.Set("Authorization", "Bearer "+c.serviceToken)
 	}
 
@@ -166,7 +176,12 @@ func (c *Client) ForwardStreamEvent(ctx context.Context, endpoint string, eventD
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	if c.serviceToken != "" {
+	// Use user's JWT from context if available, otherwise fall back to service token
+	if jwtToken := ctx.Value("jwt_token"); jwtToken != nil {
+		if tokenStr, ok := jwtToken.(string); ok && tokenStr != "" {
+			req.Header.Set("Authorization", "Bearer "+tokenStr)
+		}
+	} else if c.serviceToken != "" {
 		req.Header.Set("Authorization", "Bearer "+c.serviceToken)
 	}
 

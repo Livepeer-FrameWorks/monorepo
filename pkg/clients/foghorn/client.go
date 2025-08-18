@@ -105,8 +105,13 @@ func (c *Client) UpdateNode(ctx context.Context, req *NodeUpdateRequest) error {
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
-	if c.serviceToken != "" {
-		httpReq.Header.Set("X-Service-Token", c.serviceToken)
+	// Use user's JWT from context if available, otherwise fall back to service token
+	if jwtToken := ctx.Value("jwt_token"); jwtToken != nil {
+		if tokenStr, ok := jwtToken.(string); ok && tokenStr != "" {
+			httpReq.Header.Set("Authorization", "Bearer "+tokenStr)
+		}
+	} else if c.serviceToken != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.serviceToken)
 	}
 
 	resp, err := clients.DoWithRetry(ctx, c.httpClient, httpReq, c.retryConfig)
@@ -136,8 +141,13 @@ func (c *Client) NotifyShutdown(ctx context.Context, req *NodeShutdownRequest) e
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
-	if c.serviceToken != "" {
-		httpReq.Header.Set("X-Service-Token", c.serviceToken)
+	// Use user's JWT from context if available, otherwise fall back to service token
+	if jwtToken := ctx.Value("jwt_token"); jwtToken != nil {
+		if tokenStr, ok := jwtToken.(string); ok && tokenStr != "" {
+			httpReq.Header.Set("Authorization", "Bearer "+tokenStr)
+		}
+	} else if c.serviceToken != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.serviceToken)
 	}
 
 	resp, err := clients.DoWithRetry(ctx, c.httpClient, httpReq, c.retryConfig)
@@ -170,8 +180,13 @@ func (c *Client) UpdateStreamHealth(ctx context.Context, req *StreamHealthReques
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
-	if c.serviceToken != "" {
-		httpReq.Header.Set("X-Service-Token", c.serviceToken)
+	// Use user's JWT from context if available, otherwise fall back to service token
+	if jwtToken := ctx.Value("jwt_token"); jwtToken != nil {
+		if tokenStr, ok := jwtToken.(string); ok && tokenStr != "" {
+			httpReq.Header.Set("Authorization", "Bearer "+tokenStr)
+		}
+	} else if c.serviceToken != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.serviceToken)
 	}
 
 	resp, err := clients.DoWithRetry(ctx, c.httpClient, httpReq, c.retryConfig)

@@ -184,8 +184,13 @@ func (c *Client) GetTenant(ctx context.Context, tenantID string) (*quartermaster
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	if c.serviceToken != "" {
-		httpReq.Header.Set("X-Service-Token", c.serviceToken)
+	// Use user's JWT from context if available, otherwise fall back to service token
+	if jwtToken := ctx.Value("jwt_token"); jwtToken != nil {
+		if tokenStr, ok := jwtToken.(string); ok && tokenStr != "" {
+			httpReq.Header.Set("Authorization", "Bearer "+tokenStr)
+		}
+	} else if c.serviceToken != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.serviceToken)
 	}
 
 	resp, err := clients.DoWithRetry(ctx, c.httpClient, httpReq, c.retryConfig)
@@ -229,8 +234,13 @@ func (c *Client) CreateTenant(ctx context.Context, req *quartermaster.CreateTena
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
-	if c.serviceToken != "" {
-		httpReq.Header.Set("X-Service-Token", c.serviceToken)
+	// Use user's JWT from context if available, otherwise fall back to service token
+	if jwtToken := ctx.Value("jwt_token"); jwtToken != nil {
+		if tokenStr, ok := jwtToken.(string); ok && tokenStr != "" {
+			httpReq.Header.Set("Authorization", "Bearer "+tokenStr)
+		}
+	} else if c.serviceToken != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.serviceToken)
 	}
 
 	resp, err := clients.DoWithRetry(ctx, c.httpClient, httpReq, c.retryConfig)
