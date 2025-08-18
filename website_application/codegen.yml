@@ -1,0 +1,32 @@
+overwrite: true
+schema: "../pkg/graphql/schema.graphql"
+documents: "src/lib/graphql/**/*.graphql"
+generates:
+  src/lib/graphql/generated/types.ts:
+    plugins:
+      - "typescript"
+      - "typescript-operations"
+    config:
+      maybeValue: T | null | undefined
+      scalars:
+        Time: string
+        JSON: any
+        ID: string
+  src/lib/graphql/generated/apollo-helpers.ts:
+    plugins:
+      - "typescript"
+      - "typescript-operations"
+      - "typescript-apollo-client-helpers"
+      - "typescript-react-apollo"
+    config:
+      withComponent: false
+      withHOC: false
+      withHooks: false
+      apolloImportFrom: "@apollo/client"
+      importDocumentNodeExternallyFrom: "near-operation-file"
+      useTypeImports: true
+      maybeValue: T | null | undefined
+      scalars:
+        Time: string
+        JSON: any
+        ID: string

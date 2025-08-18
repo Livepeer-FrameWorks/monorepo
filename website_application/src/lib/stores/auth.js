@@ -1,5 +1,5 @@
 import { writable } from 'svelte/store';
-import { api } from '$lib/api';
+import { authAPI } from '$lib/authAPI.js';
 import { initializeWebSocket, disconnectWebSocket } from './realtime.js';
 
 function createAuthStore() {
@@ -22,21 +22,18 @@ function createAuthStore() {
       update(state => ({ ...state, loading: true, error: null }));
 
       try {
-        const response = await api.post('/login', { email, password });
+        const response = await authAPI.post('/login', { email, password });
         const { token, user } = response.data;
 
         localStorage.setItem('token', token);
-        api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
-
-        // After login, fetch full user data including streams
-        const meResponse = await api.get('/me');
+        authAPI.defaults.headers.common['Authorization'] = `Bearer ${token}`;
 
         // Store user data in localStorage for API client to access tenant_id
-        localStorage.setItem('user', JSON.stringify(meResponse.data.user));
+        localStorage.setItem('user', JSON.stringify(user));
 
         set({
           isAuthenticated: true,
-          user: meResponse.data, // This contains { user: {...}, streams: [...] }
+          user: { user, streams: [] }, // Match expected structure with empty streams for now
           loading: false,
           error: null,
           initialized: true
@@ -61,11 +58,11 @@ function createAuthStore() {
       update(state => ({ ...state, loading: true, error: null }));
 
       try {
-        const response = await api.post('/register', { email, password, ...botProtectionData });
+        const response = await authAPI.post('/register', { email, password, ...botProtectionData });
         const { token, user } = response.data;
 
         localStorage.setItem('token', token);
-        api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+        authAPI.defaults.headers.common['Authorization'] = `Bearer ${token}`;
 
         set({
           isAuthenticated: true,
@@ -125,25 +122,31 @@ function createAuthStore() {
       }
 
       try {
-        api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
-        const response = await api.get('/me');
+        authAPI.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+        
+        // Get stored user data
+        const storedUser = localStorage.getItem('user');
+        if (storedUser) {
+          const user = JSON.parse(storedUser);
+          set({
+            isAuthenticated: true,
+            user: { user, streams: [] },
+            loading: false,
+            error: null,
+            initialized: true
+          });
 
-        // Store user data in localStorage for API client to access tenant_id
-        localStorage.setItem('user', JSON.stringify(response.data.user));
-
-        set({
-          isAuthenticated: true,
-          user: response.data,
-          loading: false,
-          error: null,
-          initialized: true
-        });
-
-        // Initialize WebSocket for real-time updates
-        initializeWebSocket(token);
+          // Initialize WebSocket for real-time updates
+          initializeWebSocket(token);
+        } else {
+          // No stored user data, token might be invalid
+          localStorage.removeItem('token');
+          delete authAPI.defaults.headers.common['Authorization'];
+          set({ isAuthenticated: false, user: null, loading: false, error: null, initialized: true });
+        }
       } catch (error) {
         localStorage.removeItem('token');
-        delete api.defaults.headers.common['Authorization'];
+        delete authAPI.defaults.headers.common['Authorization'];
         set({ isAuthenticated: false, user: null, loading: false, error: null, initialized: true });
       }
     },
@@ -151,7 +154,7 @@ function createAuthStore() {
     logout() {
       localStorage.removeItem('token');
       localStorage.removeItem('user');
-      delete api.defaults.headers.common['Authorization'];
+      delete authAPI.defaults.headers.common['Authorization'];
       
       // Disconnect WebSocket
       disconnectWebSocket();

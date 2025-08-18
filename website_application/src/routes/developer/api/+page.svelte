@@ -1,7 +1,14 @@
 <script>
   import { onMount } from "svelte";
+  import { base } from "$app/paths";
   import { auth } from "$lib/stores/auth";
-  import { api, API_URL } from "$lib/api";
+  import { developerService } from "$lib/graphql/services/developer.js";
+  import { toast } from "$lib/stores/toast.js";
+  import SkeletonLoader from "$lib/components/SkeletonLoader.svelte";
+  import EmptyState from "$lib/components/EmptyState.svelte";
+
+  // API URL for endpoint testing (still needed for REST API documentation/testing)
+  const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:18000';
 
   let isAuthenticated = false;
   /** @type {any} */
@@ -266,29 +273,32 @@
 
   async function loadAPITokens() {
     try {
-      const response = await api.get("/developer/tokens");
-      apiTokens = response.data.tokens || [];
+      apiTokens = await developerService.getAPITokens();
     } catch (error) {
       console.error("Failed to load API tokens:", error);
+      toast.error("Failed to load API tokens. Please refresh the page.");
     }
   }
 
   async function createAPIToken() {
     if (!newTokenName.trim()) {
-      alert("Please enter a token name");
+      toast.warning("Please enter a token name");
       return;
     }
 
     try {
       creatingToken = true;
-      const response = await api.post("/developer/tokens", {
-        token_name: newTokenName.trim(),
+      const result = await developerService.createAPIToken({
+        name: newTokenName.trim(),
         permissions: "read,write",
-        expires_in: newTokenExpiry,
+        expiresIn: newTokenExpiry || null,
       });
 
-      if (response.data) {
-        newlyCreatedToken = response.data;
+      if (result) {
+        newlyCreatedToken = {
+          token_name: result.name,
+          token_value: result.token
+        };
         await loadAPITokens();
 
         // Reset form but keep modal open to show the token
@@ -297,7 +307,7 @@
       }
     } catch (error) {
       console.error("Failed to create API token:", error);
-      alert("Failed to create API token. Please try again.");
+      toast.error("Failed to create API token. Please try again.");
     } finally {
       creatingToken = false;
     }
@@ -313,12 +323,12 @@
     }
 
     try {
-      await api.delete(`/developer/tokens/${tokenId}`);
+      await developerService.revokeAPIToken(tokenId);
       await loadAPITokens();
-      alert("API token revoked successfully");
+      toast.success("API token revoked successfully");
     } catch (error) {
       console.error("Failed to revoke API token:", error);
-      alert("Failed to revoke API token. Please try again.");
+      toast.error("Failed to revoke API token. Please try again.");
     }
   }
 
@@ -346,7 +356,7 @@ To create a token:
       const headers = {
         "Content-Type": "application/json",
         Authorization: `Bearer ${
-          activeToken.token_value || "at_your_token_here"
+          activeToken.token || "at_your_token_here"
         }`,
       };
 
@@ -483,7 +493,7 @@ This could be due to:
           Create New Token
         </button>
       {:else}
-        <a href="/login" class="btn-primary">
+        <a href="{base}/login" class="btn-primary">
           <span class="mr-2">🔐</span>
           Login to Access
         </a>
@@ -492,8 +502,23 @@ This could be due to:
   </div>
 
   {#if loading}
-    <div class="flex items-center justify-center min-h-64">
-      <div class="loading-spinner w-8 h-8" />
+    <!-- API Tokens Skeleton -->
+    <div class="bg-tokyo-night-surface rounded-lg p-6 mb-8">
+      <SkeletonLoader type="text-lg" className="w-32 mb-4" />
+      <div class="space-y-3">
+        {#each Array(3) as _}
+          <div class="flex items-center justify-between p-4 bg-tokyo-night-bg rounded-lg border border-tokyo-night-selection">
+            <div class="flex-1">
+              <SkeletonLoader type="text" className="w-40 mb-2" />
+              <SkeletonLoader type="text-sm" className="w-32" />
+            </div>
+            <div class="flex space-x-2">
+              <SkeletonLoader type="custom" className="w-16 h-8 rounded" />
+              <SkeletonLoader type="custom" className="w-8 h-8 rounded" />
+            </div>
+          </div>
+        {/each}
+      </div>
     </div>
   {:else if !isAuthenticated}
     <!-- Not Authenticated State -->
@@ -505,9 +530,7 @@ This could be due to:
       <p class="text-tokyo-night-fg-dark mb-6">
         Please sign in to access the API documentation and manage your API keys.
       </p>
-      <a href="/login" class="btn-primary">
-        Sign In
-      </a>
+      <a href="{base}/login" class="btn-primary"> Sign In </a>
     </div>
   {:else}
     <!-- API Overview -->
@@ -588,7 +611,7 @@ This could be due to:
                 <div class="flex-1">
                   <div class="flex items-center space-x-3 mb-2">
                     <h3 class="font-semibold text-tokyo-night-fg">
-                      {token.token_name}
+                      {token.name}
                     </h3>
                     <span
                       class="text-xs px-2 py-1 rounded {getTokenStatusColor(
@@ -606,21 +629,21 @@ This could be due to:
                     <div>
                       <p class="text-tokyo-night-comment">Last Used</p>
                       <p class="text-tokyo-night-fg">
-                        {formatDate(token.last_used_at)}
+                        {formatDate(token.lastUsedAt)}
                       </p>
                     </div>
                     <div>
                       <p class="text-tokyo-night-comment">Expires</p>
                       <p class="text-tokyo-night-fg">
-                        {token.expires_at
-                          ? formatDate(token.expires_at)
+                        {token.expiresAt
+                          ? formatDate(token.expiresAt)
                           : "Never"}
                       </p>
                     </div>
                     <div>
                       <p class="text-tokyo-night-comment">Created</p>
                       <p class="text-tokyo-night-fg">
-                        {formatDate(token.created_at)}
+                        {formatDate(token.createdAt)}
                       </p>
                     </div>
                   </div>
@@ -630,7 +653,7 @@ This could be due to:
                     <button
                       class="btn-danger text-sm px-3 py-1"
                       on:click={() =>
-                        revokeAPIToken(token.id, token.token_name)}
+                        revokeAPIToken(token.id, token.name)}
                     >
                       Revoke
                     </button>
@@ -801,7 +824,7 @@ This could be due to:
               class="bg-tokyo-night-bg p-4 rounded-lg text-sm font-mono text-tokyo-night-fg overflow-x-auto"><code
                 >{`// Using your API token
 const API_TOKEN = '${
-                  apiTokens.find((t) => t.status === "active")?.token_value ||
+                  apiTokens.find((t) => t.status === "active")?.token ||
                   "at_your_token_here"
                 }';
 
@@ -832,7 +855,7 @@ const newStream = await fetch('${API_URL}/api/streams', {
               on:click={() =>
                 copyToClipboard(`// Using your API token
 const API_TOKEN = '${
-                  apiTokens.find((t) => t.status === "active")?.token_value ||
+                  apiTokens.find((t) => t.status === "active")?.token ||
                   "at_your_token_here"
                 }';
 
@@ -874,14 +897,14 @@ const newStream = await fetch('${API_URL}/api/streams', {
                 >{`# Get all streams
 curl -X GET ${API_URL}/api/streams \\
   -H "Authorization: Bearer ${
-    apiTokens.find((t) => t.status === "active")?.token_value ||
+    apiTokens.find((t) => t.status === "active")?.token ||
     "at_your_token_here"
   }"
 
 # Create new stream
 curl -X POST ${API_URL}/api/streams \\
   -H "Authorization: Bearer ${
-    apiTokens.find((t) => t.status === "active")?.token_value ||
+    apiTokens.find((t) => t.status === "active")?.token ||
     "at_your_token_here"
   }" \\
   -H "Content-Type: application/json" \\
@@ -890,7 +913,7 @@ curl -X POST ${API_URL}/api/streams \\
 # Get stream metrics
 curl -X GET ${API_URL}/api/streams/STREAM_ID/metrics \\
   -H "Authorization: Bearer ${
-    apiTokens.find((t) => t.status === "active")?.token_value ||
+    apiTokens.find((t) => t.status === "active")?.token ||
     "at_your_token_here"
   }"`}</code
               ></pre>
@@ -899,14 +922,14 @@ curl -X GET ${API_URL}/api/streams/STREAM_ID/metrics \\
                 copyToClipboard(`# Get all streams
 curl -X GET ${API_URL}/api/streams \\
   -H "Authorization: Bearer ${
-    apiTokens.find((t) => t.status === "active")?.token_value ||
+    apiTokens.find((t) => t.status === "active")?.token ||
     "at_your_token_here"
   }"
 
 # Create new stream
 curl -X POST ${API_URL}/api/streams \\
   -H "Authorization: Bearer ${
-    apiTokens.find((t) => t.status === "active")?.token_value ||
+    apiTokens.find((t) => t.status === "active")?.token ||
     "at_your_token_here"
   }" \\
   -H "Content-Type: application/json" \\
@@ -915,7 +938,7 @@ curl -X POST ${API_URL}/api/streams \\
 # Get stream metrics
 curl -X GET ${API_URL}/api/streams/STREAM_ID/metrics \\
   -H "Authorization: Bearer ${
-    apiTokens.find((t) => t.status === "active")?.token_value ||
+    apiTokens.find((t) => t.status === "active")?.token ||
     "at_your_token_here"
   }"`)}
               class="absolute top-2 right-2 btn-secondary text-xs px-2 py-1"

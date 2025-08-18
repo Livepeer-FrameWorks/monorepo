@@ -20,7 +20,7 @@ This starts (ports per root README):
 - ClickHouse (8123/9000)
 - Kafka + Zookeeper (29092/9092, 2181)
 - MistServer (4242, 1935, 8080)
-- Commodore (18001), Quartermaster (18002), Purser (18003)
+- Bridge (18000), Commodore (18001), Quartermaster (18002), Purser (18003)
 - Periscope‑Query (18004), Periscope‑Ingest (18005), Decklog (18006)
 - Helmsman (18007), Foghorn (18008), Signalman (18009)
 - Nginx gateway (18090)

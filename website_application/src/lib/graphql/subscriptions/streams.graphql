@@ -1,0 +1,69 @@
+# Stream real-time subscriptions
+
+# Subscribe to stream lifecycle events
+subscription StreamEvents($streamId: ID, $tenantId: ID) {
+  streamEvents(streamId: $streamId, tenantId: $tenantId) {
+    type
+    streamId
+    tenantId
+    status
+    timestamp
+    nodeId
+    details
+  }
+}
+
+# Subscribe to real-time viewer metrics for a specific stream
+subscription ViewerMetricsStream($streamId: ID!) {
+  viewerMetrics(streamId: $streamId) {
+    streamId
+    currentViewers
+    peakViewers
+    bandwidth
+    connectionQuality
+    bufferHealth
+    timestamp
+  }
+}
+
+# Subscribe to track list updates for a stream
+subscription TrackListUpdates($streamId: ID!) {
+  trackListUpdates(streamId: $streamId) {
+    streamId
+    tenantId
+    trackList
+    trackCount
+    timestamp
+  }
+}
+
+# Subscribe to all events for current tenant
+subscription TenantEvents($tenantId: ID!) {
+  tenantEvents(tenantId: $tenantId) {
+    ... on StreamEvent {
+      type
+      streamId
+      tenantId
+      status
+      timestamp
+      nodeId
+      details
+    }
+    ... on ViewerMetrics {
+      streamId
+      currentViewers
+      peakViewers
+      bandwidth
+      connectionQuality
+      bufferHealth
+      timestamp
+    }
+    ... on TrackListEvent {
+      streamId
+      tenantId
+      trackList
+      trackCount
+      timestamp
+    }
+  }
+}

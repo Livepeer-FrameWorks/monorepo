@@ -1,6 +1,7 @@
 <script>
   import { onMount } from "svelte";
   import { goto } from "$app/navigation";
+  import { base } from "$app/paths";
   import { auth } from "$lib/stores/auth";
   import { getMarketingSiteUrl } from "$lib/config";
 
@@ -29,7 +30,7 @@
     try {
       const result = await auth.login(email, password);
       if (result.success) {
-        goto("/");
+        goto(`${base}/`);
       } else {
         error = result.error || "Login failed";
       }
@@ -113,7 +114,7 @@
         <p class="text-tokyo-night-comment">
           Don't have an account?
           <a
-            href="/register"
+            href="{base}/register"
             class="text-tokyo-night-blue hover:text-tokyo-night-cyan transition-colors"
           >
             Sign up

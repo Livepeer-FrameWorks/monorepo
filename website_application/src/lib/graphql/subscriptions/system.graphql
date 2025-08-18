@@ -1,0 +1,15 @@
+# System and infrastructure subscriptions
+
+# Subscribe to system health events (admin only)
+subscription SystemHealth {
+  systemHealth {
+    nodeId
+    clusterId
+    status
+    cpuUsage
+    memoryUsage
+    diskUsage
+    healthScore
+    timestamp
+  }
+}

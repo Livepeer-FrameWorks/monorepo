@@ -1,8 +1,12 @@
 <script>
   import { onMount, onDestroy } from "svelte";
+  import { base } from "$app/paths";
   import { auth } from "$lib/stores/auth";
-  import { streamAPI, analyticsAPIFunctions } from "$lib/api";
+  import { streamsService } from "$lib/graphql/services/streams.js";
   import { getIngestUrls, getDeliveryUrls } from "$lib/config";
+  import { toast } from "$lib/stores/toast.js";
+  import LoadingCard from "$lib/components/LoadingCard.svelte";
+  import EmptyState from "$lib/components/EmptyState.svelte";
 
   let isAuthenticated = false;
   /** @type {any} */
@@ -12,8 +16,10 @@
   let loading = true;
   let refreshingKey = false;
   let copiedUrl = "";
-  /** @type {number | null} */
-  let metricsInterval = null;
+  
+  // GraphQL subscription management
+  let streamEventsSubscription = null;
+  let viewerMetricsSubscription = null;
 
   // Stream creation
   let creatingStream = false;
@@ -31,19 +37,14 @@
   /** @type {any} */
   let selectedStream = null;
 
-  // Real-time metrics for selected stream
+  // Real-time metrics for selected stream (from GraphQL subscriptions)
   let realTimeMetrics = {
-    bandwidth_in: 0,
-    bandwidth_out: 0,
-    resolution: null,
-    bitrate: null,
-    fps: null,
-    codec: null,
-    track_count: 0,
-    width: null,
-    height: null,
-    viewers: 0,
-    last_updated: /** @type {Date | null} */ (null),
+    currentViewers: 0,
+    peakViewers: 0,
+    bandwidth: 0,
+    connectionQuality: null,
+    bufferHealth: null,
+    timestamp: null
   };
 
   // Subscribe to auth store
@@ -61,22 +62,24 @@
     // Select first stream by default if available
     if (streams.length > 0) {
       selectedStream = streams[0];
-      startMetricsPolling();
+      startRealTimeSubscriptions();
     }
   });
 
   // Cleanup on unmount
   onDestroy(() => {
-    if (metricsInterval) {
-      clearInterval(metricsInterval);
+    if (streamEventsSubscription) {
+      streamEventsSubscription.unsubscribe();
+    }
+    if (viewerMetricsSubscription) {
+      viewerMetricsSubscription.unsubscribe();
     }
   });
 
   async function loadStreams() {
     try {
       loading = true;
-      const response = await streamAPI.getStreams();
-      streams = response.data || [];
+      streams = await streamsService.getStreams();
       
       // Update auth store with latest streams
       auth.updateStreams(streams);
@@ -87,82 +90,91 @@
     }
   }
 
-  // Start polling for real-time metrics
-  function startMetricsPolling() {
-    // Clear existing interval
-    if (metricsInterval) {
-      clearInterval(metricsInterval);
-    }
+  // Start real-time GraphQL subscriptions
+  function startRealTimeSubscriptions() {
+    if (!selectedStream || !user) return;
     
-    // Poll every 5 seconds for real-time updates
-    metricsInterval = setInterval(async () => {
-      if (selectedStream && isLive) {
-        await fetchStreamMetrics();
+    // Clean up existing subscriptions
+    if (streamEventsSubscription) streamEventsSubscription.unsubscribe();
+    if (viewerMetricsSubscription) viewerMetricsSubscription.unsubscribe();
+    
+    // Subscribe to stream events
+    streamEventsSubscription = streamsService.subscribeToStreamEvents(
+      selectedStream.id,
+      user.tenantId,
+      {
+        onStreamEvent: (event) => {
+          console.log('Stream event:', event);
+          // Update stream status based on events
+          if (streams.find(s => s.id === event.streamId)) {
+            streams = streams.map(s => 
+              s.id === event.streamId 
+                ? { ...s, status: event.status }
+                : s
+            );
+          }
+        },
+        onError: (error) => {
+          console.error('Stream events subscription failed:', error);
+        }
       }
-    }, 5000);
-  }
-
-  // Fetch real-time stream metrics
-  async function fetchStreamMetrics() {
-    if (!selectedStream) return;
-
-    try {
-      // Get technical metrics (bandwidth, viewers, resolution, etc.)
-      const metricsResponse = await analyticsAPIFunctions.getStreamMetrics(selectedStream.id);
-      
-      if (metricsResponse.data) {
-        const metrics = metricsResponse.data;
-        realTimeMetrics = {
-          ...realTimeMetrics,
-          bandwidth_in: metrics.bandwidth_in || 0,
-          bandwidth_out: metrics.bandwidth_out || 0,
-          resolution: metrics.resolution || null,
-          bitrate: metrics.bitrate || null,
-          viewers: metrics.viewers || 0,
-          last_updated: new Date(),
-        };
-      } else {
-        console.warn('No metrics data received from Analytics API');
+    );
+    
+    // Subscribe to viewer metrics
+    viewerMetricsSubscription = streamsService.subscribeToViewerMetrics(
+      selectedStream.id,
+      {
+        onViewerMetrics: (metrics) => {
+          realTimeMetrics = {
+            currentViewers: metrics.currentViewers,
+            peakViewers: metrics.peakViewers,
+            bandwidth: metrics.bandwidth,
+            connectionQuality: metrics.connectionQuality,
+            bufferHealth: metrics.bufferHealth,
+            timestamp: metrics.timestamp
+          };
+        },
+        onError: (error) => {
+          console.error('Viewer metrics subscription failed:', error);
+        }
       }
-    } catch (error) {
-      console.error("Failed to fetch stream metrics from Analytics API:", error);
-    }
+    );
   }
 
   // Create new stream
   async function createStream() {
     if (!newStreamTitle.trim()) {
-      alert("Please enter a stream title");
+      toast.warning("Please enter a stream title");
       return;
     }
 
     try {
       creatingStream = true;
-      const response = await streamAPI.createStream({
-        title: newStreamTitle.trim(),
-        description: newStreamDescription.trim() || undefined
+      const newStream = await streamsService.createStream({
+        name: newStreamTitle.trim(),
+        description: newStreamDescription.trim() || undefined,
+        record: false
       });
 
-      if (response.data) {
-        // Add new stream to list
-        streams = [...streams, response.data];
-        
-        // Select the new stream
-        selectedStream = response.data;
-        
-        // Update auth store
-        auth.updateStreams(streams);
-        
-        // Close modal and reset form
-        showCreateModal = false;
-        newStreamTitle = "";
-        newStreamDescription = "";
-        
-        alert("Stream created successfully!");
-      }
+      // Add new stream to list
+      streams = [...streams, newStream];
+      
+      // Select the new stream
+      selectedStream = newStream;
+      startRealTimeSubscriptions();
+      
+      // Update auth store
+      auth.updateStreams(streams);
+      
+      // Close modal and reset form
+      showCreateModal = false;
+      newStreamTitle = "";
+      newStreamDescription = "";
+      
+      toast.success("Stream created successfully!");
     } catch (error) {
       console.error("Failed to create stream:", error);
-      alert("Failed to create stream. Please try again.");
+      toast.error("Failed to create stream. Please try again.");
     } finally {
       creatingStream = false;
     }
@@ -174,7 +186,7 @@
 
     try {
       deletingStreamId = streamToDelete.id;
-      await streamAPI.deleteStream(streamToDelete.id);
+      await streamsService.deleteStream(streamToDelete.id);
 
       // Remove stream from list
       streams = streams.filter(s => s.id !== streamToDelete.id);
@@ -183,11 +195,7 @@
       if (selectedStream?.id === streamToDelete.id) {
         selectedStream = streams.length > 0 ? streams[0] : null;
         if (selectedStream) {
-          startMetricsPolling();
-        } else {
-          if (metricsInterval) {
-            clearInterval(metricsInterval);
-          }
+          startRealTimeSubscriptions();
         }
       }
       
@@ -198,10 +206,10 @@
       showDeleteModal = false;
       streamToDelete = null;
       
-      alert("Stream deleted successfully!");
+      toast.success("Stream deleted successfully!");
     } catch (error) {
       console.error("Failed to delete stream:", error);
-      alert("Failed to delete stream. Please try again.");
+      toast.error("Failed to delete stream. Please try again.");
     } finally {
       deletingStreamId = "";
     }
@@ -210,7 +218,7 @@
   // Select stream
   function selectStream(stream) {
     selectedStream = stream;
-    startMetricsPolling();
+    startRealTimeSubscriptions();
   }
 
   // Show delete confirmation
@@ -256,13 +264,11 @@
             ? { ...stream, stream_key: response.data.stream_key }
             : stream
         );
-        alert(
-          "Stream key refreshed successfully! Please update your streaming software with the new key."
-        );
+        toast.success("Stream key refreshed successfully! Please update your streaming software with the new key.");
       }
     } catch (error) {
       console.error("Failed to refresh stream key:", error);
-      alert("Failed to refresh stream key. Please try again.");
+      toast.error("Failed to refresh stream key. Please try again.");
     } finally {
       refreshingKey = false;
     }
@@ -399,7 +405,7 @@
         <span class="mr-2">➕</span>
         Create Stream
       </button>
-      <a href="/analytics" class="btn-secondary">
+      <a href="{base}/analytics" class="btn-secondary">
         <span class="mr-2">📊</span>
         View Analytics
       </a>
@@ -411,26 +417,35 @@
   </div>
 
   {#if loading}
-    <div class="flex items-center justify-center min-h-64">
-      <div class="loading-spinner w-8 h-8" />
+    <!-- Loading Skeleton for Streams -->
+    <div class="card mb-8">
+      <div class="card-header">
+        <div class="skeleton-text-lg w-48 mb-2"></div>
+        <div class="skeleton-text w-96"></div>
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+        {#each Array(6) as _, i}
+          <LoadingCard variant="stream" />
+        {/each}
+      </div>
+    </div>
+
+    <!-- Loading Skeleton for Stream Details -->
+    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-6 gap-6 mb-8">
+      {#each Array(6) as _}
+        <LoadingCard variant="metric" />
+      {/each}
     </div>
   {:else if streams.length === 0}
     <!-- No Streams State -->
-    <div class="card text-center py-12">
-      <div class="text-6xl mb-4">🎥</div>
-      <h3 class="text-xl font-semibold text-tokyo-night-fg mb-2">
-        No Streams Found
-      </h3>
-      <p class="text-tokyo-night-fg-dark mb-6">
-        Create your first stream to get started with broadcasting
-      </p>
-      <button 
-        class="btn-primary"
-        on:click={() => showCreateModal = true}
-      >
-        <span class="mr-2">➕</span>
-        Create Stream
-      </button>
+    <div class="card">
+      <EmptyState 
+        icon="🎥"
+        title="No Streams Found"
+        description="Create your first stream to get started with broadcasting"
+        actionText="➕ Create Stream"
+        onAction={() => showCreateModal = true}
+      />
     </div>
   {:else}
     <!-- Streams List -->
@@ -525,10 +540,7 @@
             <div>
               <p class="text-sm text-tokyo-night-comment">Bandwidth</p>
               <p class="text-sm font-bold text-tokyo-night-fg">
-                ↑ {formatBandwidth(realTimeMetrics.bandwidth_in)}
-              </p>
-              <p class="text-sm font-bold text-tokyo-night-fg">
-                ↓ {formatBandwidth(realTimeMetrics.bandwidth_out)}
+                {formatBandwidth(realTimeMetrics.bandwidth)}
               </p>
             </div>
             <span class="text-2xl">📊</span>
@@ -540,17 +552,8 @@
             <div>
               <p class="text-sm text-tokyo-night-comment">Resolution</p>
               <p class="text-lg font-bold text-tokyo-night-fg">
-                {selectedStream?.resolution ||
-                  formatResolution(
-                    realTimeMetrics.width || 0,
-                    realTimeMetrics.height || 0
-                  )}
+                {selectedStream?.resolution || "N/A"}
               </p>
-              {#if realTimeMetrics.fps}
-                <p class="text-xs text-tokyo-night-comment">
-                  {realTimeMetrics.fps} FPS
-                </p>
-              {/if}
             </div>
             <span class="text-2xl">🎬</span>
           </div>
@@ -579,21 +582,16 @@
                   ? `${selectedStream.playback_id.slice(0, 8)}...`
                   : "No stream"}
               </p>
-              {#if realTimeMetrics.track_count > 0}
-                <p class="text-xs text-tokyo-night-comment">
-                  {realTimeMetrics.track_count} tracks
-                </p>
-              {/if}
             </div>
             <span class="text-2xl">📺</span>
           </div>
         </div>
       </div>
 
-      {#if realTimeMetrics.last_updated && isLive}
+      {#if realTimeMetrics.timestamp && isLive}
         <div class="text-center">
           <p class="text-xs text-tokyo-night-comment">
-            Last updated: {realTimeMetrics.last_updated.toLocaleTimeString()}
+            Last updated: {new Date(realTimeMetrics.timestamp).toLocaleTimeString()}
           </p>
         </div>
       {/if}
@@ -903,14 +901,14 @@
             showDeleteModal = false;
             streamToDelete = null;
           }}
-          disabled={deletingStreamId}
+          disabled={!!deletingStreamId}
         >
           Cancel
         </button>
         <button
           class="btn-danger"
           on:click={deleteStream}
-          disabled={deletingStreamId}
+          disabled={!!deletingStreamId}
         >
           {deletingStreamId ? 'Deleting...' : 'Delete Stream'}
         </button>

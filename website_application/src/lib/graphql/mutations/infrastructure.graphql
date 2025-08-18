@@ -1,0 +1,10 @@
+# Infrastructure management mutations
+mutation UpdateTenant($input: UpdateTenantInput!) {
+  updateTenant(input: $input) {
+    id
+    name
+    settings
+    clusterId
+    createdAt
+  }
+}

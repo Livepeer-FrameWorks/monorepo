@@ -1,0 +1,79 @@
+# Infrastructure management queries
+query GetTenant {
+  tenant {
+    id
+    name
+    settings
+    clusterId
+    createdAt
+  }
+}
+
+query GetClusters {
+  clusters {
+    id
+    name
+    region
+    status
+    createdAt
+    nodes {
+      id
+      name
+      type
+      status
+      region
+      ipAddress
+      lastSeen
+      createdAt
+    }
+  }
+}
+
+query GetCluster($id: ID!) {
+  cluster(id: $id) {
+    id
+    name
+    region
+    status
+    createdAt
+    nodes {
+      id
+      name
+      clusterId
+      type
+      status
+      region
+      ipAddress
+      lastSeen
+      createdAt
+    }
+  }
+}
+
+query GetNodes {
+  nodes {
+    id
+    name
+    clusterId
+    type
+    status
+    region
+    ipAddress
+    lastSeen
+    createdAt
+  }
+}
+
+query GetNode($id: ID!) {
+  node(id: $id) {
+    id
+    name
+    clusterId
+    type
+    status
+    region
+    ipAddress
+    lastSeen
+    createdAt
+  }
+}

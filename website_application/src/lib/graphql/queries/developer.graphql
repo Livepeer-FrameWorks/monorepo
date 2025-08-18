@@ -1,0 +1,12 @@
+# Developer API queries
+query GetAPITokens {
+  developerTokens {
+    id
+    name
+    permissions
+    status
+    lastUsedAt
+    expiresAt
+    createdAt
+  }
+}

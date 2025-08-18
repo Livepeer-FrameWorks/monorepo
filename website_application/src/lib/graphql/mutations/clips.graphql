@@ -1,0 +1,17 @@
+# Clip management mutations
+mutation CreateClip($input: CreateClipInput!) {
+  createClip(input: $input) {
+    id
+    streamId
+    tenantId
+    title
+    description
+    startTime
+    endTime
+    duration
+    playbackId
+    status
+    createdAt
+    updatedAt
+  }
+}

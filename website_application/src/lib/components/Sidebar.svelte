@@ -2,6 +2,7 @@
   // @ts-check
   import { page } from "$app/stores";
   import { goto } from "$app/navigation";
+  import { base } from "$app/paths";
   import { navigationConfig } from "../navigation.js";
   import { createEventDispatcher } from "svelte";
 
@@ -9,42 +10,39 @@
 
   // Start with all sections collapsed, expand only the current section
   let expandedSections = new Set();
-  let hasInitialized = false;
+  let manuallyExpanded = new Set();
 
   $: currentPath = $page.url.pathname;
 
-  // Auto-expand the section containing the current page (only on initial load)
+  // Auto-expand the section containing the current page
   $: {
-    if (!hasInitialized) {
-      const newExpandedSections = new Set();
+    const newExpandedSections = new Set(manuallyExpanded);
 
-      // Find which section contains the current path
-      for (const [sectionKey, section] of Object.entries(navigationConfig)) {
-        if (sectionKey !== "dashboard" && section.children) {
-          for (const [childKey, child] of Object.entries(section.children)) {
-            if (child.href === currentPath) {
-              newExpandedSections.add(sectionKey);
-              break;
-            }
+    // Find which section contains the current path
+    for (const [sectionKey, section] of Object.entries(navigationConfig)) {
+      if (sectionKey !== "dashboard" && section.children) {
+        for (const [childKey, child] of Object.entries(section.children)) {
+          if (`${base}${child.href}` === currentPath) {
+            newExpandedSections.add(sectionKey);
+            break;
           }
         }
       }
-
-      expandedSections = newExpandedSections;
-      hasInitialized = true;
     }
+
+    expandedSections = newExpandedSections;
   }
 
   /**
    * @param {string} sectionKey
    */
   function toggleSection(sectionKey) {
-    if (expandedSections.has(sectionKey)) {
-      expandedSections.delete(sectionKey);
+    if (manuallyExpanded.has(sectionKey)) {
+      manuallyExpanded.delete(sectionKey);
     } else {
-      expandedSections.add(sectionKey);
+      manuallyExpanded.add(sectionKey);
     }
-    expandedSections = expandedSections; // Trigger reactivity
+    manuallyExpanded = manuallyExpanded; // Trigger reactivity for the reactive statement
   }
 
   /**
@@ -68,7 +66,7 @@
     }
     // Navigate to active routes using SvelteKit client-side routing
     if (item.href && item.active === true) {
-      goto(item.href);
+      goto(`${base}${item.href}`);
     }
   }
 
@@ -87,7 +85,7 @@
     if (item.active === "disabled") {
       return `${baseClass} disabled ${childPadding}`;
     }
-    if (item.href === currentPath) {
+    if (`${base}${item.href}` === currentPath) {
       return `${baseClass} active ${childPadding}`;
     }
     return `${baseClass} ${childPadding}`;
@@ -111,7 +109,7 @@
       >
         <span class="text-lg mr-3">{navigationConfig.dashboard.icon}</span>
         <span class="flex-1 text-left">{navigationConfig.dashboard.name}</span>
-        {#if navigationConfig.dashboard.href === currentPath}
+        {#if `${base}${navigationConfig.dashboard.href}` === currentPath}
           <div class="w-2 h-2 bg-tokyo-night-blue rounded-full" />
         {/if}
       </button>
@@ -172,7 +170,7 @@
                   {/if}
 
                   <!-- Active indicator -->
-                  {#if child.href === currentPath}
+                  {#if `${base}${child.href}` === currentPath}
                     <div
                       class="w-2 h-2 bg-tokyo-night-blue rounded-full ml-2"
                     />

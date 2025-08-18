@@ -1,7 +1,7 @@
 <script>
   import { onMount } from "svelte";
   import { auth } from "$lib/stores/auth";
-  import { analyticsAPIFunctions, billingAPI } from "$lib/api";
+  import { billingService } from "$lib/graphql/services/billing.js";
 
   let isAuthenticated = false;
   let user = null;
@@ -52,25 +52,55 @@
       startTime = new Date(now.getTime() - days * 24 * 60 * 60 * 1000).toISOString();
       endTime = now.toISOString();
 
-      // Load usage data from Periscope and billing data from Purser in parallel
-      const [usageResponse, billingResponse] = await Promise.all([
-        analyticsAPIFunctions.getUsageSummary({ start_time: startTime, end_time: endTime }),
-        billingAPI.getBillingStatus()
+      // Load usage data and billing data from GraphQL
+      const [usageRecords, billingStatus] = await Promise.all([
+        billingService.getUsageRecords({
+          start: new Date(startTime),
+          end: new Date(endTime)
+        }),
+        billingService.getBillingStatus()
       ]);
 
-      // Process usage data
-      if (usageResponse.data) {
-        usageData = {
-          ...usageData,
-          ...usageResponse.data,
+      // Process usage data - aggregate usage records
+      if (usageRecords && usageRecords.length > 0) {
+        const aggregated = usageRecords.reduce((acc, record) => {
+          switch (record.resourceType) {
+            case 'stream_hours':
+              acc.stream_hours += record.quantity;
+              break;
+            case 'egress_gb':
+              acc.egress_gb += record.quantity;
+              break;
+            case 'recording_gb':
+              acc.recording_gb += record.quantity;
+              break;
+            case 'peak_bandwidth_mbps':
+              acc.peak_bandwidth_mbps = Math.max(acc.peak_bandwidth_mbps, record.quantity);
+              break;
+            case 'total_streams':
+              acc.total_streams = Math.max(acc.total_streams, record.quantity);
+              break;
+            case 'peak_viewers':
+              acc.peak_viewers = Math.max(acc.peak_viewers, record.quantity);
+              break;
+          }
+          return acc;
+        }, {
+          stream_hours: 0,
+          egress_gb: 0,
+          recording_gb: 0,
+          peak_bandwidth_mbps: 0,
+          total_streams: 0,
+          total_viewers: 0,
+          peak_viewers: 0,
           period: `${days} days`
-        };
+        });
+        
+        usageData = aggregated;
       }
 
       // Process billing data
-      if (billingResponse.data) {
-        billingData = billingResponse.data;
-      }
+      billingData = billingStatus || {};
 
       console.log('Usage data loaded:', usageData);
       console.log('Billing data loaded:', billingData);
@@ -85,12 +115,12 @@
 
   // Calculate estimated costs based on usage and tier pricing
   function calculateEstimatedCosts() {
-    if (!billingData.tier || !billingData.tier.base_price) {
+    if (!billingData.currentTier || !billingData.currentTier.price) {
       return { total: 0, breakdown: {} };
     }
 
     // Basic cost calculation (this would be more sophisticated in production)
-    const baseCost = billingData.tier.base_price || 0;
+    const baseCost = billingData.currentTier.price || 0;
     const bandwidthCost = usageData.egress_gb * 0.05; // Example: $0.05 per GB
     const streamingCost = usageData.stream_hours * 0.10; // Example: $0.10 per hour
     const storageCost = usageData.recording_gb * 0.02; // Example: $0.02 per GB stored
@@ -187,21 +217,21 @@
           <div class="flex items-center justify-between">
             <span class="text-tokyo-night-comment">Plan</span>
             <span class="text-tokyo-night-fg font-semibold">
-              {billingData.tier?.display_name || 'Free'}
+              {billingData.currentTier?.name || 'Free'}
             </span>
           </div>
           
           <div class="flex items-center justify-between">
             <span class="text-tokyo-night-comment">Monthly Cost</span>
             <span class="text-tokyo-night-green font-semibold">
-              {billingData.tier?.base_price ? formatCurrency(billingData.tier.base_price) : 'Free'}
+              {billingData.currentTier?.price ? formatCurrency(billingData.currentTier.price, billingData.currentTier.currency) : 'Free'}
             </span>
           </div>
           
           <div class="flex items-center justify-between">
             <span class="text-tokyo-night-comment">Status</span>
             <span class="bg-tokyo-night-green/20 text-tokyo-night-green px-2 py-1 rounded text-sm capitalize">
-              {billingData.subscription?.status || 'active'}
+              {billingData.status || 'active'}
             </span>
           </div>
         </div>

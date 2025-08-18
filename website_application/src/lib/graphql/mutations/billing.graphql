@@ -1,0 +1,27 @@
+# Billing mutations
+mutation CreatePayment($input: CreatePaymentInput!) {
+  createPayment(input: $input) {
+    id
+    amount
+    currency
+    method
+    status
+    createdAt
+  }
+}
+
+mutation UpdateBillingTier($tierId: ID!) {
+  updateBillingTier(tierId: $tierId) {
+    tenantId
+    currentTier {
+      id
+      name
+      price
+      currency
+      features
+    }
+    nextBillingDate
+    outstandingAmount
+    status
+  }
+}

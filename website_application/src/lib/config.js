@@ -7,15 +7,15 @@ const config = {
   rtmpPath: import.meta.env.VITE_RTMP_PATH || '/live',
 
   // HTTP/HTTPS domains for WebRTC and delivery (typically port 8080, 443, etc.)
-  httpDomain: import.meta.env.VITE_HTTP_DOMAIN || 'http://localhost:9090/view',
-  cdnDomain: import.meta.env.VITE_CDN_DOMAIN || 'http://localhost:9090/view',
+  httpDomain: import.meta.env.VITE_HTTP_DOMAIN || 'http://localhost:8080',
+  cdnDomain: import.meta.env.VITE_CDN_DOMAIN || 'http://localhost:8080',
 
   // Paths
   hlsPath: import.meta.env.VITE_HLS_PATH || '/hls',
   embedPath: import.meta.env.VITE_EMBED_PATH || '/embed',
   webrtcPath: import.meta.env.VITE_WEBRTC_PATH || '/webrtc',
 
-  marketingSiteUrl: import.meta.env.VITE_MARKETING_SITE_URL || 'http://localhost:9004'
+  marketingSiteUrl: import.meta.env.VITE_MARKETING_SITE_URL || 'http://localhost:18031'
 };
 
 // Determine if we're in development

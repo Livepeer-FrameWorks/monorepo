@@ -1,0 +1,11 @@
+# User authentication queries
+query GetMe {
+  me {
+    id
+    email
+    name
+    tenantId
+    role
+    createdAt
+  }
+}

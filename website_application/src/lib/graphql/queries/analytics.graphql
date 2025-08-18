@@ -1,0 +1,47 @@
+# Analytics queries
+query GetStreamAnalytics($streamId: ID!, $timeRange: TimeRangeInput) {
+  streamAnalytics(streamId: $streamId, timeRange: $timeRange) {
+    streamId
+    totalViews
+    totalViewTime
+    peakViewers
+    averageViewers
+    uniqueViewers
+    timeRange {
+      start
+      end
+    }
+  }
+}
+
+query GetViewerMetrics($streamId: ID, $timeRange: TimeRangeInput) {
+  viewerMetrics(streamId: $streamId, timeRange: $timeRange) {
+    timestamp
+    viewerCount
+  }
+}
+
+query GetPlatformOverview($timeRange: TimeRangeInput) {
+  platformOverview(timeRange: $timeRange) {
+    totalStreams
+    totalViewers
+    totalBandwidth
+    totalUsers
+    timeRange {
+      start
+      end
+    }
+  }
+}
+
+query GetUsageRecords($timeRange: TimeRangeInput) {
+  usageRecords(timeRange: $timeRange) {
+    id
+    tenantId
+    resourceType
+    quantity
+    unit
+    cost
+    timestamp
+  }
+}

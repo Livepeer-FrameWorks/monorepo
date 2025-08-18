@@ -1,6 +1,7 @@
 <script>
   import { onMount } from "svelte";
   import { goto } from "$app/navigation";
+  import { base } from "$app/paths";
   import { auth } from "$lib/stores/auth";
 
   let email = "";
@@ -101,7 +102,7 @@
     if (result.success) {
       // Show verification message instead of redirecting
       error = null;
-      goto("/verify-email");
+      goto(`${base}/verify-email`);
     }
   }
 
@@ -134,7 +135,7 @@
       <p class="text-center text-tokyo-night-comment">
         Already have an account?
         <a 
-          href="/login" 
+          href="{base}/login" 
           class="text-tokyo-night-cyan hover:text-tokyo-night-blue transition-colors duration-200 font-medium"
         >
           Sign in

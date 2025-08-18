@@ -1,0 +1,44 @@
+# Stream management queries
+fragment StreamInfo on Stream {
+  id
+  name
+  description
+  streamKey
+  playbackId
+  status
+  record
+  tenantId
+  createdAt
+  updatedAt
+}
+
+query GetStreams {
+  streams {
+    ...StreamInfo
+  }
+}
+
+query GetStream($id: ID!) {
+  stream(id: $id) {
+    ...StreamInfo
+  }
+}
+
+query ValidateStreamKey($streamKey: String!) {
+  validateStreamKey(streamKey: $streamKey) {
+    valid
+    streamKey
+    error
+    tenantId
+  }
+}
+
+query GetStreamEmbed($id: ID!) {
+  streamEmbed(id: $id) {
+    streamId
+    embedCode
+    iframeUrl
+    width
+    height
+  }
+}

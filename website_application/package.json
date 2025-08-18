@@ -9,9 +9,16 @@
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
     "lint": "prettier --plugin-search-dir . --check . && eslint .",
-    "format": "prettier --plugin-search-dir . --write ."
+    "format": "prettier --plugin-search-dir . --write .",
+    "gql:codegen": "graphql-codegen --config codegen.yml",
+    "gql:watch": "graphql-codegen --config codegen.yml --watch"
   },
   "devDependencies": {
+    "@graphql-codegen/cli": "^5.0.0",
+    "@graphql-codegen/typescript": "^4.0.0",
+    "@graphql-codegen/typescript-apollo-client-helpers": "^3.0.0",
+    "@graphql-codegen/typescript-operations": "^4.0.0",
+    "@graphql-codegen/typescript-react-apollo": "^4.3.3",
     "@sveltejs/adapter-auto": "^2.0.0",
     "@tailwindcss/typography": "^0.5.16",
     "@typescript-eslint/eslint-plugin": "^6.0.0",
@@ -31,9 +38,12 @@
   },
   "type": "module",
   "dependencies": {
+    "@apollo/client": "^3.8.0",
     "@sveltejs/adapter-node": "^1.3.1",
     "@sveltejs/kit": "^1.20.4",
     "axios": "^1.5.0",
+    "graphql": "^16.8.0",
+    "graphql-ws": "^5.14.0",
     "svelte": "^4.0.5"
   }
 }

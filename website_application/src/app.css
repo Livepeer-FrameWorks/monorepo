@@ -168,6 +168,44 @@
     @apply inline-block w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin;
   }
 
+  /* Skeleton loading styles */
+  .skeleton {
+    @apply animate-pulse bg-gradient-to-r from-tokyo-night-bg-dark via-tokyo-night-bg-light to-tokyo-night-bg-dark bg-[length:200%_100%] rounded;
+    animation: shimmer 1.5s ease-in-out infinite;
+  }
+
+  .skeleton-text {
+    @apply skeleton h-4 w-full;
+  }
+
+  .skeleton-text-sm {
+    @apply skeleton h-3 w-3/4;
+  }
+
+  .skeleton-text-lg {
+    @apply skeleton h-6 w-full;
+  }
+
+  .skeleton-card {
+    @apply skeleton h-32 w-full rounded-lg;
+  }
+
+  .skeleton-avatar {
+    @apply skeleton w-10 h-10 rounded-full;
+  }
+
+  .skeleton-chart {
+    @apply skeleton h-64 w-full rounded-lg;
+  }
+
+  .skeleton-metric {
+    @apply skeleton h-20 w-full rounded-lg;
+  }
+
+  .skeleton-table-row {
+    @apply skeleton h-12 w-full rounded;
+  }
+
   /* Navigation styles */
   .nav-item {
     @apply flex items-center px-4 py-3 text-tokyo-night-fg-dark hover:text-tokyo-night-fg hover:bg-tokyo-night-bg-light/50 rounded-lg transition-all duration-200;
@@ -279,6 +317,16 @@
 
     50% {
       background-position: 100% 50%;
+    }
+  }
+
+  /* Shimmer animation for skeleton loaders */
+  @keyframes shimmer {
+    0% {
+      background-position: -200% 0;
+    }
+    100% {
+      background-position: 200% 0;
     }
   }
 }

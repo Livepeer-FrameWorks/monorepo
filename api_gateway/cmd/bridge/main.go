@@ -95,13 +95,13 @@ func main() {
 	// Auth endpoints (proxied to Commodore)
 	auth := router.Group("/auth")
 	{
-		auth.POST("/login", authProxy.ProxyToCommodore("/login"))
-		auth.POST("/register", authProxy.ProxyToCommodore("/register"))
-		auth.POST("/logout", authProxy.ProxyToCommodore("/logout"))
-		auth.GET("/verify/:token", authProxy.ProxyToCommodore("/verify/:token"))
-		auth.POST("/refresh", authProxy.ProxyToCommodore("/refresh"))
-		auth.POST("/forgot-password", authProxy.ProxyToCommodore("/forgot-password"))
-		auth.POST("/reset-password", authProxy.ProxyToCommodore("/reset-password"))
+		auth.POST("/login", authProxy.ProxyToCommodore("/api/v1/login"))
+		auth.POST("/register", authProxy.ProxyToCommodore("/api/v1/register"))
+		auth.POST("/logout", authProxy.ProxyToCommodore("/api/v1/logout"))
+		auth.GET("/verify/:token", authProxy.ProxyToCommodore("/api/v1/verify/:token"))
+		auth.POST("/refresh", authProxy.ProxyToCommodore("/api/v1/refresh"))
+		auth.POST("/forgot-password", authProxy.ProxyToCommodore("/api/v1/forgot-password"))
+		auth.POST("/reset-password", authProxy.ProxyToCommodore("/api/v1/reset-password"))
 	}
 
 	// GraphQL endpoint with optional auth (some queries are public)

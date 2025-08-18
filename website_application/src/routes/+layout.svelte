@@ -3,10 +3,13 @@
   import { onMount } from "svelte";
   import { goto } from "$app/navigation";
   import { page } from "$app/stores";
+  import { base } from "$app/paths";
   import { auth } from "$lib/stores/auth";
   import { getMarketingSiteUrl } from "$lib/config";
   import Sidebar from "$lib/components/Sidebar.svelte";
   import ComingSoonModal from "$lib/components/ComingSoonModal.svelte";
+  import Toast from "$lib/components/Toast.svelte";
+  import ErrorBoundary from "$lib/components/ErrorBoundary.svelte";
 
   let isAuthenticated = false;
   /** @type {any} */
@@ -20,7 +23,7 @@
   let selectedFeature = null;
 
   // Define public routes that don't require authentication
-  const publicRoutes = ["/login", "/login/", "/register", "/register/"];
+  const publicRoutes = [`${base}/login`, `${base}/login/`, `${base}/register`, `${base}/register/`];
 
   // Subscribe to auth store
   auth.subscribe((authState) => {
@@ -37,10 +40,10 @@
 
       if (!isAuthenticated && !isPublicRoute) {
         // Redirect unauthenticated users to login
-        goto("/login");
+        goto(`${base}/login`);
       } else if (isAuthenticated && isPublicRoute) {
         // Redirect authenticated users away from auth pages
-        goto("/");
+        goto(`${base}/`);
       }
     }
   }
@@ -51,7 +54,7 @@
 
   function logout() {
     auth.logout();
-    goto("/login");
+    goto(`${base}/login`);
   }
 
   /**
@@ -100,7 +103,7 @@
             <div class="flex items-center space-x-4">
               <!-- FrameWorks Branding -->
               <a
-                href="/"
+                href="{base}/"
                 class="flex items-center space-x-3 hover:opacity-80 transition-opacity"
               >
                 <img
@@ -215,16 +218,16 @@
                 <!-- Auth Buttons - Desktop -->
                 <div class="flex items-center space-x-3">
                   <a
-                    href="/login"
-                    class={$page.url.pathname === "/login/" || $page.url.pathname === "/login"
+                    href="{base}/login"
+                    class={$page.url.pathname === `${base}/login/` || $page.url.pathname === `${base}/login`
                       ? "btn-primary"
                       : "btn-secondary"}
                   >
                     Sign In
                   </a>
                   <a
-                    href="/register"
-                    class={$page.url.pathname === "/register/" || $page.url.pathname === "/register"
+                    href="{base}/register"
+                    class={$page.url.pathname === `${base}/register/` || $page.url.pathname === `${base}/register`
                       ? "btn-primary"
                       : "btn-secondary"}
                   >
@@ -302,8 +305,8 @@
                     class="pt-4 border-t border-tokyo-night-fg-gutter space-y-3"
                   >
                     <a
-                      href="/login"
-                      class="{$page.url.pathname === '/login/' || $page.url.pathname === '/login'
+                      href="{base}/login"
+                      class="{$page.url.pathname === `${base}/login/` || $page.url.pathname === `${base}/login`
                         ? 'btn-primary'
                         : 'btn-secondary'} w-full text-center"
                       on:click={() => (mobileMenuOpen = false)}
@@ -311,8 +314,8 @@
                       Sign In
                     </a>
                     <a
-                      href="/register"
-                      class="{$page.url.pathname === '/register/' || $page.url.pathname === '/register'
+                      href="{base}/register"
+                      class="{$page.url.pathname === `${base}/register/` || $page.url.pathname === `${base}/register`
                         ? 'btn-primary'
                         : 'btn-secondary'} w-full text-center"
                       on:click={() => (mobileMenuOpen = false)}
@@ -353,3 +356,9 @@
   item={selectedFeature}
   on:close={closeComingSoonModal}
 />
+
+<!-- Toast Notifications -->
+<Toast />
+
+<!-- Global Error Boundary -->
+<ErrorBoundary />

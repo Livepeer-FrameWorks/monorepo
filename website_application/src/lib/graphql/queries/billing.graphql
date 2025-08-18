@@ -1,0 +1,63 @@
+# Billing queries
+query GetBillingTiers {
+  billingTiers {
+    id
+    name
+    description
+    price
+    currency
+    features
+  }
+}
+
+query GetBillingStatus {
+  billingStatus {
+    tenantId
+    currentTier {
+      id
+      name
+      price
+      currency
+      features
+    }
+    nextBillingDate
+    outstandingAmount
+    status
+  }
+}
+
+query GetInvoices {
+  invoices {
+    id
+    tenantId
+    amount
+    currency
+    status
+    dueDate
+    createdAt
+    lineItems {
+      description
+      quantity
+      unitPrice
+      total
+    }
+  }
+}
+
+query GetInvoice($id: ID!) {
+  invoice(id: $id) {
+    id
+    tenantId
+    amount
+    currency
+    status
+    dueDate
+    createdAt
+    lineItems {
+      description
+      quantity
+      unitPrice
+      total
+    }
+  }
+}
