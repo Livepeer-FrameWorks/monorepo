@@ -49,6 +49,12 @@ func GraphQLContextMiddleware() gin.HandlerFunc {
 
 			// Add user to request context for GraphQL resolvers
 			ctx = context.WithValue(ctx, "user", user)
+
+			// Also add individual values that resolvers expect
+			ctx = context.WithValue(ctx, "user_id", userID.(string))
+			ctx = context.WithValue(ctx, "tenant_id", tenantID.(string))
+			ctx = context.WithValue(ctx, "email", email.(string))
+			ctx = context.WithValue(ctx, "role", role.(string))
 		}
 
 		// Update the request context

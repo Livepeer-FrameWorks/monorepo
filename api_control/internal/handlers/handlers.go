@@ -321,6 +321,7 @@ func Login(c middleware.Context) {
 		Token: token,
 		User: models.User{
 			ID:          user.ID,
+			TenantID:    user.TenantID,
 			Email:       user.Email,
 			Role:        user.Role,
 			Permissions: user.Permissions,
