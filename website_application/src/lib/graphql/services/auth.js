@@ -46,20 +46,31 @@ export const authService = {
     // Let the caller handle navigation
   },
 
-  // Check if user is authenticated and get current user from localStorage
+  // Check if user is authenticated and get current user from REST API
   async checkAuth() {
     const token = localStorage.getItem('token');
-    const userData = localStorage.getItem('user');
     
-    if (!token || !userData) {
+    if (!token) {
       return { isAuthenticated: false, user: null };
     }
 
     try {
-      const user = JSON.parse(userData);
+      // Validate token and get current user via REST API
+      const response = await authAPI.get('/me', {
+        headers: {
+          Authorization: `Bearer ${token}`
+        }
+      });
+      
+      const user = response.data;
+      
+      // Update stored user data
+      localStorage.setItem('user', JSON.stringify(user));
+      
       return { isAuthenticated: true, user, token };
     } catch (error) {
-      // Invalid user data, clear it
+      console.error('Token validation failed:', error);
+      // Token is invalid, clear auth data
       this.logout();
       return { isAuthenticated: false, user: null };
     }
