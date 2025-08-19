@@ -287,6 +287,38 @@ func (dc *DecklogClient) sendBatchGRPC(events []models.DecklogEvent) error {
 					},
 				}
 			}
+		case pb.EventType_EVENT_TYPE_TRACK_LIST:
+			eventDataItem.EventData = &pb.EventData_StreamLifecycleData{
+				StreamLifecycleData: &pb.StreamLifecycleData{
+					State:  pb.StreamLifecycleData_STATE_LIVE,
+					Reason: getOptionalStringFromData(event.Data, "source"),
+				},
+			}
+		case pb.EventType_EVENT_TYPE_STREAM_BUFFER:
+			// Map buffer states according to MistServer documentation:
+			// FULL: stream has become playable in all protocols
+			// EMPTY: stream is shutting down
+			// DRY: problem detected with incoming media data
+			// RECOVER: previously DRY stream has recovered
+			state := pb.StreamLifecycleData_STATE_UNSPECIFIED
+			if bufferState := getStringFromData(event.Data, "buffer_state"); bufferState != "" {
+				switch bufferState {
+				case "FULL":
+					state = pb.StreamLifecycleData_STATE_LIVE
+				case "EMPTY":
+					state = pb.StreamLifecycleData_STATE_ENDED
+				case "DRY":
+					state = pb.StreamLifecycleData_STATE_OFFLINE
+				case "RECOVER":
+					state = pb.StreamLifecycleData_STATE_LIVE
+				}
+			}
+			eventDataItem.EventData = &pb.EventData_StreamLifecycleData{
+				StreamLifecycleData: &pb.StreamLifecycleData{
+					State:  state,
+					Reason: getOptionalStringFromData(event.Data, "buffer_state"),
+				},
+			}
 		default:
 			// Log unrecognized event types clearly so we can add support
 			logger.WithFields(logging.Fields{
@@ -304,7 +336,7 @@ func (dc *DecklogClient) sendBatchGRPC(events []models.DecklogEvent) error {
 	if len(eventData) == 0 {
 		logger.WithFields(logging.Fields{
 			"original_batch_size": len(events),
-			"batch_id":           uuid.New().String(),
+			"batch_id":            uuid.New().String(),
 		}).Warn("All events in batch were unrecognized - skipping batch send")
 		return nil
 	}
