@@ -23,6 +23,7 @@ import (
 	"github.com/99designs/gqlgen/graphql/handler/transport"
 	"github.com/99designs/gqlgen/graphql/playground"
 	"github.com/gin-gonic/gin"
+	"github.com/gorilla/websocket"
 )
 
 func main() {
@@ -54,13 +55,13 @@ func main() {
 
 	// Add health checks
 	healthChecker.AddCheck("config", monitoring.ConfigurationHealthCheck(map[string]string{
-		"JWT_SECRET":     config.GetEnv("JWT_SECRET", ""),
-		"SERVICE_TOKEN":  config.GetEnv("SERVICE_TOKEN", ""),
-		"COMMODORE_URL":  config.GetEnv("COMMODORE_URL", ""),
-		"PERISCOPE_URL":  config.GetEnv("PERISCOPE_URL", ""),
-		"PURSER_URL":     config.GetEnv("PURSER_URL", ""),
+		"JWT_SECRET":        config.GetEnv("JWT_SECRET", ""),
+		"SERVICE_TOKEN":     config.GetEnv("SERVICE_TOKEN", ""),
+		"COMMODORE_URL":     config.GetEnv("COMMODORE_URL", ""),
+		"PERISCOPE_URL":     config.GetEnv("PERISCOPE_URL", ""),
+		"PURSER_URL":        config.GetEnv("PURSER_URL", ""),
 		"QUARTERMASTER_URL": config.GetEnv("QUARTERMASTER_URL", ""),
-		"SIGNALMAN_URL":  config.GetEnv("SIGNALMAN_URL", ""),
+		"SIGNALMAN_URL":     config.GetEnv("SIGNALMAN_URL", ""),
 	}))
 
 	// Create business metrics for GraphQL operations
@@ -80,10 +81,16 @@ func main() {
 	gqlHandler.AddTransport(transport.GET{})
 	gqlHandler.AddTransport(transport.Websocket{
 		KeepAlivePingInterval: 10 * time.Second,
+		Upgrader: websocket.Upgrader{
+			CheckOrigin: func(r *http.Request) bool {
+				// Allow all origins in development - in production, restrict to specific domains
+				return true
+			},
+		},
 		InitFunc: func(ctx context.Context, initPayload transport.InitPayload) (context.Context, *transport.InitPayload, error) {
 			// Get authorization from WebSocket connection params using built-in method
 			authHeader := initPayload.Authorization()
-			
+
 			if authHeader != "" {
 				// Parse JWT token from Authorization header
 				parts := strings.Split(authHeader, " ")
@@ -112,7 +119,7 @@ func main() {
 					}
 				}
 			}
-			
+
 			// Return the context and initPayload (can be modified if needed)
 			return ctx, &initPayload, nil
 		},
@@ -148,13 +155,10 @@ func main() {
 	graphqlGroup := app.Group("/graphql")
 	jwtSecret := config.GetEnv("JWT_SECRET", "default-secret-key-change-in-production")
 	graphqlGroup.Use(pkgauth.JWTAuthMiddleware([]byte(jwtSecret))) // Standard auth with WebSocket support
-	graphqlGroup.Use(middleware.GraphQLContextMiddleware())              // Bridge user context to GraphQL
+	graphqlGroup.Use(middleware.GraphQLContextMiddleware())        // Bridge user context to GraphQL
 	{
 		// GraphQL endpoint
 		graphqlGroup.POST("/", gin.WrapH(gqlHandler))
-		
-		// GraphQL WebSocket endpoint (for subscriptions)
-		graphqlGroup.GET("/", gin.WrapH(gqlHandler))
 
 		// GraphQL playground in development
 		if config.GetEnv("GIN_MODE", "debug") != "release" {
@@ -163,9 +167,13 @@ func main() {
 		}
 	}
 
+	// Dedicated WebSocket endpoint for GraphQL subscriptions (no auth middleware)
+	// Authentication is handled in the WebSocket InitFunc via connection params
+	app.GET("/graphql/ws", gin.WrapH(gqlHandler))
+
 	// Use standard server startup with graceful shutdown
 	serverConfig := server.DefaultConfig("bridge", "18000")
-	
+
 	// Start server with standard graceful shutdown handling
 	if err := server.Start(serverConfig, app, logger); err != nil {
 		logger.Fatal("Failed to start server: " + err.Error())

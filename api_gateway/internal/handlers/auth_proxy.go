@@ -56,6 +56,11 @@ func (ap *AuthProxy) ProxyToCommodore(path string) gin.HandlerFunc {
 			return
 		}
 
+		// Set Content-Length header explicitly to ensure body is not lost
+		if len(body) > 0 {
+			proxyReq.ContentLength = int64(len(body))
+		}
+
 		// Copy headers (excluding hop-by-hop headers)
 		for key, values := range c.Request.Header {
 			// Skip hop-by-hop headers

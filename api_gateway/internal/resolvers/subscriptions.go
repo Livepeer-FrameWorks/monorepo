@@ -98,3 +98,66 @@ func (r *Resolver) DoSystemUpdates(ctx context.Context) (<-chan *model.SystemHea
 	// Use WebSocket manager to subscribe to system updates
 	return r.wsManager.SubscribeToSystem(ctx, config)
 }
+
+// DoTrackListUpdates handles real-time track list updates via WebSocket
+func (r *Resolver) DoTrackListUpdates(ctx context.Context, streamID string) (<-chan *model.TrackListEvent, error) {
+	r.Logger.Info("Setting up track list updates subscription")
+
+	// Get user from context - subscriptions require authentication
+	user, err := middleware.RequireAuth(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("authentication required for track list subscriptions: %w", err)
+	}
+
+	// Extract JWT token from context
+	jwtToken := ""
+	if token := ctx.Value("jwt_token"); token != nil {
+		if tokenStr, ok := token.(string); ok {
+			jwtToken = tokenStr
+		}
+	}
+
+	// Create connection config
+	config := ConnectionConfig{
+		UserID:   user.UserID,
+		TenantID: user.TenantID,
+		JWT:      jwtToken,
+	}
+
+	// Use WebSocket manager to subscribe to track list updates
+	return r.wsManager.SubscribeToTrackList(ctx, config, streamID)
+}
+
+// DoTenantEvents handles real-time tenant events via WebSocket
+func (r *Resolver) DoTenantEvents(ctx context.Context, tenantID string) (<-chan model.TenantEvent, error) {
+	r.Logger.Info("Setting up tenant events subscription")
+
+	// Get user from context - subscriptions require authentication
+	user, err := middleware.RequireAuth(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("authentication required for tenant event subscriptions: %w", err)
+	}
+
+	// Verify user has access to the requested tenant
+	if user.TenantID != tenantID {
+		return nil, fmt.Errorf("access denied: user cannot access tenant %s", tenantID)
+	}
+
+	// Extract JWT token from context
+	jwtToken := ""
+	if token := ctx.Value("jwt_token"); token != nil {
+		if tokenStr, ok := token.(string); ok {
+			jwtToken = tokenStr
+		}
+	}
+
+	// Create connection config
+	config := ConnectionConfig{
+		UserID:   user.UserID,
+		TenantID: user.TenantID,
+		JWT:      jwtToken,
+	}
+
+	// Use WebSocket manager to subscribe to tenant events
+	return r.wsManager.SubscribeToTenantEvents(ctx, config, tenantID)
+}

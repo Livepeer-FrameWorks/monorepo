@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"frameworks/api_gateway/graph/model"
+	"frameworks/pkg/api/commodore"
 	"frameworks/pkg/models"
 )
 
@@ -102,16 +103,38 @@ func (r *Resolver) DoUpdateTenant(ctx context.Context, input model.UpdateTenantI
 
 // DoUpdateStream updates stream settings
 func (r *Resolver) DoUpdateStream(ctx context.Context, id string, input model.UpdateStreamInput) (*models.Stream, error) {
-	tenantID, ok := ctx.Value("tenant_id").(string)
+	// Extract JWT token from context
+	userToken, ok := ctx.Value("jwt_token").(string)
 	if !ok {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, fmt.Errorf("user not authenticated")
 	}
+
+	tenantID, _ := ctx.Value("tenant_id").(string)
 
 	r.Logger.WithField("tenant_id", tenantID).
 		WithField("stream_id", id).
 		Info("Updating stream")
 
-	// TODO: Add UpdateStream method to Commodore client
-	// For now, return error indicating not implemented
-	return nil, fmt.Errorf("stream update not yet implemented")
+	// Convert to Commodore request format
+	req := &commodore.UpdateStreamRequest{}
+
+	// Handle optional fields
+	if input.Name != nil {
+		req.Name = input.Name
+	}
+	if input.Description != nil {
+		req.Description = input.Description
+	}
+	if input.Record != nil {
+		req.Record = input.Record
+	}
+
+	// Call Commodore to update stream
+	streamResp, err := r.Clients.Commodore.UpdateStream(ctx, userToken, id, req)
+	if err != nil {
+		r.Logger.WithError(err).Error("Failed to update stream")
+		return nil, fmt.Errorf("failed to update stream: %w", err)
+	}
+
+	return streamResp, nil
 }

@@ -32,10 +32,20 @@ func TestRequestIDMiddleware(t *testing.T) {
 func TestTimeoutMiddleware(t *testing.T) {
 	r := gin.New()
 	r.Use(TimeoutMiddleware(10 * time.Millisecond))
-	r.GET("/slow", func(c *gin.Context) { time.Sleep(20 * time.Millisecond); c.String(http.StatusOK, "done") })
+	
+	// Test handler that respects context cancellation
+	r.GET("/context-aware", func(c *gin.Context) {
+		select {
+		case <-time.After(20 * time.Millisecond):
+			c.String(http.StatusOK, "done")
+		case <-c.Request.Context().Done():
+			c.AbortWithStatus(http.StatusGatewayTimeout)
+			return
+		}
+	})
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/slow", nil)
+	req, _ := http.NewRequest("GET", "/context-aware", nil)
 	r.ServeHTTP(w, req)
 
 	if w.Code != http.StatusGatewayTimeout {

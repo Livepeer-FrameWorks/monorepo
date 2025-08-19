@@ -1,8 +1,10 @@
 package middleware
 
 import (
+	"bytes"
 	"context"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -84,31 +86,108 @@ func RequestIDMiddleware() gin.HandlerFunc {
 	}
 }
 
-// TimeoutMiddleware adds a timeout to request processing
+// timeoutWriter is a custom ResponseWriter that buffers output and handles timeouts
+type timeoutWriter struct {
+	gin.ResponseWriter
+	body         *bytes.Buffer
+	headers      http.Header
+	mu           sync.Mutex
+	timeout      bool
+	wroteHeaders bool
+	code         int
+	size         int
+}
+
+// newTimeoutWriter creates a new timeout writer
+func newTimeoutWriter(w gin.ResponseWriter, buf *bytes.Buffer) *timeoutWriter {
+	return &timeoutWriter{
+		ResponseWriter: w,
+		body:           buf,
+		headers:        make(http.Header),
+		code:           http.StatusOK,
+	}
+}
+
+// Header returns the header map that will be sent by WriteHeader
+func (tw *timeoutWriter) Header() http.Header {
+	tw.mu.Lock()
+	defer tw.mu.Unlock()
+	return tw.headers
+}
+
+// Write writes data to the connection as part of an HTTP reply
+func (tw *timeoutWriter) Write(data []byte) (int, error) {
+	tw.mu.Lock()
+	defer tw.mu.Unlock()
+
+	if tw.timeout {
+		return 0, nil
+	}
+
+	if !tw.wroteHeaders {
+		tw.WriteHeader(tw.code)
+	}
+
+	n, err := tw.body.Write(data)
+	tw.size += n
+	return n, err
+}
+
+// WriteString writes a string to the connection
+func (tw *timeoutWriter) WriteString(s string) (int, error) {
+	return tw.Write([]byte(s))
+}
+
+// WriteHeader sends an HTTP response header with the provided status code
+func (tw *timeoutWriter) WriteHeader(code int) {
+	tw.mu.Lock()
+	defer tw.mu.Unlock()
+
+	if tw.timeout || tw.wroteHeaders {
+		return
+	}
+
+	tw.code = code
+	tw.wroteHeaders = true
+}
+
+// Size returns the current size of the response
+func (tw *timeoutWriter) Size() int {
+	tw.mu.Lock()
+	defer tw.mu.Unlock()
+	return tw.size
+}
+
+// Status returns the HTTP status code
+func (tw *timeoutWriter) Status() int {
+	tw.mu.Lock()
+	defer tw.mu.Unlock()
+	return tw.code
+}
+
+// copyHeaders copies headers from timeout writer to response writer
+func (tw *timeoutWriter) copyHeaders() {
+	for key, values := range tw.headers {
+		for _, value := range values {
+			tw.ResponseWriter.Header().Add(key, value)
+		}
+	}
+}
+
+// TimeoutMiddleware adds a timeout context to requests
+// Note: This sets a timeout context but doesn't interrupt handlers.
+// Handlers must check ctx.Done() themselves for true timeout behavior.
 func TimeoutMiddleware(timeout time.Duration) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// Wrap the request in a timeout context
+		// Create a timeout context
 		ctx, cancel := context.WithTimeout(c.Request.Context(), timeout)
 		defer cancel()
 
-		// Replace request context
+		// Set the timeout context on the request
 		c.Request = c.Request.WithContext(ctx)
 
-		// Process request
-		done := make(chan struct{})
-		go func() {
-			c.Next()
-			close(done)
-		}()
-
-		// Wait for completion or timeout
-		select {
-		case <-done:
-			return
-		case <-ctx.Done():
-			c.AbortWithStatus(http.StatusGatewayTimeout)
-			return
-		}
+		// Process request normally - handlers should check ctx.Done()
+		c.Next()
 	}
 }
 

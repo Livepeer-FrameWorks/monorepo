@@ -498,7 +498,12 @@ func handleGetSource(c *gin.Context, streamName string, query url.Values) {
 		return
 	}
 
-	dtscURL := fmt.Sprintf("dtsc://%s:4200", bestNode)
+	// Extract hostname from URL for DTSC (C++ returns "dtsc://" + host)
+	hostname := bestNode
+	if u, err := url.Parse(bestNode); err == nil && u.Hostname() != "" {
+		hostname = u.Hostname()
+	}
+	dtscURL := fmt.Sprintf("dtsc://%s:4200", hostname)
 
 	// Check if this is a redirect or direct response
 	if query.Get("redirect") == "1" {

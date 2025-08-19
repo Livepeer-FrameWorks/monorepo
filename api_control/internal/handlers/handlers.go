@@ -19,6 +19,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 
 	commodoreapi "frameworks/pkg/api/commodore"
 	purserapi "frameworks/pkg/api/purser"
@@ -241,7 +242,7 @@ func Login(c *gin.Context) {
 	// Find user by email (shared tenancy)
 	var user models.User
 	err := db.QueryRow(`
-		SELECT id, tenant_id, email, password_hash, role, verified, is_active, created_at
+		SELECT id, tenant_id, email, password_hash, role, verified, is_active, COALESCE(created_at, NOW()) as created_at
 		FROM users WHERE email = $1
 	`, req.Email).Scan(&user.ID, &user.TenantID, &user.Email, &user.PasswordHash, &user.Role, &user.IsVerified, &user.IsActive, &user.CreatedAt)
 
@@ -890,7 +891,7 @@ func DeleteStream(c *gin.Context) {
 // GetUsers returns all users (admin only)
 func GetUsers(c *gin.Context) {
 	rows, err := db.Query(`
-		SELECT id, email, created_at, is_active 
+		SELECT id, email, COALESCE(created_at, NOW()) as created_at, is_active 
 		FROM users ORDER BY created_at DESC
 	`)
 
@@ -1337,7 +1338,7 @@ func CreateAPIToken(c *gin.Context) {
 	_, err = db.Exec(`
 		INSERT INTO api_tokens (id, tenant_id, user_id, token_value, token_name, permissions, is_active, expires_at, created_at)
 		VALUES ($1, $2, $3, $4, $5, $6, true, $7, NOW())
-	`, tokenID, tenantID, userID, tokenValue, req.TokenName, permissions, expiresAt)
+	`, tokenID, tenantID, userID, tokenValue, req.TokenName, pq.Array(permissions), expiresAt)
 
 	if err != nil {
 		logger.WithFields(logging.Fields{
@@ -1365,7 +1366,7 @@ func GetAPITokens(c *gin.Context) {
 	userID := c.GetString("user_id")
 
 	rows, err := db.Query(`
-		SELECT id, token_name, permissions, is_active, last_used_at, expires_at, created_at
+		SELECT id, token_name, permissions, is_active, last_used_at, expires_at, COALESCE(created_at, NOW()) as created_at
 		FROM api_tokens 
 		WHERE user_id = $1 
 		ORDER BY created_at DESC

@@ -378,21 +378,29 @@ func (lb *LoadBalancer) rateNode(node *Node, streamName string, lat, lon float64
 		return 0
 	}
 
-	// Check if stream is replicated or has no inputs (like C++ source() method)
-	if stream, exists := node.Streams[streamName]; exists {
-		if stream.Replicated {
+	// Check if stream exists, has inputs, and is not replicated (EXACT C++ source() method line 279)
+	if streamName != "" {
+		stream, exists := node.Streams[streamName]
+		if !exists || stream.Inputs == 0 || stream.Replicated {
 			lb.logger.WithFields(logging.Fields{
 				"stream": streamName,
 				"host":   node.Host,
-			}).Debug("Stream is replicated, skipping for source")
-			return 0
-		}
-		if stream.Inputs == 0 {
-			lb.logger.WithFields(logging.Fields{
-				"stream": streamName,
-				"host":   node.Host,
-				"inputs": stream.Inputs,
-			}).Debug("Stream has no inputs, skipping for source")
+				"exists": exists,
+				"inputs": func() uint32 {
+					if exists {
+						return stream.Inputs
+					} else {
+						return 0
+					}
+				}(),
+				"replicated": func() bool {
+					if exists {
+						return stream.Replicated
+					} else {
+						return false
+					}
+				}(),
+			}).Debug("Stream not suitable for source: missing, no inputs, or replicated")
 			return 0
 		}
 	}

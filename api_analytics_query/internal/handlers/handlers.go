@@ -52,16 +52,37 @@ func GetStreamAnalytics(c *gin.Context) {
 		return
 	}
 
-	// Build query with optional stream filtering
+	// Build query with COALESCE for NULL handling
 	query := `
 		SELECT sa.id, sa.tenant_id, sa.internal_name, sa.internal_name, 
-		       sa.session_start_time, sa.session_end_time, sa.total_session_duration,
-		       sa.current_viewers, sa.peak_viewers, sa.total_connections, 
-		       sa.bandwidth_in, sa.bandwidth_out, sa.total_bandwidth_gb,
-		       sa.bitrate_kbps, sa.resolution, sa.packets_sent, sa.packets_lost,
-		       sa.packets_retrans, sa.upbytes, sa.downbytes, sa.first_ms, sa.last_ms,
-		       sa.track_count, sa.inputs, sa.outputs, sa.node_id, sa.node_name, sa.latitude,
-		       sa.longitude, sa.location, sa.status, sa.last_updated, sa.created_at
+		       COALESCE(sa.session_start_time, '1970-01-01 00:00:00'::timestamp) as session_start_time,
+		       COALESCE(sa.session_end_time, '1970-01-01 00:00:00'::timestamp) as session_end_time, 
+		       COALESCE(sa.total_session_duration, 0) as total_session_duration,
+		       COALESCE(sa.current_viewers, 0) as current_viewers, 
+		       COALESCE(sa.peak_viewers, 0) as peak_viewers, 
+		       COALESCE(sa.total_connections, 0) as total_connections, 
+		       COALESCE(sa.bandwidth_in, 0) as bandwidth_in, 
+		       COALESCE(sa.bandwidth_out, 0) as bandwidth_out, 
+		       COALESCE(sa.total_bandwidth_gb, 0.0) as total_bandwidth_gb,
+		       COALESCE(sa.bitrate_kbps, 0) as bitrate_kbps, 
+		       COALESCE(sa.resolution, '') as resolution, 
+		       COALESCE(sa.packets_sent, 0) as packets_sent, 
+		       COALESCE(sa.packets_lost, 0) as packets_lost,
+		       COALESCE(sa.packets_retrans, 0) as packets_retrans, 
+		       COALESCE(sa.upbytes, 0) as upbytes, 
+		       COALESCE(sa.downbytes, 0) as downbytes, 
+		       COALESCE(sa.first_ms, 0) as first_ms, 
+		       COALESCE(sa.last_ms, 0) as last_ms,
+		       COALESCE(sa.track_count, 0) as track_count, 
+		       COALESCE(sa.inputs, '') as inputs, 
+		       COALESCE(sa.outputs, '') as outputs, 
+		       COALESCE(sa.node_id, '') as node_id, 
+		       COALESCE(sa.node_name, '') as node_name, 
+		       COALESCE(sa.latitude, 0.0) as latitude,
+		       COALESCE(sa.longitude, 0.0) as longitude, 
+		       COALESCE(sa.location, '') as location, 
+		       COALESCE(sa.status, '') as status, 
+		       sa.last_updated, sa.created_at
 		FROM stream_analytics sa
 		WHERE sa.tenant_id = $1 AND sa.last_updated >= $2 AND sa.last_updated <= $3`
 
@@ -183,8 +204,21 @@ func GetViewerMetrics(c *gin.Context) {
 
 	// Parse query parameters
 	streamID := c.Query("stream_id")
-	startTime := c.DefaultQuery("start_time", time.Now().Add(-24*time.Hour).Format(time.RFC3339))
-	endTime := c.DefaultQuery("end_time", time.Now().Format(time.RFC3339))
+	startTimeStr := c.DefaultQuery("start_time", time.Now().Add(-24*time.Hour).Format(time.RFC3339))
+	endTimeStr := c.DefaultQuery("end_time", time.Now().Format(time.RFC3339))
+
+	// Parse time strings into time.Time objects for ClickHouse
+	startTime, err := time.Parse(time.RFC3339, startTimeStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Invalid start_time format. Use RFC3339 format."})
+		return
+	}
+
+	endTime, err := time.Parse(time.RFC3339, endTimeStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Invalid end_time format. Use RFC3339 format."})
+		return
+	}
 
 	// Build query with optional stream filtering
 	query := `
@@ -268,8 +302,21 @@ func GetRoutingEvents(c *gin.Context) {
 	}
 
 	// Parse time range from query params
-	startTime := c.DefaultQuery("start_time", time.Now().Add(-24*time.Hour).Format(time.RFC3339))
-	endTime := c.DefaultQuery("end_time", time.Now().Format(time.RFC3339))
+	startTimeStr := c.DefaultQuery("start_time", time.Now().Add(-24*time.Hour).Format(time.RFC3339))
+	endTimeStr := c.DefaultQuery("end_time", time.Now().Format(time.RFC3339))
+
+	// Parse time strings into time.Time objects for ClickHouse
+	startTime, err := time.Parse(time.RFC3339, startTimeStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Invalid start_time format. Use RFC3339 format."})
+		return
+	}
+
+	endTime, err := time.Parse(time.RFC3339, endTimeStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Invalid end_time format. Use RFC3339 format."})
+		return
+	}
 
 	// Query ClickHouse for routing events
 	rows, err := clickhouse.QueryContext(c.Request.Context(), `
@@ -342,8 +389,21 @@ func GetViewerMetrics5m(c *gin.Context) {
 	}
 
 	// Parse time range from query params
-	startTime := c.DefaultQuery("start_time", time.Now().Add(-24*time.Hour).Format(time.RFC3339))
-	endTime := c.DefaultQuery("end_time", time.Now().Format(time.RFC3339))
+	startTimeStr := c.DefaultQuery("start_time", time.Now().Add(-24*time.Hour).Format(time.RFC3339))
+	endTimeStr := c.DefaultQuery("end_time", time.Now().Format(time.RFC3339))
+
+	// Parse time strings into time.Time objects for ClickHouse
+	startTime, err := time.Parse(time.RFC3339, startTimeStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Invalid start_time format. Use RFC3339 format."})
+		return
+	}
+
+	endTime, err := time.Parse(time.RFC3339, endTimeStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Invalid end_time format. Use RFC3339 format."})
+		return
+	}
 
 	// Query ClickHouse materialized view
 	rows, err := clickhouse.QueryContext(c.Request.Context(), `
@@ -412,13 +472,34 @@ func GetStreamDetails(c *gin.Context) {
 	var discard string
 	err := yugaDB.QueryRowContext(c.Request.Context(), `
 		SELECT sa.id, sa.tenant_id, sa.internal_name, sa.internal_name, 
-		       sa.session_start_time, sa.session_end_time, sa.total_session_duration,
-		       sa.current_viewers, sa.peak_viewers, sa.total_connections, 
-		       sa.bandwidth_in, sa.bandwidth_out, sa.total_bandwidth_gb,
-		       sa.bitrate_kbps, sa.resolution, sa.packets_sent, sa.packets_lost,
-		       sa.packets_retrans, sa.upbytes, sa.downbytes, sa.first_ms, sa.last_ms,
-		       sa.track_count, sa.inputs, sa.outputs, sa.node_id, sa.node_name, sa.latitude,
-		       sa.longitude, sa.location, sa.status, sa.last_updated, sa.created_at
+		       COALESCE(sa.session_start_time, '1970-01-01 00:00:00'::timestamp) as session_start_time,
+		       COALESCE(sa.session_end_time, '1970-01-01 00:00:00'::timestamp) as session_end_time, 
+		       COALESCE(sa.total_session_duration, 0) as total_session_duration,
+		       COALESCE(sa.current_viewers, 0) as current_viewers, 
+		       COALESCE(sa.peak_viewers, 0) as peak_viewers, 
+		       COALESCE(sa.total_connections, 0) as total_connections, 
+		       COALESCE(sa.bandwidth_in, 0) as bandwidth_in, 
+		       COALESCE(sa.bandwidth_out, 0) as bandwidth_out, 
+		       COALESCE(sa.total_bandwidth_gb, 0.0) as total_bandwidth_gb,
+		       COALESCE(sa.bitrate_kbps, 0) as bitrate_kbps, 
+		       COALESCE(sa.resolution, '') as resolution, 
+		       COALESCE(sa.packets_sent, 0) as packets_sent, 
+		       COALESCE(sa.packets_lost, 0) as packets_lost,
+		       COALESCE(sa.packets_retrans, 0) as packets_retrans, 
+		       COALESCE(sa.upbytes, 0) as upbytes, 
+		       COALESCE(sa.downbytes, 0) as downbytes, 
+		       COALESCE(sa.first_ms, 0) as first_ms, 
+		       COALESCE(sa.last_ms, 0) as last_ms,
+		       COALESCE(sa.track_count, 0) as track_count, 
+		       COALESCE(sa.inputs, '') as inputs, 
+		       COALESCE(sa.outputs, '') as outputs, 
+		       COALESCE(sa.node_id, '') as node_id, 
+		       COALESCE(sa.node_name, '') as node_name, 
+		       COALESCE(sa.latitude, 0.0) as latitude,
+		       COALESCE(sa.longitude, 0.0) as longitude, 
+		       COALESCE(sa.location, '') as location, 
+		       COALESCE(sa.status, '') as status, 
+		       sa.last_updated, sa.created_at
 		FROM stream_analytics sa
 		WHERE sa.tenant_id = $1 AND sa.internal_name = $2
 	`, tenantID, internalName).Scan(
@@ -550,8 +631,21 @@ func GetTrackListEvents(c *gin.Context) {
 	}
 
 	internalName := c.Param("internal_name")
-	startTime := c.DefaultQuery("start_time", time.Now().Add(-24*time.Hour).Format(time.RFC3339))
-	endTime := c.DefaultQuery("end_time", time.Now().Format(time.RFC3339))
+	startTimeStr := c.DefaultQuery("start_time", time.Now().Add(-24*time.Hour).Format(time.RFC3339))
+	endTimeStr := c.DefaultQuery("end_time", time.Now().Format(time.RFC3339))
+
+	// Parse time strings into time.Time objects for ClickHouse
+	startTime, err := time.Parse(time.RFC3339, startTimeStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Invalid start_time format. Use RFC3339 format."})
+		return
+	}
+
+	endTime, err := time.Parse(time.RFC3339, endTimeStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Invalid end_time format. Use RFC3339 format."})
+		return
+	}
 
 	rows, err := clickhouse.QueryContext(c.Request.Context(), `
 		SELECT timestamp, node_id, track_list, track_count
@@ -774,7 +868,6 @@ func GetPlatformOverview(c *gin.Context) {
 	}
 
 	// Get stream counts from analytics data
-	logger.Info("Querying stream analytics table")
 	err = yugaDB.QueryRowContext(c.Request.Context(), `
 		SELECT 
 			COUNT(DISTINCT internal_name) as total_streams,
@@ -846,8 +939,6 @@ func GetPlatformOverview(c *gin.Context) {
 		GeneratedAt:    time.Now(),
 	}
 
-	logger.Info("About to send platform overview response")
-
 	// Debug marshaling to see what JSON is produced
 	jsonBytes, err := json.Marshal(response)
 	if err != nil {
@@ -856,14 +947,7 @@ func GetPlatformOverview(c *gin.Context) {
 		return
 	}
 
-	logger.WithFields(map[string]interface{}{
-		"json_length": len(jsonBytes),
-		"json":        string(jsonBytes),
-	}).Info("Platform overview JSON response")
-
 	c.Data(http.StatusOK, "application/json", jsonBytes)
-
-	logger.Info("Platform overview response sent")
 }
 
 // GetRealtimeStreams returns current live streams with analytics

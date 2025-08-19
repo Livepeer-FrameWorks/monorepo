@@ -242,9 +242,20 @@ func (dc *DecklogClient) sendBatchGRPC(events []models.DecklogEvent) error {
 				},
 			}
 		case pb.EventType_EVENT_TYPE_USER_CONNECTION:
+			// Determine action from event data
+			action := pb.UserConnectionData_ACTION_UNSPECIFIED
+			if actionStr := getStringFromData(event.Data, "action"); actionStr != "" {
+				switch actionStr {
+				case "connect":
+					action = pb.UserConnectionData_ACTION_CONNECT
+				case "disconnect":
+					action = pb.UserConnectionData_ACTION_DISCONNECT
+				}
+			}
+
 			eventDataItem.EventData = &pb.EventData_UserConnectionData{
 				UserConnectionData: &pb.UserConnectionData{
-					Action:           pb.UserConnectionData_ACTION_UNSPECIFIED, // Default, could be improved
+					Action:           action,
 					DisconnectReason: getOptionalStringFromData(event.Data, "disconnect_reason"),
 				},
 			}
@@ -257,12 +268,45 @@ func (dc *DecklogClient) sendBatchGRPC(events []models.DecklogEvent) error {
 					ActiveStreams: getUint32FromData(event.Data, "active_streams"),
 				},
 			}
+		case pb.EventType_EVENT_TYPE_CLIENT_LIFECYCLE:
+			// Handle both regular client lifecycle events and live-bandwidth events
+			if event.EventType == "live-bandwidth" {
+				// For live-bandwidth events, use StreamMetricsData
+				eventDataItem.EventData = &pb.EventData_StreamMetricsData{
+					StreamMetricsData: &pb.StreamMetricsData{
+						BandwidthBps: getUint64FromData(event.Data, "bandwidth_bps"),
+						ViewerCount:  getUint32FromData(event.Data, "viewer_count"),
+					},
+				}
+			} else {
+				// For regular client lifecycle events, use existing structure
+				eventDataItem.EventData = &pb.EventData_StreamMetricsData{
+					StreamMetricsData: &pb.StreamMetricsData{
+						BandwidthBps: getUint64FromData(event.Data, "bandwidth_in"),
+						ViewerCount:  getUint32FromData(event.Data, "viewer_count"),
+					},
+				}
+			}
 		default:
-			// For untyped events, we'll need to add a generic fallback or skip
+			// Log unrecognized event types clearly so we can add support
+			logger.WithFields(logging.Fields{
+				"event_type": eventType,
+				"event_id":   eventDataItem.EventId,
+				"data":       event.Data,
+			}).Error("Unrecognized event type - skipping event")
 			continue
 		}
 
 		eventData = append(eventData, eventDataItem)
+	}
+
+	// Don't send empty batches - this prevents validation errors
+	if len(eventData) == 0 {
+		logger.WithFields(logging.Fields{
+			"original_batch_size": len(events),
+			"batch_id":           uuid.New().String(),
+		}).Warn("All events in batch were unrecognized - skipping batch send")
+		return nil
 	}
 
 	// Collect all original data fields for metadata preservation
@@ -335,6 +379,8 @@ func mapEventTypeToProto(eventType string) pb.EventType {
 		return pb.EventType_EVENT_TYPE_STREAM_BUFFER
 	case "stream-end":
 		return pb.EventType_EVENT_TYPE_STREAM_END
+	case "live-bandwidth":
+		return pb.EventType_EVENT_TYPE_CLIENT_LIFECYCLE
 	default:
 		return pb.EventType_EVENT_TYPE_UNSPECIFIED
 	}

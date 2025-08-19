@@ -110,7 +110,7 @@ func (r *mutationResolver) DeleteStream(ctx context.Context, id string) (bool, e
 
 // RefreshStreamKey is the resolver for the refreshStreamKey field.
 func (r *mutationResolver) RefreshStreamKey(ctx context.Context, id string) (*models.Stream, error) {
-	panic(fmt.Errorf("not implemented: RefreshStreamKey - refreshStreamKey"))
+	return r.Resolver.DoRefreshStreamKey(ctx, id)
 }
 
 // CreateClip is the resolver for the createClip field.
@@ -311,27 +311,27 @@ func (r *streamAnalyticsResolver) TimeRange(ctx context.Context, obj *models.Str
 
 // StreamEvents is the resolver for the streamEvents field.
 func (r *subscriptionResolver) StreamEvents(ctx context.Context, streamID *string, tenantID *string) (<-chan *model.StreamEvent, error) {
-	panic(fmt.Errorf("not implemented: StreamEvents - streamEvents"))
+	return r.Resolver.DoStreamUpdates(ctx, streamID)
 }
 
 // ViewerMetrics is the resolver for the viewerMetrics field.
 func (r *subscriptionResolver) ViewerMetrics(ctx context.Context, streamID string) (<-chan *model.ViewerMetrics, error) {
-	panic(fmt.Errorf("not implemented: ViewerMetrics - viewerMetrics"))
+	return r.Resolver.DoAnalyticsUpdates(ctx)
 }
 
 // TrackListUpdates is the resolver for the trackListUpdates field.
 func (r *subscriptionResolver) TrackListUpdates(ctx context.Context, streamID string) (<-chan *model.TrackListEvent, error) {
-	panic(fmt.Errorf("not implemented: TrackListUpdates - trackListUpdates"))
+	return r.Resolver.DoTrackListUpdates(ctx, streamID)
 }
 
 // SystemHealth is the resolver for the systemHealth field.
 func (r *subscriptionResolver) SystemHealth(ctx context.Context) (<-chan *model.SystemHealthEvent, error) {
-	panic(fmt.Errorf("not implemented: SystemHealth - systemHealth"))
+	return r.Resolver.DoSystemUpdates(ctx)
 }
 
 // TenantEvents is the resolver for the tenantEvents field.
 func (r *subscriptionResolver) TenantEvents(ctx context.Context, tenantID string) (<-chan model.TenantEvent, error) {
-	panic(fmt.Errorf("not implemented: TenantEvents - tenantEvents"))
+	return r.Resolver.DoTenantEvents(ctx, tenantID)
 }
 
 // Settings is the resolver for the settings field.

@@ -41,8 +41,8 @@ func ServiceAuthMiddleware(expectedToken string) gin.HandlerFunc {
 func JWTAuthMiddleware(secret []byte) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// Check if this is a WebSocket upgrade request
-		if c.GetHeader("Upgrade") == "websocket" && 
-		   strings.Contains(c.GetHeader("Connection"), "Upgrade") {
+		if c.GetHeader("Upgrade") == "websocket" &&
+			strings.Contains(c.GetHeader("Connection"), "Upgrade") {
 			// Allow WebSocket upgrade requests through - auth will be handled by the WebSocket handler
 			c.Next()
 			return

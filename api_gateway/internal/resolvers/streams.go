@@ -100,6 +100,24 @@ func (r *Resolver) DoDeleteStream(ctx context.Context, id string) (bool, error) 
 	return true, nil
 }
 
+// DoRefreshStreamKey refreshes the stream key for a stream
+func (r *Resolver) DoRefreshStreamKey(ctx context.Context, id string) (*models.Stream, error) {
+	// Extract JWT token from context
+	userToken, ok := ctx.Value("jwt_token").(string)
+	if !ok {
+		return nil, fmt.Errorf("user not authenticated")
+	}
+
+	// Call Commodore to refresh stream key
+	streamResp, err := r.Clients.Commodore.RefreshStreamKey(ctx, userToken, id)
+	if err != nil {
+		r.Logger.WithError(err).Error("Failed to refresh stream key")
+		return nil, fmt.Errorf("failed to refresh stream key: %w", err)
+	}
+
+	return streamResp, nil
+}
+
 // DoValidateStreamKey validates a stream key
 func (r *Resolver) DoValidateStreamKey(ctx context.Context, streamKey string) (*model.StreamValidation, error) {
 	// Call Commodore to validate stream key

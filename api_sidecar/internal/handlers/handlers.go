@@ -134,7 +134,7 @@ func forwardEventToCommodore(endpoint string, eventData map[string]interface{}) 
 		return fmt.Errorf("failed to marshal event data: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/api/%s", apiBaseURL, endpoint)
+	url := fmt.Sprintf("%s/%s", apiBaseURL, endpoint)
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
@@ -258,7 +258,7 @@ func HandlePushRewrite(c *gin.Context) {
 	})
 
 	// Create wildcard stream name for MistServer routing
-	wildcardStreamName := fmt.Sprintf("+%s", validation.InternalName)
+	wildcardStreamName := fmt.Sprintf("live+%s", validation.InternalName)
 
 	logger.WithFields(logging.Fields{
 		"stream_key":           streamKey,

@@ -77,6 +77,10 @@ func (wm *WebSocketManager) GetOrCreateConnection(ctx context.Context, config Co
 
 	// Connect with authentication
 	if err := client.ConnectWithAuth(ctx, "/ws", config.JWT); err != nil {
+		wm.logger.WithError(err).WithFields(logging.Fields{
+			"user_id":   config.UserID,
+			"tenant_id": config.TenantID,
+		}).Error("Failed to connect to Signalman")
 		return nil, fmt.Errorf("failed to connect to Signalman: %w", err)
 	}
 
@@ -150,6 +154,54 @@ func (wm *WebSocketManager) SubscribeToSystem(ctx context.Context, config Connec
 
 	// Start message processing goroutine
 	go wm.processSystemMessages(ctx, client, updates)
+
+	return updates, nil
+}
+
+// SubscribeToTrackList subscribes to track list events and returns a channel of updates
+func (wm *WebSocketManager) SubscribeToTrackList(ctx context.Context, config ConnectionConfig, streamID string) (<-chan *model.TrackListEvent, error) {
+	client, err := wm.GetOrCreateConnection(ctx, config)
+	if err != nil {
+		return nil, err
+	}
+
+	// Subscribe to streams channel (track list events come through streams)
+	if err := client.SubscribeToStreams(); err != nil {
+		return nil, fmt.Errorf("failed to subscribe to track list updates: %w", err)
+	}
+
+	// Create output channel
+	updates := make(chan *model.TrackListEvent, 10)
+
+	// Start message processing goroutine
+	go wm.processTrackListMessages(ctx, client, updates, streamID)
+
+	return updates, nil
+}
+
+// SubscribeToTenantEvents subscribes to tenant events and returns a channel of updates
+func (wm *WebSocketManager) SubscribeToTenantEvents(ctx context.Context, config ConnectionConfig, tenantID string) (<-chan model.TenantEvent, error) {
+	client, err := wm.GetOrCreateConnection(ctx, config)
+	if err != nil {
+		return nil, err
+	}
+
+	// Subscribe to all channels to get various tenant events
+	if err := client.SubscribeToStreams(); err != nil {
+		return nil, fmt.Errorf("failed to subscribe to tenant events (streams): %w", err)
+	}
+	if err := client.SubscribeToAnalytics(); err != nil {
+		return nil, fmt.Errorf("failed to subscribe to tenant events (analytics): %w", err)
+	}
+	if err := client.SubscribeToSystem(); err != nil {
+		return nil, fmt.Errorf("failed to subscribe to tenant events (system): %w", err)
+	}
+
+	// Create output channel
+	updates := make(chan model.TenantEvent, 10)
+
+	// Start message processing goroutine
+	go wm.processTenantEventMessages(ctx, client, updates, tenantID)
 
 	return updates, nil
 }
@@ -345,6 +397,114 @@ func (wm *WebSocketManager) convertToSystemHealthEvent(msg signalmanapi.Message)
 		DiskUsage:   disk,
 		HealthScore: health,
 		Timestamp:   msg.Timestamp,
+	}
+}
+
+// processTrackListMessages processes track list messages from Signalman
+func (wm *WebSocketManager) processTrackListMessages(ctx context.Context, client *signalmanclient.Client, output chan<- *model.TrackListEvent, streamID string) {
+	defer close(output)
+
+	messages := client.GetMessages()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case msg, ok := <-messages:
+			if !ok {
+				return
+			}
+
+			// Only process track list events
+			if msg.Type != signalmanapi.TypeTrackList {
+				continue
+			}
+
+			// Filter by stream ID
+			if msgStreamID, exists := msg.Data["stream_id"].(string); exists && msgStreamID != streamID {
+				continue
+			}
+
+			// Convert to GraphQL model
+			if update := wm.convertToTrackListEvent(msg); update != nil {
+				select {
+				case output <- update:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}
+}
+
+// processTenantEventMessages processes tenant event messages from Signalman
+func (wm *WebSocketManager) processTenantEventMessages(ctx context.Context, client *signalmanclient.Client, output chan<- model.TenantEvent, tenantID string) {
+	defer close(output)
+
+	messages := client.GetMessages()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case msg, ok := <-messages:
+			if !ok {
+				return
+			}
+
+			// Only process messages for the requested tenant
+			if msg.TenantID == nil || *msg.TenantID != tenantID {
+				continue
+			}
+
+			// Convert to GraphQL model based on message type
+			var tenantEvent model.TenantEvent
+			switch msg.Type {
+			case signalmanapi.TypeStreamStart, signalmanapi.TypeStreamEnd, signalmanapi.TypeStreamError, signalmanapi.TypeStreamBuffer, signalmanapi.TypeTrackList:
+				tenantEvent = wm.convertToStreamEvent(msg)
+			case signalmanapi.TypeViewerMetrics:
+				tenantEvent = wm.convertToViewerMetrics(msg)
+				// Note: SystemHealthEvent doesn't implement TenantEvent interface,
+				// so we don't include it in tenant events for now
+			}
+
+			if tenantEvent != nil {
+				select {
+				case output <- tenantEvent:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}
+}
+
+// convertToTrackListEvent converts a Signalman message to a GraphQL TrackListEvent
+func (wm *WebSocketManager) convertToTrackListEvent(msg signalmanapi.Message) *model.TrackListEvent {
+	if msg.Type != signalmanapi.TypeTrackList {
+		return nil
+	}
+
+	streamID, _ := msg.Data["stream_id"].(string)
+	tenantID := ""
+	if msg.TenantID != nil {
+		tenantID = *msg.TenantID
+	}
+
+	trackList := ""
+	if tl, ok := msg.Data["track_list"].(string); ok {
+		trackList = tl
+	}
+
+	trackCount := 0
+	if tc, ok := msg.Data["track_count"].(float64); ok {
+		trackCount = int(tc)
+	}
+
+	return &model.TrackListEvent{
+		StreamID:   streamID,
+		TenantID:   tenantID,
+		TrackList:  trackList,
+		TrackCount: trackCount,
+		Timestamp:  msg.Timestamp,
 	}
 }
 

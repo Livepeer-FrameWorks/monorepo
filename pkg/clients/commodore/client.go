@@ -457,6 +457,86 @@ func (c *Client) DeleteStream(ctx context.Context, userToken, streamID string) e
 	return nil
 }
 
+// UpdateStream updates an existing stream
+func (c *Client) UpdateStream(ctx context.Context, userToken, streamID string, req *commodore.UpdateStreamRequest) (*models.Stream, error) {
+	jsonData, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal update stream request: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/streams/%s", c.baseURL, url.PathEscape(streamID))
+	httpReq, err := http.NewRequestWithContext(ctx, "PUT", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+userToken)
+
+	resp, err := clients.DoWithRetry(ctx, c.httpClient, httpReq, c.retryConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to update stream: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		var errorResp commodore.ErrorResponse
+		if err := json.Unmarshal(body, &errorResp); err != nil {
+			return nil, fmt.Errorf("failed to update stream with status %d: %s", resp.StatusCode, string(body))
+		}
+		return nil, fmt.Errorf("failed to update stream: %s", errorResp.Error)
+	}
+
+	var stream models.Stream
+	if err := json.Unmarshal(body, &stream); err != nil {
+		return nil, fmt.Errorf("failed to parse stream response: %w", err)
+	}
+
+	return &stream, nil
+}
+
+// RefreshStreamKey generates a new stream key for an existing stream
+func (c *Client) RefreshStreamKey(ctx context.Context, userToken, streamID string) (*models.Stream, error) {
+	url := fmt.Sprintf("%s/streams/%s/refresh-key", c.baseURL, url.PathEscape(streamID))
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	httpReq.Header.Set("Authorization", "Bearer "+userToken)
+
+	resp, err := clients.DoWithRetry(ctx, c.httpClient, httpReq, c.retryConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to refresh stream key: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		var errorResp commodore.ErrorResponse
+		if err := json.Unmarshal(body, &errorResp); err != nil {
+			return nil, fmt.Errorf("failed to refresh stream key with status %d: %s", resp.StatusCode, string(body))
+		}
+		return nil, fmt.Errorf("failed to refresh stream key: %s", errorResp.Error)
+	}
+
+	var stream models.Stream
+	if err := json.Unmarshal(body, &stream); err != nil {
+		return nil, fmt.Errorf("failed to parse stream response: %w", err)
+	}
+
+	return &stream, nil
+}
+
 // Clip Management Methods
 
 // CreateClip creates a new clip from a stream
