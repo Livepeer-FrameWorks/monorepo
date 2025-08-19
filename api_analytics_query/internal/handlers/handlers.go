@@ -88,7 +88,8 @@ func GetStreamAnalytics(c *gin.Context) {
 
 	args := []interface{}{tenantID, startParsed, endParsed}
 
-	if streamID != "" {
+	// Only filter by stream if streamID is provided and not empty
+	if streamID != "" && streamID != "null" && streamID != "undefined" {
 		query += " AND sa.internal_name = $4"
 		args = append(args, streamID)
 	}
@@ -240,7 +241,8 @@ func GetViewerMetrics(c *gin.Context) {
 
 	args := []interface{}{tenantID, startTime, endTime}
 
-	if streamID != "" {
+	// Only filter by stream if streamID is provided and not empty
+	if streamID != "" && streamID != "null" && streamID != "undefined" {
 		query += " AND internal_name = $4"
 		args = append(args, streamID)
 	}
