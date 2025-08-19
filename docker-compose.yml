@@ -381,6 +381,7 @@ services:
       - REGION=development
       - HOSTNAME=signalman-dev
       - QUARTERMASTER_URL=http://quartermaster:18002
+      - JWT_SECRET=your-jwt-secret-change-in-production
       - SERVICE_TOKEN=your-service-token-change-in-production
     ports:
       - "18009:18009"
