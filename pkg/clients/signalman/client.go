@@ -79,7 +79,7 @@ func (c *Client) Connect(ctx context.Context, endpoint string) error {
 	wsURL := c.buildWebSocketURL(endpoint)
 
 	dialer := websocket.DefaultDialer
-	dialer.HandshakeTimeout = 10 * time.Second
+	dialer.HandshakeTimeout = 30 * time.Second
 
 	conn, resp, err := dialer.DialContext(ctx, wsURL, nil)
 	if err != nil {
@@ -118,7 +118,7 @@ func (c *Client) ConnectWithAuth(ctx context.Context, endpoint string, jwtToken 
 	}
 
 	dialer := websocket.DefaultDialer
-	dialer.HandshakeTimeout = 10 * time.Second
+	dialer.HandshakeTimeout = 30 * time.Second
 
 	conn, resp, err := dialer.DialContext(ctx, wsURL, headers)
 	if err != nil {
@@ -201,6 +201,8 @@ func (c *Client) Subscribe(channels []string) error {
 		TenantID: c.tenantID,
 	}
 
+	// Set write deadline for subscription message
+	c.conn.SetWriteDeadline(time.Now().Add(30 * time.Second))
 	if err := c.conn.WriteJSON(subMsg); err != nil {
 		return fmt.Errorf("failed to send subscription: %w", err)
 	}
@@ -233,6 +235,8 @@ func (c *Client) Unsubscribe(channels []string) error {
 		TenantID: c.tenantID,
 	}
 
+	// Set write deadline for unsubscription message
+	c.conn.SetWriteDeadline(time.Now().Add(30 * time.Second))
 	if err := c.conn.WriteJSON(subMsg); err != nil {
 		return fmt.Errorf("failed to send unsubscription: %w", err)
 	}
