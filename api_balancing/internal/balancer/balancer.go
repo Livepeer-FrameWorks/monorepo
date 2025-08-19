@@ -16,10 +16,11 @@ import (
 
 // LoadBalancer is the main load balancer instance
 type LoadBalancer struct {
-	db     *sql.DB
-	logger logging.Logger
-	nodes  map[string]*Node
-	mu     sync.RWMutex
+	db        *sql.DB
+	logger    logging.Logger
+	nodes     map[string]*Node
+	nodeIDMap map[string]string // NodeID -> BaseURL mapping
+	mu        sync.RWMutex
 
 	// Configurable weights (exactly like C++ version)
 	WeightCPU   uint64
@@ -27,6 +28,9 @@ type LoadBalancer struct {
 	WeightBW    uint64
 	WeightGeo   uint64
 	WeightBonus uint64
+
+	// Staleness detection
+	stalenessChecker chan bool
 }
 
 // Node represents a MistServer node (matches C++ hostDetails exactly)
@@ -64,20 +68,32 @@ type Stream struct {
 
 // NewLoadBalancer creates a new load balancer with C++ defaults
 func NewLoadBalancer(db *sql.DB, logger logging.Logger) *LoadBalancer {
-	return &LoadBalancer{
-		db:          db,
-		logger:      logger,
-		nodes:       make(map[string]*Node),
-		WeightCPU:   500,  // Same as C++
-		WeightRAM:   500,  // Same as C++
-		WeightBW:    1000, // Same as C++
-		WeightGeo:   1000, // Same as C++
-		WeightBonus: 50,   // Same as C++ (not 200!)
+	lb := &LoadBalancer{
+		db:               db,
+		logger:           logger,
+		nodes:            make(map[string]*Node),
+		nodeIDMap:        make(map[string]string),
+		WeightCPU:        500,  // Same as C++
+		WeightRAM:        500,  // Same as C++
+		WeightBW:         1000, // Same as C++
+		WeightGeo:        1000, // Same as C++
+		WeightBonus:      50,   // Same as C++ (not 200!)
+		stalenessChecker: make(chan bool),
 	}
+
+	// Start staleness detection background goroutine
+	go lb.runStalenessChecker()
+
+	return lb
 }
 
 // AddNode adds a node to the load balancer
 func (lb *LoadBalancer) AddNode(host string, port int) error {
+	return lb.AddNodeWithID("", host, port)
+}
+
+// AddNodeWithID adds a node to the load balancer with a nodeID
+func (lb *LoadBalancer) AddNodeWithID(nodeID, host string, port int) error {
 	lb.mu.Lock()
 	defer lb.mu.Unlock()
 
@@ -98,7 +114,17 @@ func (lb *LoadBalancer) AddNode(host string, port int) error {
 	}
 
 	lb.nodes[host] = node
-	lb.logger.WithField("host", host).Info("Added node to load balancer")
+
+	// Store NodeID mapping if provided
+	if nodeID != "" {
+		lb.nodeIDMap[nodeID] = host
+		lb.logger.WithFields(logging.Fields{
+			"host":    host,
+			"node_id": nodeID,
+		}).Info("Added node to load balancer with NodeID")
+	} else {
+		lb.logger.WithField("host", host).Info("Added node to load balancer")
+	}
 
 	return nil
 }
@@ -161,6 +187,18 @@ func (lb *LoadBalancer) RemoveNode(host string) error {
 
 	if _, exists := lb.nodes[host]; exists {
 		delete(lb.nodes, host)
+
+		// Remove NodeID mappings pointing to this host
+		for nodeID, mappedHost := range lb.nodeIDMap {
+			if mappedHost == host {
+				delete(lb.nodeIDMap, nodeID)
+				lb.logger.WithFields(logging.Fields{
+					"host":    host,
+					"node_id": nodeID,
+				}).Debug("Removed NodeID mapping")
+			}
+		}
+
 		lb.logger.WithField("host", host).Info("Removed node from load balancer")
 	}
 
@@ -287,11 +325,43 @@ func (lb *LoadBalancer) GetAllNodes() []*Node {
 	return nodes
 }
 
-// Add this method to the LoadBalancer struct
+// GetNodes returns the nodes map
 func (lb *LoadBalancer) GetNodes() map[string]*Node {
 	lb.mu.RLock()
 	defer lb.mu.RUnlock()
 	return lb.nodes
+}
+
+// GetNodeByID looks up a node's BaseURL by NodeID
+func (lb *LoadBalancer) GetNodeByID(nodeID string) (string, error) {
+	lb.mu.RLock()
+	defer lb.mu.RUnlock()
+
+	baseURL, exists := lb.nodeIDMap[nodeID]
+	if !exists {
+		return "", fmt.Errorf("node with ID %s not found", nodeID)
+	}
+
+	return baseURL, nil
+}
+
+// UpdateNodeIDMapping updates the NodeID to BaseURL mapping
+func (lb *LoadBalancer) UpdateNodeIDMapping(nodeID, baseURL string) error {
+	lb.mu.Lock()
+	defer lb.mu.Unlock()
+
+	// Verify the node exists
+	if _, exists := lb.nodes[baseURL]; !exists {
+		return fmt.Errorf("node %s not found", baseURL)
+	}
+
+	lb.nodeIDMap[nodeID] = baseURL
+	lb.logger.WithFields(logging.Fields{
+		"node_id":  nodeID,
+		"base_url": baseURL,
+	}).Debug("Updated NodeID mapping")
+
+	return nil
 }
 
 // GetBestNode finds the best node using EXACT C++ rate() algorithm
@@ -691,4 +761,83 @@ func (lb *LoadBalancer) GetWeights() map[string]uint64 {
 		"geo":   lb.WeightGeo,
 		"bonus": lb.WeightBonus,
 	}
+}
+
+// runStalenessChecker runs a background goroutine to detect stale nodes
+func (lb *LoadBalancer) runStalenessChecker() {
+	ticker := time.NewTicker(30 * time.Second) // Check every 30 seconds
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			lb.checkStaleNodes()
+		case <-lb.stalenessChecker:
+			// Signal to stop the checker
+			return
+		}
+	}
+}
+
+// checkStaleNodes marks nodes as inactive if they haven't sent updates recently
+func (lb *LoadBalancer) checkStaleNodes() {
+	lb.mu.Lock()
+	defer lb.mu.Unlock()
+
+	now := time.Now()
+	staleThreshold := 90 * time.Second  // Mark stale after 90 seconds (Helmsman sends every 10s)
+	removeThreshold := 10 * time.Minute // Remove completely after 10 minutes
+
+	var staleness []string
+	var removals []string
+
+	for host, node := range lb.nodes {
+		if node.LastUpdate.IsZero() {
+			// Node was just added but never updated - give it some time
+			continue
+		}
+
+		timeSinceUpdate := now.Sub(node.LastUpdate)
+
+		if timeSinceUpdate > removeThreshold {
+			// Node has been stale too long - remove it completely
+			removals = append(removals, host)
+		} else if timeSinceUpdate > staleThreshold && node.IsActive {
+			// Node is stale but not removed yet - mark inactive
+			node.IsActive = false
+			staleness = append(staleness, host)
+		}
+	}
+
+	// Log stale nodes
+	for _, host := range staleness {
+		lb.logger.WithFields(logging.Fields{
+			"host":        host,
+			"last_update": lb.nodes[host].LastUpdate,
+			"age":         now.Sub(lb.nodes[host].LastUpdate),
+		}).Warn("Node marked as inactive due to staleness")
+	}
+
+	// Remove completely stale nodes
+	for _, host := range removals {
+		// Remove NodeID mappings
+		for nodeID, mappedHost := range lb.nodeIDMap {
+			if mappedHost == host {
+				delete(lb.nodeIDMap, nodeID)
+			}
+		}
+
+		lb.logger.WithFields(logging.Fields{
+			"host":        host,
+			"last_update": lb.nodes[host].LastUpdate,
+			"age":         now.Sub(lb.nodes[host].LastUpdate),
+		}).Info("Removed stale node from load balancer")
+
+		delete(lb.nodes, host)
+	}
+}
+
+// Shutdown gracefully shuts down the load balancer
+func (lb *LoadBalancer) Shutdown() {
+	close(lb.stalenessChecker)
 }

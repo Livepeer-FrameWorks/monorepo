@@ -142,10 +142,17 @@ func HandleNodeUpdate(c *gin.Context) {
 	// Add or update node
 	nodes := lb.GetNodes()
 	if _, exists := nodes[update.BaseURL]; !exists {
-		if err := lb.AddNode(update.BaseURL, 4242); err != nil {
+		if err := lb.AddNodeWithID(update.NodeID, update.BaseURL, 4242); err != nil {
 			logger.WithError(err).Error("Failed to add node")
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to add node"})
 			return
+		}
+	} else {
+		// Node exists, but update NodeID mapping in case it changed
+		if update.NodeID != "" {
+			if err := lb.UpdateNodeIDMapping(update.NodeID, update.BaseURL); err != nil {
+				logger.WithError(err).Warn("Failed to update NodeID mapping")
+			}
 		}
 	}
 
@@ -176,17 +183,9 @@ func HandleStreamHealth(c *gin.Context) {
 		return
 	}
 
-	// Get node info
-	nodes := lb.GetAllNodes()
-	var nodeHost string
-	for _, node := range nodes {
-		if strings.Contains(node.Host, update.NodeID) {
-			nodeHost = node.Host
-			break
-		}
-	}
-
-	if nodeHost == "" {
+	// Get node info using NodeID lookup
+	nodeHost, err := lb.GetNodeByID(update.NodeID)
+	if err != nil {
 		logger.WithField("node_id", update.NodeID).Error("Node not found for stream health update")
 		c.JSON(http.StatusNotFound, gin.H{"error": "node not found"})
 		return
@@ -221,17 +220,9 @@ func HandleNodeShutdown(c *gin.Context) {
 		return
 	}
 
-	// Get node info
-	nodes := lb.GetAllNodes()
-	var nodeHost string
-	for _, node := range nodes {
-		if strings.Contains(node.Host, update.NodeID) {
-			nodeHost = node.Host
-			break
-		}
-	}
-
-	if nodeHost == "" {
+	// Get node info using NodeID lookup
+	nodeHost, err := lb.GetNodeByID(update.NodeID)
+	if err != nil {
 		logger.WithField("node_id", update.NodeID).Error("Node not found for shutdown update")
 		c.JSON(http.StatusNotFound, gin.H{"error": "node not found"})
 		return
