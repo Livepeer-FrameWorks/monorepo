@@ -9,6 +9,7 @@
   import LoadingCard from "$lib/components/LoadingCard.svelte";
   import SkeletonLoader from "$lib/components/SkeletonLoader.svelte";
   import EmptyState from "$lib/components/EmptyState.svelte";
+  import { getIconComponent } from "$lib/iconUtils.js";
 
   let isAuthenticated = false;
   let user = null;
@@ -284,7 +285,7 @@
         </div>
       {:else if streams.length === 0}
         <EmptyState 
-          icon="📊"
+          icon="BarChart"
           title="No streams found"
           description="Create a stream to start seeing analytics data"
           actionText="Go to Streams"

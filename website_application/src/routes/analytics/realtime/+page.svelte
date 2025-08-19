@@ -7,6 +7,7 @@
   import { infrastructureService } from "$lib/graphql/services/infrastructure.js";
   import { subscribeToSystemHealth } from "$lib/stores/realtime.js";
   import { toast } from "$lib/stores/toast.js";
+  import { getIconComponent } from "$lib/iconUtils.js";
 
   let isAuthenticated = false;
   /** @type {any} */
@@ -150,9 +151,10 @@
   <!-- Page Header -->
   <div class="flex justify-between items-start">
     <div>
-      <h1 class="text-3xl font-bold text-tokyo-night-fg mb-2">
-        ⚡ Real-time Analytics
-      </h1>
+      <div class="flex items-center space-x-3 mb-2">
+        <svelte:component this={getIconComponent('Zap')} class="w-8 h-8 text-tokyo-night-fg" />
+        <h1 class="text-3xl font-bold text-tokyo-night-fg">Real-time Analytics</h1>
+      </div>
       <p class="text-tokyo-night-fg-dark">
         Live streaming metrics from your actual MistServer infrastructure
       </p>
@@ -166,7 +168,7 @@
         </span>
       </div>
       <button class="btn-secondary" on:click={updateRealTimeMetrics}>
-        <span class="mr-2">🔄</span>
+        <svelte:component this={getIconComponent('RefreshCw')} class="w-4 h-4 mr-2" />
         Refresh
       </button>
     </div>
@@ -187,7 +189,7 @@
               {liveMetrics.totalViewers}
             </p>
           </div>
-          <span class="text-2xl">👥</span>
+          <svelte:component this={getIconComponent('Users')} class="w-6 h-6 text-tokyo-night-blue" />
         </div>
         <div class="absolute bottom-0 left-0 right-0 h-1 bg-tokyo-night-blue opacity-20 animate-pulse"></div>
       </div>
@@ -201,7 +203,7 @@
             </p>
             <p class="text-xs text-tokyo-night-comment">of {streams.length} total</p>
           </div>
-          <span class="text-2xl">🎥</span>
+          <svelte:component this={getIconComponent('Video')} class="w-6 h-6 text-tokyo-night-green" />
         </div>
         <div class="absolute bottom-0 left-0 right-0 h-1 bg-tokyo-night-green opacity-20 animate-pulse"></div>
       </div>
@@ -214,7 +216,7 @@
               {formatBandwidth(liveMetrics.totalBandwidthIn)}
             </p>
           </div>
-          <span class="text-2xl">📥</span>
+          <svelte:component this={getIconComponent('Download')} class="w-6 h-6 text-tokyo-night-cyan" />
         </div>
         <div class="absolute bottom-0 left-0 right-0 h-1 bg-tokyo-night-cyan opacity-20 animate-pulse"></div>
       </div>
@@ -227,7 +229,7 @@
               {formatBandwidth(liveMetrics.totalBandwidthOut)}
             </p>
           </div>
-          <span class="text-2xl">📤</span>
+          <svelte:component this={getIconComponent('Upload')} class="w-6 h-6 text-tokyo-night-yellow" />
         </div>
         <div class="absolute bottom-0 left-0 right-0 h-1 bg-tokyo-night-yellow opacity-20 animate-pulse"></div>
       </div>
@@ -240,7 +242,7 @@
               {liveMetrics.avgLatency}
             </p>
           </div>
-          <span class="text-2xl">⚡</span>
+          <svelte:component this={getIconComponent('Zap')} class="w-6 h-6 text-tokyo-night-purple" />
         </div>
         <div class="absolute bottom-0 left-0 right-0 h-1 bg-tokyo-night-purple opacity-20 animate-pulse"></div>
       </div>
@@ -251,9 +253,10 @@
       <!-- Live Viewer Activity Chart -->
       <div class="xl:col-span-2 card">
         <div class="card-header">
-          <h2 class="text-xl font-semibold text-tokyo-night-fg mb-2">
-            📈 Live Viewer Activity
-          </h2>
+          <div class="flex items-center space-x-2 mb-2">
+            <svelte:component this={getIconComponent('TrendingUp')} class="w-5 h-5 text-tokyo-night-fg" />
+            <h2 class="text-xl font-semibold text-tokyo-night-fg">Live Viewer Activity</h2>
+          </div>
           <p class="text-tokyo-night-fg-dark">
             Real-time viewer count aggregated from all active streams
           </p>
@@ -307,9 +310,10 @@
       <!-- Node Status -->
       <div class="card">
         <div class="card-header">
-          <h2 class="text-xl font-semibold text-tokyo-night-fg mb-2">
-            🖥️ Infrastructure Nodes
-          </h2>
+          <div class="flex items-center space-x-2 mb-2">
+            <svelte:component this={getIconComponent('Server')} class="w-5 h-5 text-tokyo-night-fg" />
+            <h2 class="text-xl font-semibold text-tokyo-night-fg">Infrastructure Nodes</h2>
+          </div>
           <p class="text-tokyo-night-fg-dark">
             Status of your infrastructure nodes
           </p>
@@ -348,9 +352,10 @@
     <!-- Current Active Streams -->
     <div class="card">
       <div class="card-header">
-        <h2 class="text-xl font-semibold text-tokyo-night-fg mb-2">
-          🎥 Active Streams
-        </h2>
+        <div class="flex items-center space-x-2 mb-2">
+          <svelte:component this={getIconComponent('Video')} class="w-5 h-5 text-tokyo-night-fg" />
+          <h2 class="text-xl font-semibold text-tokyo-night-fg">Active Streams</h2>
+        </div>
         <p class="text-tokyo-night-fg-dark">
           Real-time status of all your streams
         </p>
@@ -393,7 +398,7 @@
         </div>
       {:else}
         <div class="text-center py-8">
-          <div class="text-4xl mb-4">🎥</div>
+          <svelte:component this={getIconComponent('Video')} class="w-16 h-16 text-tokyo-night-comment mx-auto mb-4" />
           <h3 class="text-lg font-semibold text-tokyo-night-fg mb-2">
             No Streams Found
           </h3>
@@ -401,7 +406,7 @@
             Create your first stream to see real-time analytics
           </p>
           <a href="{base}/streams" class="btn-primary">
-            <span class="mr-2">➕</span>
+            <svelte:component this={getIconComponent('Plus')} class="w-4 h-4 mr-2" />
             Create Stream
           </a>
         </div>

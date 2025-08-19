@@ -157,7 +157,7 @@
     <!-- Welcome Header -->
     <div class="mb-8">
       <h1 class="text-3xl font-bold gradient-text mb-2">
-        Welcome back, {user?.email?.split("@")[0] || "Streamer"}! 👋
+        Welcome back, {user?.email?.split("@")[0] || "Streamer"}!
       </h1>
       <p class="text-tokyo-night-fg-dark">
         Your streams are looking great today. Here's what's happening across
@@ -668,7 +668,7 @@
                 </p>
                 <p class="text-xs text-tokyo-night-comment mt-2">Stream Key:</p>
                 <p class="font-mono text-sm text-tokyo-night-fg">
-                  {primaryStream?.stream_key
+                  {primaryStream?.streamKey
                     ? `${primaryStream.streamKey.slice(0, 12)}...`
                     : "Create a stream first"}
                 </p>

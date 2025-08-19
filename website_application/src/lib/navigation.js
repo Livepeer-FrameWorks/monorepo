@@ -4,7 +4,7 @@
  * @typedef {Object} NavigationItem
  * @property {string} name
  * @property {string} [href]
- * @property {string} icon
+ * @property {string} icon - Icon component name from lucide-svelte
  * @property {boolean | string} [active]
  * @property {string} [description]
  * @property {string} [tier] - Future: 'Free', 'Pro', 'Enterprise' for feature gating
@@ -37,7 +37,7 @@ export const navigationConfig = {
   dashboard: {
     name: 'Dashboard',
     href: '/',
-    icon: '📊',
+    icon: 'BarChart3',
     active: true,
     description: 'Overview of your streams and analytics'
   },
@@ -45,33 +45,33 @@ export const navigationConfig = {
   // Core Streaming Features
   streaming: {
     name: 'Streaming',
-    icon: '🎥',
+    icon: 'Video',
     children: {
       overview: {
         name: 'Stream Overview',
         href: '/streams',
-        icon: '📺',
+        icon: 'Monitor',
         active: true,
         description: 'Manage your live streams'
       },
       browser: {
         name: 'Browser Streaming',
         href: '/streams/browser',
-        icon: '🌐',
+        icon: 'Globe',
         active: 'soon',
         description: 'Stream directly from your browser with WebRTC'
       },
       settings: {
         name: 'Stream Settings',
         href: '/streams/settings',
-        icon: '⚙️',
+        icon: 'Settings',
         active: 'soon',
         description: 'Configure transcoding, recording, and stream options'
       },
       composer: {
         name: 'Stream Composer',
         href: '/streams/composer',
-        icon: '🎬',
+        icon: 'Clapperboard',
         active: 'soon',
         description: 'Multi-stream compositing with PiP and overlays'
       }
@@ -81,19 +81,19 @@ export const navigationConfig = {
   // Media Management
   media: {
     name: 'Media',
-    icon: '📁',
+    icon: 'FolderOpen',
     children: {
       clips: {
         name: 'Clips',
         href: '/clips',
-        icon: '✂️',
+        icon: 'Scissors',
         active: 'soon',
         description: 'Create and manage stream clips'
       },
       recordings: {
         name: 'Recordings',
         href: '/recordings',
-        icon: '🎞️',
+        icon: 'Film',
         active: 'soon',
         description: 'Access your stream recordings'
       }
@@ -103,33 +103,33 @@ export const navigationConfig = {
   // Analytics & Insights
   analytics: {
     name: 'Analytics',
-    icon: '📈',
+    icon: 'TrendingUp',
     children: {
       overview: {
         name: 'Analytics Overview',
         href: '/analytics',
-        icon: '📊',
+        icon: 'BarChart3',
         active: true,
         description: 'View comprehensive streaming analytics'
       },
       realtime: {
         name: 'Real-time Stats',
         href: '/analytics/realtime',
-        icon: '⚡',
+        icon: 'Zap',
         active: true,
         description: 'Live viewer and performance metrics'
       },
       geographic: {
         name: 'Geographic Analytics',
         href: '/analytics/geographic',
-        icon: '🌍',
+        icon: 'Globe2',
         active: true,
         description: 'View viewer distribution and regional metrics'
       },
       usage: {
         name: 'Usage Analytics',
         href: '/analytics/usage',
-        icon: '📊',
+        icon: 'Activity',
         active: true,
         description: 'Track resource usage and performance metrics'
       }
@@ -139,26 +139,26 @@ export const navigationConfig = {
   // Infrastructure Management
   infrastructure: {
     name: 'Infrastructure',
-    icon: '🏗️',
+    icon: 'Building2',
     children: {
       nodes: {
         name: 'Node Management',
         href: '/nodes',
-        icon: '🖥️',
+        icon: 'Server',
         active: 'soon',
         description: 'Manage your Edge nodes worldwide'
       },
       devices: {
         name: 'Device Discovery',
         href: '/devices',
-        icon: '📹',
+        icon: 'Camera',
         active: 'soon',
         description: 'Auto-discover and configure AV devices'
       },
       network: {
         name: 'Network Status',
         href: '/infrastructure/network',
-        icon: '📡',
+        icon: 'Wifi',
         active: 'soon',
         description: 'Monitor network health and performance'
       }
@@ -168,19 +168,19 @@ export const navigationConfig = {
   // AI & Automation
   ai: {
     name: 'AI & Automation',
-    icon: '🤖',
+    icon: 'Bot',
     children: {
       processing: {
         name: 'AI Processing',
         href: '/ai',
-        icon: '🧠',
+        icon: 'Brain',
         active: 'soon',
         description: 'Real-time AI analysis and processing'
       },
       transcription: {
         name: 'Live Transcription',
         href: '/ai/transcription',
-        icon: '📝',
+        icon: 'FileText',
         active: 'soon',
         description: 'Automatic speech-to-text for streams'
       }
@@ -190,26 +190,26 @@ export const navigationConfig = {
   // Account & Settings
   account: {
     name: 'Account',
-    icon: '👤',
+    icon: 'User',
     children: {
       profile: {
         name: 'Profile Settings',
         href: '/account/profile',
-        icon: '⚙️',
+        icon: 'Settings',
         active: 'soon',
         description: 'Manage your account profile and preferences'
       },
       billing: {
         name: 'Billing & Plans',
         href: '/account/billing',
-        icon: '💳',
+        icon: 'CreditCard',
         active: true,
         description: 'Manage billing, subscriptions, and payment methods'
       },
       notifications: {
         name: 'Notifications',
         href: '/account/notifications',
-        icon: '🔔',
+        icon: 'Bell',
         active: 'soon',
         description: 'Configure alerts and notification preferences'
       }
@@ -219,26 +219,26 @@ export const navigationConfig = {
   // Team & Collaboration
   team: {
     name: 'Team',
-    icon: '👥',
+    icon: 'Users',
     children: {
       members: {
         name: 'Team Members',
         href: '/team',
-        icon: '👤',
+        icon: 'UserPlus',
         active: 'soon',
         description: 'Invite and manage team members'
       },
       permissions: {
         name: 'Permissions',
         href: '/team/permissions',
-        icon: '🔐',
+        icon: 'Shield',
         active: 'soon',
         description: 'Configure role-based access control'
       },
       activity: {
         name: 'Team Activity',
         href: '/team/activity',
-        icon: '📋',
+        icon: 'ScrollText',
         active: 'soon',
         description: 'View team member activity and logs'
       }
@@ -248,26 +248,26 @@ export const navigationConfig = {
   // Developer Tools
   developer: {
     name: 'Developer',
-    icon: '⚡',
+    icon: 'Code2',
     children: {
       api: {
         name: 'API & Keys',
         href: '/developer/api',
-        icon: '📚',
+        icon: 'BookOpen',
         active: true,
         description: 'API reference and manage API keys'
       },
       webhooks: {
         name: 'Webhooks',
         href: '/developer/webhooks',
-        icon: '🔗',
+        icon: 'Link',
         active: 'soon',
         description: 'Configure event notifications and integrations'
       },
       sdk: {
         name: 'SDKs & Libraries',
         href: '/developer/sdk',
-        icon: '📦',
+        icon: 'Package',
         active: 'soon',
         description: 'Download SDKs and integration libraries'
       }
@@ -277,19 +277,19 @@ export const navigationConfig = {
   // Support & Community
   support: {
     name: 'Support',
-    icon: '💬',
+    icon: 'MessageCircle',
     children: {
       help: {
         name: 'Help Center',
         href: '/support/help',
-        icon: '❓',
+        icon: 'HelpCircle',
         active: 'soon',
         description: 'Browse documentation and tutorials'
       },
       tickets: {
         name: 'Support Tickets',
         href: '/support/tickets',
-        icon: '🎫',
+        icon: 'Ticket',
         active: 'soon',
         description: 'Get help from our support team'
       }

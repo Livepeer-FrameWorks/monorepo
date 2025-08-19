@@ -1,5 +1,6 @@
 <script>
   import { createEventDispatcher } from "svelte";
+  import { getIconComponent } from "../iconUtils.js";
 
   /** @type {boolean} */
   export let show = false;
@@ -69,7 +70,12 @@
 
       <!-- Feature Icon and Title -->
       <div class="flex items-center space-x-3 mb-4">
-        <span class="text-3xl">{item.icon}</span>
+        <div class="w-10 h-10 flex items-center justify-center bg-tokyo-night-bg-highlight rounded-lg">
+          <svelte:component 
+            this={getIconComponent(item.icon)} 
+            class="w-6 h-6 text-tokyo-night-fg" 
+          />
+        </div>
         <div>
           <h2
             id="modal-title"

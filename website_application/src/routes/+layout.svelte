@@ -6,6 +6,7 @@
   import { base } from "$app/paths";
   import { auth } from "$lib/stores/auth";
   import { getMarketingSiteUrl } from "$lib/config";
+  import { getRouteInfo } from "$lib/navigation.js";
   import Sidebar from "$lib/components/Sidebar.svelte";
   import ComingSoonModal from "$lib/components/ComingSoonModal.svelte";
   import Toast from "$lib/components/Toast.svelte";
@@ -17,6 +18,7 @@
   let loading = true;
   let initialized = false;
   let mobileMenuOpen = false;
+  let sidebarCollapsed = false;
 
   // Coming Soon Modal state
   let showComingSoonModal = false;
@@ -29,10 +31,18 @@
   // Subscribe to auth store
   auth.subscribe((authState) => {
     isAuthenticated = authState.isAuthenticated;
-    user = authState.user;
+    // Fix: authState.user contains the full API response: { user: {...}, streams: [...] }
+    user = authState.user?.user || null;
     loading = authState.loading;
     initialized = authState.initialized;
   });
+
+  // Get current page title from navigation config
+  $: currentPageTitle = (() => {
+    const currentPath = $page.url.pathname.replace(base, '') || '/';
+    const routeInfo = getRouteInfo(currentPath);
+    return routeInfo ? routeInfo.name : 'Page';
+  })();
 
   // Reactive statement to handle route protection
   $: {
@@ -76,6 +86,10 @@
   function toggleMobileMenu() {
     mobileMenuOpen = !mobileMenuOpen;
   }
+
+  function toggleSidebar() {
+    sidebarCollapsed = !sidebarCollapsed;
+  }
 </script>
 
 {#if loading && !initialized}
@@ -104,6 +118,21 @@
         >
           <div class="flex justify-between items-center">
             <div class="flex items-center space-x-4">
+              <!-- Sidebar Toggle -->
+              <button
+                on:click={toggleSidebar}
+                class="p-2 rounded-lg text-tokyo-night-fg-dark hover:text-tokyo-night-fg hover:bg-tokyo-night-bg-dark/50 transition-colors"
+                title="Toggle Sidebar"
+              >
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  {#if sidebarCollapsed}
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
+                  {:else}
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
+                  {/if}
+                </svg>
+              </button>
+              
               <!-- FrameWorks Branding -->
               <a
                 href="{base}/"
@@ -120,21 +149,14 @@
               <!-- Page Title -->
               <div class="text-tokyo-night-comment">•</div>
               <h1 class="text-lg font-semibold text-tokyo-night-fg">
-                {#if $page.url.pathname === "/"}
-                  Dashboard
-                {:else}
-                  {$page.url.pathname
-                    .split("/")
-                    .pop()
-                    ?.replace(/^\w/, (c) => c.toUpperCase()) || "Page"}
-                {/if}
+                {currentPageTitle}
               </h1>
             </div>
 
             <div class="flex items-center space-x-4">
               <span class="text-tokyo-night-fg-dark"
                 >Welcome, <span class="text-tokyo-night-blue"
-                  >{user?.email}</span
+                  >{user?.name || user?.email}</span
                 ></span
               >
               <button on:click={logout} class="btn-secondary"> Logout </button>
@@ -145,7 +167,10 @@
         <!-- Main Content Area with Sidebar -->
         <div class="flex flex-1 overflow-hidden">
           <!-- Sidebar -->
-          <Sidebar on:comingSoon={handleComingSoon} />
+          <Sidebar 
+            on:comingSoon={handleComingSoon} 
+            collapsed={sidebarCollapsed}
+          />
 
           <!-- Page Content -->
           <main class="flex-1 overflow-y-auto bg-tokyo-night-bg p-6">

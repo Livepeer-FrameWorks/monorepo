@@ -1,12 +1,11 @@
-import { client } from '../client.js';
-import { authAPI, resetGraphQLClient, updateAuthToken } from '../../api.js';
-import { GetMeDocument } from '../generated/apollo-helpers';
+import { authAPI } from '../../authAPI.js';
+import { resetGraphQLClient, updateAuthToken } from '../client.js';
 
 export const authService = {
   // REST-based auth operations (login/register happen before GraphQL token)
   async login(email, password) {
     try {
-      const response = await authAPI.login({ email, password });
+      const response = await authAPI.post('/login', { email, password });
       const { token, user } = response.data;
       
       // Update GraphQL client with new token
@@ -24,7 +23,7 @@ export const authService = {
 
   async register(email, password, name) {
     try {
-      const response = await authAPI.register({ email, password, name });
+      const response = await authAPI.post('/register', { email, password, name });
       const { token, user } = response.data;
       
       // Update GraphQL client with new token
@@ -40,20 +39,6 @@ export const authService = {
     }
   },
 
-  // GraphQL-based user data operations (after authentication)
-  async getMe() {
-    try {
-      const result = await client.query({
-        query: GetMeDocument,
-        fetchPolicy: 'network-only' // Always get fresh user data
-      });
-      return result.data.me;
-    } catch (error) {
-      console.error('Failed to get user data:', error);
-      throw error;
-    }
-  },
-
   async logout() {
     // Clear all auth data and reset GraphQL client
     resetGraphQLClient();
@@ -61,18 +46,20 @@ export const authService = {
     // Let the caller handle navigation
   },
 
-  // Check if user is authenticated and get current user
+  // Check if user is authenticated and get current user from localStorage
   async checkAuth() {
     const token = localStorage.getItem('token');
-    if (!token) {
+    const userData = localStorage.getItem('user');
+    
+    if (!token || !userData) {
       return { isAuthenticated: false, user: null };
     }
 
     try {
-      const user = await this.getMe();
+      const user = JSON.parse(userData);
       return { isAuthenticated: true, user, token };
     } catch (error) {
-      // Token is invalid, clear it
+      // Invalid user data, clear it
       this.logout();
       return { isAuthenticated: false, user: null };
     }

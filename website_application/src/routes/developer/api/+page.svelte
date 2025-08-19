@@ -6,6 +6,7 @@
   import { toast } from "$lib/stores/toast.js";
   import SkeletonLoader from "$lib/components/SkeletonLoader.svelte";
   import GraphQLExplorer from "$lib/components/GraphQLExplorer.svelte";
+  import { Code2, Key, LogIn, Globe, Zap, Target, Copy, Plus, Rocket, BookOpen } from 'lucide-svelte';
 
   let isAuthenticated = false;
   /** @type {any} */
@@ -131,8 +132,9 @@
   <!-- Page Header -->
   <div class="flex justify-between items-start">
     <div>
-      <h1 class="text-3xl font-bold text-tokyo-night-fg mb-2">
-        🛠️ GraphQL API
+      <h1 class="text-3xl font-bold text-tokyo-night-fg mb-2 flex items-center gap-3">
+        <Code2 class="w-8 h-8" />
+        GraphQL API
       </h1>
       <p class="text-tokyo-night-fg-dark">
         Interactive GraphQL explorer with schema introspection, query templates, and code generation
@@ -142,18 +144,18 @@
     <div class="flex space-x-3">
       {#if isAuthenticated}
         <button
-          class="btn-primary"
+          class="btn-primary flex items-center gap-2"
           on:click={() => {
             showCreateTokenModal = true;
             newlyCreatedToken = null;
           }}
         >
-          <span class="mr-2">🔑</span>
+          <Key class="w-4 h-4" />
           Create New Token
         </button>
       {:else}
-        <a href="{base}/login" class="btn-primary">
-          <span class="mr-2">🔐</span>
+        <a href="{base}/login" class="btn-primary flex items-center gap-2">
+          <LogIn class="w-4 h-4" />
           Login to Access
         </a>
       {/if}
@@ -182,7 +184,9 @@
   {:else if !isAuthenticated}
     <!-- Not Authenticated State -->
     <div class="card text-center py-12">
-      <div class="text-6xl mb-4">🔐</div>
+      <div class="flex justify-center mb-4">
+        <LogIn class="w-16 h-16 text-tokyo-night-blue" />
+      </div>
       <h3 class="text-xl font-semibold text-tokyo-night-fg mb-2">
         Authentication Required
       </h3>
@@ -202,7 +206,7 @@
               {import.meta.env.VITE_GRAPHQL_HTTP_URL || 'http://localhost:18000/graphql/'}
             </p>
           </div>
-          <span class="text-2xl ml-3 flex-shrink-0">🌐</span>
+          <Globe class="w-6 h-6 ml-3 flex-shrink-0 text-tokyo-night-blue" />
         </div>
       </div>
 
@@ -214,7 +218,7 @@
               {import.meta.env.VITE_GRAPHQL_WS_URL || 'ws://localhost:18000/graphql/'}
             </p>
           </div>
-          <span class="text-2xl ml-3 flex-shrink-0">⚡</span>
+          <Zap class="w-6 h-6 ml-3 flex-shrink-0 text-tokyo-night-yellow" />
         </div>
       </div>
 
@@ -224,7 +228,7 @@
             <p class="text-sm text-tokyo-night-comment mb-2">Authentication</p>
             <p class="text-lg font-semibold text-tokyo-night-fg">JWT Bearer</p>
           </div>
-          <span class="text-2xl ml-3 flex-shrink-0">🔑</span>
+          <Key class="w-6 h-6 ml-3 flex-shrink-0 text-tokyo-night-green" />
         </div>
       </div>
 
@@ -236,7 +240,7 @@
               {apiTokens.filter((t) => t.status === "active").length}
             </p>
           </div>
-          <span class="text-2xl ml-3 flex-shrink-0">🎯</span>
+          <Target class="w-6 h-6 ml-3 flex-shrink-0 text-tokyo-night-purple" />
         </div>
       </div>
     </div>
@@ -244,8 +248,9 @@
     <!-- API Token Management -->
     <div class="card">
       <div class="card-header">
-        <h2 class="text-xl font-semibold text-tokyo-night-fg mb-2">
-          🔑 Your API Tokens
+        <h2 class="text-xl font-semibold text-tokyo-night-fg mb-2 flex items-center gap-2">
+          <Key class="w-5 h-5" />
+          Your API Tokens
         </h2>
         <p class="text-tokyo-night-fg-dark">
           Generate and manage API tokens for programmatic access to your streams
@@ -254,7 +259,9 @@
 
       {#if apiTokens.length === 0}
         <div class="text-center py-8">
-          <div class="text-4xl mb-4">🔑</div>
+          <div class="flex justify-center mb-4">
+            <Key class="w-12 h-12 text-tokyo-night-blue" />
+          </div>
           <h3 class="text-lg font-semibold text-tokyo-night-fg mb-2">
             No API Tokens
           </h3>
@@ -262,13 +269,13 @@
             Create your first API token to start using the FrameWorks GraphQL API
           </p>
           <button
-            class="btn-primary"
+            class="btn-primary flex items-center gap-2"
             on:click={() => {
               showCreateTokenModal = true;
               newlyCreatedToken = null;
             }}
           >
-            <span class="mr-2">➕</span>
+            <Plus class="w-4 h-4" />
             Create Your First Token
           </button>
         </div>
@@ -340,8 +347,9 @@
     <!-- GraphQL Explorer -->
     <div class="card">
       <div class="card-header">
-        <h2 class="text-xl font-semibold text-tokyo-night-fg mb-2">
-          🚀 GraphQL API Explorer
+        <h2 class="text-xl font-semibold text-tokyo-night-fg mb-2 flex items-center gap-2">
+          <Rocket class="w-5 h-5" />
+          GraphQL API Explorer
         </h2>
         <p class="text-tokyo-night-fg-dark">
           Interactive GraphQL query builder and tester with live schema introspection
@@ -354,8 +362,9 @@
     <!-- GraphQL Guide -->
     <div class="card">
       <div class="card-header">
-        <h2 class="text-xl font-semibold text-tokyo-night-fg mb-2">
-          📚 GraphQL API Guide
+        <h2 class="text-xl font-semibold text-tokyo-night-fg mb-2 flex items-center gap-2">
+          <BookOpen class="w-5 h-5" />
+          GraphQL API Guide
         </h2>
         <p class="text-tokyo-night-fg-dark">
           Everything you need to know about our GraphQL API
@@ -364,7 +373,9 @@
 
       <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         <div class="text-center">
-          <div class="text-3xl mb-3">🏗️</div>
+          <div class="flex justify-center mb-3">
+            <Code2 class="w-8 h-8 text-tokyo-night-blue" />
+          </div>
           <h3 class="font-semibold text-tokyo-night-fg mb-2">Schema First</h3>
           <p class="text-sm text-tokyo-night-comment">
             All operations use a single GraphQL endpoint. Query exactly the data you need with strong typing.
@@ -372,7 +383,9 @@
         </div>
 
         <div class="text-center">
-          <div class="text-3xl mb-3">🔄</div>
+          <div class="flex justify-center mb-3">
+            <Zap class="w-8 h-8 text-tokyo-night-yellow" />
+          </div>
           <h3 class="font-semibold text-tokyo-night-fg mb-2">Real-time</h3>
           <p class="text-sm text-tokyo-night-comment">
             Use GraphQL subscriptions over WebSocket for real-time stream events and viewer metrics.
@@ -380,7 +393,9 @@
         </div>
 
         <div class="text-center">
-          <div class="text-3xl mb-3">🔑</div>
+          <div class="flex justify-center mb-3">
+            <Key class="w-8 h-8 text-tokyo-night-green" />
+          </div>
           <h3 class="font-semibold text-tokyo-night-fg mb-2">JWT Auth</h3>
           <p class="text-sm text-tokyo-night-comment">
             Include your JWT token in the Authorization header. The explorer handles this automatically.
@@ -388,7 +403,9 @@
         </div>
 
         <div class="text-center">
-          <div class="text-3xl mb-3">🎯</div>
+          <div class="flex justify-center mb-3">
+            <Target class="w-8 h-8 text-tokyo-night-purple" />
+          </div>
           <h3 class="font-semibold text-tokyo-night-fg mb-2">Type Safe</h3>
           <p class="text-sm text-tokyo-night-comment">
             Generate TypeScript types from the schema for full type safety in your applications.
@@ -409,8 +426,9 @@
     >
       {#if newlyCreatedToken}
         <!-- Show newly created token -->
-        <h3 class="text-xl font-semibold text-tokyo-night-green mb-4">
-          🎉 Token Created Successfully!
+        <h3 class="text-xl font-semibold text-tokyo-night-green mb-4 flex items-center gap-2">
+          <Key class="w-6 h-6" />
+          Token Created Successfully!
         </h3>
 
         <div class="space-y-4">
@@ -443,9 +461,10 @@
               />
               <button
                 on:click={() => copyToClipboard(newlyCreatedToken.token_value)}
-                class="btn-primary"
+                class="btn-primary flex items-center gap-2"
               >
-                📋 Copy
+                <Copy class="w-4 h-4" />
+                Copy
               </button>
             </div>
           </div>
@@ -454,7 +473,7 @@
             class="bg-tokyo-night-bg-highlight p-3 rounded border border-tokyo-night-yellow"
           >
             <p class="text-sm text-tokyo-night-yellow">
-              ⚠️ <strong>Important:</strong> Store this token securely. You won't
+              <strong>Important:</strong> Store this token securely. You won't
               be able to see it again after closing this dialog.
             </p>
           </div>
@@ -519,7 +538,7 @@
             class="bg-tokyo-night-bg-highlight p-3 rounded border border-tokyo-night-fg-gutter"
           >
             <p class="text-sm text-tokyo-night-comment">
-              💡 <strong>Tip:</strong> Create separate tokens for different applications
+              <strong>Tip:</strong> Create separate tokens for different applications
               or environments (development, staging, production).
             </p>
           </div>

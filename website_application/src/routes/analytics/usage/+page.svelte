@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { auth } from "$lib/stores/auth";
   import { billingService } from "$lib/graphql/services/billing.js";
+  import { getIconComponent } from "$lib/iconUtils.js";
 
   let isAuthenticated = false;
   let user = null;
@@ -185,7 +186,7 @@
       </select>
       
       <button on:click={loadUsageAndCosts} class="btn-secondary">
-        <span class="mr-2">🔄</span>
+        <svelte:component this={getIconComponent('RefreshCw')} class="w-4 h-4 mr-2" />
         Refresh
       </button>
     </div>
@@ -201,7 +202,7 @@
   {:else if error}
     <div class="bg-tokyo-night-red/10 border border-tokyo-night-red/30 rounded-lg p-4">
       <div class="flex items-center space-x-2">
-        <span class="text-tokyo-night-red">❌</span>
+        <svelte:component this={getIconComponent('AlertCircle')} class="w-5 h-5 text-tokyo-night-red" />
         <span class="text-tokyo-night-red font-medium">Error loading data</span>
       </div>
       <p class="text-tokyo-night-red/80 text-sm mt-1">{error}</p>
@@ -292,7 +293,7 @@
               {formatNumber(usageData.stream_hours)}
             </p>
           </div>
-          <span class="text-2xl">⏱️</span>
+          <svelte:component this={getIconComponent('Clock')} class="w-6 h-6 text-tokyo-night-blue" />
         </div>
       </div>
 
@@ -305,7 +306,7 @@
               {formatNumber(usageData.egress_gb)} GB
             </p>
           </div>
-          <span class="text-2xl">📡</span>
+          <svelte:component this={getIconComponent('Radio')} class="w-6 h-6 text-tokyo-night-green" />
         </div>
       </div>
 
@@ -318,7 +319,7 @@
               {formatNumber(usageData.peak_viewers)}
             </p>
           </div>
-          <span class="text-2xl">👥</span>
+          <svelte:component this={getIconComponent('Users')} class="w-6 h-6 text-tokyo-night-purple" />
         </div>
       </div>
 
@@ -331,7 +332,7 @@
               {formatNumber(usageData.total_streams)}
             </p>
           </div>
-          <span class="text-2xl">🎥</span>
+          <svelte:component this={getIconComponent('Video')} class="w-6 h-6 text-tokyo-night-cyan" />
         </div>
       </div>
     </div>
@@ -348,7 +349,7 @@
                   {formatNumber(usageData.recording_gb)} GB
                 </p>
               </div>
-              <span class="text-2xl">💾</span>
+              <svelte:component this={getIconComponent('HardDrive')} class="w-6 h-6 text-tokyo-night-yellow" />
             </div>
           </div>
         {/if}
@@ -362,7 +363,7 @@
                   {formatNumber(usageData.peak_bandwidth_mbps)} Mbps
                 </p>
               </div>
-              <span class="text-2xl">📈</span>
+              <svelte:component this={getIconComponent('TrendingUp')} class="w-6 h-6 text-tokyo-night-red" />
             </div>
           </div>
         {/if}
@@ -372,7 +373,7 @@
     <!-- Footer Note -->
     <div class="bg-tokyo-night-yellow/10 border border-tokyo-night-yellow/30 rounded-lg p-4">
       <div class="flex items-start space-x-3">
-        <span class="text-tokyo-night-yellow mt-0.5">💡</span>
+        <svelte:component this={getIconComponent('Lightbulb')} class="w-5 h-5 text-tokyo-night-yellow mt-0.5" />
         <div>
           <h3 class="text-tokyo-night-yellow font-medium mb-1">How We Calculate This</h3>
           <p class="text-tokyo-night-yellow/80 text-sm">

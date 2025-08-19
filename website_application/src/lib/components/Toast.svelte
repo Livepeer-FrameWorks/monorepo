@@ -31,11 +31,11 @@
 </script>
 
 <!-- Toast Container -->
-<div class="fixed top-4 right-4 z-50 space-y-2 pointer-events-none">
+<div class="fixed bottom-4 right-4 z-50 space-y-2 pointer-events-none">
   {#each toasts as toastItem (toastItem.id)}
     <div
       class="pointer-events-auto rounded-lg border p-4 shadow-lg max-w-sm {getToastColors(toastItem.type)}"
-      transition:fly={{ x: 300, duration: 300 }}
+      transition:fly={{ y: 100, duration: 300 }}
     >
       <div class="flex items-start space-x-3">
         <div class="text-lg">

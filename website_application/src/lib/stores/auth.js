@@ -1,5 +1,6 @@
 import { writable } from 'svelte/store';
 import { authAPI } from '$lib/authAPI.js';
+import { authService } from '$lib/graphql/services/auth.js';
 import { initializeWebSocket, disconnectWebSocket } from './realtime.js';
 
 function createAuthStore() {
@@ -116,39 +117,44 @@ function createAuthStore() {
 
       update(state => ({ ...state, loading: true }));
 
-      const token = localStorage.getItem('token');
-      if (!token) {
-        set({ isAuthenticated: false, user: null, loading: false, error: null, initialized: true });
-        return;
-      }
-
       try {
-        authAPI.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+        // Use the GraphQL auth service to check authentication
+        const authResult = await authService.checkAuth();
         
-        // Get stored user data
-        const storedUser = localStorage.getItem('user');
-        if (storedUser) {
-          const user = JSON.parse(storedUser);
+        if (authResult.isAuthenticated && authResult.user) {
           set({
             isAuthenticated: true,
-            user: { user, streams: [] },
+            user: { user: authResult.user, streams: [] }, // Match expected structure
+            token: authResult.token,
             loading: false,
             error: null,
             initialized: true
           });
 
           // Initialize WebSocket for real-time updates
-          initializeWebSocket(token);
+          if (authResult.token) {
+            initializeWebSocket(authResult.token);
+          }
         } else {
-          // No stored user data, token might be invalid
-          localStorage.removeItem('token');
-          delete authAPI.defaults.headers.common['Authorization'];
-          set({ isAuthenticated: false, user: null, loading: false, error: null, initialized: true });
+          set({ 
+            isAuthenticated: false, 
+            user: null, 
+            token: null,
+            loading: false, 
+            error: null, 
+            initialized: true 
+          });
         }
       } catch (error) {
-        localStorage.removeItem('token');
-        delete authAPI.defaults.headers.common['Authorization'];
-        set({ isAuthenticated: false, user: null, loading: false, error: null, initialized: true });
+        console.error('Auth check failed:', error);
+        set({ 
+          isAuthenticated: false, 
+          user: null, 
+          token: null,
+          loading: false, 
+          error: 'Authentication check failed', 
+          initialized: true 
+        });
       }
     },
 

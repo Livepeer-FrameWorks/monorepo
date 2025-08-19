@@ -1,11 +1,1 @@
-# User authentication queries
-query GetMe {
-  me {
-    id
-    email
-    name
-    tenantId
-    role
-    createdAt
-  }
-}
+# User authentication queries - handled via REST API
