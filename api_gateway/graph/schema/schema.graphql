@@ -3,9 +3,6 @@
 
 # Root Query type
 type Query {
-  # Authentication
-  me: User
-
   # Streams (from Commodore)
   streams: [Stream!]!
   stream(id: ID!): Stream

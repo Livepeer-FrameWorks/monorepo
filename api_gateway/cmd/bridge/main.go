@@ -145,6 +145,7 @@ func main() {
 		auth.POST("/login", authProxy.ProxyToCommodore("/login"))
 		auth.POST("/register", authProxy.ProxyToCommodore("/register"))
 		auth.POST("/logout", authProxy.ProxyToCommodore("/logout"))
+		auth.GET("/me", authProxy.ProxyToCommodore("/me"))
 		auth.GET("/verify/:token", authProxy.ProxyToCommodore("/verify/:token"))
 		auth.POST("/refresh", authProxy.ProxyToCommodore("/refresh"))
 		auth.POST("/forgot-password", authProxy.ProxyToCommodore("/forgot-password"))
