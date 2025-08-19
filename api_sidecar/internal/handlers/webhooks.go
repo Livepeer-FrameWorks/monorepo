@@ -9,7 +9,8 @@ import (
 	"time"
 
 	"frameworks/pkg/logging"
-	"frameworks/pkg/middleware"
+
+	"github.com/gin-gonic/gin"
 )
 
 var tenantCache = struct {
@@ -78,7 +79,7 @@ func extractJSONField(b []byte, key string) string {
 
 // HandlePushEnd handles PUSH_END webhook
 // Payload: push ID, stream name, target URI (before/after), last 10 log messages, push status
-func HandlePushEnd(c middleware.Context) {
+func HandlePushEnd(c *gin.Context) {
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
 		logger.WithFields(logging.Fields{
@@ -158,7 +159,7 @@ func HandlePushEnd(c middleware.Context) {
 // HandlePushOutStart handles PUSH_OUT_START webhook
 // Payload: stream name, push target
 // Response: non-empty response sets push target, empty response aborts push
-func HandlePushOutStart(c middleware.Context) {
+func HandlePushOutStart(c *gin.Context) {
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
 		logger.WithFields(logging.Fields{
@@ -225,7 +226,7 @@ func HandlePushOutStart(c middleware.Context) {
 
 // HandleStreamBuffer handles STREAM_BUFFER webhook
 // Payload: stream name, buffer state (JSON)
-func HandleStreamBuffer(c middleware.Context) {
+func HandleStreamBuffer(c *gin.Context) {
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
 		logger.WithFields(logging.Fields{
@@ -341,7 +342,7 @@ func HandleStreamBuffer(c middleware.Context) {
 
 // HandleStreamEnd handles STREAM_END webhook
 // Payload: stream name
-func HandleStreamEnd(c middleware.Context) {
+func HandleStreamEnd(c *gin.Context) {
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
 		logger.WithFields(logging.Fields{
@@ -416,7 +417,7 @@ func HandleStreamEnd(c middleware.Context) {
 // HandleUserNew handles USER_NEW webhook
 // Payload: stream name, connection address, connection identifier, connector, request url, session identifier
 // Response: "true" to accept session, "false" to deny
-func HandleUserNew(c middleware.Context) {
+func HandleUserNew(c *gin.Context) {
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
 		logger.WithFields(logging.Fields{
@@ -486,7 +487,7 @@ func HandleUserNew(c middleware.Context) {
 // Payload: stream name, connection address, connection identifier, connector, request url, session identifier,
 //
 //	down bytes, up bytes, seconds connected, unix time connected, unix time disconnected, tags
-func HandleUserEnd(c middleware.Context) {
+func HandleUserEnd(c *gin.Context) {
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
 		logger.WithFields(logging.Fields{
@@ -565,7 +566,7 @@ func HandleUserEnd(c middleware.Context) {
 
 // HandleLiveTrackList handles LIVE_TRACK_LIST webhook
 // Payload: stream name, track list (JSON)
-func HandleLiveTrackList(c middleware.Context) {
+func HandleLiveTrackList(c *gin.Context) {
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
 		logger.WithFields(logging.Fields{
@@ -640,7 +641,7 @@ func HandleLiveTrackList(c middleware.Context) {
 
 // HandleLiveBandwidth handles LIVE_BANDWIDTH webhook
 // Payload: stream name, bandwidth data (JSON)
-func HandleLiveBandwidth(c middleware.Context) {
+func HandleLiveBandwidth(c *gin.Context) {
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
 		logger.WithFields(logging.Fields{
@@ -669,7 +670,7 @@ func HandleLiveBandwidth(c middleware.Context) {
 //	unix time recording started, unix time recording stopped, total milliseconds of media data recorded,
 //	millisecond timestamp of first media packet, millisecond timestamp of last media packet,
 //	machine-readable reason for exit, human-readable reason for exit
-func HandleRecordingEnd(c middleware.Context) {
+func HandleRecordingEnd(c *gin.Context) {
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
 		logger.WithFields(logging.Fields{

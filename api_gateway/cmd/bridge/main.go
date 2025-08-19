@@ -2,13 +2,8 @@ package main
 
 import (
 	"context"
-	"fmt"
-	"log"
 	"net/http"
-	"os"
-	"os/signal"
-	"strconv"
-	"syscall"
+	"strings"
 	"time"
 
 	"frameworks/api_gateway/graph"
@@ -19,20 +14,25 @@ import (
 	pkgauth "frameworks/pkg/auth"
 	"frameworks/pkg/config"
 	"frameworks/pkg/logging"
+	"frameworks/pkg/monitoring"
+	"frameworks/pkg/server"
+	"frameworks/pkg/version"
 
 	"github.com/99designs/gqlgen/graphql/handler"
+	"github.com/99designs/gqlgen/graphql/handler/extension"
 	"github.com/99designs/gqlgen/graphql/handler/transport"
 	"github.com/99designs/gqlgen/graphql/playground"
 	"github.com/gin-gonic/gin"
 )
 
 func main() {
-	// Initialize logging
-	logger := logging.NewLogger()
-	logger.Info("Starting Bridge GraphQL Gateway")
+	// Setup logger
+	logger := logging.NewLoggerWithService("bridge")
 
-	// Load configuration
+	// Load environment variables
 	config.LoadEnv(logger)
+
+	logger.Info("Starting Bridge GraphQL Gateway")
 
 	// Initialize service clients
 	serviceToken := config.GetEnv("SERVICE_TOKEN", "")
@@ -48,41 +48,82 @@ func main() {
 	// Initialize GraphQL resolver and server
 	resolver := graph.NewResolver(serviceClients, logger)
 
+	// Setup monitoring
+	healthChecker := monitoring.NewHealthChecker("bridge", version.Version)
+	metricsCollector := monitoring.NewMetricsCollector("bridge", version.Version, version.GitCommit)
+
+	// Add health checks
+	healthChecker.AddCheck("config", monitoring.ConfigurationHealthCheck(map[string]string{
+		"JWT_SECRET":     config.GetEnv("JWT_SECRET", ""),
+		"SERVICE_TOKEN":  config.GetEnv("SERVICE_TOKEN", ""),
+		"COMMODORE_URL":  config.GetEnv("COMMODORE_URL", ""),
+		"PERISCOPE_URL":  config.GetEnv("PERISCOPE_URL", ""),
+		"PURSER_URL":     config.GetEnv("PURSER_URL", ""),
+		"QUARTERMASTER_URL": config.GetEnv("QUARTERMASTER_URL", ""),
+		"SIGNALMAN_URL":  config.GetEnv("SIGNALMAN_URL", ""),
+	}))
+
+	// Create business metrics for GraphQL operations
+	_, graphqlOperations, graphqlDuration := metricsCollector.CreateBusinessMetrics()
+	// TODO: Wire these metrics into GraphQL handler
+	_ = graphqlOperations
+	_ = graphqlDuration
+
 	// Create GraphQL server with WebSocket support for subscriptions
 	gqlHandler := handler.New(generated.NewExecutableSchema(generated.Config{Resolvers: resolver}))
+
+	// Enable introspection for developer API explorer
+	gqlHandler.Use(extension.Introspection{})
 
 	// Add transport options
 	gqlHandler.AddTransport(transport.POST{})
 	gqlHandler.AddTransport(transport.GET{})
 	gqlHandler.AddTransport(transport.Websocket{
 		KeepAlivePingInterval: 10 * time.Second,
+		InitFunc: func(ctx context.Context, initPayload transport.InitPayload) (context.Context, *transport.InitPayload, error) {
+			// Get authorization from WebSocket connection params using built-in method
+			authHeader := initPayload.Authorization()
+			
+			if authHeader != "" {
+				// Parse JWT token from Authorization header
+				parts := strings.Split(authHeader, " ")
+				if len(parts) == 2 && parts[0] == "Bearer" {
+					token := parts[1]
+
+					// Validate JWT token
+					jwtSecret := config.GetEnv("JWT_SECRET", "default-secret-key-change-in-production")
+					claims, err := pkgauth.ValidateJWT(token, []byte(jwtSecret))
+					if err == nil {
+						// Add user context to WebSocket connection
+						ctx = context.WithValue(ctx, "user_id", claims.UserID)
+						ctx = context.WithValue(ctx, "tenant_id", claims.TenantID)
+						ctx = context.WithValue(ctx, "email", claims.Email)
+						ctx = context.WithValue(ctx, "role", claims.Role)
+						ctx = context.WithValue(ctx, "jwt_token", token)
+
+						// Create user context
+						user := &middleware.UserContext{
+							UserID:   claims.UserID,
+							TenantID: claims.TenantID,
+							Email:    claims.Email,
+							Role:     claims.Role,
+						}
+						ctx = context.WithValue(ctx, "user", user)
+					}
+				}
+			}
+			
+			// Return the context and initPayload (can be modified if needed)
+			return ctx, &initPayload, nil
+		},
 	})
 
-	// Get port from environment
-	port := getPort()
-
-	// Set Gin mode
-	if config.GetEnv("GIN_MODE", "debug") == "release" {
-		gin.SetMode(gin.ReleaseMode)
-	}
-
-	// Create router
-	router := gin.New()
-	router.Use(gin.Logger())
-	router.Use(gin.Recovery())
-
-	// Health check endpoint (no auth required)
-	router.GET("/health", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{
-			"status":  "healthy",
-			"service": "bridge",
-			"version": config.GetEnv("VERSION", "development"),
-		})
-	})
+	// Setup router with unified monitoring
+	app := server.SetupServiceRouter(logger, "bridge", healthChecker, metricsCollector)
 
 	// Public API routes (no auth required)
 	{
-		router.GET("/status", func(c *gin.Context) {
+		app.GET("/status", func(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{
 				"service": "bridge",
 				"status":  "ready",
@@ -92,7 +133,7 @@ func main() {
 	}
 
 	// Auth endpoints (proxied to Commodore)
-	auth := router.Group("/auth")
+	auth := app.Group("/auth")
 	{
 		auth.POST("/login", authProxy.ProxyToCommodore("/login"))
 		auth.POST("/register", authProxy.ProxyToCommodore("/register"))
@@ -104,70 +145,34 @@ func main() {
 	}
 
 	// GraphQL endpoint with optional auth (some queries are public)
-	graphqlGroup := router.Group("/graphql")
+	graphqlGroup := app.Group("/graphql")
 	jwtSecret := config.GetEnv("JWT_SECRET", "default-secret-key-change-in-production")
-	graphqlGroup.Use(pkgauth.JWTAuthMiddleware([]byte(jwtSecret))) // Using pkg/auth
-	graphqlGroup.Use(middleware.GraphQLContextMiddleware())        // Bridge user context to GraphQL
+	graphqlGroup.Use(pkgauth.JWTAuthMiddleware([]byte(jwtSecret))) // Standard auth with WebSocket support
+	graphqlGroup.Use(middleware.GraphQLContextMiddleware())              // Bridge user context to GraphQL
 	{
 		// GraphQL endpoint
 		graphqlGroup.POST("/", gin.WrapH(gqlHandler))
+		
+		// GraphQL WebSocket endpoint (for subscriptions)
+		graphqlGroup.GET("/", gin.WrapH(gqlHandler))
 
 		// GraphQL playground in development
 		if config.GetEnv("GIN_MODE", "debug") != "release" {
-			graphqlGroup.GET("/", gin.WrapH(playground.Handler("GraphQL Playground", "/graphql/")))
+			// Use a separate route for playground to avoid conflicts
+			app.GET("/graphql/playground", gin.WrapH(playground.Handler("GraphQL Playground", "/graphql/")))
 		}
 	}
 
-	// Create HTTP server
-	srv := &http.Server{
-		Addr:    fmt.Sprintf(":%d", port),
-		Handler: router,
+	// Use standard server startup with graceful shutdown
+	serverConfig := server.DefaultConfig("bridge", "18000")
+	
+	// Start server with standard graceful shutdown handling
+	if err := server.Start(serverConfig, app, logger); err != nil {
+		logger.Fatal("Failed to start server: " + err.Error())
 	}
 
-	// Start server in a goroutine
-	go func() {
-		logger.Info(fmt.Sprintf("Bridge GraphQL Gateway listening on port %d", port))
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Fatal(fmt.Sprintf("Failed to start server: %v", err))
-		}
-	}()
-
-	// Graceful shutdown
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
-
-	logger.Info("Shutting down Bridge GraphQL Gateway...")
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	// Shutdown the resolver first to clean up WebSocket connections
+	// Shutdown the resolver to clean up WebSocket connections
 	if err := resolver.Shutdown(); err != nil {
-		logger.Error(fmt.Sprintf("Error shutting down resolver: %v", err))
+		logger.Error("Error shutting down resolver: " + err.Error())
 	}
-
-	if err := srv.Shutdown(ctx); err != nil {
-		logger.Fatal(fmt.Sprintf("Server forced to shutdown: %v", err))
-	}
-
-	logger.Info("Bridge GraphQL Gateway stopped")
-}
-
-func getPort() int {
-	portStr := os.Getenv("BRIDGE_PORT")
-	if portStr == "" {
-		portStr = os.Getenv("PORT")
-	}
-	if portStr == "" {
-		portStr = "18000"
-	}
-
-	port, err := strconv.Atoi(portStr)
-	if err != nil {
-		log.Printf("Invalid port %s, using default 18000", portStr)
-		return 18000
-	}
-
-	return port
 }

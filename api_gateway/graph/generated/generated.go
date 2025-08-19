@@ -100,6 +100,17 @@ type ComplexityRoot struct {
 		Status    func(childComplexity int) int
 	}
 
+	DeveloperToken struct {
+		CreatedAt   func(childComplexity int) int
+		ExpiresAt   func(childComplexity int) int
+		ID          func(childComplexity int) int
+		LastUsedAt  func(childComplexity int) int
+		Name        func(childComplexity int) int
+		Permissions func(childComplexity int) int
+		Status      func(childComplexity int) int
+		Token       func(childComplexity int) int
+	}
+
 	Invoice struct {
 		Amount    func(childComplexity int) int
 		CreatedAt func(childComplexity int) int
@@ -119,14 +130,16 @@ type ComplexityRoot struct {
 	}
 
 	Mutation struct {
-		CreateClip        func(childComplexity int, input model.CreateClipInput) int
-		CreatePayment     func(childComplexity int, input model.CreatePaymentInput) int
-		CreateStream      func(childComplexity int, input model.CreateStreamInput) int
-		DeleteStream      func(childComplexity int, id string) int
-		RefreshStreamKey  func(childComplexity int, id string) int
-		UpdateBillingTier func(childComplexity int, tierID string) int
-		UpdateStream      func(childComplexity int, id string, input model.UpdateStreamInput) int
-		UpdateTenant      func(childComplexity int, input model.UpdateTenantInput) int
+		CreateClip           func(childComplexity int, input model.CreateClipInput) int
+		CreateDeveloperToken func(childComplexity int, input model.CreateDeveloperTokenInput) int
+		CreatePayment        func(childComplexity int, input model.CreatePaymentInput) int
+		CreateStream         func(childComplexity int, input model.CreateStreamInput) int
+		DeleteStream         func(childComplexity int, id string) int
+		RefreshStreamKey     func(childComplexity int, id string) int
+		RevokeDeveloperToken func(childComplexity int, id string) int
+		UpdateBillingTier    func(childComplexity int, tierID string) int
+		UpdateStream         func(childComplexity int, id string, input model.UpdateStreamInput) int
+		UpdateTenant         func(childComplexity int, input model.UpdateTenantInput) int
 	}
 
 	Node struct {
@@ -163,6 +176,7 @@ type ComplexityRoot struct {
 		BillingTiers      func(childComplexity int) int
 		Cluster           func(childComplexity int, id string) int
 		Clusters          func(childComplexity int) int
+		DeveloperTokens   func(childComplexity int) int
 		Invoice           func(childComplexity int, id string) int
 		Invoices          func(childComplexity int) int
 		Me                func(childComplexity int) int
@@ -325,6 +339,8 @@ type MutationResolver interface {
 	CreateClip(ctx context.Context, input model.CreateClipInput) (*model.Clip, error)
 	CreatePayment(ctx context.Context, input model.CreatePaymentInput) (*models.Payment, error)
 	UpdateBillingTier(ctx context.Context, tierID string) (*models.BillingStatus, error)
+	CreateDeveloperToken(ctx context.Context, input model.CreateDeveloperTokenInput) (*model.DeveloperToken, error)
+	RevokeDeveloperToken(ctx context.Context, id string) (bool, error)
 	UpdateTenant(ctx context.Context, input model.UpdateTenantInput) (*models.Tenant, error)
 }
 type PaymentResolver interface {
@@ -349,6 +365,7 @@ type QueryResolver interface {
 	Cluster(ctx context.Context, id string) (*model.Cluster, error)
 	Nodes(ctx context.Context) ([]*model.Node, error)
 	Node(ctx context.Context, id string) (*model.Node, error)
+	DeveloperTokens(ctx context.Context) ([]*model.DeveloperToken, error)
 }
 type StreamResolver interface {
 	Name(ctx context.Context, obj *models.Stream) (string, error)
@@ -608,6 +625,62 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.Cluster.Status(childComplexity), true
 
+	case "DeveloperToken.createdAt":
+		if e.complexity.DeveloperToken.CreatedAt == nil {
+			break
+		}
+
+		return e.complexity.DeveloperToken.CreatedAt(childComplexity), true
+
+	case "DeveloperToken.expiresAt":
+		if e.complexity.DeveloperToken.ExpiresAt == nil {
+			break
+		}
+
+		return e.complexity.DeveloperToken.ExpiresAt(childComplexity), true
+
+	case "DeveloperToken.id":
+		if e.complexity.DeveloperToken.ID == nil {
+			break
+		}
+
+		return e.complexity.DeveloperToken.ID(childComplexity), true
+
+	case "DeveloperToken.lastUsedAt":
+		if e.complexity.DeveloperToken.LastUsedAt == nil {
+			break
+		}
+
+		return e.complexity.DeveloperToken.LastUsedAt(childComplexity), true
+
+	case "DeveloperToken.name":
+		if e.complexity.DeveloperToken.Name == nil {
+			break
+		}
+
+		return e.complexity.DeveloperToken.Name(childComplexity), true
+
+	case "DeveloperToken.permissions":
+		if e.complexity.DeveloperToken.Permissions == nil {
+			break
+		}
+
+		return e.complexity.DeveloperToken.Permissions(childComplexity), true
+
+	case "DeveloperToken.status":
+		if e.complexity.DeveloperToken.Status == nil {
+			break
+		}
+
+		return e.complexity.DeveloperToken.Status(childComplexity), true
+
+	case "DeveloperToken.token":
+		if e.complexity.DeveloperToken.Token == nil {
+			break
+		}
+
+		return e.complexity.DeveloperToken.Token(childComplexity), true
+
 	case "Invoice.amount":
 		if e.complexity.Invoice.Amount == nil {
 			break
@@ -704,6 +777,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.Mutation.CreateClip(childComplexity, args["input"].(model.CreateClipInput)), true
 
+	case "Mutation.createDeveloperToken":
+		if e.complexity.Mutation.CreateDeveloperToken == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_createDeveloperToken_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.complexity.Mutation.CreateDeveloperToken(childComplexity, args["input"].(model.CreateDeveloperTokenInput)), true
+
 	case "Mutation.createPayment":
 		if e.complexity.Mutation.CreatePayment == nil {
 			break
@@ -751,6 +836,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.complexity.Mutation.RefreshStreamKey(childComplexity, args["id"].(string)), true
+
+	case "Mutation.revokeDeveloperToken":
+		if e.complexity.Mutation.RevokeDeveloperToken == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_revokeDeveloperToken_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.complexity.Mutation.RevokeDeveloperToken(childComplexity, args["id"].(string)), true
 
 	case "Mutation.updateBillingTier":
 		if e.complexity.Mutation.UpdateBillingTier == nil {
@@ -960,6 +1057,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.complexity.Query.Clusters(childComplexity), true
+
+	case "Query.developerTokens":
+		if e.complexity.Query.DeveloperTokens == nil {
+			break
+		}
+
+		return e.complexity.Query.DeveloperTokens(childComplexity), true
 
 	case "Query.invoice":
 		if e.complexity.Query.Invoice == nil {
@@ -1693,6 +1797,7 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 	ec := executionContext{opCtx, e, 0, 0, make(chan graphql.DeferredResult)}
 	inputUnmarshalMap := graphql.BuildUnmarshalerMap(
 		ec.unmarshalInputCreateClipInput,
+		ec.unmarshalInputCreateDeveloperTokenInput,
 		ec.unmarshalInputCreatePaymentInput,
 		ec.unmarshalInputCreateStreamInput,
 		ec.unmarshalInputTimeRangeInput,
@@ -1844,6 +1949,9 @@ type Query {
   cluster(id: ID!): Cluster
   nodes: [Node!]!
   node(id: ID!): Node
+
+  # Developer operations
+  developerTokens: [DeveloperToken!]!
 }
 
 # Root Mutation type
@@ -1862,6 +1970,10 @@ type Mutation {
   updateBillingTier(tierId: ID!): BillingStatus!
 
   # Infrastructure operations (via Quartermaster)
+
+  # Developer operations  
+  createDeveloperToken(input: CreateDeveloperTokenInput!): DeveloperToken!
+  revokeDeveloperToken(id: ID!): Boolean!
   updateTenant(input: UpdateTenantInput!): Tenant!
 }
 
@@ -1914,6 +2026,12 @@ input CreatePaymentInput {
 input UpdateTenantInput {
   name: String
   settings: JSON
+}
+
+input CreateDeveloperTokenInput {
+  name: String!
+  permissions: String = "read,write"
+  expiresIn: Int
 }
 
 input TimeRangeInput {
@@ -2158,6 +2276,17 @@ type Clip {
   status: String!
   createdAt: Time!
   updatedAt: Time!
+}
+
+type DeveloperToken {
+  id: ID!
+  name: String!
+  token: String
+  permissions: String!
+  status: String!
+  lastUsedAt: Time
+  expiresAt: Time
+  createdAt: Time!
 }`, BuiltIn: false},
 }
 var parsedSchema = gqlparser.MustLoadSchema(sources...)
@@ -2170,6 +2299,17 @@ func (ec *executionContext) field_Mutation_createClip_args(ctx context.Context, 
 	var err error
 	args := map[string]any{}
 	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input", ec.unmarshalNCreateClipInput2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐCreateClipInput)
+	if err != nil {
+		return nil, err
+	}
+	args["input"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Mutation_createDeveloperToken_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input", ec.unmarshalNCreateDeveloperTokenInput2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐCreateDeveloperTokenInput)
 	if err != nil {
 		return nil, err
 	}
@@ -2211,6 +2351,17 @@ func (ec *executionContext) field_Mutation_deleteStream_args(ctx context.Context
 }
 
 func (ec *executionContext) field_Mutation_refreshStreamKey_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "id", ec.unmarshalNID2string)
+	if err != nil {
+		return nil, err
+	}
+	args["id"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Mutation_revokeDeveloperToken_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
 	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "id", ec.unmarshalNID2string)
@@ -3795,6 +3946,349 @@ func (ec *executionContext) fieldContext_Cluster_createdAt(_ context.Context, fi
 	return fc, nil
 }
 
+func (ec *executionContext) _DeveloperToken_id(ctx context.Context, field graphql.CollectedField, obj *model.DeveloperToken) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_DeveloperToken_id(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.ID, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNID2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_DeveloperToken_id(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "DeveloperToken",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _DeveloperToken_name(ctx context.Context, field graphql.CollectedField, obj *model.DeveloperToken) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_DeveloperToken_name(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Name, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_DeveloperToken_name(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "DeveloperToken",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _DeveloperToken_token(ctx context.Context, field graphql.CollectedField, obj *model.DeveloperToken) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_DeveloperToken_token(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Token, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_DeveloperToken_token(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "DeveloperToken",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _DeveloperToken_permissions(ctx context.Context, field graphql.CollectedField, obj *model.DeveloperToken) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_DeveloperToken_permissions(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Permissions, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_DeveloperToken_permissions(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "DeveloperToken",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _DeveloperToken_status(ctx context.Context, field graphql.CollectedField, obj *model.DeveloperToken) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_DeveloperToken_status(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Status, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_DeveloperToken_status(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "DeveloperToken",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _DeveloperToken_lastUsedAt(ctx context.Context, field graphql.CollectedField, obj *model.DeveloperToken) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_DeveloperToken_lastUsedAt(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.LastUsedAt, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*time.Time)
+	fc.Result = res
+	return ec.marshalOTime2ᚖtimeᚐTime(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_DeveloperToken_lastUsedAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "DeveloperToken",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Time does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _DeveloperToken_expiresAt(ctx context.Context, field graphql.CollectedField, obj *model.DeveloperToken) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_DeveloperToken_expiresAt(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.ExpiresAt, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*time.Time)
+	fc.Result = res
+	return ec.marshalOTime2ᚖtimeᚐTime(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_DeveloperToken_expiresAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "DeveloperToken",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Time does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _DeveloperToken_createdAt(ctx context.Context, field graphql.CollectedField, obj *model.DeveloperToken) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_DeveloperToken_createdAt(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.CreatedAt, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(time.Time)
+	fc.Result = res
+	return ec.marshalNTime2timeᚐTime(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_DeveloperToken_createdAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "DeveloperToken",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Time does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Invoice_id(ctx context.Context, field graphql.CollectedField, obj *models.Invoice) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_Invoice_id(ctx, field)
 	if err != nil {
@@ -4830,6 +5324,134 @@ func (ec *executionContext) fieldContext_Mutation_updateBillingTier(ctx context.
 	}()
 	ctx = graphql.WithFieldContext(ctx, fc)
 	if fc.Args, err = ec.field_Mutation_updateBillingTier_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_createDeveloperToken(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Mutation_createDeveloperToken(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.Mutation().CreateDeveloperToken(rctx, fc.Args["input"].(model.CreateDeveloperTokenInput))
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(*model.DeveloperToken)
+	fc.Result = res
+	return ec.marshalNDeveloperToken2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐDeveloperToken(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Mutation_createDeveloperToken(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "id":
+				return ec.fieldContext_DeveloperToken_id(ctx, field)
+			case "name":
+				return ec.fieldContext_DeveloperToken_name(ctx, field)
+			case "token":
+				return ec.fieldContext_DeveloperToken_token(ctx, field)
+			case "permissions":
+				return ec.fieldContext_DeveloperToken_permissions(ctx, field)
+			case "status":
+				return ec.fieldContext_DeveloperToken_status(ctx, field)
+			case "lastUsedAt":
+				return ec.fieldContext_DeveloperToken_lastUsedAt(ctx, field)
+			case "expiresAt":
+				return ec.fieldContext_DeveloperToken_expiresAt(ctx, field)
+			case "createdAt":
+				return ec.fieldContext_DeveloperToken_createdAt(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type DeveloperToken", field.Name)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_createDeveloperToken_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_revokeDeveloperToken(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Mutation_revokeDeveloperToken(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.Mutation().RevokeDeveloperToken(rctx, fc.Args["id"].(string))
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(bool)
+	fc.Result = res
+	return ec.marshalNBoolean2bool(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Mutation_revokeDeveloperToken(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_revokeDeveloperToken_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
 		ec.Error(ctx, err)
 		return fc, err
 	}
@@ -6935,6 +7557,68 @@ func (ec *executionContext) fieldContext_Query_node(ctx context.Context, field g
 	if fc.Args, err = ec.field_Query_node_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
 		ec.Error(ctx, err)
 		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_developerTokens(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Query_developerTokens(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.Query().DeveloperTokens(rctx)
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.([]*model.DeveloperToken)
+	fc.Result = res
+	return ec.marshalNDeveloperToken2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐDeveloperTokenᚄ(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Query_developerTokens(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "id":
+				return ec.fieldContext_DeveloperToken_id(ctx, field)
+			case "name":
+				return ec.fieldContext_DeveloperToken_name(ctx, field)
+			case "token":
+				return ec.fieldContext_DeveloperToken_token(ctx, field)
+			case "permissions":
+				return ec.fieldContext_DeveloperToken_permissions(ctx, field)
+			case "status":
+				return ec.fieldContext_DeveloperToken_status(ctx, field)
+			case "lastUsedAt":
+				return ec.fieldContext_DeveloperToken_lastUsedAt(ctx, field)
+			case "expiresAt":
+				return ec.fieldContext_DeveloperToken_expiresAt(ctx, field)
+			case "createdAt":
+				return ec.fieldContext_DeveloperToken_createdAt(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type DeveloperToken", field.Name)
+		},
 	}
 	return fc, nil
 }
@@ -12748,6 +13432,51 @@ func (ec *executionContext) unmarshalInputCreateClipInput(ctx context.Context, o
 	return it, nil
 }
 
+func (ec *executionContext) unmarshalInputCreateDeveloperTokenInput(ctx context.Context, obj any) (model.CreateDeveloperTokenInput, error) {
+	var it model.CreateDeveloperTokenInput
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	if _, present := asMap["permissions"]; !present {
+		asMap["permissions"] = "read,write"
+	}
+
+	fieldsInOrder := [...]string{"name", "permissions", "expiresIn"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "name":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("name"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Name = data
+		case "permissions":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("permissions"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Permissions = data
+		case "expiresIn":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("expiresIn"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ExpiresIn = data
+		}
+	}
+
+	return it, nil
+}
+
 func (ec *executionContext) unmarshalInputCreatePaymentInput(ctx context.Context, obj any) (model.CreatePaymentInput, error) {
 	var it model.CreatePaymentInput
 	asMap := map[string]any{}
@@ -13415,6 +14144,71 @@ func (ec *executionContext) _Cluster(ctx context.Context, sel ast.SelectionSet, 
 	return out
 }
 
+var developerTokenImplementors = []string{"DeveloperToken"}
+
+func (ec *executionContext) _DeveloperToken(ctx context.Context, sel ast.SelectionSet, obj *model.DeveloperToken) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, developerTokenImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("DeveloperToken")
+		case "id":
+			out.Values[i] = ec._DeveloperToken_id(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "name":
+			out.Values[i] = ec._DeveloperToken_name(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "token":
+			out.Values[i] = ec._DeveloperToken_token(ctx, field, obj)
+		case "permissions":
+			out.Values[i] = ec._DeveloperToken_permissions(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "status":
+			out.Values[i] = ec._DeveloperToken_status(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "lastUsedAt":
+			out.Values[i] = ec._DeveloperToken_lastUsedAt(ctx, field, obj)
+		case "expiresAt":
+			out.Values[i] = ec._DeveloperToken_expiresAt(ctx, field, obj)
+		case "createdAt":
+			out.Values[i] = ec._DeveloperToken_createdAt(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.processDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
 var invoiceImplementors = []string{"Invoice"}
 
 func (ec *executionContext) _Invoice(ctx context.Context, sel ast.SelectionSet, obj *models.Invoice) graphql.Marshaler {
@@ -13638,6 +14432,20 @@ func (ec *executionContext) _Mutation(ctx context.Context, sel ast.SelectionSet)
 		case "updateBillingTier":
 			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
 				return ec._Mutation_updateBillingTier(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "createDeveloperToken":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_createDeveloperToken(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "revokeDeveloperToken":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_revokeDeveloperToken(ctx, field)
 			})
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
@@ -14287,6 +15095,28 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 					}
 				}()
 				res = ec._Query_node(ctx, field)
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "developerTokens":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_developerTokens(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
 				return res
 			}
 
@@ -16134,6 +16964,11 @@ func (ec *executionContext) unmarshalNCreateClipInput2frameworksᚋapi_gateway�
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
+func (ec *executionContext) unmarshalNCreateDeveloperTokenInput2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐCreateDeveloperTokenInput(ctx context.Context, v any) (model.CreateDeveloperTokenInput, error) {
+	res, err := ec.unmarshalInputCreateDeveloperTokenInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
 func (ec *executionContext) unmarshalNCreatePaymentInput2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐCreatePaymentInput(ctx context.Context, v any) (model.CreatePaymentInput, error) {
 	res, err := ec.unmarshalInputCreatePaymentInput(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
@@ -16142,6 +16977,64 @@ func (ec *executionContext) unmarshalNCreatePaymentInput2frameworksᚋapi_gatewa
 func (ec *executionContext) unmarshalNCreateStreamInput2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐCreateStreamInput(ctx context.Context, v any) (model.CreateStreamInput, error) {
 	res, err := ec.unmarshalInputCreateStreamInput(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNDeveloperToken2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐDeveloperToken(ctx context.Context, sel ast.SelectionSet, v model.DeveloperToken) graphql.Marshaler {
+	return ec._DeveloperToken(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNDeveloperToken2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐDeveloperTokenᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.DeveloperToken) graphql.Marshaler {
+	ret := make(graphql.Array, len(v))
+	var wg sync.WaitGroup
+	isLen1 := len(v) == 1
+	if !isLen1 {
+		wg.Add(len(v))
+	}
+	for i := range v {
+		i := i
+		fc := &graphql.FieldContext{
+			Index:  &i,
+			Result: &v[i],
+		}
+		ctx := graphql.WithFieldContext(ctx, fc)
+		f := func(i int) {
+			defer func() {
+				if r := recover(); r != nil {
+					ec.Error(ctx, ec.Recover(ctx, r))
+					ret = nil
+				}
+			}()
+			if !isLen1 {
+				defer wg.Done()
+			}
+			ret[i] = ec.marshalNDeveloperToken2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐDeveloperToken(ctx, sel, v[i])
+		}
+		if isLen1 {
+			f(i)
+		} else {
+			go f(i)
+		}
+
+	}
+	wg.Wait()
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNDeveloperToken2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐDeveloperToken(ctx context.Context, sel ast.SelectionSet, v *model.DeveloperToken) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._DeveloperToken(ctx, sel, v)
 }
 
 func (ec *executionContext) unmarshalNFloat2float64(ctx context.Context, v any) (float64, error) {
@@ -17129,6 +18022,24 @@ func (ec *executionContext) marshalOID2ᚖstring(ctx context.Context, sel ast.Se
 	return res
 }
 
+func (ec *executionContext) unmarshalOInt2ᚖint(ctx context.Context, v any) (*int, error) {
+	if v == nil {
+		return nil, nil
+	}
+	res, err := graphql.UnmarshalInt(v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalOInt2ᚖint(ctx context.Context, sel ast.SelectionSet, v *int) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	_ = sel
+	_ = ctx
+	res := graphql.MarshalInt(*v)
+	return res
+}
+
 func (ec *executionContext) marshalOInvoice2ᚖframeworksᚋpkgᚋmodelsᚐInvoice(ctx context.Context, sel ast.SelectionSet, v *models.Invoice) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
@@ -17210,6 +18121,24 @@ func (ec *executionContext) marshalOTenant2ᚖframeworksᚋpkgᚋmodelsᚐTenant
 		return graphql.Null
 	}
 	return ec._Tenant(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalOTime2ᚖtimeᚐTime(ctx context.Context, v any) (*time.Time, error) {
+	if v == nil {
+		return nil, nil
+	}
+	res, err := graphql.UnmarshalTime(v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalOTime2ᚖtimeᚐTime(ctx context.Context, sel ast.SelectionSet, v *time.Time) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	_ = sel
+	_ = ctx
+	res := graphql.MarshalTime(*v)
+	return res
 }
 
 func (ec *executionContext) unmarshalOTimeRangeInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐTimeRangeInput(ctx context.Context, v any) (*model.TimeRangeInput, error) {

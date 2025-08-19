@@ -46,6 +46,12 @@ type CreateClipInput struct {
 	Description *string `json:"description,omitempty"`
 }
 
+type CreateDeveloperTokenInput struct {
+	Name        string  `json:"name"`
+	Permissions *string `json:"permissions,omitempty"`
+	ExpiresIn   *int    `json:"expiresIn,omitempty"`
+}
+
 type CreatePaymentInput struct {
 	Amount   float64       `json:"amount"`
 	Currency *string       `json:"currency,omitempty"`
@@ -56,6 +62,17 @@ type CreateStreamInput struct {
 	Name        string  `json:"name"`
 	Description *string `json:"description,omitempty"`
 	Record      *bool   `json:"record,omitempty"`
+}
+
+type DeveloperToken struct {
+	ID          string     `json:"id"`
+	Name        string     `json:"name"`
+	Token       *string    `json:"token,omitempty"`
+	Permissions string     `json:"permissions"`
+	Status      string     `json:"status"`
+	LastUsedAt  *time.Time `json:"lastUsedAt,omitempty"`
+	ExpiresAt   *time.Time `json:"expiresAt,omitempty"`
+	CreatedAt   time.Time  `json:"createdAt"`
 }
 
 type LineItem struct {

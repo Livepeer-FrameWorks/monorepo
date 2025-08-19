@@ -18,9 +18,15 @@ export const streamsService = {
   async getStreams() {
     const result = await client.query({
       query: GetStreamsDocument,
-      fetchPolicy: 'cache-first'
+      fetchPolicy: 'network-only', // Always fetch fresh data to avoid cache issues
+      errorPolicy: 'all'
     });
-    return result.data.streams;
+    
+    if (result.errors) {
+      console.error('GraphQL errors in getStreams:', result.errors);
+    }
+    
+    return result.data?.streams || [];
   },
 
   async getStream(id) {

@@ -35,7 +35,8 @@ func (r *Resolver) DoGetStreamAnalytics(ctx context.Context, streamID string, ti
 	if len(*analytics) > 0 {
 		return &(*analytics)[0], nil
 	}
-	return nil, fmt.Errorf("no analytics found for stream")
+	// Return null instead of error when no analytics found - this is normal for new streams
+	return nil, nil
 }
 
 // DoGetViewerMetrics returns viewer metrics
@@ -100,12 +101,19 @@ func (r *Resolver) DoGetPlatformOverview(ctx context.Context, timeRange *model.T
 		return nil, fmt.Errorf("failed to get platform overview: %w", err)
 	}
 
-	// Convert to GraphQL model
+	// Convert to GraphQL model - always provide a TimeRange (default to 24h if none provided)
 	var gqlTimeRange *model.TimeRange
 	if timeRange != nil {
 		gqlTimeRange = &model.TimeRange{
 			Start: timeRange.Start,
 			End:   timeRange.End,
+		}
+	} else {
+		// Default to last 24 hours if no time range provided
+		now := time.Now()
+		gqlTimeRange = &model.TimeRange{
+			Start: now.Add(-24 * time.Hour),
+			End:   now,
 		}
 	}
 

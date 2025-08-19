@@ -29,6 +29,9 @@ type Query {
   cluster(id: ID!): Cluster
   nodes: [Node!]!
   node(id: ID!): Node
+
+  # Developer API (from Commodore)
+  developerTokens: [DeveloperToken!]!
 }
 
 # Root Mutation type
@@ -47,6 +50,10 @@ type Mutation {
 
   # Infrastructure operations (via Quartermaster)
   updateTenant(input: UpdateTenantInput!): Tenant!
+
+  # Developer API operations (via Commodore)
+  createDeveloperToken(input: CreateDeveloperTokenInput!): DeveloperToken!
+  revokeDeveloperToken(id: ID!): Boolean!
 }
 
 # Root Subscription type for real-time updates
@@ -335,3 +342,22 @@ type Clip {
   createdAt: Time!
   updatedAt: Time!
 }
+
+# Developer API Types
+type DeveloperToken {
+  id: ID!
+  name: String!
+  token: String
+  permissions: String!
+  status: String!
+  lastUsedAt: Time
+  expiresAt: Time
+  createdAt: Time!
+}
+
+input CreateDeveloperTokenInput {
+  name: String!
+  permissions: String
+  expiresIn: Int
+}
+

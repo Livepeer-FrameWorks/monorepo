@@ -139,12 +139,15 @@ export const client = new ApolloClient({
       Query: {
         fields: {
           streams: {
-            merge: true,
+            merge: false, // Always replace to avoid cache conflicts
           },
           viewerMetrics: {
             merge: false, // Always replace for real-time data
           },
         },
+      },
+      Stream: {
+        keyFields: ["id"], // Ensure streams are cached by ID
       },
     },
   }),

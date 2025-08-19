@@ -11,21 +11,9 @@ import (
 	"frameworks/pkg/logging"
 )
 
-// Context represents an HTTP request context
-type Context = *gin.Context
-
-// HandlerFunc represents an HTTP handler function
-type HandlerFunc = gin.HandlerFunc
-
-// H is a shortcut for map[string]interface{}
-type H = gin.H
-
-// Engine represents a gin engine
-type Engine = *gin.Engine
-
 // LoggingMiddleware provides structured request logging
-func LoggingMiddleware(logger logging.Logger) HandlerFunc {
-	return func(c Context) {
+func LoggingMiddleware(logger logging.Logger) gin.HandlerFunc {
+	return func(c *gin.Context) {
 		// Start timer
 		start := time.Now()
 
@@ -47,8 +35,8 @@ func LoggingMiddleware(logger logging.Logger) HandlerFunc {
 }
 
 // CORSMiddleware handles CORS headers
-func CORSMiddleware() HandlerFunc {
-	return func(c Context) {
+func CORSMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
 		c.Header("Access-Control-Allow-Origin", "*")
 		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization")
@@ -63,8 +51,8 @@ func CORSMiddleware() HandlerFunc {
 }
 
 // RecoveryMiddleware provides panic recovery with logging
-func RecoveryMiddleware(logger logging.Logger) HandlerFunc {
-	return func(c Context) {
+func RecoveryMiddleware(logger logging.Logger) gin.HandlerFunc {
+	return func(c *gin.Context) {
 		defer func() {
 			if err := recover(); err != nil {
 				logger.WithFields(logging.Fields{
@@ -83,8 +71,8 @@ func RecoveryMiddleware(logger logging.Logger) HandlerFunc {
 }
 
 // RequestIDMiddleware adds a unique request ID to each request
-func RequestIDMiddleware() HandlerFunc {
-	return func(c Context) {
+func RequestIDMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
 		requestID := c.GetHeader("X-Request-ID")
 		if requestID == "" {
 			requestID = GenerateRequestID()
@@ -97,8 +85,8 @@ func RequestIDMiddleware() HandlerFunc {
 }
 
 // TimeoutMiddleware adds a timeout to request processing
-func TimeoutMiddleware(timeout time.Duration) HandlerFunc {
-	return func(c Context) {
+func TimeoutMiddleware(timeout time.Duration) gin.HandlerFunc {
+	return func(c *gin.Context) {
 		// Wrap the request in a timeout context
 		ctx, cancel := context.WithTimeout(c.Request.Context(), timeout)
 		defer cancel()

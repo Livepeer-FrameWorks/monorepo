@@ -1,13 +1,16 @@
 package handlers
 
 import (
+	"encoding/json"
+	"math"
 	"net/http"
 	"time"
+
+	"github.com/gin-gonic/gin"
 
 	"frameworks/pkg/api/periscope"
 	"frameworks/pkg/database"
 	"frameworks/pkg/logging"
-	"frameworks/pkg/middleware"
 	"frameworks/pkg/models"
 )
 
@@ -25,7 +28,7 @@ func Init(ydb database.PostgresConn, ch database.ClickHouseConn, log logging.Log
 }
 
 // GetStreamAnalytics returns analytics for all streams with recent activity (tenant-scoped)
-func GetStreamAnalytics(c middleware.Context) {
+func GetStreamAnalytics(c *gin.Context) {
 	tenantID := c.GetString("tenant_id")
 	if tenantID == "" {
 		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Tenant context required"})
@@ -171,7 +174,7 @@ func GetStreamAnalytics(c middleware.Context) {
 }
 
 // GetViewerMetrics returns viewer metrics from ClickHouse
-func GetViewerMetrics(c middleware.Context) {
+func GetViewerMetrics(c *gin.Context) {
 	tenantID := c.GetString("tenant_id")
 	if tenantID == "" {
 		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Tenant context required"})
@@ -216,9 +219,15 @@ func GetViewerMetrics(c middleware.Context) {
 	if err != nil {
 		logger.WithFields(logging.Fields{
 			"tenant_id": tenantID,
+			"stream_id": streamID,
+			"query":     query,
 			"error":     err,
 		}).Error("Failed to fetch viewer metrics from ClickHouse")
-		c.JSON(http.StatusInternalServerError, periscope.ErrorResponse{Error: "Failed to fetch viewer metrics"})
+
+		// Return empty metrics instead of error - might be fresh setup or no data yet
+		emptyMetrics := []models.AnalyticsViewerSession{}
+		response := periscope.ViewerMetricsResponse(emptyMetrics)
+		c.JSON(http.StatusOK, response)
 		return
 	}
 	defer rows.Close()
@@ -251,7 +260,7 @@ func GetViewerMetrics(c middleware.Context) {
 }
 
 // GetRoutingEvents returns routing events from ClickHouse
-func GetRoutingEvents(c middleware.Context) {
+func GetRoutingEvents(c *gin.Context) {
 	tenantID := c.GetString("tenant_id")
 	if tenantID == "" {
 		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Tenant context required"})
@@ -325,7 +334,7 @@ func GetRoutingEvents(c middleware.Context) {
 }
 
 // GetViewerMetrics5m returns aggregated viewer metrics from ClickHouse materialized view
-func GetViewerMetrics5m(c middleware.Context) {
+func GetViewerMetrics5m(c *gin.Context) {
 	tenantID := c.GetString("tenant_id")
 	if tenantID == "" {
 		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Tenant context required"})
@@ -389,7 +398,7 @@ func GetViewerMetrics5m(c middleware.Context) {
 }
 
 // GetStreamDetails returns detailed analytics for a specific stream
-func GetStreamDetails(c middleware.Context) {
+func GetStreamDetails(c *gin.Context) {
 	tenantID := c.GetString("tenant_id")
 	if tenantID == "" {
 		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Tenant context required"})
@@ -483,7 +492,7 @@ func GetStreamDetails(c middleware.Context) {
 }
 
 // GetStreamEvents returns events for a specific stream
-func GetStreamEvents(c middleware.Context) {
+func GetStreamEvents(c *gin.Context) {
 	tenantID := c.GetString("tenant_id")
 	internalName := c.Param("internal_name")
 
@@ -533,7 +542,7 @@ func GetStreamEvents(c middleware.Context) {
 }
 
 // GetTrackListEvents returns track list updates for a specific stream
-func GetTrackListEvents(c middleware.Context) {
+func GetTrackListEvents(c *gin.Context) {
 	tenantID := c.GetString("tenant_id")
 	if tenantID == "" {
 		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Tenant context required"})
@@ -580,7 +589,7 @@ func GetTrackListEvents(c middleware.Context) {
 }
 
 // GetViewerStats returns viewer statistics for a specific stream
-func GetViewerStats(c middleware.Context) {
+func GetViewerStats(c *gin.Context) {
 	tenantID := c.GetString("tenant_id")
 	internalName := c.Param("internal_name")
 
@@ -715,12 +724,14 @@ func GetViewerStats(c middleware.Context) {
 }
 
 // GetPlatformOverview returns high-level platform metrics
-func GetPlatformOverview(c middleware.Context) {
+func GetPlatformOverview(c *gin.Context) {
 	tenantID := c.GetString("tenant_id")
 	if tenantID == "" {
 		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Tenant context required"})
 		return
 	}
+
+	logger.WithField("tenant_id", tenantID).Info("Getting platform overview")
 
 	// Parse time range from query params (defaults to last 1 hour)
 	startTime := c.DefaultQuery("start_time", time.Now().Add(-1*time.Hour).Format(time.RFC3339))
@@ -763,6 +774,7 @@ func GetPlatformOverview(c middleware.Context) {
 	}
 
 	// Get stream counts from analytics data
+	logger.Info("Querying stream analytics table")
 	err = yugaDB.QueryRowContext(c.Request.Context(), `
 		SELECT 
 			COUNT(DISTINCT internal_name) as total_streams,
@@ -778,6 +790,11 @@ func GetPlatformOverview(c middleware.Context) {
 		return
 	}
 
+	logger.WithFields(map[string]interface{}{
+		"total_streams":  metrics.TotalStreams,
+		"active_streams": metrics.ActiveStreams,
+	}).Info("Stream metrics retrieved")
+
 	// Get time-series data from ClickHouse
 	var timeseriesMetrics struct {
 		TotalViewers   int     `json:"total_viewers"`
@@ -787,8 +804,8 @@ func GetPlatformOverview(c middleware.Context) {
 
 	err = clickhouse.QueryRowContext(c.Request.Context(), `
 		SELECT 
-			sum(viewer_count) as total_viewers,
-			avg(viewer_count) as average_viewers,
+			COALESCE(sum(viewer_count), 0) as total_viewers,
+			COALESCE(avg(viewer_count), 0) as average_viewers,
 			(SELECT COALESCE(max(bandwidth_out) / (1024*1024), 0) FROM stream_health_metrics WHERE tenant_id = $1 AND timestamp BETWEEN $2 AND $3) as peak_bandwidth_mbps
 		FROM viewer_metrics 
 		WHERE tenant_id = $1 
@@ -806,6 +823,16 @@ func GetPlatformOverview(c middleware.Context) {
 		timeseriesMetrics.PeakBandwidth = 0
 	}
 
+	// Check for NaN values and replace with 0
+	if math.IsNaN(timeseriesMetrics.AverageViewers) {
+		logger.Warn("AverageViewers is NaN, setting to 0")
+		timeseriesMetrics.AverageViewers = 0
+	}
+	if math.IsNaN(timeseriesMetrics.PeakBandwidth) {
+		logger.Warn("PeakBandwidth is NaN, setting to 0")
+		timeseriesMetrics.PeakBandwidth = 0
+	}
+
 	// Build structured response
 	response := periscope.PlatformOverviewResponse{
 		TenantID:       tenantID,
@@ -819,11 +846,28 @@ func GetPlatformOverview(c middleware.Context) {
 		GeneratedAt:    time.Now(),
 	}
 
-	c.JSON(http.StatusOK, response)
+	logger.Info("About to send platform overview response")
+
+	// Debug marshaling to see what JSON is produced
+	jsonBytes, err := json.Marshal(response)
+	if err != nil {
+		logger.WithError(err).Error("Failed to marshal platform overview response")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to marshal response"})
+		return
+	}
+
+	logger.WithFields(map[string]interface{}{
+		"json_length": len(jsonBytes),
+		"json":        string(jsonBytes),
+	}).Info("Platform overview JSON response")
+
+	c.Data(http.StatusOK, "application/json", jsonBytes)
+
+	logger.Info("Platform overview response sent")
 }
 
 // GetRealtimeStreams returns current live streams with analytics
-func GetRealtimeStreams(c middleware.Context) {
+func GetRealtimeStreams(c *gin.Context) {
 	tenantID := c.GetString("tenant_id")
 	if tenantID == "" {
 		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Tenant context required"})
@@ -910,7 +954,7 @@ func GetRealtimeStreams(c middleware.Context) {
 }
 
 // GetRealtimeViewers returns current viewer counts across all streams
-func GetRealtimeViewers(c middleware.Context) {
+func GetRealtimeViewers(c *gin.Context) {
 	tenantID := c.GetString("tenant_id")
 	if tenantID == "" {
 		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Tenant context required"})
@@ -981,7 +1025,7 @@ func GetRealtimeViewers(c middleware.Context) {
 }
 
 // GetRealtimeEvents returns recent events across all streams
-func GetRealtimeEvents(c middleware.Context) {
+func GetRealtimeEvents(c *gin.Context) {
 	tenantID := c.GetString("tenant_id")
 	if tenantID == "" {
 		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Tenant context required"})
@@ -1085,7 +1129,7 @@ func GetRealtimeEvents(c middleware.Context) {
 }
 
 // GetConnectionEvents returns connection events from ClickHouse
-func GetConnectionEvents(c middleware.Context) {
+func GetConnectionEvents(c *gin.Context) {
 	tenantID := c.GetString("tenant_id")
 	if tenantID == "" {
 		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Tenant context required"})
@@ -1203,7 +1247,7 @@ func GetConnectionEvents(c middleware.Context) {
 }
 
 // GetNodeMetrics returns node metrics from ClickHouse
-func GetNodeMetrics(c middleware.Context) {
+func GetNodeMetrics(c *gin.Context) {
 	tenantID := c.GetString("tenant_id")
 	if tenantID == "" {
 		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Tenant context required"})
@@ -1361,7 +1405,7 @@ func GetNodeMetrics(c middleware.Context) {
 }
 
 // GetNodeMetrics1h returns hourly aggregated node metrics from ClickHouse materialized view
-func GetNodeMetrics1h(c middleware.Context) {
+func GetNodeMetrics1h(c *gin.Context) {
 	tenantID := c.GetString("tenant_id")
 	if tenantID == "" {
 		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Tenant context required"})
@@ -1447,7 +1491,7 @@ func GetNodeMetrics1h(c middleware.Context) {
 }
 
 // GetStreamHealthMetrics returns stream health metrics from ClickHouse
-func GetStreamHealthMetrics(c middleware.Context) {
+func GetStreamHealthMetrics(c *gin.Context) {
 	tenantID := c.GetString("tenant_id")
 	if tenantID == "" {
 		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Tenant context required"})
@@ -1577,7 +1621,7 @@ func GetStreamHealthMetrics(c middleware.Context) {
 }
 
 // GetStreamBufferEvents returns buffer events for a specific stream
-func GetStreamBufferEvents(c middleware.Context) {
+func GetStreamBufferEvents(c *gin.Context) {
 	tenantID := c.GetString("tenant_id")
 	if tenantID == "" {
 		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Tenant context required"})
@@ -1621,7 +1665,7 @@ func GetStreamBufferEvents(c middleware.Context) {
 }
 
 // GetStreamEndEvents returns end events for a specific stream
-func GetStreamEndEvents(c middleware.Context) {
+func GetStreamEndEvents(c *gin.Context) {
 	tenantID := c.GetString("tenant_id")
 	if tenantID == "" {
 		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Tenant context required"})

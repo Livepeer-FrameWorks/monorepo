@@ -93,13 +93,19 @@ func (c *Client) makeRequest(ctx context.Context, method, endpoint string, param
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
-
 	if resp.StatusCode >= 400 {
+		if len(body) == 0 {
+			return nil, fmt.Errorf("Periscope Query returned error status %d with empty body", resp.StatusCode)
+		}
 		var errorResp periscope.ErrorResponse
 		if err := json.Unmarshal(body, &errorResp); err != nil {
 			return nil, fmt.Errorf("Periscope Query returned error status %d: %s", resp.StatusCode, string(body))
 		}
 		return nil, fmt.Errorf("Periscope Query returned error: %s", errorResp.Error)
+	}
+
+	if len(body) == 0 {
+		return nil, fmt.Errorf("failed to parse response: empty body")
 	}
 
 	return body, nil

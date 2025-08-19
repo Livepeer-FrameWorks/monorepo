@@ -12,8 +12,9 @@ import (
 	qmclient "frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/database"
 	"frameworks/pkg/logging"
-	"frameworks/pkg/middleware"
 	"frameworks/pkg/models"
+
+	"github.com/gin-gonic/gin"
 )
 
 // BillingSummarizer handles usage summarization for billing
@@ -314,10 +315,10 @@ func (bs *BillingSummarizer) RunDailyUsageSummary() error {
 }
 
 // GetPlatformMetrics returns platform-wide metrics from ClickHouse
-func GetPlatformMetrics(c middleware.Context) {
+func GetPlatformMetrics(c *gin.Context) {
 	tenantID := c.GetString("tenant_id")
 	if tenantID == "" {
-		c.JSON(http.StatusBadRequest, middleware.H{"error": "Tenant context required"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Tenant context required"})
 		return
 	}
 
@@ -363,7 +364,7 @@ func GetPlatformMetrics(c middleware.Context) {
 
 	if err != nil {
 		logger.WithError(err).Error("Failed to fetch platform metrics from ClickHouse")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to fetch platform metrics"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch platform metrics"})
 		return
 	}
 
@@ -371,10 +372,10 @@ func GetPlatformMetrics(c middleware.Context) {
 }
 
 // GetPlatformEvents returns platform-wide events from ClickHouse
-func GetPlatformEvents(c middleware.Context) {
+func GetPlatformEvents(c *gin.Context) {
 	tenantID := c.GetString("tenant_id")
 	if tenantID == "" {
-		c.JSON(http.StatusBadRequest, middleware.H{"error": "Tenant context required"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Tenant context required"})
 		return
 	}
 
@@ -403,7 +404,7 @@ func GetPlatformEvents(c middleware.Context) {
 
 	if err != nil {
 		logger.WithError(err).Error("Failed to fetch platform events from ClickHouse")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to fetch platform events"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch platform events"})
 		return
 	}
 	defer rows.Close()
@@ -450,17 +451,17 @@ func GetPlatformEvents(c middleware.Context) {
 		})
 	}
 
-	c.JSON(http.StatusOK, middleware.H{
+	c.JSON(http.StatusOK, gin.H{
 		"events": events,
 		"count":  len(events),
 	})
 }
 
 // GetUsageSummary returns usage summary for the tenant
-func GetUsageSummary(c middleware.Context) {
+func GetUsageSummary(c *gin.Context) {
 	tenantID := c.GetString("tenant_id")
 	if tenantID == "" {
-		c.JSON(http.StatusBadRequest, middleware.H{"error": "Tenant context required"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Tenant context required"})
 		return
 	}
 
@@ -470,13 +471,13 @@ func GetUsageSummary(c middleware.Context) {
 
 	startTime, err := time.Parse(time.RFC3339, startTimeStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, middleware.H{"error": "Invalid start_time format"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid start_time format"})
 		return
 	}
 
 	endTime, err := time.Parse(time.RFC3339, endTimeStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, middleware.H{"error": "Invalid end_time format"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid end_time format"})
 		return
 	}
 
@@ -487,7 +488,7 @@ func GetUsageSummary(c middleware.Context) {
 	summary, err := bs.generateTenantUsageSummary(tenantID, startTime, endTime)
 	if err != nil {
 		logger.WithError(err).Error("Failed to generate usage summary")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to generate usage summary"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate usage summary"})
 		return
 	}
 
@@ -495,37 +496,37 @@ func GetUsageSummary(c middleware.Context) {
 }
 
 // TriggerHourlySummary triggers hourly usage summarization
-func TriggerHourlySummary(c middleware.Context) {
+func TriggerHourlySummary(c *gin.Context) {
 	tenantID := c.GetString("tenant_id")
 	if tenantID == "" {
-		c.JSON(http.StatusBadRequest, middleware.H{"error": "Tenant context required"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Tenant context required"})
 		return
 	}
 
 	bs := NewBillingSummarizer(yugaDB, clickhouse, logger)
 	if err := bs.RunHourlyUsageSummary(); err != nil {
 		logger.WithError(err).Error("Failed to run hourly usage summarization")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to run hourly summarization"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to run hourly summarization"})
 		return
 	}
 
-	c.JSON(http.StatusOK, middleware.H{"message": "Hourly usage summarization completed"})
+	c.JSON(http.StatusOK, gin.H{"message": "Hourly usage summarization completed"})
 }
 
 // TriggerDailySummary triggers daily usage summarization
-func TriggerDailySummary(c middleware.Context) {
+func TriggerDailySummary(c *gin.Context) {
 	tenantID := c.GetString("tenant_id")
 	if tenantID == "" {
-		c.JSON(http.StatusBadRequest, middleware.H{"error": "Tenant context required"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Tenant context required"})
 		return
 	}
 
 	bs := NewBillingSummarizer(yugaDB, clickhouse, logger)
 	if err := bs.RunDailyUsageSummary(); err != nil {
 		logger.WithError(err).Error("Failed to run daily usage summarization")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to run daily summarization"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to run daily summarization"})
 		return
 	}
 
-	c.JSON(http.StatusOK, middleware.H{"message": "Daily usage summarization completed"})
+	c.JSON(http.StatusOK, gin.H{"message": "Daily usage summarization completed"})
 }

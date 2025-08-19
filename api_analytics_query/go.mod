@@ -2,7 +2,10 @@ module frameworks/api_analytics_query
 
 go 1.23.8
 
-require frameworks/pkg v0.0.0
+require (
+	frameworks/pkg v0.0.0
+	github.com/gin-gonic/gin v1.9.1
+)
 
 replace frameworks/pkg => ../pkg
 
@@ -16,7 +19,6 @@ require (
 	github.com/chenzhuoyu/base64x v0.0.0-20221115062448-fe3a3abad311 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.2 // indirect
 	github.com/gin-contrib/sse v0.1.0 // indirect
-	github.com/gin-gonic/gin v1.9.1 // indirect
 	github.com/go-faster/city v1.0.1 // indirect
 	github.com/go-faster/errors v0.7.1 // indirect
 	github.com/go-playground/locales v0.14.1 // indirect

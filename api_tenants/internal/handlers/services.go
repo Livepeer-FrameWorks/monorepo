@@ -3,11 +3,11 @@ package handlers
 import (
 	"database/sql"
 	"encoding/json"
-	"frameworks/pkg/middleware"
 	"frameworks/pkg/models"
 	"net/http"
 	"strconv"
 
+	"github.com/gin-gonic/gin"
 	"github.com/lib/pq"
 )
 
@@ -16,7 +16,7 @@ import (
 // ============================================================================
 
 // GetServices returns all services in the catalog
-func GetServices(c middleware.Context) {
+func GetServices(c *gin.Context) {
 	rows, err := db.Query(`
 		SELECT id, service_id, name, plane, description, default_port,
 		       health_check_path, docker_image, version, dependencies,
@@ -27,7 +27,7 @@ func GetServices(c middleware.Context) {
 	`)
 	if err != nil {
 		logger.WithError(err).Error("Failed to fetch services")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to fetch services"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch services"})
 		return
 	}
 	defer rows.Close()
@@ -61,14 +61,14 @@ func GetServices(c middleware.Context) {
 		services = append(services, service)
 	}
 
-	c.JSON(http.StatusOK, middleware.H{
+	c.JSON(http.StatusOK, gin.H{
 		"services": services,
 		"count":    len(services),
 	})
 }
 
 // GetService returns a specific service by ID
-func GetService(c middleware.Context) {
+func GetService(c *gin.Context) {
 	serviceID := c.Param("service_id")
 
 	var service models.Service
@@ -88,13 +88,13 @@ func GetService(c middleware.Context) {
 	)
 
 	if err == sql.ErrNoRows {
-		c.JSON(http.StatusNotFound, middleware.H{"error": "Service not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": "Service not found"})
 		return
 	}
 
 	if err != nil {
 		logger.WithError(err).Error("Failed to fetch service")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to fetch service"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch service"})
 		return
 	}
 
@@ -116,7 +116,7 @@ func GetService(c middleware.Context) {
 // ============================================================================
 
 // GetClusterServices returns all services assigned to a cluster
-func GetClusterServices(c middleware.Context) {
+func GetClusterServices(c *gin.Context) {
 	clusterID := c.Param("cluster_id")
 
 	rows, err := db.Query(`
@@ -132,7 +132,7 @@ func GetClusterServices(c middleware.Context) {
 	`, clusterID)
 	if err != nil {
 		logger.WithError(err).Error("Failed to fetch cluster services")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to fetch cluster services"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch cluster services"})
 		return
 	}
 	defer rows.Close()
@@ -175,7 +175,7 @@ func GetClusterServices(c middleware.Context) {
 		clusterServices = append(clusterServices, cs)
 	}
 
-	c.JSON(http.StatusOK, middleware.H{
+	c.JSON(http.StatusOK, gin.H{
 		"cluster_id": clusterID,
 		"services":   clusterServices,
 		"count":      len(clusterServices),
@@ -183,7 +183,7 @@ func GetClusterServices(c middleware.Context) {
 }
 
 // UpdateClusterServiceState updates the desired state of a service on a cluster
-func UpdateClusterServiceState(c middleware.Context) {
+func UpdateClusterServiceState(c *gin.Context) {
 	clusterID := c.Param("cluster_id")
 	serviceID := c.Param("service_id")
 
@@ -195,7 +195,7 @@ func UpdateClusterServiceState(c middleware.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, middleware.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
@@ -235,17 +235,17 @@ func UpdateClusterServiceState(c middleware.Context) {
 	result, err := db.Exec(query, args...)
 	if err != nil {
 		logger.WithError(err).Error("Failed to update cluster service")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to update service"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update service"})
 		return
 	}
 
 	rowsAffected, _ := result.RowsAffected()
 	if rowsAffected == 0 {
-		c.JSON(http.StatusNotFound, middleware.H{"error": "Service assignment not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": "Service assignment not found"})
 		return
 	}
 
-	c.JSON(http.StatusOK, middleware.H{
+	c.JSON(http.StatusOK, gin.H{
 		"message":    "Service state updated successfully",
 		"cluster_id": clusterID,
 		"service_id": serviceID,
@@ -253,7 +253,7 @@ func UpdateClusterServiceState(c middleware.Context) {
 }
 
 // GetServiceInstances returns all running instances of services
-func GetServiceInstances(c middleware.Context) {
+func GetServiceInstances(c *gin.Context) {
 	clusterID := c.Query("cluster_id")
 	serviceID := c.Query("service_id")
 
@@ -287,7 +287,7 @@ func GetServiceInstances(c middleware.Context) {
 	rows, err := db.Query(query, args...)
 	if err != nil {
 		logger.WithError(err).Error("Failed to fetch service instances")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to fetch service instances"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch service instances"})
 		return
 	}
 	defer rows.Close()
@@ -313,10 +313,10 @@ func GetServiceInstances(c middleware.Context) {
 		instances = append(instances, instance)
 	}
 
-	c.JSON(http.StatusOK, middleware.H{
+	c.JSON(http.StatusOK, gin.H{
 		"instances": instances,
 		"count":     len(instances),
-		"filters": middleware.H{
+		"filters": gin.H{
 			"cluster_id": clusterID,
 			"service_id": serviceID,
 		},

@@ -5,14 +5,14 @@ import (
 	"net/http"
 
 	"frameworks/pkg/logging"
-	"frameworks/pkg/middleware"
 	"frameworks/pkg/models"
 
+	"github.com/gin-gonic/gin"
 	"github.com/lib/pq"
 )
 
 // GetClusters returns all clusters
-func GetClusters(c middleware.Context) {
+func GetClusters(c *gin.Context) {
 	rows, err := db.Query(`
 		SELECT id, cluster_id, cluster_name, cluster_type, base_url, 
 		       max_concurrent_streams, max_concurrent_viewers, max_bandwidth_mbps,
@@ -23,7 +23,7 @@ func GetClusters(c middleware.Context) {
 	`)
 	if err != nil {
 		logger.WithError(err).Error("Failed to get clusters")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to get clusters"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get clusters"})
 		return
 	}
 	defer rows.Close()
@@ -45,11 +45,11 @@ func GetClusters(c middleware.Context) {
 		clusters = append(clusters, cluster)
 	}
 
-	c.JSON(http.StatusOK, middleware.H{"clusters": clusters})
+	c.JSON(http.StatusOK, gin.H{"clusters": clusters})
 }
 
 // GetCluster returns a specific cluster
-func GetCluster(c middleware.Context) {
+func GetCluster(c *gin.Context) {
 	clusterID := c.Param("id")
 
 	var cluster models.InfrastructureCluster
@@ -71,19 +71,19 @@ func GetCluster(c middleware.Context) {
 	)
 
 	if err == sql.ErrNoRows {
-		c.JSON(http.StatusNotFound, middleware.H{"error": "Cluster not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": "Cluster not found"})
 		return
 	} else if err != nil {
 		logger.WithError(err).Error("Failed to get cluster")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to get cluster"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get cluster"})
 		return
 	}
 
-	c.JSON(http.StatusOK, middleware.H{"cluster": cluster})
+	c.JSON(http.StatusOK, gin.H{"cluster": cluster})
 }
 
 // CreateCluster creates a new infrastructure cluster
-func CreateCluster(c middleware.Context) {
+func CreateCluster(c *gin.Context) {
 	var req struct {
 		ClusterID            string   `json:"cluster_id" binding:"required"`
 		ClusterName          string   `json:"cluster_name" binding:"required"`
@@ -99,7 +99,7 @@ func CreateCluster(c middleware.Context) {
 
 	if err := c.ShouldBindJSON(&req); err != nil {
 		logger.WithError(err).Warn("Invalid create cluster request")
-		c.JSON(http.StatusBadRequest, middleware.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
@@ -142,7 +142,7 @@ func CreateCluster(c middleware.Context) {
 
 	if err != nil {
 		logger.WithError(err).WithField("cluster_id", req.ClusterID).Error("Failed to create cluster")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to create cluster"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create cluster"})
 		return
 	}
 
@@ -156,7 +156,7 @@ func CreateCluster(c middleware.Context) {
 }
 
 // UpdateCluster updates an existing infrastructure cluster
-func UpdateCluster(c middleware.Context) {
+func UpdateCluster(c *gin.Context) {
 	clusterID := c.Param("id")
 
 	var req struct {
@@ -177,7 +177,7 @@ func UpdateCluster(c middleware.Context) {
 
 	if err := c.ShouldBindJSON(&req); err != nil {
 		logger.WithError(err).Warn("Invalid update cluster request")
-		c.JSON(http.StatusBadRequest, middleware.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
@@ -268,7 +268,7 @@ func UpdateCluster(c middleware.Context) {
 	args = append(args, clusterID)
 
 	if len(setParts) == 1 { // Only updated_at
-		c.JSON(http.StatusBadRequest, middleware.H{"error": "No fields to update"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No fields to update"})
 		return
 	}
 
@@ -281,17 +281,17 @@ func UpdateCluster(c middleware.Context) {
 	result, err := db.Exec(query, args...)
 	if err != nil {
 		logger.WithError(err).WithField("cluster_id", clusterID).Error("Failed to update cluster")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to update cluster"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update cluster"})
 		return
 	}
 
 	rowsAffected, _ := result.RowsAffected()
 	if rowsAffected == 0 {
 		logger.WithField("cluster_id", clusterID).Warn("Cluster not found for update")
-		c.JSON(http.StatusNotFound, middleware.H{"error": "Cluster not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": "Cluster not found"})
 		return
 	}
 
 	logger.WithField("cluster_id", clusterID).Info("Updated cluster successfully")
-	c.JSON(http.StatusOK, middleware.H{"message": "Cluster updated successfully"})
+	c.JSON(http.StatusOK, gin.H{"message": "Cluster updated successfully"})
 }

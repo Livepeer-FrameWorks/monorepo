@@ -17,8 +17,9 @@ import (
 	qmclient "frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/config"
 	"frameworks/pkg/logging"
-	"frameworks/pkg/middleware"
 	"frameworks/pkg/models"
+
+	"github.com/gin-gonic/gin"
 )
 
 // Mollie webhook payload structure
@@ -44,14 +45,14 @@ type StripeWebhookPayload struct {
 }
 
 // HandleStripeWebhook handles webhook notifications from Stripe payment processor
-func HandleStripeWebhook(c middleware.Context) {
+func HandleStripeWebhook(c *gin.Context) {
 	// Verify webhook signature
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
 		logger.WithFields(logging.Fields{
 			"error": err.Error(),
 		}).Warn("Failed to read webhook body")
-		c.JSON(http.StatusBadRequest, middleware.H{"error": "Invalid request body"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
 		return
 	}
 
@@ -63,7 +64,7 @@ func HandleStripeWebhook(c middleware.Context) {
 		logger.WithFields(logging.Fields{
 			"signature": signature,
 		}).Warn("Invalid Stripe webhook signature")
-		c.JSON(http.StatusUnauthorized, middleware.H{"error": "Invalid signature"})
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid signature"})
 		return
 	}
 
@@ -72,7 +73,7 @@ func HandleStripeWebhook(c middleware.Context) {
 		logger.WithFields(logging.Fields{
 			"error": err.Error(),
 		}).Warn("Invalid Stripe webhook payload")
-		c.JSON(http.StatusBadRequest, middleware.H{"error": "Invalid payload"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid payload"})
 		return
 	}
 
@@ -87,12 +88,12 @@ func HandleStripeWebhook(c middleware.Context) {
 		err := handleStripePaymentIntent(payload)
 		if err != nil {
 			logger.WithError(err).Error("Failed to process Stripe payment intent")
-			c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to process webhook"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to process webhook"})
 			return
 		}
 	}
 
-	c.JSON(http.StatusOK, middleware.H{"status": "received"})
+	c.JSON(http.StatusOK, gin.H{"status": "received"})
 }
 
 // handleStripePaymentIntent processes Stripe payment intent webhooks
@@ -325,13 +326,13 @@ func sendPaymentStatusEmail(invoiceID, paymentID, provider, status string) {
 }
 
 // HandleMollieWebhook handles webhook notifications from Mollie payment processor
-func HandleMollieWebhook(c middleware.Context) {
+func HandleMollieWebhook(c *gin.Context) {
 	var payload map[string]interface{}
 	if err := c.ShouldBindJSON(&payload); err != nil {
 		logger.WithFields(logging.Fields{
 			"error": err.Error(),
 		}).Warn("Invalid webhook payload")
-		c.JSON(http.StatusBadRequest, middleware.H{"error": "Invalid payload"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid payload"})
 		return
 	}
 
@@ -354,7 +355,7 @@ func HandleMollieWebhook(c middleware.Context) {
 			"tx_id":    payload["id"],
 			"provider": "mollie",
 		}).Error("Payment not found for webhook")
-		c.JSON(http.StatusNotFound, middleware.H{"error": "Payment not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": "Payment not found"})
 		return
 	}
 
@@ -376,7 +377,7 @@ func HandleMollieWebhook(c middleware.Context) {
 			"mollie_status": payload["status"],
 			"payment_id":    paymentID,
 		}).Warn("Unknown Mollie payment status")
-		c.JSON(http.StatusOK, middleware.H{"status": "received"})
+		c.JSON(http.StatusOK, gin.H{"status": "received"})
 		return
 	}
 
@@ -393,7 +394,7 @@ func HandleMollieWebhook(c middleware.Context) {
 			"payment_id": paymentID,
 			"new_status": newStatus,
 		}).Error("Failed to update payment status")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to update payment"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update payment"})
 		return
 	}
 
@@ -427,7 +428,7 @@ func HandleMollieWebhook(c middleware.Context) {
 		sendPaymentStatusEmail(invoiceID, paymentID, "mollie", "failed")
 	}
 
-	c.JSON(http.StatusOK, middleware.H{"status": "received"})
+	c.JSON(http.StatusOK, gin.H{"status": "received"})
 }
 
 // getTenantInfo calls Quartermaster to get tenant information using shared client

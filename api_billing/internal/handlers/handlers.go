@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
 	// HTTP client for direct API calls (we'll use this for all payment providers)
@@ -17,7 +18,6 @@ import (
 
 	purserapi "frameworks/pkg/api/purser"
 	"frameworks/pkg/logging"
-	"frameworks/pkg/middleware"
 	"frameworks/pkg/models"
 )
 
@@ -68,13 +68,13 @@ func GetAvailablePaymentMethods() []string {
 
 // GetPlans returns all available billing plans with available payment methods
 // DEPRECATED: Use GetTiers instead - kept for backwards compatibility
-func GetPlans(c middleware.Context) {
+func GetPlans(c *gin.Context) {
 	// Redirect to GetTiers for backwards compatibility
 	GetTiers(c)
 }
 
 // GetTiers returns all available billing tiers with available payment methods
-func GetTiers(c middleware.Context) {
+func GetTiers(c *gin.Context) {
 	rows, err := db.Query(`
 		SELECT id, tier_name, display_name, description, base_price, currency, 
 		       billing_period, bandwidth_allocation, storage_allocation, compute_allocation,
@@ -126,7 +126,7 @@ func GetTiers(c middleware.Context) {
 }
 
 // GetInvoice returns a specific invoice with usage details
-func GetInvoice(c middleware.Context) {
+func GetInvoice(c *gin.Context) {
 	tenantID := c.GetString("tenant_id")
 	if tenantID == "" {
 		c.JSON(http.StatusBadRequest, purserapi.ErrorResponse{Error: "Tenant context required"})
@@ -203,7 +203,7 @@ func GetInvoice(c middleware.Context) {
 }
 
 // GetInvoices returns all invoices for a tenant
-func GetInvoices(c middleware.Context) {
+func GetInvoices(c *gin.Context) {
 	tenantID := c.GetString("tenant_id")
 	if tenantID == "" {
 		c.JSON(http.StatusBadRequest, purserapi.ErrorResponse{Error: "Tenant context required"})
@@ -302,7 +302,7 @@ func GetInvoices(c middleware.Context) {
 }
 
 // CreatePayment creates a payment request for an invoice
-func CreatePayment(c middleware.Context) {
+func CreatePayment(c *gin.Context) {
 	tenantID := c.GetString("tenant_id")
 
 	var req purserapi.PaymentRequest
@@ -454,12 +454,18 @@ func CreatePayment(c middleware.Context) {
 }
 
 // GetBillingStatus returns current billing status for the tenant
-func GetBillingStatus(c middleware.Context) {
+func GetBillingStatus(c *gin.Context) {
 	tenantID := c.GetString("tenant_id")
 
 	// Get tenant's current subscription and tier
 	var subscription models.TenantSubscription
 	var tier models.BillingTier
+
+	// Intermediate variables for nullable fields
+	var paymentMethod sql.NullString
+	var paymentReference sql.NullString
+	var taxID sql.NullString
+	var taxRate sql.NullFloat64
 
 	err := db.QueryRow(`
 		SELECT 
@@ -483,8 +489,8 @@ func GetBillingStatus(c middleware.Context) {
 		&subscription.ID, &subscription.TenantID, &subscription.TierID, &subscription.Status, &subscription.BillingEmail,
 		&subscription.StartedAt, &subscription.TrialEndsAt, &subscription.NextBillingDate, &subscription.CancelledAt,
 		&subscription.CustomPricing, &subscription.CustomFeatures, &subscription.CustomAllocations,
-		&subscription.PaymentMethod, &subscription.PaymentReference, &subscription.BillingAddress,
-		&subscription.TaxID, &subscription.TaxRate, &subscription.CreatedAt, &subscription.UpdatedAt,
+		&paymentMethod, &paymentReference, &subscription.BillingAddress,
+		&taxID, &taxRate, &subscription.CreatedAt, &subscription.UpdatedAt,
 		&tier.ID, &tier.TierName, &tier.DisplayName, &tier.Description,
 		&tier.BasePrice, &tier.Currency, &tier.BillingPeriod,
 		&tier.BandwidthAllocation, &tier.StorageAllocation, &tier.ComputeAllocation,
@@ -499,6 +505,20 @@ func GetBillingStatus(c middleware.Context) {
 		}).Error("Failed to fetch tenant subscription")
 		c.JSON(http.StatusInternalServerError, purserapi.ErrorResponse{Error: "Failed to fetch billing status"})
 		return
+	}
+
+	// Convert nullable fields
+	if paymentMethod.Valid {
+		subscription.PaymentMethod = &paymentMethod.String
+	}
+	if paymentReference.Valid {
+		subscription.PaymentReference = &paymentReference.String
+	}
+	if taxID.Valid {
+		subscription.TaxID = &taxID.String
+	}
+	if taxRate.Valid {
+		subscription.TaxRate = &taxRate.Float64
 	}
 
 	// Get pending invoices

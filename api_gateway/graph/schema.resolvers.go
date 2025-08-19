@@ -128,6 +128,16 @@ func (r *mutationResolver) UpdateBillingTier(ctx context.Context, tierID string)
 	return r.DoUpdateBillingTier(ctx, tierID)
 }
 
+// CreateDeveloperToken is the resolver for the createDeveloperToken field.
+func (r *mutationResolver) CreateDeveloperToken(ctx context.Context, input model.CreateDeveloperTokenInput) (*model.DeveloperToken, error) {
+	return r.DoCreateDeveloperToken(ctx, input)
+}
+
+// RevokeDeveloperToken is the resolver for the revokeDeveloperToken field.
+func (r *mutationResolver) RevokeDeveloperToken(ctx context.Context, id string) (bool, error) {
+	return r.DoRevokeDeveloperToken(ctx, id)
+}
+
 // UpdateTenant is the resolver for the updateTenant field.
 func (r *mutationResolver) UpdateTenant(ctx context.Context, input model.UpdateTenantInput) (*models.Tenant, error) {
 	return r.DoUpdateTenant(ctx, input)
@@ -236,6 +246,11 @@ func (r *queryResolver) Nodes(ctx context.Context) ([]*model.Node, error) {
 // Node is the resolver for the node field.
 func (r *queryResolver) Node(ctx context.Context, id string) (*model.Node, error) {
 	return r.DoGetNode(ctx, id)
+}
+
+// DeveloperTokens is the resolver for the developerTokens field.
+func (r *queryResolver) DeveloperTokens(ctx context.Context) ([]*model.DeveloperToken, error) {
+	return r.DoGetDeveloperTokens(ctx)
 }
 
 // Name is the resolver for the name field.

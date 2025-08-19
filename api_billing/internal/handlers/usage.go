@@ -8,12 +8,13 @@ import (
 
 	purserapi "frameworks/pkg/api/purser"
 	"frameworks/pkg/logging"
-	"frameworks/pkg/middleware"
 	"frameworks/pkg/models"
+
+	"github.com/gin-gonic/gin"
 )
 
 // IngestUsageData handles usage data from Periscope-Query
-func IngestUsageData(c middleware.Context) {
+func IngestUsageData(c *gin.Context) {
 	var req models.UsageIngestRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, purserapi.UsageIngestResponse{
@@ -275,10 +276,17 @@ func updateInvoiceDraft(tenantID string) error {
 }
 
 // GetUsageRecords returns usage records for a tenant
-func GetUsageRecords(c middleware.Context) {
+func GetUsageRecords(c *gin.Context) {
+	// Try to get tenant_id from context first (user requests)
 	tenantID := c.GetString("tenant_id")
+
+	// If not in context, check query parameters (service-to-service requests)
 	if tenantID == "" {
-		c.JSON(http.StatusBadRequest, middleware.H{"error": "Tenant ID is required"})
+		tenantID = c.Query("tenant_id")
+	}
+
+	if tenantID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Tenant ID is required"})
 		return
 	}
 
@@ -323,7 +331,7 @@ func GetUsageRecords(c middleware.Context) {
 	rows, err := db.Query(query, args...)
 	if err != nil {
 		logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to query usage records")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Internal server error"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal server error"})
 		return
 	}
 	defer rows.Close()
@@ -366,7 +374,7 @@ func GetUsageRecords(c middleware.Context) {
 		records = append(records, recordMap)
 	}
 
-	c.JSON(http.StatusOK, middleware.H{
+	c.JSON(http.StatusOK, gin.H{
 		"usage_records": records,
 		"tenant_id":     tenantID,
 		"filters": map[string]interface{}{

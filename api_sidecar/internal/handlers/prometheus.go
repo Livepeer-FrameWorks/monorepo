@@ -14,9 +14,9 @@ import (
 	"time"
 
 	"frameworks/pkg/logging"
-	"frameworks/pkg/middleware"
 	"frameworks/pkg/models"
 
+	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
@@ -1032,9 +1032,9 @@ func (pm *PrometheusMonitor) Stop() {
 // HTTP handlers for Prometheus monitoring endpoints
 
 // GetPrometheusNodes returns information about all monitored nodes
-func GetPrometheusNodes(c middleware.Context) {
+func GetPrometheusNodes(c *gin.Context) {
 	if prometheusMonitor == nil {
-		c.JSON(http.StatusServiceUnavailable, middleware.H{"error": "Prometheus monitor not initialized"})
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Prometheus monitor not initialized"})
 		return
 	}
 
@@ -1050,13 +1050,13 @@ func GetPrometheusNodes(c middleware.Context) {
 	}
 	prometheusMonitor.mutex.RUnlock()
 
-	c.JSON(http.StatusOK, middleware.H{"nodes": []interface{}{nodeInfo}})
+	c.JSON(http.StatusOK, gin.H{"nodes": []interface{}{nodeInfo}})
 }
 
 // AddPrometheusNode adds a new node to monitor
-func AddPrometheusNode(c middleware.Context) {
+func AddPrometheusNode(c *gin.Context) {
 	if prometheusMonitor == nil {
-		c.JSON(http.StatusServiceUnavailable, middleware.H{"error": "Prometheus monitor not initialized"})
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Prometheus monitor not initialized"})
 		return
 	}
 
@@ -1069,13 +1069,13 @@ func AddPrometheusNode(c middleware.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(http.StatusBadRequest, middleware.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
 	prometheusMonitor.AddNode(request.NodeID, request.BaseURL)
 
-	c.JSON(http.StatusOK, middleware.H{"message": "Node added successfully"})
+	c.JSON(http.StatusOK, gin.H{"message": "Node added successfully"})
 }
 
 // AddPrometheusNodeDirect adds a node directly to the monitor (not via HTTP)
@@ -1086,20 +1086,20 @@ func AddPrometheusNodeDirect(nodeID, baseURL string) {
 }
 
 // RemovePrometheusNode removes a node from monitoring
-func RemovePrometheusNode(c middleware.Context) {
+func RemovePrometheusNode(c *gin.Context) {
 	if prometheusMonitor == nil {
-		c.JSON(http.StatusServiceUnavailable, middleware.H{"error": "Prometheus monitor not initialized"})
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Prometheus monitor not initialized"})
 		return
 	}
 
 	nodeID := c.Param("node_id")
 	if nodeID == "" {
-		c.JSON(http.StatusBadRequest, middleware.H{"error": "node_id parameter required"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "node_id parameter required"})
 		return
 	}
 
 	prometheusMonitor.RemoveNode(nodeID)
-	c.JSON(http.StatusOK, middleware.H{"message": "Node removed successfully"})
+	c.JSON(http.StatusOK, gin.H{"message": "Node removed successfully"})
 }
 
 func (pm *PrometheusMonitor) emitClientLifecycle(nodeID, mistURL string) error {

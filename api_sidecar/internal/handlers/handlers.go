@@ -15,7 +15,8 @@ import (
 	"frameworks/pkg/clients/commodore"
 	"frameworks/pkg/clients/foghorn"
 	"frameworks/pkg/logging"
-	"frameworks/pkg/middleware"
+
+	"github.com/gin-gonic/gin"
 )
 
 var (
@@ -85,8 +86,8 @@ func Init(log logging.Logger) {
 }
 
 // HealthCheck handles health check requests
-func HealthCheck(c middleware.Context) {
-	c.JSON(http.StatusOK, middleware.H{
+func HealthCheck(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
 		"status":  "healthy",
 		"service": "helmsman",
 		"node":    nodeName,
@@ -94,7 +95,7 @@ func HealthCheck(c middleware.Context) {
 }
 
 // GetPrometheusPassword handles the /koekjes endpoint for Prometheus scraping
-func GetPrometheusPassword(c middleware.Context) {
+func GetPrometheusPassword(c *gin.Context) {
 	password := os.Getenv("MIST_PASSWORD")
 	if password == "" {
 		password = "koekjes"
@@ -161,7 +162,7 @@ func forwardEventToCommodore(endpoint string, eventData map[string]interface{}) 
 
 // HandlePushRewrite handles the PUSH_REWRITE trigger from MistServer
 // This is a critical trigger - validates stream keys and routes to wildcard streams
-func HandlePushRewrite(c middleware.Context) {
+func HandlePushRewrite(c *gin.Context) {
 	// Read the raw body - MistServer sends parameters as raw text, not JSON
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
@@ -271,7 +272,7 @@ func HandlePushRewrite(c middleware.Context) {
 
 // HandleDefaultStream handles the DEFAULT_STREAM trigger from MistServer
 // This maps playback IDs to internal stream names for viewing
-func HandleDefaultStream(c middleware.Context) {
+func HandleDefaultStream(c *gin.Context) {
 	// Read the raw body - MistServer sends parameters as raw text, not JSON
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {

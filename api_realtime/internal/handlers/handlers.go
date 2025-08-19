@@ -10,7 +10,8 @@ import (
 	"frameworks/pkg/api/signalman"
 	"frameworks/pkg/kafka"
 	"frameworks/pkg/logging"
-	"frameworks/pkg/middleware"
+
+	"github.com/gin-gonic/gin"
 )
 
 // SignalmanHandlers contains the HTTP handlers for the service
@@ -32,27 +33,27 @@ func NewSignalmanHandlers(hub *websocket.Hub, consumer kafka.ConsumerInterface, 
 }
 
 // HandleWebSocketStreams serves WebSocket connections for stream updates
-func (h *SignalmanHandlers) HandleWebSocketStreams(c middleware.Context) {
+func (h *SignalmanHandlers) HandleWebSocketStreams(c *gin.Context) {
 	h.hub.ServeWS(c.Writer, c.Request)
 }
 
 // HandleWebSocketAnalytics serves WebSocket connections for analytics updates
-func (h *SignalmanHandlers) HandleWebSocketAnalytics(c middleware.Context) {
+func (h *SignalmanHandlers) HandleWebSocketAnalytics(c *gin.Context) {
 	h.hub.ServeWS(c.Writer, c.Request)
 }
 
 // HandleWebSocketSystem serves WebSocket connections for system updates
-func (h *SignalmanHandlers) HandleWebSocketSystem(c middleware.Context) {
+func (h *SignalmanHandlers) HandleWebSocketSystem(c *gin.Context) {
 	h.hub.ServeWS(c.Writer, c.Request)
 }
 
 // HandleWebSocketAll serves WebSocket connections for all event types
-func (h *SignalmanHandlers) HandleWebSocketAll(c middleware.Context) {
+func (h *SignalmanHandlers) HandleWebSocketAll(c *gin.Context) {
 	h.hub.ServeWS(c.Writer, c.Request)
 }
 
 // HandleHealth provides health check endpoint
-func (h *SignalmanHandlers) HandleHealth(c middleware.Context) {
+func (h *SignalmanHandlers) HandleHealth(c *gin.Context) {
 	health := signalman.HealthResponse{
 		Status:    "healthy",
 		Service:   "signalman",
@@ -80,7 +81,7 @@ func (h *SignalmanHandlers) HandleHealth(c middleware.Context) {
 }
 
 // HandleMetrics provides operational metrics in Prometheus format
-func (h *SignalmanHandlers) HandleMetrics(c middleware.Context) {
+func (h *SignalmanHandlers) HandleMetrics(c *gin.Context) {
 	c.Header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 
 	// Basic service availability metric
@@ -102,7 +103,7 @@ func (h *SignalmanHandlers) HandleMetrics(c middleware.Context) {
 }
 
 // HandleNotFound provides a custom 404 handler
-func (h *SignalmanHandlers) HandleNotFound(c middleware.Context) {
+func (h *SignalmanHandlers) HandleNotFound(c *gin.Context) {
 	errorResponse := signalman.ErrorResponse{
 		ErrorResponse: common.ErrorResponse{
 			Error:   "not_found",

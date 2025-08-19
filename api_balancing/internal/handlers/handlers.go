@@ -16,7 +16,8 @@ import (
 	"frameworks/api_balancing/internal/balancer"
 	"frameworks/pkg/clients/decklog"
 	"frameworks/pkg/logging"
-	"frameworks/pkg/middleware"
+
+	"github.com/gin-gonic/gin"
 )
 
 var (
@@ -63,7 +64,7 @@ func Init(database *sql.DB, log logging.Logger, loadBalancer *balancer.LoadBalan
 
 // MistServerCompatibilityHandler handles ALL MistServer requests
 // This implements the exact same HTTP API as the C++ MistUtilLoad
-func MistServerCompatibilityHandler(c middleware.Context) {
+func MistServerCompatibilityHandler(c *gin.Context) {
 	// Handle HTTP/2 protocol initialization
 	if c.Request.Method == "PRI" && c.Request.RequestURI == "*" {
 		c.String(http.StatusOK, "")
@@ -103,7 +104,7 @@ func MistServerCompatibilityHandler(c middleware.Context) {
 }
 
 // HandleNodeUpdate receives node updates from Helmsman
-func HandleNodeUpdate(c middleware.Context) {
+func HandleNodeUpdate(c *gin.Context) {
 	var update struct {
 		NodeID    string                 `json:"node_id"`
 		BaseURL   string                 `json:"base_url"`
@@ -118,7 +119,7 @@ func HandleNodeUpdate(c middleware.Context) {
 
 	if err := c.ShouldBindJSON(&update); err != nil {
 		logger.WithError(err).Error("Failed to parse node update")
-		c.JSON(http.StatusBadRequest, middleware.H{"error": "invalid update format"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid update format"})
 		return
 	}
 
@@ -143,7 +144,7 @@ func HandleNodeUpdate(c middleware.Context) {
 	if _, exists := nodes[update.BaseURL]; !exists {
 		if err := lb.AddNode(update.BaseURL, 4242); err != nil {
 			logger.WithError(err).Error("Failed to add node")
-			c.JSON(http.StatusInternalServerError, middleware.H{"error": "failed to add node"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to add node"})
 			return
 		}
 	}
@@ -151,15 +152,15 @@ func HandleNodeUpdate(c middleware.Context) {
 	// Update node metrics
 	if err := lb.UpdateNodeMetrics(update.BaseURL, metrics); err != nil {
 		logger.WithError(err).Error("Failed to update node metrics")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "failed to update metrics"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update metrics"})
 		return
 	}
 
-	c.JSON(http.StatusOK, middleware.H{"status": "updated"})
+	c.JSON(http.StatusOK, gin.H{"status": "updated"})
 }
 
 // HandleStreamHealth receives immediate stream health updates from Helmsman
-func HandleStreamHealth(c middleware.Context) {
+func HandleStreamHealth(c *gin.Context) {
 	var update struct {
 		NodeID       string                 `json:"node_id"`
 		StreamName   string                 `json:"stream_name"`
@@ -171,7 +172,7 @@ func HandleStreamHealth(c middleware.Context) {
 
 	if err := c.ShouldBindJSON(&update); err != nil {
 		logger.WithError(err).Error("Failed to parse stream health update")
-		c.JSON(http.StatusBadRequest, middleware.H{"error": "invalid update format"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid update format"})
 		return
 	}
 
@@ -187,25 +188,25 @@ func HandleStreamHealth(c middleware.Context) {
 
 	if nodeHost == "" {
 		logger.WithField("node_id", update.NodeID).Error("Node not found for stream health update")
-		c.JSON(http.StatusNotFound, middleware.H{"error": "node not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": "node not found"})
 		return
 	}
 
 	// Update stream health in the balancer
 	if err := lb.UpdateStreamHealth(nodeHost, update.StreamName, update.IsHealthy, update.Details); err != nil {
 		logger.WithError(err).Error("Failed to update stream health")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "failed to update stream health"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update stream health"})
 		return
 	}
 
 	// Post event to Decklog
 	go postBalancingEvent(c, update.InternalName, nodeHost, 0, 0, 0, "health_update", fmt.Sprintf("Stream health: %v", update.IsHealthy))
 
-	c.JSON(http.StatusOK, middleware.H{"status": "updated"})
+	c.JSON(http.StatusOK, gin.H{"status": "updated"})
 }
 
 // HandleNodeShutdown receives graceful shutdown notifications from Helmsman
-func HandleNodeShutdown(c middleware.Context) {
+func HandleNodeShutdown(c *gin.Context) {
 	var update struct {
 		NodeID    string                 `json:"node_id"`
 		Type      string                 `json:"type"`
@@ -216,7 +217,7 @@ func HandleNodeShutdown(c middleware.Context) {
 
 	if err := c.ShouldBindJSON(&update); err != nil {
 		logger.WithError(err).Error("Failed to parse node shutdown update")
-		c.JSON(http.StatusBadRequest, middleware.H{"error": "invalid update format"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid update format"})
 		return
 	}
 
@@ -232,21 +233,21 @@ func HandleNodeShutdown(c middleware.Context) {
 
 	if nodeHost == "" {
 		logger.WithField("node_id", update.NodeID).Error("Node not found for shutdown update")
-		c.JSON(http.StatusNotFound, middleware.H{"error": "node not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": "node not found"})
 		return
 	}
 
 	// Mark node as inactive and clear its streams
 	if err := lb.HandleNodeShutdown(nodeHost, update.Reason, update.Details); err != nil {
 		logger.WithError(err).Error("Failed to handle node shutdown")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "failed to handle shutdown"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to handle shutdown"})
 		return
 	}
 
 	// Post event to Decklog
 	go postBalancingEvent(c, "node_shutdown", nodeHost, 0, 0, 0, "shutdown", update.Reason)
 
-	c.JSON(http.StatusOK, middleware.H{"status": "handled"})
+	c.JSON(http.StatusOK, gin.H{"status": "handled"})
 }
 
 /*
@@ -321,7 +322,7 @@ Implementation Strategy:
 */
 
 // handleRootQueries handles the admin API endpoints (EXACT C++ implementation)
-func handleRootQueries(c middleware.Context, query url.Values) {
+func handleRootQueries(c *gin.Context, query url.Values) {
 	c.Header("Content-Type", "text/plain")
 
 	// Get/set weights: /?weights=<json> (EXACT C++ implementation)
@@ -377,7 +378,7 @@ func handleRootQueries(c middleware.Context, query url.Values) {
 }
 
 // handleWeights implements /?weights=<json> (EXACT C++ implementation)
-func handleWeights(c middleware.Context, weightsJSON string) {
+func handleWeights(c *gin.Context, weightsJSON string) {
 	if weightsJSON != "" {
 		// Set new weights
 		var newWeights map[string]interface{}
@@ -419,7 +420,7 @@ func handleWeights(c middleware.Context, weightsJSON string) {
 }
 
 // handleListServers implements /?lstserver=1 (EXACT C++ implementation)
-func handleListServers(c middleware.Context) {
+func handleListServers(c *gin.Context) {
 	nodes := lb.GetAllNodes()
 	result := make(map[string]string)
 
@@ -436,7 +437,7 @@ func handleListServers(c middleware.Context) {
 }
 
 // handleDeleteServer implements /?delserver=<url> (EXACT C++ implementation)
-func handleDeleteServer(c middleware.Context, serverURL string) {
+func handleDeleteServer(c *gin.Context, serverURL string) {
 	err := lb.RemoveNode(serverURL)
 	if err != nil {
 		c.String(http.StatusOK, "Server not monitored - could not delete from monitored server list!")
@@ -446,7 +447,7 @@ func handleDeleteServer(c middleware.Context, serverURL string) {
 }
 
 // handleAddServer implements /?addserver=<url> (EXACT C++ implementation)
-func handleAddServer(c middleware.Context, serverURL string) {
+func handleAddServer(c *gin.Context, serverURL string) {
 	if len(serverURL) >= 1024 {
 		c.String(http.StatusOK, "Host length too long for monitoring")
 		return
@@ -476,7 +477,7 @@ func handleAddServer(c middleware.Context, serverURL string) {
 }
 
 // handleGetSource implements /?source=<stream> (EXACT C++ implementation)
-func handleGetSource(c middleware.Context, streamName string, query url.Values) {
+func handleGetSource(c *gin.Context, streamName string, query url.Values) {
 	lat := getLatLon(c, query, "lat", "X-Latitude")
 	lon := getLatLon(c, query, "lon", "X-Longitude")
 	tagAdjust := getTagAdjustments(c, query)
@@ -512,7 +513,7 @@ func handleGetSource(c middleware.Context, streamName string, query url.Values) 
 }
 
 // handleFindIngest implements /?ingest=<cpu> (EXACT C++ implementation)
-func handleFindIngest(c middleware.Context, cpuUsage string, query url.Values) {
+func handleFindIngest(c *gin.Context, cpuUsage string, query url.Values) {
 	lat := getLatLon(c, query, "lat", "X-Latitude")
 	lon := getLatLon(c, query, "lon", "X-Longitude")
 	tagAdjust := getTagAdjustments(c, query)
@@ -557,7 +558,7 @@ func handleFindIngest(c middleware.Context, cpuUsage string, query url.Values) {
 }
 
 // handleStreamStats implements /?streamstats=<stream> (EXACT C++ implementation)
-func handleStreamStats(c middleware.Context, streamName string) {
+func handleStreamStats(c *gin.Context, streamName string) {
 	nodes := lb.GetAllNodes()
 	result := make(map[string][]interface{})
 
@@ -581,7 +582,7 @@ func handleStreamStats(c middleware.Context, streamName string) {
 }
 
 // handleViewerCount implements /?viewers=<stream> (EXACT C++ implementation)
-func handleViewerCount(c middleware.Context, streamName string) {
+func handleViewerCount(c *gin.Context, streamName string) {
 	nodes := lb.GetAllNodes()
 	totalViewers := uint64(0)
 
@@ -598,7 +599,7 @@ func handleViewerCount(c middleware.Context, streamName string) {
 }
 
 // handleHostStatus implements /?host=<hostname> or no params (EXACT C++ implementation)
-func handleHostStatus(c middleware.Context, hostname string) {
+func handleHostStatus(c *gin.Context, hostname string) {
 	nodes := lb.GetAllNodes()
 	result := make(map[string]interface{})
 
@@ -645,7 +646,7 @@ func handleHostStatus(c middleware.Context, hostname string) {
 }
 
 // handleStreamBalancing implements /<stream> (EXACT C++ implementation)
-func handleStreamBalancing(c middleware.Context, streamName string) {
+func handleStreamBalancing(c *gin.Context, streamName string) {
 	query := c.Request.URL.Query()
 	lat := getLatLon(c, query, "lat", "X-Latitude")
 	lon := getLatLon(c, query, "lon", "X-Longitude")
@@ -686,7 +687,7 @@ func handleStreamBalancing(c middleware.Context, streamName string) {
 }
 
 // postBalancingEvent posts load balancing decisions to Decklog via gRPC
-func postBalancingEvent(c middleware.Context, streamName, selectedNode string, score uint64, lat, lon float64, status, details string) {
+func postBalancingEvent(c *gin.Context, streamName, selectedNode string, score uint64, lat, lon float64, status, details string) {
 
 	// Extract client IP (check X-Forwarded-For first, then X-Real-IP, then RemoteAddr)
 	clientIP := c.GetHeader("X-Forwarded-For")
@@ -746,7 +747,7 @@ func postBalancingEvent(c middleware.Context, streamName, selectedNode string, s
 
 // Helper functions
 
-func getLatLon(c middleware.Context, query url.Values, queryKey, headerKey string) float64 {
+func getLatLon(c *gin.Context, query url.Values, queryKey, headerKey string) float64 {
 	// First check CloudFlare geographic headers (most accurate)
 	if queryKey == "lat" {
 		if val := c.GetHeader("CF-IPLatitude"); val != "" {
@@ -779,7 +780,7 @@ func getLatLon(c middleware.Context, query url.Values, queryKey, headerKey strin
 	return 0
 }
 
-func getTagAdjustments(c middleware.Context, query url.Values) map[string]int {
+func getTagAdjustments(c *gin.Context, query url.Values) map[string]int {
 	// Check header first (like C++)
 	if tagAdjust := c.GetHeader("X-Tag-Adjust"); tagAdjust != "" {
 		var adjustments map[string]int

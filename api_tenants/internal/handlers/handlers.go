@@ -6,9 +6,9 @@ import (
 
 	qmapi "frameworks/pkg/api/quartermaster"
 	"frameworks/pkg/logging"
-	"frameworks/pkg/middleware"
 	"frameworks/pkg/models"
 
+	"github.com/gin-gonic/gin"
 	"github.com/lib/pq"
 )
 
@@ -24,7 +24,7 @@ func Init(database *sql.DB, log logging.Logger) {
 }
 
 // ValidateTenant validates a tenant and returns its features/limits
-func ValidateTenant(c middleware.Context) {
+func ValidateTenant(c *gin.Context) {
 	var req models.ValidateTenantRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, qmapi.ErrorResponse{Error: err.Error()})
@@ -64,7 +64,7 @@ func ValidateTenant(c middleware.Context) {
 }
 
 // ResolveTenant resolves a tenant ID from subdomain/domain
-func ResolveTenant(c middleware.Context) {
+func ResolveTenant(c *gin.Context) {
 	var req models.ResolveTenantRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, qmapi.ErrorResponse{Error: err.Error()})
@@ -103,7 +103,7 @@ func ResolveTenant(c middleware.Context) {
 }
 
 // GetClusterRouting returns the best cluster for a tenant's stream
-func GetClusterRouting(c middleware.Context) {
+func GetClusterRouting(c *gin.Context) {
 	var req qmapi.GetClusterRoutingRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, qmapi.ErrorResponse{Error: err.Error()})
@@ -183,7 +183,7 @@ func GetClusterRouting(c middleware.Context) {
 }
 
 // GetTenant retrieves a tenant by ID
-func GetTenant(c middleware.Context) {
+func GetTenant(c *gin.Context) {
 	tenantID := c.Param("id")
 
 	var tenant models.Tenant
@@ -222,7 +222,7 @@ func GetTenant(c middleware.Context) {
 }
 
 // CreateTenant creates a new tenant
-func CreateTenant(c middleware.Context) {
+func CreateTenant(c *gin.Context) {
 	var req qmapi.CreateTenantRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		logger.WithError(err).Warn("Invalid create tenant request")
@@ -281,7 +281,7 @@ func CreateTenant(c middleware.Context) {
 }
 
 // UpdateTenant updates an existing tenant
-func UpdateTenant(c middleware.Context) {
+func UpdateTenant(c *gin.Context) {
 	tenantID := c.Param("id")
 
 	var req qmapi.UpdateTenantRequest
@@ -395,7 +395,7 @@ func UpdateTenant(c middleware.Context) {
 }
 
 // DeleteTenant soft deletes a tenant
-func DeleteTenant(c middleware.Context) {
+func DeleteTenant(c *gin.Context) {
 	tenantID := c.Param("id")
 
 	query := `UPDATE tenants SET is_active = FALSE, updated_at = NOW() WHERE id = $1 AND is_active = TRUE`
@@ -419,7 +419,7 @@ func DeleteTenant(c middleware.Context) {
 }
 
 // GetTenantCluster retrieves cluster information for a tenant
-func GetTenantCluster(c middleware.Context) {
+func GetTenantCluster(c *gin.Context) {
 	tenantID := c.Param("id")
 
 	var tenant models.Tenant
@@ -453,7 +453,7 @@ func GetTenantCluster(c middleware.Context) {
 }
 
 // UpdateTenantCluster updates the cluster routing information for a tenant
-func UpdateTenantCluster(c middleware.Context) {
+func UpdateTenantCluster(c *gin.Context) {
 	tenantID := c.Param("id")
 
 	var req struct {
@@ -498,7 +498,7 @@ func UpdateTenantCluster(c middleware.Context) {
 }
 
 // GetTenantsBatch retrieves multiple tenants by IDs
-func GetTenantsBatch(c middleware.Context) {
+func GetTenantsBatch(c *gin.Context) {
 	var req struct {
 		TenantIDs []string `json:"tenant_ids" binding:"required"`
 	}
@@ -549,7 +549,7 @@ func GetTenantsBatch(c middleware.Context) {
 }
 
 // GetTenantsByCluster retrieves all tenants assigned to a specific cluster
-func GetTenantsByCluster(c middleware.Context) {
+func GetTenantsByCluster(c *gin.Context) {
 	clusterID := c.Param("cluster_id")
 
 	query := `

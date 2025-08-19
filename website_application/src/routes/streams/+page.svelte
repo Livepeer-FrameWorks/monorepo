@@ -3,6 +3,7 @@
   import { base } from "$app/paths";
   import { auth } from "$lib/stores/auth";
   import { streamsService } from "$lib/graphql/services/streams.js";
+  import { subscribeToStreamMetrics } from "$lib/stores/realtime.js";
   import { getIngestUrls, getDeliveryUrls } from "$lib/config";
   import { toast } from "$lib/stores/toast.js";
   import LoadingCard from "$lib/components/LoadingCard.svelte";
@@ -17,9 +18,8 @@
   let refreshingKey = false;
   let copiedUrl = "";
   
-  // GraphQL subscription management
-  let streamEventsSubscription = null;
-  let viewerMetricsSubscription = null;
+  // Real-time subscription management
+  let unsubscribeStreamMetrics = null;
 
   // Stream creation
   let creatingStream = false;
@@ -68,11 +68,8 @@
 
   // Cleanup on unmount
   onDestroy(() => {
-    if (streamEventsSubscription) {
-      streamEventsSubscription.unsubscribe();
-    }
-    if (viewerMetricsSubscription) {
-      viewerMetricsSubscription.unsubscribe();
+    if (unsubscribeStreamMetrics) {
+      unsubscribeStreamMetrics();
     }
   });
 
@@ -92,53 +89,15 @@
 
   // Start real-time GraphQL subscriptions
   function startRealTimeSubscriptions() {
-    if (!selectedStream || !user) return;
+    if (!selectedStream) return;
     
-    // Clean up existing subscriptions
-    if (streamEventsSubscription) streamEventsSubscription.unsubscribe();
-    if (viewerMetricsSubscription) viewerMetricsSubscription.unsubscribe();
+    // Clean up existing subscription
+    if (unsubscribeStreamMetrics) {
+      unsubscribeStreamMetrics();
+    }
     
-    // Subscribe to stream events
-    streamEventsSubscription = streamsService.subscribeToStreamEvents(
-      selectedStream.id,
-      user.tenantId,
-      {
-        onStreamEvent: (event) => {
-          console.log('Stream event:', event);
-          // Update stream status based on events
-          if (streams.find(s => s.id === event.streamId)) {
-            streams = streams.map(s => 
-              s.id === event.streamId 
-                ? { ...s, status: event.status }
-                : s
-            );
-          }
-        },
-        onError: (error) => {
-          console.error('Stream events subscription failed:', error);
-        }
-      }
-    );
-    
-    // Subscribe to viewer metrics
-    viewerMetricsSubscription = streamsService.subscribeToViewerMetrics(
-      selectedStream.id,
-      {
-        onViewerMetrics: (metrics) => {
-          realTimeMetrics = {
-            currentViewers: metrics.currentViewers,
-            peakViewers: metrics.peakViewers,
-            bandwidth: metrics.bandwidth,
-            connectionQuality: metrics.connectionQuality,
-            bufferHealth: metrics.bufferHealth,
-            timestamp: metrics.timestamp
-          };
-        },
-        onError: (error) => {
-          console.error('Viewer metrics subscription failed:', error);
-        }
-      }
-    );
+    // Subscribe to viewer metrics for the selected stream
+    unsubscribeStreamMetrics = subscribeToStreamMetrics(selectedStream.id);
   }
 
   // Create new stream
@@ -261,7 +220,7 @@
       if (response.data) {
         streams = streams.map((stream) =>
           stream.id === streamId
-            ? { ...stream, stream_key: response.data.stream_key }
+            ? { ...stream, streamKey: response.data.streamKey }
             : stream
         );
         toast.success("Stream key refreshed successfully! Please update your streaming software with the new key.");
@@ -293,9 +252,9 @@
   $: primaryStream = streams.length > 0 ? streams[0] : null;
 
   // Reactive URLs based on selected stream
-  $: ingestUrls = selectedStream ? getIngestUrls(selectedStream.stream_key) : {};
+  $: ingestUrls = selectedStream ? getIngestUrls(selectedStream.streamKey) : {};
   $: deliveryUrls = selectedStream
-    ? getDeliveryUrls(selectedStream.playback_id)
+    ? getDeliveryUrls(selectedStream.playbackId)
     : {};
 
   // Stream status for selected stream
@@ -470,7 +429,7 @@
           >
             <div class="flex items-center justify-between mb-3">
               <h3 class="font-semibold text-tokyo-night-fg truncate">
-                {stream.title || `Stream ${stream.id.slice(0, 8)}`}
+                {stream.name || `Stream ${stream.id.slice(0, 8)}`}
               </h3>
               <div class="flex items-center space-x-2">
                 <div class="w-2 h-2 rounded-full {stream.status === 'live' ? 'bg-tokyo-night-green animate-pulse' : 'bg-tokyo-night-red'}"></div>
@@ -497,7 +456,7 @@
 
             <div class="mt-3 pt-3 border-t border-tokyo-night-fg-gutter">
               <p class="text-xs text-tokyo-night-comment truncate">
-                ID: {stream.playback_id || stream.id.slice(0, 16)}
+                ID: {stream.playbackId || stream.id.slice(0, 16)}
               </p>
             </div>
           </div>
@@ -567,8 +526,8 @@
             <div>
               <p class="text-sm text-tokyo-night-comment">Stream Key</p>
               <p class="text-sm font-mono text-tokyo-night-fg">
-                {selectedStream?.stream_key
-                  ? `${selectedStream.stream_key.slice(0, 8)}...`
+                {selectedStream?.streamKey
+                  ? `${selectedStream.streamKey.slice(0, 8)}...`
                   : "No stream"}
               </p>
             </div>
@@ -581,8 +540,8 @@
             <div>
               <p class="text-sm text-tokyo-night-comment">Playback ID</p>
               <p class="text-sm font-mono text-tokyo-night-fg">
-                {selectedStream?.playback_id
-                  ? `${selectedStream.playback_id.slice(0, 8)}...`
+                {selectedStream?.playbackId
+                  ? `${selectedStream.playbackId.slice(0, 8)}...`
                   : "No stream"}
               </p>
             </div>
@@ -633,16 +592,16 @@
                 <input
                   id="stream-key-input"
                   type="text"
-                  value={selectedStream?.stream_key || "Loading..."}
+                  value={selectedStream?.streamKey || "Loading..."}
                   readonly
                   class="input flex-1 font-mono text-sm"
                 />
                 <button
-                  on:click={() => copyToClipboard(selectedStream?.stream_key)}
+                  on:click={() => copyToClipboard(selectedStream?.streamKey)}
                   class="btn-secondary"
-                  disabled={!selectedStream?.stream_key}
+                  disabled={!selectedStream?.streamKey}
                 >
-                  {copiedUrl === selectedStream?.stream_key ? "✅" : "📋"}
+                  {copiedUrl === selectedStream?.streamKey ? "✅" : "📋"}
                 </button>
               </div>
               <p class="text-xs text-tokyo-night-comment mt-2">
@@ -894,7 +853,7 @@
       
       <p class="text-tokyo-night-fg-dark mb-6">
         Are you sure you want to delete the stream 
-        <span class="font-semibold text-tokyo-night-fg">"{streamToDelete.title || `Stream ${streamToDelete.id.slice(0, 8)}`}"</span>?
+        <span class="font-semibold text-tokyo-night-fg">"{streamToDelete.name || `Stream ${streamToDelete.id.slice(0, 8)}`}"</span>?
         This action cannot be undone.
       </p>
       

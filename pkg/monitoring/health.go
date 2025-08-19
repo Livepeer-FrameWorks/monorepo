@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"time"
 
-	"frameworks/pkg/middleware"
+	"github.com/gin-gonic/gin"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
@@ -79,8 +79,8 @@ func (hc *HealthChecker) CheckHealth() HealthStatus {
 }
 
 // Handler returns a middleware handler for the health check endpoint
-func (hc *HealthChecker) Handler() middleware.HandlerFunc {
-	return func(c middleware.Context) {
+func (hc *HealthChecker) Handler() gin.HandlerFunc {
+	return func(c *gin.Context) {
 		health := hc.CheckHealth()
 		statusCode := http.StatusOK
 		if health.Status == "unhealthy" {

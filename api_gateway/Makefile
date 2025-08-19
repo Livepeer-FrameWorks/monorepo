@@ -4,11 +4,10 @@
 graphql: clean
 	gqlgen generate
 
-# Clean generated files
+# Clean generated files (keep schema.resolvers.go as it contains implementations)
 clean:
 	rm -f graph/generated/*.go
 	rm -f graph/model/*.go
-	rm -f graph/*.resolvers.go
 
 # Install required tools
 install-tools:

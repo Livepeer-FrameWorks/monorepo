@@ -34,8 +34,8 @@ func (r *Resolver) DoRegister(ctx context.Context, email, password, firstName, l
 
 // DoGetMe retrieves current user information
 func (r *Resolver) DoGetMe(ctx context.Context) (*models.User, error) {
-	// Extract user token from context (set by auth middleware)
-	userToken, ok := ctx.Value("user_token").(string)
+	// Extract JWT token from context (set by auth middleware)
+	userToken, ok := ctx.Value("jwt_token").(string)
 	if !ok {
 		return nil, fmt.Errorf("user not authenticated")
 	}

@@ -193,50 +193,50 @@
     </div>
   {:else}
     <!-- GraphQL API Overview -->
-    <div class="grid grid-cols-1 md:grid-cols-4 gap-6">
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
       <div class="glow-card p-6">
-        <div class="flex items-center justify-between">
-          <div>
-            <p class="text-sm text-tokyo-night-comment">GraphQL Endpoint</p>
-            <p class="text-lg font-mono text-tokyo-night-fg break-all">
+        <div class="flex items-start justify-between">
+          <div class="flex-1 min-w-0">
+            <p class="text-sm text-tokyo-night-comment mb-2">GraphQL Endpoint</p>
+            <p class="text-sm font-mono text-tokyo-night-fg break-all leading-relaxed">
               {import.meta.env.VITE_GRAPHQL_HTTP_URL || 'http://localhost:18000/graphql/'}
             </p>
           </div>
-          <span class="text-2xl">🌐</span>
+          <span class="text-2xl ml-3 flex-shrink-0">🌐</span>
         </div>
       </div>
 
       <div class="glow-card p-6">
-        <div class="flex items-center justify-between">
-          <div>
-            <p class="text-sm text-tokyo-night-comment">WebSocket</p>
-            <p class="text-lg font-mono text-tokyo-night-fg break-all">
+        <div class="flex items-start justify-between">
+          <div class="flex-1 min-w-0">
+            <p class="text-sm text-tokyo-night-comment mb-2">WebSocket</p>
+            <p class="text-sm font-mono text-tokyo-night-fg break-all leading-relaxed">
               {import.meta.env.VITE_GRAPHQL_WS_URL || 'ws://localhost:18000/graphql/'}
             </p>
           </div>
-          <span class="text-2xl">⚡</span>
+          <span class="text-2xl ml-3 flex-shrink-0">⚡</span>
         </div>
       </div>
 
       <div class="glow-card p-6">
-        <div class="flex items-center justify-between">
-          <div>
-            <p class="text-sm text-tokyo-night-comment">Authentication</p>
+        <div class="flex items-start justify-between">
+          <div class="flex-1 min-w-0">
+            <p class="text-sm text-tokyo-night-comment mb-2">Authentication</p>
             <p class="text-lg font-semibold text-tokyo-night-fg">JWT Bearer</p>
           </div>
-          <span class="text-2xl">🔑</span>
+          <span class="text-2xl ml-3 flex-shrink-0">🔑</span>
         </div>
       </div>
 
       <div class="glow-card p-6">
-        <div class="flex items-center justify-between">
-          <div>
-            <p class="text-sm text-tokyo-night-comment">Active Tokens</p>
+        <div class="flex items-start justify-between">
+          <div class="flex-1 min-w-0">
+            <p class="text-sm text-tokyo-night-comment mb-2">Active Tokens</p>
             <p class="text-lg font-semibold text-tokyo-night-fg">
               {apiTokens.filter((t) => t.status === "active").length}
             </p>
           </div>
-          <span class="text-2xl">🎯</span>
+          <span class="text-2xl ml-3 flex-shrink-0">🎯</span>
         </div>
       </div>
     </div>

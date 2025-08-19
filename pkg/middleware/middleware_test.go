@@ -14,7 +14,7 @@ import (
 func TestRequestIDMiddleware(t *testing.T) {
 	r := gin.New()
 	r.Use(RequestIDMiddleware())
-	r.GET("/ping", func(c Context) { c.String(http.StatusOK, "pong") })
+	r.GET("/ping", func(c *gin.Context) { c.String(http.StatusOK, "pong") })
 
 	w := httptest.NewRecorder()
 	req, _ := http.NewRequest("GET", "/ping", nil)
@@ -32,7 +32,7 @@ func TestRequestIDMiddleware(t *testing.T) {
 func TestTimeoutMiddleware(t *testing.T) {
 	r := gin.New()
 	r.Use(TimeoutMiddleware(10 * time.Millisecond))
-	r.GET("/slow", func(c Context) { time.Sleep(20 * time.Millisecond); c.String(http.StatusOK, "done") })
+	r.GET("/slow", func(c *gin.Context) { time.Sleep(20 * time.Millisecond); c.String(http.StatusOK, "done") })
 
 	w := httptest.NewRecorder()
 	req, _ := http.NewRequest("GET", "/slow", nil)
@@ -47,7 +47,7 @@ func TestLoggingMiddleware(t *testing.T) {
 	r := gin.New()
 	logger := logging.NewLogger()
 	r.Use(LoggingMiddleware(logger))
-	r.GET("/", func(c Context) { c.String(http.StatusOK, "ok") })
+	r.GET("/", func(c *gin.Context) { c.String(http.StatusOK, "ok") })
 
 	w := httptest.NewRecorder()
 	req, _ := http.NewRequest("GET", "/", nil)
@@ -61,7 +61,7 @@ func TestRecoveryMiddleware(t *testing.T) {
 	r := gin.New()
 	logger := logging.NewLogger()
 	r.Use(RecoveryMiddleware(logger))
-	r.GET("/panic", func(c Context) { panic("boom") })
+	r.GET("/panic", func(c *gin.Context) { panic("boom") })
 
 	w := httptest.NewRecorder()
 	req, _ := http.NewRequest("GET", "/panic", nil)

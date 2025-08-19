@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"frameworks/pkg/middleware"
+	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
@@ -86,8 +86,8 @@ func (mc *MetricsCollector) RegisterCustomMetric(name string, metric prometheus.
 }
 
 // MetricsMiddleware returns middleware that collects HTTP metrics
-func (mc *MetricsCollector) MetricsMiddleware() middleware.HandlerFunc {
-	return func(c middleware.Context) {
+func (mc *MetricsCollector) MetricsMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
 		start := time.Now()
 
 		// Increment active connections
@@ -112,9 +112,9 @@ func (mc *MetricsCollector) MetricsMiddleware() middleware.HandlerFunc {
 }
 
 // Handler returns the Prometheus metrics HTTP handler
-func (mc *MetricsCollector) Handler() middleware.HandlerFunc {
+func (mc *MetricsCollector) Handler() gin.HandlerFunc {
 	handler := promhttp.Handler()
-	return func(c middleware.Context) {
+	return func(c *gin.Context) {
 		handler.ServeHTTP(c.Writer, c.Request)
 	}
 }

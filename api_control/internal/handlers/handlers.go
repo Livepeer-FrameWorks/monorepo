@@ -16,8 +16,8 @@ import (
 	"time"
 
 	"frameworks/pkg/logging"
-	"frameworks/pkg/middleware"
 
+	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
 	commodoreapi "frameworks/pkg/api/commodore"
@@ -92,7 +92,7 @@ func Init(database *sql.DB, log logging.Logger, r Router) {
 }
 
 // Register handles user registration with comprehensive bot protection
-func Register(c middleware.Context) {
+func Register(c *gin.Context) {
 	var req models.RegisterRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: err.Error()})
@@ -231,7 +231,7 @@ func Register(c middleware.Context) {
 }
 
 // Login handles user authentication with verification requirement
-func Login(c middleware.Context) {
+func Login(c *gin.Context) {
 	var req models.LoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: err.Error()})
@@ -331,12 +331,12 @@ func Login(c middleware.Context) {
 }
 
 // GetMe returns current user info with their streams
-func GetMe(c middleware.Context) {
+func GetMe(c *gin.Context) {
 	userID := c.GetString("user_id")
 
 	var user models.User
 	err := db.QueryRow(`
-		SELECT id, tenant_id, email, role, created_at, is_active 
+		SELECT id, tenant_id, email, role, COALESCE(created_at, NOW()) as created_at, is_active 
 		FROM users WHERE id = $1
 	`, userID).Scan(&user.ID, &user.TenantID, &user.Email, &user.Role, &user.CreatedAt, &user.IsActive)
 
@@ -392,22 +392,43 @@ func GetMe(c middleware.Context) {
 }
 
 // GetStreams returns user's streams (Control Plane data only)
-func GetStreams(c middleware.Context) {
+func GetStreams(c *gin.Context) {
 	userID := c.GetString("user_id")
 	tenantID := c.GetString("tenant_id")
+	role := c.GetString("role")
 
-	rows, err := db.Query(`
-		SELECT id, tenant_id, user_id, stream_key, playback_id, internal_name, title, description,
-		       is_recording_enabled, is_public, status, start_time, end_time, created_at
-		FROM streams 
-		WHERE user_id = $1 AND tenant_id = $2
-		ORDER BY created_at DESC
-	`, userID, tenantID)
+	var query string
+	var args []interface{}
+
+	if role == "service" {
+		// Service accounts can see all streams for the tenant
+		query = `
+			SELECT id, tenant_id, user_id, stream_key, playback_id, internal_name, title, description,
+			       is_recording_enabled, is_public, status, start_time, end_time, created_at, updated_at
+			FROM streams 
+			WHERE tenant_id = $1
+			ORDER BY created_at DESC
+		`
+		args = []interface{}{tenantID}
+	} else {
+		// Regular users see only their own streams
+		query = `
+			SELECT id, tenant_id, user_id, stream_key, playback_id, internal_name, title, description,
+			       is_recording_enabled, is_public, status, start_time, end_time, created_at, updated_at
+			FROM streams 
+			WHERE user_id = $1 AND tenant_id = $2
+			ORDER BY created_at DESC
+		`
+		args = []interface{}{userID, tenantID}
+	}
+
+	rows, err := db.Query(query, args...)
 
 	if err != nil {
 		logger.WithFields(logging.Fields{
 			"tenant_id": tenantID,
 			"user_id":   userID,
+			"role":      role,
 			"error":     err,
 		}).Error("Database error fetching user streams")
 		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Database error"})
@@ -415,14 +436,15 @@ func GetStreams(c middleware.Context) {
 	}
 	defer rows.Close()
 
-	var streams []models.Stream
+	streams := []models.Stream{}
 	for rows.Next() {
 		var stream models.Stream
 		var startTime, endTime *time.Time
+		var description *string // Handle nullable description
 		err := rows.Scan(&stream.ID, &stream.TenantID, &stream.UserID, &stream.StreamKey, &stream.PlaybackID,
-			&stream.InternalName, &stream.Title, &stream.Description,
+			&stream.InternalName, &stream.Title, &description,
 			&stream.IsRecordingEnabled, &stream.IsPublic, &stream.Status,
-			&startTime, &endTime, &stream.CreatedAt)
+			&startTime, &endTime, &stream.CreatedAt, &stream.UpdatedAt)
 
 		if err != nil {
 			logger.WithFields(logging.Fields{
@@ -431,6 +453,13 @@ func GetStreams(c middleware.Context) {
 				"error":     err,
 			}).Error("Row scan error while fetching streams")
 			continue
+		}
+
+		// Convert nullable fields
+		if description != nil {
+			stream.Description = *description
+		} else {
+			stream.Description = ""
 		}
 
 		// Convert nullable timestamps
@@ -448,7 +477,7 @@ func GetStreams(c middleware.Context) {
 }
 
 // GetStream returns a specific stream
-func GetStream(c middleware.Context) {
+func GetStream(c *gin.Context) {
 	userID := c.GetString("user_id")
 	tenantID := c.GetString("tenant_id")
 	streamID := c.Param("id")
@@ -492,7 +521,7 @@ func GetStream(c middleware.Context) {
 }
 
 // GetStreamMetrics returns real-time metrics for a specific stream
-func GetStreamMetrics(c middleware.Context) {
+func GetStreamMetrics(c *gin.Context) {
 	userID := c.GetString("user_id")
 	streamID := c.Param("id")
 
@@ -565,7 +594,7 @@ func GetStreamMetrics(c middleware.Context) {
 }
 
 // GetStreamEmbed returns embed code for a stream using playback_id
-func GetStreamEmbed(c middleware.Context) {
+func GetStreamEmbed(c *gin.Context) {
 	userID := c.GetString("user_id")
 	streamID := c.Param("id")
 
@@ -591,7 +620,7 @@ func GetStreamEmbed(c middleware.Context) {
 }
 
 // ValidateStreamKey validates a stream key for RTMP ingest (used by MistServer triggers)
-func ValidateStreamKey(c middleware.Context) {
+func ValidateStreamKey(c *gin.Context) {
 	streamKey := c.Param("stream_key")
 
 	var streamID, userID, tenantID, internalName string
@@ -646,7 +675,7 @@ func ValidateStreamKey(c middleware.Context) {
 }
 
 // CreateClip creates a clip from a stream (STUB - not implemented)
-func CreateClip(c middleware.Context) {
+func CreateClip(c *gin.Context) {
 	var req commodoreapi.CreateClipRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: err.Error()})
@@ -661,7 +690,7 @@ func CreateClip(c middleware.Context) {
 }
 
 // GetStreamNode returns the appropriate node for a stream
-func GetStreamNode(c middleware.Context) {
+func GetStreamNode(c *gin.Context) {
 	streamKey := c.Param("stream_key")
 	if streamKey == "" {
 		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: "stream_key is required"})
@@ -703,7 +732,7 @@ func GetStreamNode(c middleware.Context) {
 }
 
 // CreateStream creates a new stream for a user
-func CreateStream(c middleware.Context) {
+func CreateStream(c *gin.Context) {
 	userID := c.GetString("user_id")
 
 	var req commodoreapi.CreateStreamRequest
@@ -755,7 +784,7 @@ func CreateStream(c middleware.Context) {
 }
 
 // DeleteStream deletes a stream for a user
-func DeleteStream(c middleware.Context) {
+func DeleteStream(c *gin.Context) {
 	userID := c.GetString("user_id")
 	streamID := c.Param("id")
 
@@ -859,7 +888,7 @@ func DeleteStream(c middleware.Context) {
 // Admin handlers
 
 // GetUsers returns all users (admin only)
-func GetUsers(c middleware.Context) {
+func GetUsers(c *gin.Context) {
 	rows, err := db.Query(`
 		SELECT id, email, created_at, is_active 
 		FROM users ORDER BY created_at DESC
@@ -889,7 +918,7 @@ func GetUsers(c middleware.Context) {
 }
 
 // GetAllStreams returns all streams (admin only)
-func GetAllStreams(c middleware.Context) {
+func GetAllStreams(c *gin.Context) {
 	rows, err := db.Query(`
 		SELECT id, tenant_id, user_id, stream_key, playback_id, internal_name, title, description,
 		       is_recording_enabled, is_public, status, start_time, end_time, created_at
@@ -933,7 +962,7 @@ func GetAllStreams(c middleware.Context) {
 }
 
 // TerminateStream terminates a stream (admin only)
-func TerminateStream(c middleware.Context) {
+func TerminateStream(c *gin.Context) {
 	streamID := c.Param("id")
 
 	_, err := db.Exec(`
@@ -949,7 +978,7 @@ func TerminateStream(c middleware.Context) {
 }
 
 // RefreshStreamKey generates a new stream key for an existing stream
-func RefreshStreamKey(c middleware.Context) {
+func RefreshStreamKey(c *gin.Context) {
 	userID := c.GetString("user_id")
 	streamID := c.Param("id")
 
@@ -1045,7 +1074,7 @@ func RefreshStreamKey(c middleware.Context) {
 // Internal endpoints for Helmsman webhook forwarding
 
 // HandleStreamStart handles stream start events from Helmsman
-func HandleStreamStart(c middleware.Context) {
+func HandleStreamStart(c *gin.Context) {
 	var eventData struct {
 		StreamID     string `json:"stream_id"`
 		StreamKey    string `json:"stream_key"`
@@ -1120,7 +1149,7 @@ func HandleStreamStart(c middleware.Context) {
 }
 
 // HandleStreamStatus handles stream status updates from Helmsman
-func HandleStreamStatus(c middleware.Context) {
+func HandleStreamStatus(c *gin.Context) {
 	var eventData struct {
 		InternalName  string `json:"internal_name"`
 		Status        string `json:"status"`
@@ -1147,7 +1176,7 @@ func HandleStreamStatus(c middleware.Context) {
 }
 
 // HandleRecordingStatus handles recording status updates from Helmsman
-func HandleRecordingStatus(c middleware.Context) {
+func HandleRecordingStatus(c *gin.Context) {
 	var eventData struct {
 		InternalName string `json:"internal_name"`
 		IsRecording  bool   `json:"is_recording"`
@@ -1189,7 +1218,7 @@ func HandleRecordingStatus(c middleware.Context) {
 }
 
 // ResolvePlaybackID resolves a playback ID to internal name for MistServer DEFAULT_STREAM trigger
-func ResolvePlaybackID(c middleware.Context) {
+func ResolvePlaybackID(c *gin.Context) {
 	playbackID := c.Param("playback_id")
 
 	var internalName, tenantID, status string
@@ -1226,7 +1255,7 @@ func ResolvePlaybackID(c middleware.Context) {
 }
 
 // HandlePushStatus handles push status updates from Helmsman
-func HandlePushStatus(c middleware.Context) {
+func HandlePushStatus(c *gin.Context) {
 	var eventData map[string]interface{}
 	if err := c.ShouldBindJSON(&eventData); err != nil {
 		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: "Invalid payload"})
@@ -1265,7 +1294,7 @@ func min(a, b int) int {
 // Developer API Token Management
 
 // CreateAPIToken creates a new API token for the authenticated user
-func CreateAPIToken(c middleware.Context) {
+func CreateAPIToken(c *gin.Context) {
 	userID := c.GetString("user_id")
 	tenantID := c.GetString("tenant_id")
 
@@ -1332,7 +1361,7 @@ func CreateAPIToken(c middleware.Context) {
 }
 
 // GetAPITokens returns all API tokens for the authenticated user (without token values)
-func GetAPITokens(c middleware.Context) {
+func GetAPITokens(c *gin.Context) {
 	userID := c.GetString("user_id")
 
 	rows, err := db.Query(`
@@ -1395,7 +1424,7 @@ func GetAPITokens(c middleware.Context) {
 }
 
 // RevokeAPIToken revokes an API token
-func RevokeAPIToken(c middleware.Context) {
+func RevokeAPIToken(c *gin.Context) {
 	userID := c.GetString("user_id")
 	tokenID := c.Param("id")
 
@@ -1454,7 +1483,7 @@ func RevokeAPIToken(c middleware.Context) {
 }
 
 // VerifyEmail handles email verification via token
-func VerifyEmail(c middleware.Context) {
+func VerifyEmail(c *gin.Context) {
 	token := c.Query("token")
 	if token == "" {
 		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: "Verification token required"})
@@ -1518,7 +1547,7 @@ func VerifyEmail(c middleware.Context) {
 }
 
 // getTenantContext extracts tenant ID from request context
-func getTenantContext(c middleware.Context) string {
+func getTenantContext(c *gin.Context) string {
 	// First check X-Tenant-ID header
 	if tenantID := c.GetHeader("X-Tenant-ID"); tenantID != "" {
 		return tenantID
@@ -1806,7 +1835,7 @@ func sendVerificationEmail(email, token, tenantName string) error {
 }
 
 // GetTenantKafkaConfig returns Kafka configuration for a tenant
-func GetTenantKafkaConfig(c middleware.Context) {
+func GetTenantKafkaConfig(c *gin.Context) {
 	tenantID := c.Param("tenant_id")
 	if tenantID == "" {
 		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: "tenant_id is required"})
@@ -1995,7 +2024,7 @@ func getIntFromMap(m map[string]interface{}, key string, defaultVal int) int {
 }
 
 // ResolveInternalName resolves an internal_name to tenant_id for Helmsman service lookups
-func ResolveInternalName(c middleware.Context) {
+func ResolveInternalName(c *gin.Context) {
 	internalName := c.Param("internal_name")
 	if internalName == "" {
 		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: "internal_name required"})

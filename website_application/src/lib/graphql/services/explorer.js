@@ -488,6 +488,75 @@ export const explorerService = {
           variables: {
             streamId: "stream-id-here"
           }
+        },
+        {
+          name: 'System Health',
+          description: 'Subscribe to system health events (infrastructure monitoring)',
+          query: `subscription SystemHealth {
+  systemHealth {
+    nodeId
+    clusterId
+    status
+    cpuUsage
+    memoryUsage
+    diskUsage
+    healthScore
+    timestamp
+  }
+}`,
+          variables: {}
+        },
+        {
+          name: 'Track List Updates',
+          description: 'Subscribe to track list changes for a stream',
+          query: `subscription TrackListUpdates($streamId: ID!) {
+  trackListUpdates(streamId: $streamId) {
+    streamId
+    tenantId
+    trackList
+    trackCount
+    timestamp
+  }
+}`,
+          variables: {
+            streamId: "stream-id-here"
+          }
+        },
+        {
+          name: 'Tenant Events',
+          description: 'Subscribe to all events for current tenant',
+          query: `subscription TenantEvents($tenantId: ID!) {
+  tenantEvents(tenantId: $tenantId) {
+    ... on StreamEvent {
+      type
+      streamId
+      tenantId
+      status
+      timestamp
+      nodeId
+      details
+    }
+    ... on ViewerMetrics {
+      streamId
+      currentViewers
+      peakViewers
+      bandwidth
+      connectionQuality
+      bufferHealth
+      timestamp
+    }
+    ... on TrackListEvent {
+      streamId
+      tenantId
+      trackList
+      trackCount
+      timestamp
+    }
+  }
+}`,
+          variables: {
+            tenantId: "tenant-id-here"
+          }
         }
       ]
     };

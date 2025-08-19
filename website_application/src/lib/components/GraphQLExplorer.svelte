@@ -260,15 +260,15 @@
     </div>
   </div>
 
-  <div class="grid grid-cols-1 xl:grid-cols-2 gap-0">
+  <div class="grid grid-cols-1 xl:grid-cols-2 gap-0 min-h-[600px]">
     <!-- Left panel - Query editor and sidebar -->
-    <div class="border-r border-tokyo-night-fg-gutter">
-      <div class="grid grid-cols-1 {showTemplates || showSchema || showCodeExamples ? 'lg:grid-cols-5' : ''}">
+    <div class="border-r border-tokyo-night-fg-gutter flex flex-col">
+      <div class="grid grid-cols-1 {showTemplates || showSchema || showCodeExamples ? 'lg:grid-cols-5' : ''} flex-1">
         <!-- Sidebar -->
         {#if showTemplates || showSchema || showCodeExamples}
-          <div class="lg:col-span-2 border-b lg:border-b-0 lg:border-r border-tokyo-night-fg-gutter bg-tokyo-night-bg-light">
+          <div class="lg:col-span-2 border-b lg:border-b-0 lg:border-r border-tokyo-night-fg-gutter bg-tokyo-night-bg-light flex flex-col">
             {#if showTemplates && queryTemplates}
-              <div class="p-4 h-64 lg:h-96 overflow-y-auto">
+              <div class="p-4 h-64 lg:flex-1 lg:min-h-0 overflow-y-auto">
                 <h3 class="text-sm font-semibold text-tokyo-night-fg mb-3">Query Templates</h3>
                 
                 {#each ['queries', 'mutations', 'subscriptions'] as category}
@@ -280,11 +280,11 @@
                       <div class="space-y-1">
                         {#each queryTemplates[category] as template}
                           <button
-                            class="w-full text-left p-2 text-xs rounded transition-colors hover:bg-tokyo-night-bg-highlight {selectedTemplate === template ? 'bg-tokyo-night-bg-highlight border border-tokyo-night-blue' : 'border border-transparent'}"
+                            class="w-full text-left p-3 text-xs rounded transition-all duration-200 hover:bg-tokyo-night-bg-highlight {selectedTemplate === template ? 'bg-tokyo-night-bg-highlight border-l-2 border-tokyo-night-blue shadow-sm' : 'border-l-2 border-transparent hover:border-tokyo-night-fg-gutter'}"
                             on:click={() => selectTemplate(template)}
                           >
-                            <div class="font-medium text-tokyo-night-fg">{template.name}</div>
-                            <div class="text-tokyo-night-comment mt-1">{template.description}</div>
+                            <div class="font-medium text-tokyo-night-fg mb-1">{template.name}</div>
+                            <div class="text-tokyo-night-comment leading-relaxed">{template.description}</div>
                           </button>
                         {/each}
                       </div>
@@ -318,7 +318,7 @@
             {/if}
 
             {#if showSchema}
-              <div class="p-4 h-64 lg:h-96 overflow-y-auto">
+              <div class="p-4 h-64 lg:flex-1 lg:min-h-0 overflow-y-auto">
                 <h3 class="text-sm font-semibold text-tokyo-night-fg mb-3">Schema Explorer</h3>
                 {#if loading}
                   <div class="flex items-center justify-center py-8">
@@ -386,7 +386,7 @@
             {/if}
 
             {#if showCodeExamples}
-              <div class="p-4 h-64 lg:h-96 overflow-y-auto">
+              <div class="p-4 h-64 lg:flex-1 lg:min-h-0 overflow-y-auto">
                 <div class="flex items-center justify-between mb-3">
                   <h3 class="text-sm font-semibold text-tokyo-night-fg">Code Examples</h3>
                   <select
@@ -416,8 +416,8 @@
         {/if}
 
         <!-- Query editor -->
-        <div class="{showTemplates || showSchema || showCodeExamples ? 'lg:col-span-3' : 'col-span-1'}">
-          <div class="p-4">
+        <div class="{showTemplates || showSchema || showCodeExamples ? 'lg:col-span-3' : 'col-span-1'} flex flex-col">
+          <div class="p-4 flex-1 flex flex-col">
             <div class="flex items-center justify-between mb-2">
               <h3 class="text-sm font-semibold text-tokyo-night-fg">GraphQL Query</h3>
               <span class="text-xs text-tokyo-night-comment">Ctrl+Enter to execute</span>
@@ -426,7 +426,7 @@
               bind:this={queryTextarea}
               bind:value={query}
               placeholder="Enter your GraphQL query here..."
-              class="w-full h-32 lg:h-48 text-sm font-mono bg-tokyo-night-bg border border-tokyo-night-fg-gutter rounded p-3 text-tokyo-night-fg placeholder-tokyo-night-comment resize-none focus:border-tokyo-night-blue focus:ring-1 focus:ring-tokyo-night-blue"
+              class="w-full flex-1 min-h-[200px] text-sm font-mono bg-tokyo-night-bg border border-tokyo-night-fg-gutter rounded p-3 text-tokyo-night-fg placeholder-tokyo-night-comment resize-none focus:border-tokyo-night-blue focus:ring-1 focus:ring-tokyo-night-blue"
               on:keydown={handleKeyPress}
             ></textarea>
           </div>
@@ -448,7 +448,7 @@
     </div>
 
     <!-- Right panel - Response -->
-    <div class="p-4">
+    <div class="p-4 flex flex-col">
       <div class="flex items-center justify-between mb-2">
         <h3 class="text-sm font-semibold text-tokyo-night-fg">Response</h3>
         {#if response}
@@ -461,16 +461,16 @@
         {/if}
       </div>
       
-      <div class="h-64 lg:h-96 border border-tokyo-night-fg-gutter rounded bg-tokyo-night-bg">
+      <div class="flex-1 min-h-0 border border-tokyo-night-fg-gutter rounded bg-tokyo-night-bg">
         {#if loading}
-          <div class="flex items-center justify-center h-full">
+          <div class="flex items-center justify-center h-full min-h-[300px]">
             <div class="text-center">
               <div class="text-2xl mb-2">⏳</div>
               <div class="text-tokyo-night-comment">Executing query...</div>
             </div>
           </div>
         {:else if response}
-          <div class="relative h-full">
+          <div class="relative h-full min-h-[300px]">
             <pre class="text-sm p-4 h-full overflow-auto text-tokyo-night-fg font-mono">{#if response.error}{JSON.stringify(response.error, null, 2)}{:else}{response.data}{/if}</pre>
             <button
               class="absolute top-2 right-2 text-xs bg-tokyo-night-bg-highlight border border-tokyo-night-fg-gutter rounded px-2 py-1 hover:bg-tokyo-night-bg-light transition-colors"
@@ -480,7 +480,7 @@
             </button>
           </div>
         {:else}
-          <div class="flex items-center justify-center h-full">
+          <div class="flex items-center justify-center h-full min-h-[300px]">
             <div class="text-center">
               <div class="text-4xl mb-4">🚀</div>
               <div class="text-tokyo-night-fg font-medium mb-2">GraphQL Explorer</div>

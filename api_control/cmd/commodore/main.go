@@ -1,6 +1,7 @@
 package main
 
 import (
+	internalauth "frameworks/api_control/internal/auth"
 	"frameworks/api_control/internal/handlers"
 	"frameworks/pkg/auth"
 	"frameworks/pkg/config"
@@ -111,7 +112,7 @@ func main() {
 
 		// Developer API routes (using API token authentication)
 		devAPI := app.Group("/dev")
-		devAPI.Use(auth.APIAuthMiddleware(db))
+		devAPI.Use(internalauth.APIAuthMiddleware(db))
 		{
 			devAPI.GET("/streams", handlers.GetStreams)
 			devAPI.GET("/streams/:id", handlers.GetStream)

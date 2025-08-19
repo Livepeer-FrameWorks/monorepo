@@ -62,9 +62,14 @@ func (r *Resolver) DoGetBillingStatus(ctx context.Context) (*models.BillingStatu
 	}
 
 	// Build BillingStatus from available subscription data
+	// Default next billing date to beginning of next month
+	now := time.Now()
+	nextMonth := time.Date(now.Year(), now.Month()+1, 1, 0, 0, 0, 0, now.Location())
+
 	status := &models.BillingStatus{
-		TenantID: tenantID,
-		Status:   "active",
+		TenantID:        tenantID,
+		Status:          "active",
+		NextBillingDate: &nextMonth,
 	}
 
 	if subscription.Subscription != nil {
@@ -75,6 +80,28 @@ func (r *Resolver) DoGetBillingStatus(ctx context.Context) (*models.BillingStatu
 			TenantID: subscription.Subscription.TenantID,
 			TierID:   subscription.Subscription.TierID,
 			Status:   subscription.Subscription.Status,
+		}
+
+		// Calculate next billing date from subscription start date and billing period
+		if subscription.Subscription.StartDate != "" {
+			if startDate, err := time.Parse("2006-01-02", subscription.Subscription.StartDate); err == nil {
+				switch subscription.Subscription.BillingPeriod {
+				case "monthly":
+					// Find next month from start date that's in the future
+					nextBilling := startDate
+					for nextBilling.Before(now) {
+						nextBilling = nextBilling.AddDate(0, 1, 0)
+					}
+					status.NextBillingDate = &nextBilling
+				case "yearly":
+					// Find next year from start date that's in the future
+					nextBilling := startDate
+					for nextBilling.Before(now) {
+						nextBilling = nextBilling.AddDate(1, 0, 0)
+					}
+					status.NextBillingDate = &nextBilling
+				}
+			}
 		}
 	}
 

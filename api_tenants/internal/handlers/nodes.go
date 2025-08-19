@@ -3,10 +3,11 @@ package handlers
 import (
 	"database/sql"
 	"encoding/json"
-	"frameworks/pkg/middleware"
 	"frameworks/pkg/models"
 	"net/http"
 	"strconv"
+
+	"github.com/gin-gonic/gin"
 )
 
 // ============================================================================
@@ -14,7 +15,7 @@ import (
 // ============================================================================
 
 // GetNodes returns all nodes, optionally filtered by cluster
-func GetNodes(c middleware.Context) {
+func GetNodes(c *gin.Context) {
 	clusterID := c.Query("cluster_id")
 	nodeType := c.Query("node_type")
 	region := c.Query("region")
@@ -54,7 +55,7 @@ func GetNodes(c middleware.Context) {
 	rows, err := db.Query(query, args...)
 	if err != nil {
 		logger.WithError(err).Error("Failed to fetch nodes")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to fetch nodes"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch nodes"})
 		return
 	}
 	defer rows.Close()
@@ -98,10 +99,10 @@ func GetNodes(c middleware.Context) {
 		nodes = append(nodes, node)
 	}
 
-	c.JSON(http.StatusOK, middleware.H{
+	c.JSON(http.StatusOK, gin.H{
 		"nodes": nodes,
 		"count": len(nodes),
-		"filters": middleware.H{
+		"filters": gin.H{
 			"cluster_id": clusterID,
 			"node_type":  nodeType,
 			"region":     region,
@@ -110,7 +111,7 @@ func GetNodes(c middleware.Context) {
 }
 
 // GetNode returns a specific node by ID
-func GetNode(c middleware.Context) {
+func GetNode(c *gin.Context) {
 	nodeID := c.Param("node_id")
 
 	var node models.InfrastructureNode
@@ -133,13 +134,13 @@ func GetNode(c middleware.Context) {
 	)
 
 	if err == sql.ErrNoRows {
-		c.JSON(http.StatusNotFound, middleware.H{"error": "Node not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": "Node not found"})
 		return
 	}
 
 	if err != nil {
 		logger.WithError(err).Error("Failed to fetch node")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to fetch node"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch node"})
 		return
 	}
 
@@ -166,7 +167,7 @@ func GetNode(c middleware.Context) {
 }
 
 // CreateNode creates a new infrastructure node
-func CreateNode(c middleware.Context) {
+func CreateNode(c *gin.Context) {
 	var req struct {
 		NodeID             string                 `json:"node_id" binding:"required"`
 		ClusterID          string                 `json:"cluster_id" binding:"required"`
@@ -188,7 +189,7 @@ func CreateNode(c middleware.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, middleware.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
@@ -197,12 +198,12 @@ func CreateNode(c middleware.Context) {
 	err := db.QueryRow("SELECT EXISTS(SELECT 1 FROM infrastructure_clusters WHERE cluster_id = $1)", req.ClusterID).Scan(&clusterExists)
 	if err != nil {
 		logger.WithError(err).Error("Failed to check cluster existence")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to validate cluster"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to validate cluster"})
 		return
 	}
 
 	if !clusterExists {
-		c.JSON(http.StatusBadRequest, middleware.H{"error": "Cluster not found"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Cluster not found"})
 		return
 	}
 
@@ -226,7 +227,7 @@ func CreateNode(c middleware.Context) {
 
 	if err != nil {
 		logger.WithError(err).Error("Failed to create node")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to create node"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create node"})
 		return
 	}
 
@@ -263,7 +264,7 @@ func CreateNode(c middleware.Context) {
 }
 
 // UpdateNodeHealth updates the health status and metrics of a node
-func UpdateNodeHealth(c middleware.Context) {
+func UpdateNodeHealth(c *gin.Context) {
 	nodeID := c.Param("node_id")
 
 	var req struct {
@@ -276,7 +277,7 @@ func UpdateNodeHealth(c middleware.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, middleware.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
@@ -311,17 +312,17 @@ func UpdateNodeHealth(c middleware.Context) {
 	result, err := db.Exec(query, args...)
 	if err != nil {
 		logger.WithError(err).Error("Failed to update node health")
-		c.JSON(http.StatusInternalServerError, middleware.H{"error": "Failed to update node health"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update node health"})
 		return
 	}
 
 	rowsAffected, _ := result.RowsAffected()
 	if rowsAffected == 0 {
-		c.JSON(http.StatusNotFound, middleware.H{"error": "Node not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": "Node not found"})
 		return
 	}
 
-	c.JSON(http.StatusOK, middleware.H{
+	c.JSON(http.StatusOK, gin.H{
 		"message": "Node health updated successfully",
 		"node_id": nodeID,
 	})

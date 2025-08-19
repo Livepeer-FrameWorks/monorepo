@@ -5,6 +5,7 @@
   import { streamsService } from "$lib/graphql/services/streams.js";
   import { analyticsService } from "$lib/graphql/services/analytics.js";
   import { infrastructureService } from "$lib/graphql/services/infrastructure.js";
+  import { subscribeToSystemHealth } from "$lib/stores/realtime.js";
   import { toast } from "$lib/stores/toast.js";
 
   let isAuthenticated = false;
@@ -13,6 +14,7 @@
   let loading = true;
   /** @type {ReturnType<typeof setInterval> | null} */
   let refreshInterval = null;
+  let unsubscribeSystemHealth = null;
 
   // Real streams data
   /** @type {any[]} */
@@ -51,12 +53,17 @@
     await loadNodeData();
     await updateRealTimeMetrics();
     startRealTimeUpdates();
+    // Subscribe to system health for self-hosted infrastructure monitoring
+    unsubscribeSystemHealth = subscribeToSystemHealth();
     loading = false;
   });
 
   onDestroy(() => {
     if (refreshInterval) {
       clearInterval(refreshInterval);
+    }
+    if (unsubscribeSystemHealth) {
+      unsubscribeSystemHealth();
     }
   });
 
@@ -355,7 +362,7 @@
             <div class="bg-tokyo-night-bg-highlight p-4 rounded-lg border border-tokyo-night-fg-gutter">
               <div class="flex items-center justify-between mb-2">
                 <h3 class="font-semibold text-tokyo-night-fg">
-                  {stream.title || `Stream ${stream.id.slice(0, 8)}`}
+                  {stream.name || `Stream ${stream.id.slice(0, 8)}`}
                 </h3>
                 <div class="flex items-center space-x-1">
                   <div class="w-2 h-2 rounded-full {stream.status === 'live' ? 'bg-tokyo-night-green animate-pulse' : 'bg-tokyo-night-red'}"></div>

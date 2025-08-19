@@ -96,13 +96,13 @@ type TenantSubscription struct {
 	CustomAllocations JSONB `json:"custom_allocations" db:"custom_allocations"`
 
 	// Payment info
-	PaymentMethod    string `json:"payment_method" db:"payment_method"`
-	PaymentReference string `json:"payment_reference" db:"payment_reference"`
+	PaymentMethod    *string `json:"payment_method,omitempty" db:"payment_method"`
+	PaymentReference *string `json:"payment_reference,omitempty" db:"payment_reference"`
 
 	// Billing address and tax
-	BillingAddress JSONB   `json:"billing_address" db:"billing_address"`
-	TaxID          string  `json:"tax_id" db:"tax_id"`
-	TaxRate        float64 `json:"tax_rate" db:"tax_rate"`
+	BillingAddress JSONB    `json:"billing_address" db:"billing_address"`
+	TaxID          *string  `json:"tax_id,omitempty" db:"tax_id"`
+	TaxRate        *float64 `json:"tax_rate,omitempty" db:"tax_rate"`
 
 	CreatedAt time.Time `json:"created_at" db:"created_at"`
 	UpdatedAt time.Time `json:"updated_at" db:"updated_at"`

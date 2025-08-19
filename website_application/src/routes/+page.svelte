@@ -278,7 +278,7 @@
             >
               <div class="flex items-center justify-between mb-3">
                 <h3 class="font-semibold text-tokyo-night-fg">
-                  {primaryStream.title ||
+                  {primaryStream.name ||
                     `Stream ${primaryStream.id.slice(0, 8)}`}
                 </h3>
                 <div class="flex items-center space-x-2">
@@ -319,14 +319,14 @@
                   <input
                     id="primary-stream-key"
                     type="text"
-                    value={primaryStream.stream_key || "Loading..."}
+                    value={primaryStream.streamKey || "Loading..."}
                     readonly
                     class="input flex-1 font-mono text-sm"
                   />
                   <button
-                    on:click={() => copyToClipboard(primaryStream.stream_key)}
+                    on:click={() => copyToClipboard(primaryStream.streamKey)}
                     class="btn-secondary"
-                    disabled={!primaryStream.stream_key}
+                    disabled={!primaryStream.streamKey}
                   >
                     Copy
                   </button>
@@ -669,7 +669,7 @@
                 <p class="text-xs text-tokyo-night-comment mt-2">Stream Key:</p>
                 <p class="font-mono text-sm text-tokyo-night-fg">
                   {primaryStream?.stream_key
-                    ? `${primaryStream.stream_key.slice(0, 12)}...`
+                    ? `${primaryStream.streamKey.slice(0, 12)}...`
                     : "Create a stream first"}
                 </p>
               </div>

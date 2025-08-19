@@ -396,7 +396,7 @@ CREATE TABLE IF NOT EXISTS users (
     avatar_url VARCHAR(500),
     
     -- Role within tenant
-    role VARCHAR(50) DEFAULT 'member', -- owner, admin, member, viewer
+    role VARCHAR(50) DEFAULT 'member', -- owner, admin, member, viewer, service
     permissions TEXT[] DEFAULT ARRAY['streams:read'],
     
     -- Status
@@ -814,6 +814,31 @@ INSERT INTO users (
 
 -- Mark demo user as verified for development/testing
 UPDATE users SET verified = TRUE WHERE email = 'demo@frameworks.dev' AND tenant_id = '00000000-0000-0000-0000-000000000001';
+
+-- Insert service account user for service-to-service authentication
+INSERT INTO users (
+    id,
+    tenant_id, 
+    email,
+    password_hash,
+    first_name,
+    last_name,
+    role,
+    permissions,
+    is_active,
+    verified
+) VALUES (
+    '00000000-0000-0000-0000-000000000000',
+    '00000000-0000-0000-0000-000000000001',
+    'service@internal',
+    'no-login', -- Service accounts don't use password authentication
+    'Service',
+    'Account', 
+    'service',
+    ARRAY['*'], -- All permissions for service accounts
+    TRUE,
+    TRUE
+) ON CONFLICT (tenant_id, email) DO NOTHING;
 
 
 

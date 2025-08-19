@@ -501,3 +501,124 @@ func (c *Client) CreateClip(ctx context.Context, userToken string, req *commodor
 
 	return &clip, nil
 }
+
+// CreateAPIToken creates a new API token for the authenticated user
+func (c *Client) CreateAPIToken(ctx context.Context, userToken string, req *models.CreateAPITokenRequest) (*commodore.CreateAPITokenResponse, error) {
+	url := c.baseURL + "/developer/tokens"
+
+	// Prepare request body
+	reqBody, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(reqBody))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+userToken)
+
+	resp, err := clients.DoWithRetry(ctx, c.httpClient, httpReq, c.retryConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call Commodore: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusCreated {
+		var errorResp commodore.ErrorResponse
+		if err := json.Unmarshal(body, &errorResp); err != nil {
+			return nil, fmt.Errorf("Commodore returned error status %d: %s", resp.StatusCode, string(body))
+		}
+		return nil, fmt.Errorf("Commodore returned error: %s", errorResp.Error)
+	}
+
+	var tokenResp commodore.CreateAPITokenResponse
+	if err := json.Unmarshal(body, &tokenResp); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return &tokenResp, nil
+}
+
+// GetAPITokens retrieves all API tokens for the authenticated user
+func (c *Client) GetAPITokens(ctx context.Context, userToken string) (*commodore.APITokenListResponse, error) {
+	url := c.baseURL + "/developer/tokens"
+
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+userToken)
+
+	resp, err := clients.DoWithRetry(ctx, c.httpClient, req, c.retryConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call Commodore: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		var errorResp commodore.ErrorResponse
+		if err := json.Unmarshal(body, &errorResp); err != nil {
+			return nil, fmt.Errorf("Commodore returned error status %d: %s", resp.StatusCode, string(body))
+		}
+		return nil, fmt.Errorf("Commodore returned error: %s", errorResp.Error)
+	}
+
+	var tokensResp commodore.APITokenListResponse
+	if err := json.Unmarshal(body, &tokensResp); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return &tokensResp, nil
+}
+
+// RevokeAPIToken revokes an API token by ID
+func (c *Client) RevokeAPIToken(ctx context.Context, userToken, tokenID string) (*commodore.RevokeAPITokenResponse, error) {
+	url := c.baseURL + "/developer/tokens/" + url.PathEscape(tokenID)
+
+	req, err := http.NewRequestWithContext(ctx, "DELETE", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+userToken)
+
+	resp, err := clients.DoWithRetry(ctx, c.httpClient, req, c.retryConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call Commodore: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		var errorResp commodore.ErrorResponse
+		if err := json.Unmarshal(body, &errorResp); err != nil {
+			return nil, fmt.Errorf("Commodore returned error status %d: %s", resp.StatusCode, string(body))
+		}
+		return nil, fmt.Errorf("Commodore returned error: %s", errorResp.Error)
+	}
+
+	var revokeResp commodore.RevokeAPITokenResponse
+	if err := json.Unmarshal(body, &revokeResp); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return &revokeResp, nil
+}
