@@ -8,6 +8,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"frameworks/api_analytics_query/internal/metrics"
 	"frameworks/pkg/api/periscope"
 	"frameworks/pkg/database"
 	"frameworks/pkg/logging"
@@ -15,22 +16,38 @@ import (
 )
 
 var (
-	yugaDB     database.PostgresConn
-	clickhouse database.ClickHouseConn
-	logger     logging.Logger
+	yugaDB         database.PostgresConn
+	clickhouse     database.ClickHouseConn
+	logger         logging.Logger
+	serviceMetrics *metrics.Metrics
 )
 
-// Init initializes the handlers package with database connections
-func Init(ydb database.PostgresConn, ch database.ClickHouseConn, log logging.Logger) {
+// Init initializes the handlers package with database connections and metrics
+func Init(ydb database.PostgresConn, ch database.ClickHouseConn, log logging.Logger, m *metrics.Metrics) {
 	yugaDB = ydb
 	clickhouse = ch
 	logger = log
+	serviceMetrics = m
 }
 
 // GetStreamAnalytics returns analytics for all streams with recent activity (tenant-scoped)
 func GetStreamAnalytics(c *gin.Context) {
+	start := time.Now()
+	defer func() {
+		if serviceMetrics != nil {
+			serviceMetrics.QueryDuration.WithLabelValues("stream_analytics").Observe(time.Since(start).Seconds())
+		}
+	}()
+
+	if serviceMetrics != nil {
+		serviceMetrics.AnalyticsQueries.WithLabelValues("stream_analytics", "requested").Inc()
+	}
+
 	tenantID := c.GetString("tenant_id")
 	if tenantID == "" {
+		if serviceMetrics != nil {
+			serviceMetrics.AnalyticsQueries.WithLabelValues("stream_analytics", "error").Inc()
+		}
 		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Tenant context required"})
 		return
 	}
@@ -192,6 +209,9 @@ func GetStreamAnalytics(c *gin.Context) {
 
 	// Convert to API response type
 	response := periscope.StreamAnalyticsResponse(analytics)
+	if serviceMetrics != nil {
+		serviceMetrics.AnalyticsQueries.WithLabelValues("stream_analytics", "success").Inc()
+	}
 	c.JSON(http.StatusOK, response)
 }
 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"frameworks/api_analytics_query/internal/handlers"
+	"frameworks/api_analytics_query/internal/metrics"
 	"frameworks/api_analytics_query/internal/scheduler"
 	"frameworks/pkg/auth"
 	"frameworks/pkg/config"
@@ -36,9 +37,6 @@ func main() {
 	clickhouse := database.MustConnectClickHouse(chConfig, logger)
 	defer clickhouse.Close()
 
-	// Initialize handlers with both databases
-	handlers.Init(yugaDB, clickhouse, logger)
-
 	// Setup monitoring
 	healthChecker := monitoring.NewHealthChecker("periscope-query", version.Version)
 	metricsCollector := monitoring.NewMetricsCollector("periscope-query", version.Version, version.GitCommit)
@@ -53,17 +51,19 @@ func main() {
 		"JWT_SECRET":      config.GetEnv("JWT_SECRET", ""),
 	}))
 
-	// Create analytics metrics
-	analyticsQueries, analyticsOperations, analyticsLatency := metricsCollector.CreateBusinessMetrics()
-	pgQueries, pgDuration, pgConnections := metricsCollector.CreateDatabaseMetrics()
+	// Create custom analytics query metrics
+	serviceMetrics := &metrics.Metrics{
+		AnalyticsQueries:  metricsCollector.NewCounter("analytics_queries_total", "Analytics queries executed", []string{"query_type", "status"}),
+		QueryDuration:     metricsCollector.NewHistogram("analytics_query_duration_seconds", "Analytics query duration", []string{"query_type"}, nil),
+		ClickHouseQueries: metricsCollector.NewCounter("clickhouse_queries_total", "ClickHouse queries executed", []string{"table", "status"}),
+		PostgresQueries:   metricsCollector.NewCounter("postgres_queries_total", "PostgreSQL queries executed", []string{"table", "status"}),
+	}
 
-	// TODO: Wire these metrics into handlers
-	_ = analyticsQueries
-	_ = analyticsOperations
-	_ = analyticsLatency
-	_ = pgQueries
-	_ = pgDuration
-	_ = pgConnections
+	// Create database metrics
+	serviceMetrics.PostgresQueries, serviceMetrics.DBDuration, serviceMetrics.DBConnections = metricsCollector.CreateDatabaseMetrics()
+
+	// Initialize handlers with unified metrics
+	handlers.Init(yugaDB, clickhouse, logger, serviceMetrics)
 
 	// Initialize and start scheduler for billing summarization
 	taskScheduler := scheduler.NewScheduler(yugaDB, clickhouse, logger)
