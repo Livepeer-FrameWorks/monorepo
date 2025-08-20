@@ -1,0 +1,406 @@
+package demo
+
+import (
+	"time"
+
+	"frameworks/api_gateway/graph/model"
+	"frameworks/pkg/models"
+)
+
+// GenerateStreams creates realistic demo stream data
+func GenerateStreams() []*models.Stream {
+	now := time.Now()
+
+	return []*models.Stream{
+		{
+			ID:          "demo_live_stream_001",
+			Title:       "Live: FrameWorks Demo Stream",
+			Description: "Demonstrating live streaming capabilities",
+			StreamKey:   "sk_demo_live_a1b2c3d4e5f6",
+			PlaybackID:  "pb_demo_live_x7y8z9",
+			Status:      "live",
+			IsRecording: true,
+			CreatedAt:   now.Add(-2 * time.Hour),
+			UpdatedAt:   now.Add(-5 * time.Minute),
+		},
+		{
+			ID:          "demo_offline_stream_002",
+			Title:       "Gaming Stream Setup",
+			Description: "Getting ready for tonight's gaming session",
+			StreamKey:   "sk_demo_offline_f6g7h8i9j0k1",
+			PlaybackID:  "pb_demo_offline_m3n4o5",
+			Status:      "offline",
+			IsRecording: false,
+			CreatedAt:   now.Add(-24 * time.Hour),
+			UpdatedAt:   now.Add(-1 * time.Hour),
+		},
+		{
+			ID:          "demo_recording_stream_003",
+			Title:       "Product Demo Recording",
+			Description: "Recording a product demo for the marketing team",
+			StreamKey:   "sk_demo_rec_l2m3n4o5p6q7",
+			PlaybackID:  "pb_demo_rec_r8s9t0",
+			Status:      "recording",
+			IsRecording: true,
+			CreatedAt:   now.Add(-6 * time.Hour),
+			UpdatedAt:   now.Add(-10 * time.Minute),
+		},
+		{
+			ID:          "demo_ended_stream_004",
+			Title:       "Weekly Team Standup",
+			Description: "Our weekly development team standup meeting",
+			StreamKey:   "sk_demo_ended_u1v2w3x4y5z6",
+			PlaybackID:  "pb_demo_ended_a7b8c9",
+			Status:      "ended",
+			IsRecording: false,
+			CreatedAt:   now.Add(-48 * time.Hour),
+			UpdatedAt:   now.Add(-36 * time.Hour),
+		},
+	}
+}
+
+// GenerateStreamAnalytics creates realistic analytics data
+func GenerateStreamAnalytics(streamID string) *models.StreamAnalytics {
+	now := time.Now()
+
+	return &models.StreamAnalytics{
+		StreamID:             streamID,
+		TotalConnections:     1247,
+		PeakViewers:          89,
+		AvgViewers:           34.7,
+		TotalSessionDuration: 18650, // seconds
+		UniqueCountries:      12,
+		UniqueCities:         28,
+		SessionStartTime:     now.Add(-2 * time.Hour),
+		SessionEndTime:       now,
+	}
+}
+
+// GenerateViewerMetrics creates demo viewer metrics
+func GenerateViewerMetrics() []*model.ViewerMetric {
+	now := time.Now()
+	metrics := make([]*model.ViewerMetric, 20)
+
+	// Simulate viewer count over last 20 intervals (5 min each)
+	viewerCounts := []int{12, 15, 23, 34, 45, 67, 89, 85, 78, 92, 87, 76, 65, 58, 71, 69, 54, 47, 39, 31}
+
+	for i, count := range viewerCounts {
+		metrics[i] = &model.ViewerMetric{
+			Timestamp:   now.Add(-time.Duration(19-i) * 5 * time.Minute),
+			ViewerCount: count,
+		}
+	}
+
+	return metrics
+}
+
+// GenerateBillingTiers creates demo billing tier data
+func GenerateBillingTiers() []*models.BillingTier {
+	return []*models.BillingTier{
+		{
+			ID:          "tier_demo_starter",
+			DisplayName: "Starter",
+			Description: "Perfect for trying out FrameWorks",
+			BasePrice:   0.00,
+			Currency:    "USD",
+			Features: map[string]interface{}{
+				"max_streams":   1,
+				"max_viewers":   10,
+				"recording":     false,
+				"analytics":     true,
+				"support_level": "community",
+			},
+		},
+		{
+			ID:          "tier_demo_pro",
+			DisplayName: "Professional",
+			Description: "For content creators and small businesses",
+			BasePrice:   29.99,
+			Currency:    "USD",
+			Features: map[string]interface{}{
+				"max_streams":     5,
+				"max_viewers":     100,
+				"recording":       true,
+				"analytics":       true,
+				"custom_branding": true,
+				"support_level":   "email",
+			},
+		},
+		{
+			ID:          "tier_demo_enterprise",
+			DisplayName: "Enterprise",
+			Description: "For large organizations with custom needs",
+			BasePrice:   299.99,
+			Currency:    "USD",
+			Features: map[string]interface{}{
+				"max_streams":     "unlimited",
+				"max_viewers":     "unlimited",
+				"recording":       true,
+				"analytics":       true,
+				"custom_branding": true,
+				"api_access":      true,
+				"support_level":   "phone",
+				"sla":             true,
+			},
+		},
+	}
+}
+
+// GenerateInvoices creates demo invoice data
+func GenerateInvoices() []*models.Invoice {
+	now := time.Now()
+
+	return []*models.Invoice{
+		{
+			ID:        "inv_demo_current_001",
+			Amount:    29.99,
+			Currency:  "USD",
+			Status:    "paid",
+			DueDate:   now.Add(24 * time.Hour),
+			CreatedAt: now.Add(-30 * 24 * time.Hour),
+			UsageDetails: map[string]interface{}{
+				"Streaming hours": map[string]interface{}{
+					"quantity":   42.5,
+					"unit_price": 0.50,
+				},
+				"Storage GB": map[string]interface{}{
+					"quantity":   15.2,
+					"unit_price": 0.25,
+				},
+			},
+		},
+		{
+			ID:        "inv_demo_previous_002",
+			Amount:    24.50,
+			Currency:  "USD",
+			Status:    "paid",
+			DueDate:   now.Add(-30 * 24 * time.Hour),
+			CreatedAt: now.Add(-60 * 24 * time.Hour),
+			UsageDetails: map[string]interface{}{
+				"Streaming hours": map[string]interface{}{
+					"quantity":   35.0,
+					"unit_price": 0.50,
+				},
+				"Storage GB": map[string]interface{}{
+					"quantity":   19.0,
+					"unit_price": 0.25,
+				},
+			},
+		},
+	}
+}
+
+// GenerateBillingStatus creates demo billing status
+func GenerateBillingStatus() *models.BillingStatus {
+	tiers := GenerateBillingTiers()
+	nextBilling := time.Now().Add(18 * 24 * time.Hour)
+
+	return &models.BillingStatus{
+		TenantID:        "demo_tenant_frameworks",
+		Tier:            *tiers[1], // Professional tier
+		Status:          "active",
+		NextBillingDate: &nextBilling,
+		PendingInvoices: []models.Invoice{}, // No pending invoices
+		RecentPayments:  []models.Payment{},
+	}
+}
+
+// GenerateUsageRecords creates demo usage records
+func GenerateUsageRecords() []*models.UsageRecord {
+	now := time.Now()
+	records := make([]*models.UsageRecord, 10)
+
+	usageTypes := []string{"streaming", "storage", "bandwidth", "transcoding"}
+
+	for i := 0; i < 10; i++ {
+		usageType := usageTypes[i%len(usageTypes)]
+		var value float64
+
+		switch usageType {
+		case "streaming":
+			value = float64(2 + i*3) // hours
+		case "storage":
+			value = float64(5 + i*2) // GB
+		case "bandwidth":
+			value = float64(50 + i*25) // GB
+		case "transcoding":
+			value = float64(10 + i*5) // minutes
+		}
+
+		records[i] = &models.UsageRecord{
+			ID:         "usage_demo_" + time.Now().Format("20060102") + "_" + string(rune(i+'a')),
+			UsageType:  usageType,
+			UsageValue: value,
+			CreatedAt:  now.Add(-time.Duration(i) * 24 * time.Hour),
+			UsageDetails: map[string]interface{}{
+				"cost": value * 0.5,
+			},
+		}
+	}
+
+	return records
+}
+
+// GenerateDeveloperTokens creates demo API tokens
+func GenerateDeveloperTokens() []*model.DeveloperToken {
+	now := time.Now()
+
+	// Helper function to create time pointers
+	timePtr := func(t time.Time) *time.Time { return &t }
+	tokenPtr := func(s string) *string { return &s }
+
+	return []*model.DeveloperToken{
+		{
+			ID:          "token_demo_production",
+			Name:        "Production API Access",
+			Token:       tokenPtr("***********************************uc12"), // Masked
+			Permissions: "streams:read,streams:write,analytics:read",
+			Status:      "active",
+			LastUsedAt:  timePtr(now.Add(-2 * time.Hour)),
+			ExpiresAt:   timePtr(now.Add(365 * 24 * time.Hour)),
+			CreatedAt:   now.Add(-60 * 24 * time.Hour),
+		},
+		{
+			ID:          "token_demo_readonly",
+			Name:        "Analytics Dashboard",
+			Token:       tokenPtr("***********************************kl89"), // Masked
+			Permissions: "analytics:read,streams:read",
+			Status:      "active",
+			LastUsedAt:  timePtr(now.Add(-30 * time.Minute)),
+			ExpiresAt:   nil, // No expiration
+			CreatedAt:   now.Add(-30 * 24 * time.Hour),
+		},
+		{
+			ID:          "token_demo_revoked",
+			Name:        "Old Integration Token",
+			Token:       tokenPtr("***********************************xy56"), // Masked
+			Permissions: "streams:read,streams:write",
+			Status:      "revoked",
+			LastUsedAt:  timePtr(now.Add(-10 * 24 * time.Hour)),
+			ExpiresAt:   timePtr(now.Add(30 * 24 * time.Hour)),
+			CreatedAt:   now.Add(-90 * 24 * time.Hour),
+		},
+	}
+}
+
+// GenerateTenant creates demo tenant data
+func GenerateTenant() *models.Tenant {
+	return &models.Tenant{
+		ID:             "demo_tenant_frameworks",
+		Name:           "FrameWorks Demo Organization",
+		PrimaryColor:   "#3B82F6", // Blue
+		SecondaryColor: "#1F2937", // Dark gray
+		CreatedAt:      time.Now().Add(-180 * 24 * time.Hour),
+	}
+}
+
+// GeneratePlatformOverview creates demo platform metrics
+func GeneratePlatformOverview() *model.PlatformOverview {
+	now := time.Now()
+
+	return &model.PlatformOverview{
+		TotalStreams:   42,
+		TotalViewers:   1247,
+		TotalBandwidth: 850.5, // Gbps
+		TotalUsers:     156,
+		TimeRange: &model.TimeRange{
+			Start: now.Add(-24 * time.Hour),
+			End:   now,
+		},
+	}
+}
+
+// GenerateStreamEvents creates demo stream events for subscription
+func GenerateStreamEvents() []*model.StreamEvent {
+	return []*model.StreamEvent{
+		{
+			Type:      "STREAM_START",
+			Stream:    "demo_live_stream_001",
+			Status:    "LIVE",
+			Timestamp: time.Now(),
+			Details:   func() *string { s := "Stream started successfully"; return &s }(),
+		},
+		{
+			Type:      "BUFFER_UPDATE",
+			Stream:    "demo_live_stream_001",
+			Status:    "LIVE",
+			Timestamp: time.Now().Add(30 * time.Second),
+			Details:   func() *string { s := "Buffer health: 95%"; return &s }(),
+		},
+		{
+			Type:      "TRACK_LIST_UPDATE",
+			Stream:    "demo_live_stream_001",
+			Status:    "LIVE",
+			Timestamp: time.Now().Add(60 * time.Second),
+			Details:   func() *string { s := "New track added to playlist"; return &s }(),
+		},
+	}
+}
+
+// GenerateViewerMetricsEvents creates demo viewer metrics for subscription
+func GenerateViewerMetricsEvents() []*model.ViewerMetrics {
+	return []*model.ViewerMetrics{
+		{
+			Stream:            "demo_live_stream_001",
+			CurrentViewers:    45,
+			PeakViewers:       89,
+			Bandwidth:         25.6,
+			ConnectionQuality: func() *float64 { f := 0.95; return &f }(),
+			BufferHealth:      func() *float64 { f := 0.98; return &f }(),
+			Timestamp:         time.Now(),
+		},
+		{
+			Stream:            "demo_live_stream_001",
+			CurrentViewers:    52,
+			PeakViewers:       89,
+			Bandwidth:         28.1,
+			ConnectionQuality: func() *float64 { f := 0.97; return &f }(),
+			BufferHealth:      func() *float64 { f := 0.96; return &f }(),
+			Timestamp:         time.Now().Add(30 * time.Second),
+		},
+	}
+}
+
+// GenerateTrackListEvents creates demo track list events for subscription
+func GenerateTrackListEvents() []*model.TrackListEvent {
+	return []*model.TrackListEvent{
+		{
+			Stream:     "demo_live_stream_001",
+			TrackList:  "Track 1: Intro Music\nTrack 2: Main Content\nTrack 3: Q&A Session",
+			TrackCount: 3,
+			Timestamp:  time.Now(),
+		},
+		{
+			Stream:     "demo_live_stream_001",
+			TrackList:  "Track 1: Intro Music\nTrack 2: Main Content\nTrack 3: Q&A Session\nTrack 4: Closing Remarks",
+			TrackCount: 4,
+			Timestamp:  time.Now().Add(60 * time.Second),
+		},
+	}
+}
+
+// GenerateSystemHealthEvents creates demo system health events for subscription
+func GenerateSystemHealthEvents() []*model.SystemHealthEvent {
+	return []*model.SystemHealthEvent{
+		{
+			Node:        "node_demo_us_west_01",
+			Cluster:     "cluster_demo_us_west",
+			Status:      "HEALTHY",
+			CPUUsage:    65.2,
+			MemoryUsage: 78.5,
+			DiskUsage:   45.3,
+			HealthScore: 0.95,
+			Timestamp:   time.Now(),
+		},
+		{
+			Node:        "node_demo_us_west_02",
+			Cluster:     "cluster_demo_us_west",
+			Status:      "HEALTHY",
+			CPUUsage:    72.1,
+			MemoryUsage: 82.3,
+			DiskUsage:   38.7,
+			HealthScore: 0.92,
+			Timestamp:   time.Now().Add(15 * time.Second),
+		},
+	}
+}

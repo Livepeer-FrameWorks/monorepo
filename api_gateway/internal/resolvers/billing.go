@@ -6,12 +6,20 @@ import (
 	"time"
 
 	"frameworks/api_gateway/graph/model"
+	"frameworks/api_gateway/internal/demo"
+	"frameworks/api_gateway/internal/middleware"
 	"frameworks/pkg/api/purser"
 	"frameworks/pkg/models"
 )
 
 // DoGetBillingTiers returns available billing tiers
 func (r *Resolver) DoGetBillingTiers(ctx context.Context) ([]*models.BillingTier, error) {
+	// Check for demo mode
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Returning demo billing tiers data")
+		return demo.GenerateBillingTiers(), nil
+	}
+
 	r.Logger.Info("Getting billing tiers")
 
 	// TODO: Add GetBillingTiers method to Purser client
@@ -21,6 +29,12 @@ func (r *Resolver) DoGetBillingTiers(ctx context.Context) ([]*models.BillingTier
 
 // DoGetInvoices returns tenant invoices
 func (r *Resolver) DoGetInvoices(ctx context.Context) ([]*models.Invoice, error) {
+	// Check for demo mode
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Returning demo invoices data")
+		return demo.GenerateInvoices(), nil
+	}
+
 	tenantID, ok := ctx.Value("tenant_id").(string)
 	if !ok {
 		return nil, fmt.Errorf("tenant context required")
@@ -47,6 +61,12 @@ func (r *Resolver) DoGetInvoice(ctx context.Context, id string) (*models.Invoice
 
 // DoGetBillingStatus returns current billing status for tenant
 func (r *Resolver) DoGetBillingStatus(ctx context.Context) (*models.BillingStatus, error) {
+	// Check for demo mode
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Returning demo billing status data")
+		return demo.GenerateBillingStatus(), nil
+	}
+
 	tenantID, ok := ctx.Value("tenant_id").(string)
 	if !ok {
 		return nil, fmt.Errorf("tenant context required")
@@ -110,6 +130,12 @@ func (r *Resolver) DoGetBillingStatus(ctx context.Context) (*models.BillingStatu
 
 // DoGetUsageRecords returns usage records for tenant
 func (r *Resolver) DoGetUsageRecords(ctx context.Context, timeRange *model.TimeRangeInput) ([]*models.UsageRecord, error) {
+	// Check for demo mode
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Returning demo usage records data")
+		return demo.GenerateUsageRecords(), nil
+	}
+
 	tenantID, ok := ctx.Value("tenant_id").(string)
 	if !ok {
 		return nil, fmt.Errorf("tenant context required")
@@ -170,6 +196,18 @@ func (r *Resolver) DoGetUsageRecords(ctx context.Context, timeRange *model.TimeR
 
 // DoCreatePayment processes a payment
 func (r *Resolver) DoCreatePayment(ctx context.Context, input model.CreatePaymentInput) (*models.Payment, error) {
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Returning demo payment creation")
+		return &models.Payment{
+			ID:        "payment_demo_" + time.Now().Format("20060102150405"),
+			Amount:    input.Amount,
+			Currency:  *input.Currency,
+			Method:    string(input.Method),
+			Status:    "completed",
+			CreatedAt: time.Now(),
+		}, nil
+	}
+
 	tenantID, ok := ctx.Value("tenant_id").(string)
 	if !ok {
 		return nil, fmt.Errorf("tenant context required")
@@ -193,6 +231,11 @@ func (r *Resolver) DoCreatePayment(ctx context.Context, input model.CreatePaymen
 
 // DoUpdateBillingTier changes the tenant's billing tier
 func (r *Resolver) DoUpdateBillingTier(ctx context.Context, tierID string) (*models.BillingStatus, error) {
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Returning demo billing tier update")
+		return demo.GenerateBillingStatus(), nil
+	}
+
 	tenantID, ok := ctx.Value("tenant_id").(string)
 	if !ok {
 		return nil, fmt.Errorf("tenant context required")

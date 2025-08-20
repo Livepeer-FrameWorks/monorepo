@@ -6,11 +6,19 @@ import (
 	"time"
 
 	"frameworks/api_gateway/graph/model"
+	"frameworks/api_gateway/internal/demo"
+	"frameworks/api_gateway/internal/middleware"
 	"frameworks/pkg/models"
 )
 
 // DoGetStreamAnalytics returns analytics for a specific stream
 func (r *Resolver) DoGetStreamAnalytics(ctx context.Context, streamId string, timeRange *model.TimeRangeInput) (*models.StreamAnalytics, error) {
+	// Check for demo mode
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Returning demo stream analytics data")
+		return demo.GenerateStreamAnalytics(streamId), nil
+	}
+
 	// Extract tenant ID from context for data isolation
 	tenantID, ok := ctx.Value("tenant_id").(string)
 	if !ok {
@@ -41,6 +49,12 @@ func (r *Resolver) DoGetStreamAnalytics(ctx context.Context, streamId string, ti
 
 // DoGetViewerMetrics returns viewer metrics
 func (r *Resolver) DoGetViewerMetrics(ctx context.Context, streamId *string, timeRange *model.TimeRangeInput) ([]*model.ViewerMetric, error) {
+	// Check for demo mode
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Returning demo viewer metrics data")
+		return demo.GenerateViewerMetrics(), nil
+	}
+
 	// Extract tenant ID from context for data isolation
 	tenantID, ok := ctx.Value("tenant_id").(string)
 	if !ok {
@@ -81,6 +95,12 @@ func (r *Resolver) DoGetViewerMetrics(ctx context.Context, streamId *string, tim
 
 // DoGetPlatformOverview returns platform-wide metrics
 func (r *Resolver) DoGetPlatformOverview(ctx context.Context, timeRange *model.TimeRangeInput) (*model.PlatformOverview, error) {
+	// Check for demo mode
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Returning demo platform overview data")
+		return demo.GeneratePlatformOverview(), nil
+	}
+
 	// Extract tenant ID from context
 	tenantID, ok := ctx.Value("tenant_id").(string)
 	if !ok {

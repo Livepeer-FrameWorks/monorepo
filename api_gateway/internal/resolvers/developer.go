@@ -7,11 +7,28 @@ import (
 	"time"
 
 	"frameworks/api_gateway/graph/model"
+	"frameworks/api_gateway/internal/demo"
+	"frameworks/api_gateway/internal/middleware"
 	"frameworks/pkg/models"
 )
 
 // DoCreateDeveloperToken creates a new developer token
 func (r *Resolver) DoCreateDeveloperToken(ctx context.Context, input model.CreateDeveloperTokenInput) (*model.DeveloperToken, error) {
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Returning demo developer token creation")
+		// Return a demo token creation response
+		tokenValue := "dk_demo_12345678901234567890123456789012"
+		return &model.DeveloperToken{
+			ID:          "demo_dev_token_001",
+			Name:        input.Name,
+			Token:       &tokenValue,
+			Permissions: "streams:read,streams:write,analytics:read",
+			Status:      "active",
+			CreatedAt:   time.Now(),
+			ExpiresAt:   func() *time.Time { t := time.Now().AddDate(0, 6, 0); return &t }(),
+		}, nil
+	}
+
 	// Extract JWT token from context (set by auth middleware)
 	userToken, ok := ctx.Value("jwt_token").(string)
 	if !ok {
@@ -61,6 +78,11 @@ func (r *Resolver) DoCreateDeveloperToken(ctx context.Context, input model.Creat
 
 // DoRevokeDeveloperToken revokes a developer token
 func (r *Resolver) DoRevokeDeveloperToken(ctx context.Context, id string) (bool, error) {
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Returning demo developer token revocation")
+		return true, nil
+	}
+
 	// Extract JWT token from context
 	userToken, ok := ctx.Value("jwt_token").(string)
 	if !ok {
@@ -79,6 +101,11 @@ func (r *Resolver) DoRevokeDeveloperToken(ctx context.Context, id string) (bool,
 
 // DoGetDeveloperTokens retrieves all developer tokens for the authenticated user
 func (r *Resolver) DoGetDeveloperTokens(ctx context.Context) ([]*model.DeveloperToken, error) {
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Returning demo developer tokens")
+		return demo.GenerateDeveloperTokens(), nil
+	}
+
 	// Extract JWT token from context
 	userToken, ok := ctx.Value("jwt_token").(string)
 	if !ok {

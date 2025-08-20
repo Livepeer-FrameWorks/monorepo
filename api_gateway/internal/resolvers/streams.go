@@ -3,14 +3,24 @@ package resolvers
 import (
 	"context"
 	"fmt"
+	"strings"
+	"time"
 
 	"frameworks/api_gateway/graph/model"
+	"frameworks/api_gateway/internal/demo"
+	"frameworks/api_gateway/internal/middleware"
 	"frameworks/pkg/api/commodore"
 	"frameworks/pkg/models"
 )
 
 // DoGetStreams retrieves all streams for the authenticated user
 func (r *Resolver) DoGetStreams(ctx context.Context) ([]*models.Stream, error) {
+	// Check for demo mode
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Returning demo streams data")
+		return demo.GenerateStreams(), nil
+	}
+
 	// Extract JWT token from context (set by auth middleware)
 	userToken, ok := ctx.Value("jwt_token").(string)
 	if !ok {
@@ -53,6 +63,31 @@ func (r *Resolver) DoGetStream(ctx context.Context, id string) (*models.Stream, 
 
 // DoCreateStream creates a new stream
 func (r *Resolver) DoCreateStream(ctx context.Context, input model.CreateStreamInput) (*models.Stream, error) {
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Returning demo stream creation")
+		return &models.Stream{
+			ID:    "demo_stream_" + time.Now().Format("20060102150405"),
+			Title: input.Name,
+			Description: func() string {
+				if input.Description != nil {
+					return *input.Description
+				}
+				return ""
+			}(),
+			StreamKey:  "sk_demo_" + time.Now().Format("150405"),
+			PlaybackID: "pb_demo_" + time.Now().Format("150405"),
+			Status:     "offline",
+			IsRecording: func() bool {
+				if input.Record != nil {
+					return *input.Record
+				}
+				return false
+			}(),
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+		}, nil
+	}
+
 	// Extract JWT token from context
 	userToken, ok := ctx.Value("jwt_token").(string)
 	if !ok {
@@ -84,6 +119,11 @@ func (r *Resolver) DoCreateStream(ctx context.Context, input model.CreateStreamI
 
 // DoDeleteStream deletes a stream
 func (r *Resolver) DoDeleteStream(ctx context.Context, id string) (bool, error) {
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Returning demo stream deletion")
+		return true, nil
+	}
+
 	// Extract JWT token from context
 	userToken, ok := ctx.Value("jwt_token").(string)
 	if !ok {
@@ -102,6 +142,19 @@ func (r *Resolver) DoDeleteStream(ctx context.Context, id string) (bool, error) 
 
 // DoRefreshStreamKey refreshes the stream key for a stream
 func (r *Resolver) DoRefreshStreamKey(ctx context.Context, id string) (*models.Stream, error) {
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Returning demo stream refresh")
+		streams := demo.GenerateStreams()
+		for _, stream := range streams {
+			if stream.ID == id {
+				// Generate new demo stream key
+				stream.StreamKey = "sk_demo_refreshed_" + time.Now().Format("20060102150405")
+				return stream, nil
+			}
+		}
+		return nil, fmt.Errorf("demo stream not found")
+	}
+
 	// Extract JWT token from context
 	userToken, ok := ctx.Value("jwt_token").(string)
 	if !ok {
@@ -120,6 +173,22 @@ func (r *Resolver) DoRefreshStreamKey(ctx context.Context, id string) (*models.S
 
 // DoValidateStreamKey validates a stream key
 func (r *Resolver) DoValidateStreamKey(ctx context.Context, streamKey string) (*model.StreamValidation, error) {
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Returning demo stream key validation")
+		// Demo validation - validate demo stream keys
+		valid := strings.HasPrefix(streamKey, "sk_demo_")
+		errorPtr := (*string)(nil)
+		if !valid {
+			errorMsg := "Invalid demo stream key"
+			errorPtr = &errorMsg
+		}
+		return &model.StreamValidation{
+			Valid:     valid,
+			StreamKey: streamKey,
+			Error:     errorPtr,
+		}, nil
+	}
+
 	// Call Commodore to validate stream key
 	validation, err := r.Clients.Commodore.ValidateStreamKey(ctx, streamKey)
 	if err != nil {
@@ -142,6 +211,23 @@ func (r *Resolver) DoValidateStreamKey(ctx context.Context, streamKey string) (*
 
 // DoCreateClip creates a new clip
 func (r *Resolver) DoCreateClip(ctx context.Context, input model.CreateClipInput) (*model.Clip, error) {
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Returning demo clip creation")
+		return &model.Clip{
+			ID:          "clip_demo_" + time.Now().Format("20060102150405"),
+			Stream:      input.Stream,
+			Title:       input.Title,
+			Description: input.Description,
+			StartTime:   input.StartTime,
+			EndTime:     input.EndTime,
+			Duration:    input.EndTime - input.StartTime,
+			PlaybackID:  "pb_clip_demo_" + time.Now().Format("150405"),
+			Status:      "processing",
+			CreatedAt:   time.Now(),
+			UpdatedAt:   time.Now(),
+		}, nil
+	}
+
 	// Extract JWT token from context
 	userToken, ok := ctx.Value("jwt_token").(string)
 	if !ok {

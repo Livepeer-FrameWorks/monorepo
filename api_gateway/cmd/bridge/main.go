@@ -155,6 +155,7 @@ func main() {
 	// GraphQL endpoint with optional auth (some queries are public)
 	graphqlGroup := app.Group("/graphql")
 	jwtSecret := config.GetEnv("JWT_SECRET", "default-secret-key-change-in-production")
+	graphqlGroup.Use(middleware.DemoMode(logger))                  // Demo mode detection (must be before auth)
 	graphqlGroup.Use(pkgauth.JWTAuthMiddleware([]byte(jwtSecret))) // Standard auth with WebSocket support
 	graphqlGroup.Use(middleware.GraphQLContextMiddleware())        // Bridge user context to GraphQL
 	{

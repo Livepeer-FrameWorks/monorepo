@@ -3,7 +3,9 @@ package resolvers
 import (
 	"context"
 	"fmt"
+	"time"
 
+	"frameworks/api_gateway/internal/middleware"
 	commodore "frameworks/pkg/api/commodore"
 	"frameworks/pkg/models"
 )
@@ -34,6 +36,18 @@ func (r *Resolver) DoRegister(ctx context.Context, email, password, firstName, l
 
 // DoGetMe retrieves current user information
 func (r *Resolver) DoGetMe(ctx context.Context) (*models.User, error) {
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Returning demo user data")
+		// Return demo user data without calling Commodore
+		return &models.User{
+			ID:        "demo_user_developer",
+			Email:     "developer@frameworks.demo",
+			FirstName: "Demo",
+			LastName:  "Developer",
+			CreatedAt: time.Now().Add(-90 * 24 * time.Hour),
+		}, nil
+	}
+
 	// Extract JWT token from context (set by auth middleware)
 	userToken, ok := ctx.Value("jwt_token").(string)
 	if !ok {
