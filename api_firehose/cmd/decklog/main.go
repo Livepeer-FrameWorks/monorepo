@@ -53,17 +53,15 @@ func main() {
 		"KAFKA_CLUSTER_ID": config.GetEnv("KAFKA_CLUSTER_ID", ""),
 	}))
 
-	// Create Kafka metrics
-	kafkaMessages, kafkaDuration, kafkaLag := metricsCollector.CreateKafkaMetrics()
-	businessItems, operations, operationDuration := metricsCollector.CreateBusinessMetrics()
+	// Create custom event streaming metrics
+	metrics := &grpc.DecklogMetrics{
+		EventsIngested:     metricsCollector.NewCounter("events_ingested_total", "Total events ingested", []string{"event_type", "status"}),
+		ProcessingDuration: metricsCollector.NewHistogram("event_processing_duration_seconds", "Event processing duration", []string{"event_type"}, nil),
+		GRPCRequests:       metricsCollector.NewCounter("grpc_requests_total", "gRPC requests", []string{"method", "status"}),
+	}
 
-	// TODO: Wire these metrics into handlers
-	_ = kafkaMessages
-	_ = kafkaDuration
-	_ = kafkaLag
-	_ = businessItems
-	_ = operations
-	_ = operationDuration
+	// Create Kafka metrics
+	metrics.KafkaMessages, metrics.KafkaDuration, metrics.KafkaLag = metricsCollector.CreateKafkaMetrics()
 
 	// Get TLS configuration
 	certFile := config.GetEnv("TLS_CERT_FILE", "/etc/letsencrypt/live/decklog/fullchain.pem")
@@ -71,7 +69,7 @@ func main() {
 	allowInsecure := config.GetEnvBool("ALLOW_INSECURE", false)
 
 	// Create gRPC server
-	grpcServer, err := grpc.NewGRPCServer(producer, logger, certFile, keyFile, allowInsecure)
+	grpcServer, err := grpc.NewGRPCServer(producer, logger, metrics, certFile, keyFile, allowInsecure)
 	if err != nil {
 		logger.WithError(err).Fatal("Failed to create gRPC server")
 	}

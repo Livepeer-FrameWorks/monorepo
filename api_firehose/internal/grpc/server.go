@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"frameworks/pkg/logging"
+	"github.com/prometheus/client_golang/prometheus"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -53,18 +54,30 @@ func mapProtoEventTypeToValidation(t pb.EventType) validation.EventType {
 	}
 }
 
+// DecklogMetrics holds all Prometheus metrics for Decklog
+type DecklogMetrics struct {
+	EventsIngested     *prometheus.CounterVec
+	ProcessingDuration *prometheus.HistogramVec
+	KafkaMessages      *prometheus.CounterVec
+	GRPCRequests       *prometheus.CounterVec
+	KafkaDuration      *prometheus.HistogramVec
+	KafkaLag           *prometheus.GaugeVec
+}
+
 type DecklogServer struct {
 	pb.UnimplementedDecklogServiceServer
 	producer  kafka.ProducerInterface
 	validator *validation.EventValidator
 	logger    logging.Logger
+	metrics   *DecklogMetrics
 }
 
-func NewDecklogServer(producer kafka.ProducerInterface, logger logging.Logger) *DecklogServer {
+func NewDecklogServer(producer kafka.ProducerInterface, logger logging.Logger, metrics *DecklogMetrics) *DecklogServer {
 	return &DecklogServer{
 		producer:  producer,
 		validator: validation.NewEventValidator(),
 		logger:    logger,
+		metrics:   metrics,
 	}
 }
 
@@ -90,14 +103,28 @@ func convertStringMapToInterface(m map[string]string) map[string]interface{} {
 
 // StreamEvents handles streaming events from Helmsman
 func (s *DecklogServer) StreamEvents(stream pb.DecklogService_StreamEventsServer) error {
+	// Track gRPC request
+	if s.metrics != nil {
+		s.metrics.GRPCRequests.WithLabelValues("StreamEvents", "requested").Inc()
+	}
+
 	for {
+		start := time.Now()
 		event, err := stream.Recv()
 		if err == io.EOF {
 			return nil
 		}
 		if err != nil {
 			s.logger.WithError(err).Error("Failed to receive event")
+			if s.metrics != nil {
+				s.metrics.GRPCRequests.WithLabelValues("StreamEvents", "error").Inc()
+			}
 			return status.Error(codes.Internal, "failed to receive event")
+		}
+
+		// Track events ingested
+		if s.metrics != nil {
+			s.metrics.EventsIngested.WithLabelValues(event.Source, "received").Add(float64(len(event.Events)))
 		}
 
 		// Convert proto event to validation.BatchedEvents
@@ -229,6 +256,9 @@ func (s *DecklogServer) StreamEvents(stream pb.DecklogService_StreamEventsServer
 		// Validate event batch
 		if err := s.validator.ValidateBatch(batch); err != nil {
 			s.logger.WithError(err).Error("Event validation failed")
+			if s.metrics != nil {
+				s.metrics.EventsIngested.WithLabelValues(event.Source, "validation_error").Add(float64(len(event.Events)))
+			}
 			if err := stream.Send(&pb.EventResponse{
 				Status:  "error",
 				Message: err.Error(),
@@ -306,12 +336,29 @@ func (s *DecklogServer) StreamEvents(stream pb.DecklogService_StreamEventsServer
 			evts = append(evts, m)
 		}
 		batchEnvelope["events"] = evts
+
+		// Track Kafka publishing
+		kafkaStart := time.Now()
+		if s.metrics != nil {
+			s.metrics.KafkaMessages.WithLabelValues("analytics_events", "publish_attempt").Inc()
+		}
+
 		if err := s.producer.PublishBatch(batchEnvelope); err != nil {
 			s.logger.WithError(err).Error("Failed to publish events to Kafka")
+			if s.metrics != nil {
+				s.metrics.KafkaMessages.WithLabelValues("analytics_events", "publish_error").Inc()
+				s.metrics.EventsIngested.WithLabelValues(event.Source, "kafka_error").Add(float64(len(event.Events)))
+			}
 			if err := stream.Send(&pb.EventResponse{Status: "error", Message: "failed to publish events"}); err != nil {
 				return err
 			}
 			continue
+		}
+
+		// Track successful Kafka publishing
+		if s.metrics != nil {
+			s.metrics.KafkaMessages.WithLabelValues("analytics_events", "publish_success").Inc()
+			s.metrics.KafkaDuration.WithLabelValues("analytics_events").Observe(time.Since(kafkaStart).Seconds())
 		}
 
 		s.logger.WithFields(logging.Fields{
@@ -319,6 +366,13 @@ func (s *DecklogServer) StreamEvents(stream pb.DecklogService_StreamEventsServer
 			"source":   event.Source,
 			"count":    len(event.Events),
 		}).Info("Published analytics events to Kafka")
+
+		// Track successful processing
+		if s.metrics != nil {
+			s.metrics.EventsIngested.WithLabelValues(event.Source, "processed").Add(float64(len(event.Events)))
+			s.metrics.ProcessingDuration.WithLabelValues(event.Source).Observe(time.Since(start).Seconds())
+			s.metrics.GRPCRequests.WithLabelValues("StreamEvents", "success").Inc()
+		}
 
 		// Send success response
 		if err := stream.Send(&pb.EventResponse{
@@ -332,8 +386,18 @@ func (s *DecklogServer) StreamEvents(stream pb.DecklogService_StreamEventsServer
 
 // SendEvent handles single events from Foghorn (replaces SendBalancingEvent)
 func (s *DecklogServer) SendEvent(ctx context.Context, event *pb.Event) (*pb.EventResponse, error) {
+	start := time.Now()
+
+	// Track gRPC request
+	if s.metrics != nil {
+		s.metrics.GRPCRequests.WithLabelValues("SendEvent", "requested").Inc()
+	}
+
 	// Process single event the same way as batched events
 	if len(event.Events) == 0 {
+		if s.metrics != nil {
+			s.metrics.GRPCRequests.WithLabelValues("SendEvent", "empty_batch").Inc()
+		}
 		return &pb.EventResponse{
 			Status:  "error",
 			Message: "no events in batch",
@@ -380,6 +444,13 @@ func (s *DecklogServer) SendEvent(ctx context.Context, event *pb.Event) (*pb.Eve
 		return nil, status.Error(codes.Internal, "failed to marshal event")
 	}
 
+	// Track Kafka publishing
+	if s.metrics != nil {
+		s.metrics.KafkaMessages.WithLabelValues("analytics_events", "single_event").Inc()
+		s.metrics.EventsIngested.WithLabelValues("foghorn", "received").Inc()
+	}
+
+	kafkaStart := time.Now()
 	// Publish to main analytics topic with tenant header
 	if err := s.producer.ProduceMessage("analytics_events", []byte(kafkaEvent.ID), value, map[string]string{
 		"source":     "foghorn",
@@ -387,7 +458,19 @@ func (s *DecklogServer) SendEvent(ctx context.Context, event *pb.Event) (*pb.Eve
 		"tenant_id":  event.TenantId,
 	}); err != nil {
 		s.logger.WithError(err).Error("Failed to publish balancing event")
+		if s.metrics != nil {
+			s.metrics.GRPCRequests.WithLabelValues("SendEvent", "kafka_error").Inc()
+			s.metrics.EventsIngested.WithLabelValues("foghorn", "kafka_error").Inc()
+		}
 		return nil, status.Error(codes.Internal, "failed to publish event")
+	}
+
+	// Track successful processing
+	if s.metrics != nil {
+		s.metrics.KafkaDuration.WithLabelValues("analytics_events").Observe(time.Since(kafkaStart).Seconds())
+		s.metrics.EventsIngested.WithLabelValues("foghorn", "processed").Inc()
+		s.metrics.ProcessingDuration.WithLabelValues("foghorn").Observe(time.Since(start).Seconds())
+		s.metrics.GRPCRequests.WithLabelValues("SendEvent", "success").Inc()
 	}
 
 	return &pb.EventResponse{
@@ -406,7 +489,7 @@ func (s *DecklogServer) CheckHealth(ctx context.Context, req *pb.HealthRequest) 
 }
 
 // NewGRPCServer creates a new gRPC server with proper TLS configuration
-func NewGRPCServer(producer kafka.ProducerInterface, logger logging.Logger, certFile, keyFile string, allowInsecure bool) (*grpc.Server, error) {
+func NewGRPCServer(producer kafka.ProducerInterface, logger logging.Logger, metrics *DecklogMetrics, certFile, keyFile string, allowInsecure bool) (*grpc.Server, error) {
 	var opts []grpc.ServerOption
 
 	if !allowInsecure {
@@ -423,7 +506,7 @@ func NewGRPCServer(producer kafka.ProducerInterface, logger logging.Logger, cert
 	opts = append(opts, grpc.StreamInterceptor(streamInterceptor(logger)))
 
 	server := grpc.NewServer(opts...)
-	pb.RegisterDecklogServiceServer(server, NewDecklogServer(producer, logger))
+	pb.RegisterDecklogServiceServer(server, NewDecklogServer(producer, logger, metrics))
 	return server, nil
 }
 
