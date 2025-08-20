@@ -3,6 +3,7 @@ package handlers
 import (
 	"database/sql"
 	"net/http"
+	"time"
 
 	qmapi "frameworks/pkg/api/quartermaster"
 	"frameworks/pkg/logging"
@@ -10,17 +11,30 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/lib/pq"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 var (
-	db     *sql.DB
-	logger logging.Logger
+	db      *sql.DB
+	logger  logging.Logger
+	metrics *QuartermasterMetrics
 )
 
+// QuartermasterMetrics holds all Prometheus metrics for Quartermaster
+type QuartermasterMetrics struct {
+	TenantOperations    *prometheus.CounterVec
+	ClusterOperations   *prometheus.CounterVec
+	TenantResourceUsage *prometheus.GaugeVec
+	DBQueries           *prometheus.CounterVec
+	DBDuration          *prometheus.HistogramVec
+	DBConnections       *prometheus.GaugeVec
+}
+
 // Init initializes the handlers with database and logger
-func Init(database *sql.DB, log logging.Logger) {
+func Init(database *sql.DB, log logging.Logger, quartermasterMetrics *QuartermasterMetrics) {
 	db = database
 	logger = log
+	metrics = quartermasterMetrics
 }
 
 // ValidateTenant validates a tenant and returns its features/limits
@@ -184,7 +198,12 @@ func GetClusterRouting(c *gin.Context) {
 
 // GetTenant retrieves a tenant by ID
 func GetTenant(c *gin.Context) {
+	start := time.Now()
 	tenantID := c.Param("id")
+
+	if metrics != nil {
+		metrics.TenantOperations.WithLabelValues("get", "requested").Inc()
+	}
 
 	var tenant models.Tenant
 	query := `
@@ -207,25 +226,43 @@ func GetTenant(c *gin.Context) {
 
 	if err == sql.ErrNoRows {
 		logger.WithField("tenant_id", tenantID).Warn("Tenant not found")
+		if metrics != nil {
+			metrics.TenantOperations.WithLabelValues("get", "not_found").Inc()
+		}
 		c.JSON(http.StatusNotFound, qmapi.ErrorResponse{Error: "Tenant not found"})
 		return
 	}
 
 	if err != nil {
 		logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to get tenant")
+		if metrics != nil {
+			metrics.TenantOperations.WithLabelValues("get", "error").Inc()
+		}
 		c.JSON(http.StatusInternalServerError, qmapi.ErrorResponse{Error: "Internal server error"})
 		return
 	}
 
 	logger.WithField("tenant_id", tenantID).Debug("Retrieved tenant successfully")
+	if metrics != nil {
+		metrics.TenantOperations.WithLabelValues("get", "success").Inc()
+		metrics.DBDuration.WithLabelValues("get_tenant").Observe(time.Since(start).Seconds())
+	}
 	c.JSON(http.StatusOK, qmapi.SingleTenantResponse{Tenant: tenant})
 }
 
 // CreateTenant creates a new tenant
 func CreateTenant(c *gin.Context) {
+	start := time.Now()
+	if metrics != nil {
+		metrics.TenantOperations.WithLabelValues("create", "requested").Inc()
+	}
+
 	var req qmapi.CreateTenantRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		logger.WithError(err).Warn("Invalid create tenant request")
+		if metrics != nil {
+			metrics.TenantOperations.WithLabelValues("create", "error").Inc()
+		}
 		c.JSON(http.StatusBadRequest, qmapi.ErrorResponse{Error: err.Error()})
 		return
 	}
@@ -268,6 +305,9 @@ func CreateTenant(c *gin.Context) {
 
 	if err != nil {
 		logger.WithError(err).WithField("tenant_name", req.Name).Error("Failed to create tenant")
+		if metrics != nil {
+			metrics.TenantOperations.WithLabelValues("create", "error").Inc()
+		}
 		c.JSON(http.StatusInternalServerError, qmapi.ErrorResponse{Error: "Failed to create tenant"})
 		return
 	}
@@ -277,16 +317,29 @@ func CreateTenant(c *gin.Context) {
 		"tenant_name": req.Name,
 	}).Info("Created tenant successfully")
 
+	if metrics != nil {
+		metrics.TenantOperations.WithLabelValues("create", "success").Inc()
+		metrics.DBDuration.WithLabelValues("create_tenant").Observe(time.Since(start).Seconds())
+	}
+
 	c.JSON(http.StatusCreated, qmapi.CreateTenantResponse{Tenant: tenant})
 }
 
 // UpdateTenant updates an existing tenant
 func UpdateTenant(c *gin.Context) {
+	start := time.Now()
 	tenantID := c.Param("id")
+
+	if metrics != nil {
+		metrics.TenantOperations.WithLabelValues("update", "requested").Inc()
+	}
 
 	var req qmapi.UpdateTenantRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		logger.WithError(err).Warn("Invalid update tenant request")
+		if metrics != nil {
+			metrics.TenantOperations.WithLabelValues("update", "error").Inc()
+		}
 		c.JSON(http.StatusBadRequest, qmapi.ErrorResponse{Error: err.Error()})
 		return
 	}
@@ -366,6 +419,9 @@ func UpdateTenant(c *gin.Context) {
 	args = append(args, tenantID)
 
 	if len(setParts) == 1 { // Only updated_at
+		if metrics != nil {
+			metrics.TenantOperations.WithLabelValues("update", "error").Inc()
+		}
 		c.JSON(http.StatusBadRequest, qmapi.ErrorResponse{Error: "No fields to update"})
 		return
 	}
@@ -379,6 +435,9 @@ func UpdateTenant(c *gin.Context) {
 	result, err := db.Exec(query, args...)
 	if err != nil {
 		logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to update tenant")
+		if metrics != nil {
+			metrics.TenantOperations.WithLabelValues("update", "error").Inc()
+		}
 		c.JSON(http.StatusInternalServerError, qmapi.ErrorResponse{Error: "Failed to update tenant"})
 		return
 	}
@@ -386,23 +445,38 @@ func UpdateTenant(c *gin.Context) {
 	rowsAffected, _ := result.RowsAffected()
 	if rowsAffected == 0 {
 		logger.WithField("tenant_id", tenantID).Warn("Tenant not found for update")
+		if metrics != nil {
+			metrics.TenantOperations.WithLabelValues("update", "not_found").Inc()
+		}
 		c.JSON(http.StatusNotFound, qmapi.ErrorResponse{Error: "Tenant not found"})
 		return
 	}
 
 	logger.WithField("tenant_id", tenantID).Info("Updated tenant successfully")
+	if metrics != nil {
+		metrics.TenantOperations.WithLabelValues("update", "success").Inc()
+		metrics.DBDuration.WithLabelValues("update_tenant").Observe(time.Since(start).Seconds())
+	}
 	c.JSON(http.StatusOK, qmapi.SuccessResponse{Message: "Tenant updated successfully"})
 }
 
 // DeleteTenant soft deletes a tenant
 func DeleteTenant(c *gin.Context) {
+	start := time.Now()
 	tenantID := c.Param("id")
+
+	if metrics != nil {
+		metrics.TenantOperations.WithLabelValues("delete", "requested").Inc()
+	}
 
 	query := `UPDATE tenants SET is_active = FALSE, updated_at = NOW() WHERE id = $1 AND is_active = TRUE`
 
 	result, err := db.Exec(query, tenantID)
 	if err != nil {
 		logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to delete tenant")
+		if metrics != nil {
+			metrics.TenantOperations.WithLabelValues("delete", "error").Inc()
+		}
 		c.JSON(http.StatusInternalServerError, qmapi.ErrorResponse{Error: "Failed to delete tenant"})
 		return
 	}
@@ -410,11 +484,18 @@ func DeleteTenant(c *gin.Context) {
 	rowsAffected, _ := result.RowsAffected()
 	if rowsAffected == 0 {
 		logger.WithField("tenant_id", tenantID).Warn("Tenant not found for deletion")
+		if metrics != nil {
+			metrics.TenantOperations.WithLabelValues("delete", "not_found").Inc()
+		}
 		c.JSON(http.StatusNotFound, qmapi.ErrorResponse{Error: "Tenant not found"})
 		return
 	}
 
 	logger.WithField("tenant_id", tenantID).Info("Deleted tenant successfully")
+	if metrics != nil {
+		metrics.TenantOperations.WithLabelValues("delete", "success").Inc()
+		metrics.DBDuration.WithLabelValues("delete_tenant").Observe(time.Since(start).Seconds())
+	}
 	c.JSON(http.StatusOK, qmapi.SuccessResponse{Message: "Tenant deleted successfully"})
 }
 

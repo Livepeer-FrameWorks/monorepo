@@ -37,20 +37,18 @@ func main() {
 		"SERVICE_TOKEN": config.GetEnv("SERVICE_TOKEN", ""),
 	}))
 
-	// Create tenant management metrics
-	tenantOperations, tenantRequests, tenantLatency := metricsCollector.CreateBusinessMetrics()
-	dbQueries, dbDuration, dbConnections := metricsCollector.CreateDatabaseMetrics()
+	// Create custom tenant management metrics
+	metrics := &handlers.QuartermasterMetrics{
+		TenantOperations:    metricsCollector.NewCounter("tenant_operations_total", "Tenant CRUD operations", []string{"operation", "status"}),
+		ClusterOperations:   metricsCollector.NewCounter("cluster_operations_total", "Cluster management operations", []string{"operation", "status"}),
+		TenantResourceUsage: metricsCollector.NewGauge("tenant_resource_usage", "Tenant resource usage", []string{"tenant_id", "resource_type"}),
+	}
 
-	// TODO: Wire these metrics into handlers
-	_ = tenantOperations
-	_ = tenantRequests
-	_ = tenantLatency
-	_ = dbQueries
-	_ = dbDuration
-	_ = dbConnections
+	// Create database metrics
+	metrics.DBQueries, metrics.DBDuration, metrics.DBConnections = metricsCollector.CreateDatabaseMetrics()
 
 	// Initialize handlers
-	handlers.Init(db, logger)
+	handlers.Init(db, logger, metrics)
 
 	// Setup router with unified monitoring
 	router := server.SetupServiceRouter(logger, "quartermaster", healthChecker, metricsCollector)
