@@ -275,7 +275,6 @@ export type Query = {
   rebufferingEvents: Array<RebufferingEvent>;
   stream?: Maybe<Stream>;
   streamAnalytics?: Maybe<StreamAnalytics>;
-  streamEmbed: StreamEmbed;
   streamHealthAlerts: Array<StreamHealthAlert>;
   streamHealthMetrics: Array<StreamHealthMetric>;
   streamQualityChanges: Array<StreamQualityChange>;
@@ -326,11 +325,6 @@ export type QueryStreamArgs = {
 export type QueryStreamAnalyticsArgs = {
   stream: Scalars['String']['input'];
   timeRange?: InputMaybe<TimeRangeInput>;
-};
-
-
-export type QueryStreamEmbedArgs = {
-  id: Scalars['ID']['input'];
 };
 
 
@@ -417,15 +411,6 @@ export type StreamAnalytics = {
   totalViewTime: Scalars['Float']['output'];
   totalViews: Scalars['Int']['output'];
   uniqueViewers: Scalars['Int']['output'];
-};
-
-export type StreamEmbed = {
-  __typename?: 'StreamEmbed';
-  embedCode: Scalars['String']['output'];
-  height: Scalars['Int']['output'];
-  iframeUrl: Scalars['String']['output'];
-  stream: Scalars['String']['output'];
-  width: Scalars['Int']['output'];
 };
 
 export type StreamEvent = {
@@ -1193,7 +1178,7 @@ export type PlatformOverviewFieldPolicy = {
 	totalUsers?: FieldPolicy<any> | FieldReadFunction<any>,
 	totalViewers?: FieldPolicy<any> | FieldReadFunction<any>
 };
-export type QueryKeySpecifier = ('billingStatus' | 'billingTiers' | 'cluster' | 'clusters' | 'currentStreamHealth' | 'developerTokens' | 'invoice' | 'invoices' | 'node' | 'nodes' | 'platformOverview' | 'rebufferingEvents' | 'stream' | 'streamAnalytics' | 'streamEmbed' | 'streamHealthAlerts' | 'streamHealthMetrics' | 'streamQualityChanges' | 'streams' | 'tenant' | 'usageRecords' | 'validateStreamKey' | 'viewerMetrics' | QueryKeySpecifier)[];
+export type QueryKeySpecifier = ('billingStatus' | 'billingTiers' | 'cluster' | 'clusters' | 'currentStreamHealth' | 'developerTokens' | 'invoice' | 'invoices' | 'node' | 'nodes' | 'platformOverview' | 'rebufferingEvents' | 'stream' | 'streamAnalytics' | 'streamHealthAlerts' | 'streamHealthMetrics' | 'streamQualityChanges' | 'streams' | 'tenant' | 'usageRecords' | 'validateStreamKey' | 'viewerMetrics' | QueryKeySpecifier)[];
 export type QueryFieldPolicy = {
 	billingStatus?: FieldPolicy<any> | FieldReadFunction<any>,
 	billingTiers?: FieldPolicy<any> | FieldReadFunction<any>,
@@ -1209,7 +1194,6 @@ export type QueryFieldPolicy = {
 	rebufferingEvents?: FieldPolicy<any> | FieldReadFunction<any>,
 	stream?: FieldPolicy<any> | FieldReadFunction<any>,
 	streamAnalytics?: FieldPolicy<any> | FieldReadFunction<any>,
-	streamEmbed?: FieldPolicy<any> | FieldReadFunction<any>,
 	streamHealthAlerts?: FieldPolicy<any> | FieldReadFunction<any>,
 	streamHealthMetrics?: FieldPolicy<any> | FieldReadFunction<any>,
 	streamQualityChanges?: FieldPolicy<any> | FieldReadFunction<any>,
@@ -1267,14 +1251,6 @@ export type StreamAnalyticsFieldPolicy = {
 	totalViewTime?: FieldPolicy<any> | FieldReadFunction<any>,
 	totalViews?: FieldPolicy<any> | FieldReadFunction<any>,
 	uniqueViewers?: FieldPolicy<any> | FieldReadFunction<any>
-};
-export type StreamEmbedKeySpecifier = ('embedCode' | 'height' | 'iframeUrl' | 'stream' | 'width' | StreamEmbedKeySpecifier)[];
-export type StreamEmbedFieldPolicy = {
-	embedCode?: FieldPolicy<any> | FieldReadFunction<any>,
-	height?: FieldPolicy<any> | FieldReadFunction<any>,
-	iframeUrl?: FieldPolicy<any> | FieldReadFunction<any>,
-	stream?: FieldPolicy<any> | FieldReadFunction<any>,
-	width?: FieldPolicy<any> | FieldReadFunction<any>
 };
 export type StreamEventKeySpecifier = ('details' | 'status' | 'stream' | 'timestamp' | 'type' | StreamEventKeySpecifier)[];
 export type StreamEventFieldPolicy = {
@@ -1476,10 +1452,6 @@ export type StrictTypedTypePolicies = {
 	StreamAnalytics?: Omit<TypePolicy, "fields" | "keyFields"> & {
 		keyFields?: false | StreamAnalyticsKeySpecifier | (() => undefined | StreamAnalyticsKeySpecifier),
 		fields?: StreamAnalyticsFieldPolicy,
-	},
-	StreamEmbed?: Omit<TypePolicy, "fields" | "keyFields"> & {
-		keyFields?: false | StreamEmbedKeySpecifier | (() => undefined | StreamEmbedKeySpecifier),
-		fields?: StreamEmbedFieldPolicy,
 	},
 	StreamEvent?: Omit<TypePolicy, "fields" | "keyFields"> & {
 		keyFields?: false | StreamEventKeySpecifier | (() => undefined | StreamEventKeySpecifier),

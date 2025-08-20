@@ -144,11 +144,6 @@ type StreamMetricsResponse struct {
 	} `json:"metrics"`
 }
 
-// Stream embed response
-type StreamEmbedResponse struct {
-	PlaybackID string `json:"playback_id"`
-}
-
 // User profile response
 type UserProfileResponse struct {
 	User    models.User     `json:"user"`

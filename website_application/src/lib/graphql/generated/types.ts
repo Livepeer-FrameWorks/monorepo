@@ -272,7 +272,6 @@ export type Query = {
   rebufferingEvents: Array<RebufferingEvent>;
   stream?: Maybe<Stream>;
   streamAnalytics?: Maybe<StreamAnalytics>;
-  streamEmbed: StreamEmbed;
   streamHealthAlerts: Array<StreamHealthAlert>;
   streamHealthMetrics: Array<StreamHealthMetric>;
   streamQualityChanges: Array<StreamQualityChange>;
@@ -323,11 +322,6 @@ export type QueryStreamArgs = {
 export type QueryStreamAnalyticsArgs = {
   stream: Scalars['String']['input'];
   timeRange?: InputMaybe<TimeRangeInput>;
-};
-
-
-export type QueryStreamEmbedArgs = {
-  id: Scalars['ID']['input'];
 };
 
 
@@ -414,15 +408,6 @@ export type StreamAnalytics = {
   totalViewTime: Scalars['Float']['output'];
   totalViews: Scalars['Int']['output'];
   uniqueViewers: Scalars['Int']['output'];
-};
-
-export type StreamEmbed = {
-  __typename?: 'StreamEmbed';
-  embedCode: Scalars['String']['output'];
-  height: Scalars['Int']['output'];
-  iframeUrl: Scalars['String']['output'];
-  stream: Scalars['String']['output'];
-  width: Scalars['Int']['output'];
 };
 
 export type StreamEvent = {

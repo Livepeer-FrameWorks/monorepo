@@ -8,7 +8,6 @@ type Query {
   streams: [Stream!]!
   stream(id: ID!): Stream
   validateStreamKey(streamKey: String!): StreamValidation!
-  streamEmbed(id: ID!): StreamEmbed!
 
   # Analytics (from Periscope Query)
   streamAnalytics(stream: String!, timeRange: TimeRangeInput): StreamAnalytics
@@ -235,14 +234,6 @@ type StreamValidation {
   valid: Boolean!
   streamKey: String!
   error: String
-}
-
-type StreamEmbed {
-  stream: String!
-  embedCode: String!
-  iframeUrl: String!
-  width: Int!
-  height: Int!
 }
 
 type StreamAnalytics {

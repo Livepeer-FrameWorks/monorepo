@@ -3,7 +3,6 @@ import {
   GetStreamsDocument, 
   GetStreamDocument, 
   ValidateStreamKeyDocument,
-  GetStreamEmbedDocument,
   CreateStreamDocument,
   UpdateStreamDocument, 
   DeleteStreamDocument,
@@ -45,15 +44,6 @@ export const streamsService = {
       fetchPolicy: 'no-cache' // Always fresh for validation
     });
     return result.data.validateStreamKey;
-  },
-
-  async getStreamEmbed(id) {
-    const result = await client.query({
-      query: GetStreamEmbedDocument,
-      variables: { id },
-      fetchPolicy: 'cache-first'
-    });
-    return result.data.streamEmbed;
   },
 
   // Mutations
