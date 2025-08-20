@@ -678,21 +678,33 @@ func HandleLiveTrackList(c *gin.Context) {
 	trackListJSON := params[1] // JSON track list
 
 	// Parse the track list JSON to extract track details
+	// MistServer sends an object where keys are track names, values are track data
+	var trackObject map[string]interface{}
 	var parsedTracks []map[string]interface{}
 	var qualityMetrics map[string]interface{}
-	if err := json.Unmarshal([]byte(trackListJSON), &parsedTracks); err != nil {
+
+	if err := json.Unmarshal([]byte(trackListJSON), &trackObject); err != nil {
 		logger.WithFields(logging.Fields{
 			"error":       err,
 			"stream_name": streamName,
 			"raw_json":    trackListJSON,
 		}).Error("Failed to parse LIVE_TRACK_LIST JSON")
 	} else {
+		// Convert object format to slice format
+		for trackName, trackData := range trackObject {
+			if trackMap, ok := trackData.(map[string]interface{}); ok {
+				// Add track name to the track data
+				trackMap["track_name"] = trackName
+				parsedTracks = append(parsedTracks, trackMap)
+			}
+		}
+
 		qualityMetrics = extractTrackQualityMetrics(parsedTracks)
 		logger.WithFields(logging.Fields{
 			"stream_name":     streamName,
 			"track_count":     len(parsedTracks),
 			"quality_metrics": qualityMetrics,
-		}).Debug("Extracted quality metrics from LIVE_TRACK_LIST")
+		}).Info("Track list updated for stream")
 	}
 
 	logger.WithFields(logging.Fields{

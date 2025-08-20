@@ -48,7 +48,7 @@ func (r *Resolver) DoGetStreamAnalytics(ctx context.Context, streamId string, ti
 }
 
 // DoGetViewerMetrics returns viewer metrics
-func (r *Resolver) DoGetViewerMetrics(ctx context.Context, streamId *string, timeRange *model.TimeRangeInput) ([]*model.ViewerMetric, error) {
+func (r *Resolver) DoGetViewerMetrics(ctx context.Context, stream *string, timeRange *model.TimeRangeInput) ([]*model.ViewerMetric, error) {
 	// Check for demo mode
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo viewer metrics data")
@@ -70,8 +70,8 @@ func (r *Resolver) DoGetViewerMetrics(ctx context.Context, streamId *string, tim
 
 	// Determine stream context
 	var internalName string
-	if streamId != nil {
-		internalName = *streamId
+	if stream != nil {
+		internalName = *stream
 	}
 
 	// Get viewer metrics from Periscope Query using tenant_id from JWT context

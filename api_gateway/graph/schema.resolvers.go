@@ -406,7 +406,7 @@ func (r *subscriptionResolver) StreamEvents(ctx context.Context, stream *string)
 
 // ViewerMetrics is the resolver for the viewerMetrics field.
 func (r *subscriptionResolver) ViewerMetrics(ctx context.Context, stream string) (<-chan *model.ViewerMetrics, error) {
-	return r.Resolver.DoAnalyticsUpdates(ctx)
+	return r.Resolver.DoAnalyticsUpdates(ctx, stream)
 }
 
 // TrackListUpdates is the resolver for the trackListUpdates field.

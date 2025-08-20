@@ -289,6 +289,7 @@ func HandlePushRewrite(c *gin.Context) {
 	go ForwardEventToDecklog("stream-ingest", map[string]interface{}{
 		"stream_key":    streamKey,
 		"internal_name": validation.InternalName,
+		"user_id":       validation.UserID,
 		"hostname":      hostname,
 		"push_url":      pushURL,
 		"protocol":      protocol,

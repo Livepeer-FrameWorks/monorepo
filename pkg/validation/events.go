@@ -37,6 +37,8 @@ const (
 	EventStreamBuffer EventType = "stream-buffer"
 	// Emitted by MistServer STREAM_END webhook
 	EventStreamEnd EventType = "stream-end"
+	// Emitted by Helmsman on MistServer LIVE_BANDWIDTH webhook
+	EventBandwidthThreshold EventType = "bandwidth-threshold"
 )
 
 // BaseEvent is the normalized envelope for a single analytics event as received
@@ -121,6 +123,8 @@ func (v *EventValidator) validateEventData(event BaseEvent) error {
 		return v.validateStreamEndEvent(event)
 	case EventLoadBalancing:
 		return v.validateLoadBalancingEvent(event)
+	case EventBandwidthThreshold:
+		return v.validateBandwidthThresholdEvent(event)
 	default:
 		return fmt.Errorf("unknown event type: %s", event.EventType)
 	}
@@ -327,6 +331,23 @@ func (v *EventValidator) validateStreamEndEvent(event BaseEvent) error {
 	if event.InternalName == nil {
 		return fmt.Errorf("internal_name is required for stream-end events")
 	}
+	return nil
+}
+
+// validateBandwidthThresholdEvent validates LIVE_BANDWIDTH webhook events
+// emitted when a stream exceeds bandwidth threshold
+func (v *EventValidator) validateBandwidthThresholdEvent(event BaseEvent) error {
+	if event.InternalName == nil {
+		return fmt.Errorf("internal_name is required for bandwidth-threshold events")
+	}
+
+	requiredFields := []string{"current_bytes_per_sec", "threshold_exceeded"}
+	for _, field := range requiredFields {
+		if _, exists := event.Data[field]; !exists {
+			return fmt.Errorf("missing required field in data: %s", field)
+		}
+	}
+
 	return nil
 }
 

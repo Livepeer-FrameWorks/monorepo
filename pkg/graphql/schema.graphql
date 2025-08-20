@@ -169,6 +169,7 @@ enum StreamEventType {
 type ViewerMetrics {
   stream: String!
   currentViewers: Int!
+  viewerCount: Int!
   peakViewers: Int!
   bandwidth: Float!
   connectionQuality: Float

@@ -243,6 +243,7 @@ type ViewerMetric struct {
 type ViewerMetrics struct {
 	Stream            string    `json:"stream"`
 	CurrentViewers    int       `json:"currentViewers"`
+	ViewerCount       int       `json:"viewerCount"`
 	PeakViewers       int       `json:"peakViewers"`
 	Bandwidth         float64   `json:"bandwidth"`
 	ConnectionQuality *float64  `json:"connectionQuality,omitempty"`

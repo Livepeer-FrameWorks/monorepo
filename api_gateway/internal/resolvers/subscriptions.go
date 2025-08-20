@@ -82,7 +82,7 @@ func (r *Resolver) DoStreamUpdates(ctx context.Context, streamID *string) (<-cha
 }
 
 // DoAnalyticsUpdates handles real-time analytics updates via WebSocket
-func (r *Resolver) DoAnalyticsUpdates(ctx context.Context) (<-chan *model.ViewerMetrics, error) {
+func (r *Resolver) DoAnalyticsUpdates(ctx context.Context, streamID string) (<-chan *model.ViewerMetrics, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo analytics subscription")
 		ch := make(chan *model.ViewerMetrics, 10)
@@ -125,6 +125,7 @@ func (r *Resolver) DoAnalyticsUpdates(ctx context.Context) (<-chan *model.Viewer
 	}
 
 	// Use WebSocket manager to subscribe to analytics updates
+	// TODO: Update SubscribeToAnalytics to accept stream filter parameter
 	return r.wsManager.SubscribeToAnalytics(ctx, config)
 }
 

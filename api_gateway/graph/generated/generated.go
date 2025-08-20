@@ -380,6 +380,7 @@ type ComplexityRoot struct {
 		PeakViewers       func(childComplexity int) int
 		Stream            func(childComplexity int) int
 		Timestamp         func(childComplexity int) int
+		ViewerCount       func(childComplexity int) int
 	}
 }
 
@@ -2294,6 +2295,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.ViewerMetrics.Timestamp(childComplexity), true
 
+	case "ViewerMetrics.viewerCount":
+		if e.complexity.ViewerMetrics.ViewerCount == nil {
+			break
+		}
+
+		return e.complexity.ViewerMetrics.ViewerCount(childComplexity), true
+
 	}
 	return 0, false
 }
@@ -2594,6 +2602,7 @@ enum StreamEventType {
 type ViewerMetrics {
   stream: String!
   currentViewers: Int!
+  viewerCount: Int!
   peakViewers: Int!
   bandwidth: Float!
   connectionQuality: Float
@@ -12760,6 +12769,8 @@ func (ec *executionContext) fieldContext_Subscription_viewerMetrics(ctx context.
 				return ec.fieldContext_ViewerMetrics_stream(ctx, field)
 			case "currentViewers":
 				return ec.fieldContext_ViewerMetrics_currentViewers(ctx, field)
+			case "viewerCount":
+				return ec.fieldContext_ViewerMetrics_viewerCount(ctx, field)
 			case "peakViewers":
 				return ec.fieldContext_ViewerMetrics_peakViewers(ctx, field)
 			case "bandwidth":
@@ -14476,6 +14487,50 @@ func (ec *executionContext) _ViewerMetrics_currentViewers(ctx context.Context, f
 }
 
 func (ec *executionContext) fieldContext_ViewerMetrics_currentViewers(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ViewerMetrics",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ViewerMetrics_viewerCount(ctx context.Context, field graphql.CollectedField, obj *model.ViewerMetrics) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ViewerMetrics_viewerCount(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.ViewerCount, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(int)
+	fc.Result = res
+	return ec.marshalNInt2int(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ViewerMetrics_viewerCount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "ViewerMetrics",
 		Field:      field,
@@ -20465,6 +20520,11 @@ func (ec *executionContext) _ViewerMetrics(ctx context.Context, sel ast.Selectio
 			}
 		case "currentViewers":
 			out.Values[i] = ec._ViewerMetrics_currentViewers(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "viewerCount":
+			out.Values[i] = ec._ViewerMetrics_viewerCount(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}

@@ -460,8 +460,8 @@ export const explorerService = {
         {
           name: 'Stream Events',
           description: 'Subscribe to stream lifecycle events',
-          query: `subscription StreamEvents($streamId: ID) {
-  streamEvents(streamId: $streamId) {
+          query: `subscription StreamEvents($stream: String) {
+  streamEvents(stream: $stream) {
     type
     stream
     status
@@ -470,20 +470,20 @@ export const explorerService = {
   }
 }`,
           variables: {
-            streamId: "demo_live_stream_001"
+            stream: "demo_live_stream_001"
           }
         },
         {
           name: 'Viewer Metrics',
           description: 'Subscribe to real-time viewer metrics',
-          query: `subscription ViewerMetrics($streamId: ID!) {
-  viewerMetrics(streamId: $streamId) {
+          query: `subscription ViewerMetrics($stream: String!) {
+  viewerMetrics(stream: $stream) {
     timestamp
     viewerCount
   }
 }`,
           variables: {
-            streamId: "demo_live_stream_001"
+            stream: "demo_live_stream_001"
           }
         },
         {
@@ -506,17 +506,16 @@ export const explorerService = {
         {
           name: 'Track List Updates',
           description: 'Subscribe to track list changes for a stream',
-          query: `subscription TrackListUpdates($streamId: ID!) {
-  trackListUpdates(streamId: $streamId) {
-    streamId
-    tenantId
+          query: `subscription TrackListUpdates($stream: String!) {
+  trackListUpdates(stream: $stream) {
+    stream
     trackList
     trackCount
     timestamp
   }
 }`,
           variables: {
-            streamId: "stream-id-here"
+            stream: "stream-id-here"
           }
         },
         {
