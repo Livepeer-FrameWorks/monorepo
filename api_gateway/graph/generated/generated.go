@@ -183,7 +183,6 @@ type ComplexityRoot struct {
 		RebufferingEvents    func(childComplexity int, stream string, timeRange *model.TimeRangeInput) int
 		Stream               func(childComplexity int, id string) int
 		StreamAnalytics      func(childComplexity int, stream string, timeRange *model.TimeRangeInput) int
-		StreamEmbed          func(childComplexity int, id string) int
 		StreamHealthAlerts   func(childComplexity int, stream *string, timeRange *model.TimeRangeInput) int
 		StreamHealthMetrics  func(childComplexity int, stream string, timeRange *model.TimeRangeInput) int
 		StreamQualityChanges func(childComplexity int, stream string, timeRange *model.TimeRangeInput) int
@@ -241,14 +240,6 @@ type ComplexityRoot struct {
 		TotalViewTime        func(childComplexity int) int
 		TotalViews           func(childComplexity int) int
 		UniqueViewers        func(childComplexity int) int
-	}
-
-	StreamEmbed struct {
-		EmbedCode func(childComplexity int) int
-		Height    func(childComplexity int) int
-		IframeURL func(childComplexity int) int
-		Stream    func(childComplexity int) int
-		Width     func(childComplexity int) int
 	}
 
 	StreamEvent struct {
@@ -426,7 +417,6 @@ type QueryResolver interface {
 	Streams(ctx context.Context) ([]*models.Stream, error)
 	Stream(ctx context.Context, id string) (*models.Stream, error)
 	ValidateStreamKey(ctx context.Context, streamKey string) (*model.StreamValidation, error)
-	StreamEmbed(ctx context.Context, id string) (*model.StreamEmbed, error)
 	StreamAnalytics(ctx context.Context, stream string, timeRange *model.TimeRangeInput) (*models.StreamAnalytics, error)
 	ViewerMetrics(ctx context.Context, stream *string, timeRange *model.TimeRangeInput) ([]*model.ViewerMetric, error)
 	PlatformOverview(ctx context.Context, timeRange *model.TimeRangeInput) (*model.PlatformOverview, error)
@@ -1237,18 +1227,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.Query.StreamAnalytics(childComplexity, args["stream"].(string), args["timeRange"].(*model.TimeRangeInput)), true
 
-	case "Query.streamEmbed":
-		if e.complexity.Query.StreamEmbed == nil {
-			break
-		}
-
-		args, err := ec.field_Query_streamEmbed_args(ctx, rawArgs)
-		if err != nil {
-			return 0, false
-		}
-
-		return e.complexity.Query.StreamEmbed(childComplexity, args["id"].(string)), true
-
 	case "Query.streamHealthAlerts":
 		if e.complexity.Query.StreamHealthAlerts == nil {
 			break
@@ -1614,41 +1592,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.complexity.StreamAnalytics.UniqueViewers(childComplexity), true
-
-	case "StreamEmbed.embedCode":
-		if e.complexity.StreamEmbed.EmbedCode == nil {
-			break
-		}
-
-		return e.complexity.StreamEmbed.EmbedCode(childComplexity), true
-
-	case "StreamEmbed.height":
-		if e.complexity.StreamEmbed.Height == nil {
-			break
-		}
-
-		return e.complexity.StreamEmbed.Height(childComplexity), true
-
-	case "StreamEmbed.iframeUrl":
-		if e.complexity.StreamEmbed.IframeURL == nil {
-			break
-		}
-
-		return e.complexity.StreamEmbed.IframeURL(childComplexity), true
-
-	case "StreamEmbed.stream":
-		if e.complexity.StreamEmbed.Stream == nil {
-			break
-		}
-
-		return e.complexity.StreamEmbed.Stream(childComplexity), true
-
-	case "StreamEmbed.width":
-		if e.complexity.StreamEmbed.Width == nil {
-			break
-		}
-
-		return e.complexity.StreamEmbed.Width(childComplexity), true
 
 	case "StreamEvent.details":
 		if e.complexity.StreamEvent.Details == nil {
@@ -2490,7 +2433,6 @@ type Query {
   streams: [Stream!]!
   stream(id: ID!): Stream
   validateStreamKey(streamKey: String!): StreamValidation!
-  streamEmbed(id: ID!): StreamEmbed!
 
   # Analytics (from Periscope Query)
   streamAnalytics(stream: String!, timeRange: TimeRangeInput): StreamAnalytics
@@ -2717,14 +2659,6 @@ type StreamValidation {
   valid: Boolean!
   streamKey: String!
   error: String
-}
-
-type StreamEmbed {
-  stream: String!
-  embedCode: String!
-  iframeUrl: String!
-  width: Int!
-  height: Int!
 }
 
 type StreamAnalytics {
@@ -3212,17 +3146,6 @@ func (ec *executionContext) field_Query_streamAnalytics_args(ctx context.Context
 		return nil, err
 	}
 	args["timeRange"] = arg1
-	return args, nil
-}
-
-func (ec *executionContext) field_Query_streamEmbed_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
-	var err error
-	args := map[string]any{}
-	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "id", ec.unmarshalNID2string)
-	if err != nil {
-		return nil, err
-	}
-	args["id"] = arg0
 	return args, nil
 }
 
@@ -7231,73 +7154,6 @@ func (ec *executionContext) fieldContext_Query_validateStreamKey(ctx context.Con
 	return fc, nil
 }
 
-func (ec *executionContext) _Query_streamEmbed(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_Query_streamEmbed(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return ec.resolvers.Query().StreamEmbed(rctx, fc.Args["id"].(string))
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.(*model.StreamEmbed)
-	fc.Result = res
-	return ec.marshalNStreamEmbed2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐStreamEmbed(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_Query_streamEmbed(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "Query",
-		Field:      field,
-		IsMethod:   true,
-		IsResolver: true,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			switch field.Name {
-			case "stream":
-				return ec.fieldContext_StreamEmbed_stream(ctx, field)
-			case "embedCode":
-				return ec.fieldContext_StreamEmbed_embedCode(ctx, field)
-			case "iframeUrl":
-				return ec.fieldContext_StreamEmbed_iframeUrl(ctx, field)
-			case "width":
-				return ec.fieldContext_StreamEmbed_width(ctx, field)
-			case "height":
-				return ec.fieldContext_StreamEmbed_height(ctx, field)
-			}
-			return nil, fmt.Errorf("no field named %q was found under type StreamEmbed", field.Name)
-		},
-	}
-	defer func() {
-		if r := recover(); r != nil {
-			err = ec.Recover(ctx, r)
-			ec.Error(ctx, err)
-		}
-	}()
-	ctx = graphql.WithFieldContext(ctx, fc)
-	if fc.Args, err = ec.field_Query_streamEmbed_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
-		ec.Error(ctx, err)
-		return fc, err
-	}
-	return fc, nil
-}
-
 func (ec *executionContext) _Query_streamAnalytics(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_Query_streamAnalytics(ctx, field)
 	if err != nil {
@@ -10482,226 +10338,6 @@ func (ec *executionContext) fieldContext_StreamAnalytics_alertCount(_ context.Co
 		Field:      field,
 		IsMethod:   true,
 		IsResolver: true,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Int does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _StreamEmbed_stream(ctx context.Context, field graphql.CollectedField, obj *model.StreamEmbed) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_StreamEmbed_stream(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.Stream, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.(string)
-	fc.Result = res
-	return ec.marshalNString2string(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_StreamEmbed_stream(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "StreamEmbed",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type String does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _StreamEmbed_embedCode(ctx context.Context, field graphql.CollectedField, obj *model.StreamEmbed) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_StreamEmbed_embedCode(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.EmbedCode, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.(string)
-	fc.Result = res
-	return ec.marshalNString2string(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_StreamEmbed_embedCode(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "StreamEmbed",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type String does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _StreamEmbed_iframeUrl(ctx context.Context, field graphql.CollectedField, obj *model.StreamEmbed) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_StreamEmbed_iframeUrl(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.IframeURL, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.(string)
-	fc.Result = res
-	return ec.marshalNString2string(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_StreamEmbed_iframeUrl(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "StreamEmbed",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type String does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _StreamEmbed_width(ctx context.Context, field graphql.CollectedField, obj *model.StreamEmbed) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_StreamEmbed_width(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.Width, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.(int)
-	fc.Result = res
-	return ec.marshalNInt2int(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_StreamEmbed_width(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "StreamEmbed",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Int does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _StreamEmbed_height(ctx context.Context, field graphql.CollectedField, obj *model.StreamEmbed) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_StreamEmbed_height(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.Height, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.(int)
-	fc.Result = res
-	return ec.marshalNInt2int(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_StreamEmbed_height(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "StreamEmbed",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type Int does not have child fields")
 		},
@@ -18413,28 +18049,6 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
-		case "streamEmbed":
-			field := field
-
-			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
-				defer func() {
-					if r := recover(); r != nil {
-						ec.Error(ctx, ec.Recover(ctx, r))
-					}
-				}()
-				res = ec._Query_streamEmbed(ctx, field)
-				if res == graphql.Null {
-					atomic.AddUint32(&fs.Invalids, 1)
-				}
-				return res
-			}
-
-			rrm := func(ctx context.Context) graphql.Marshaler {
-				return ec.OperationContext.RootResolverMiddleware(ctx,
-					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
-			}
-
-			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
 		case "streamAnalytics":
 			field := field
 
@@ -19804,65 +19418,6 @@ func (ec *executionContext) _StreamAnalytics(ctx context.Context, sel ast.Select
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
-		default:
-			panic("unknown field " + strconv.Quote(field.Name))
-		}
-	}
-	out.Dispatch(ctx)
-	if out.Invalids > 0 {
-		return graphql.Null
-	}
-
-	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
-
-	for label, dfs := range deferred {
-		ec.processDeferredGroup(graphql.DeferredGroup{
-			Label:    label,
-			Path:     graphql.GetPath(ctx),
-			FieldSet: dfs,
-			Context:  ctx,
-		})
-	}
-
-	return out
-}
-
-var streamEmbedImplementors = []string{"StreamEmbed"}
-
-func (ec *executionContext) _StreamEmbed(ctx context.Context, sel ast.SelectionSet, obj *model.StreamEmbed) graphql.Marshaler {
-	fields := graphql.CollectFields(ec.OperationContext, sel, streamEmbedImplementors)
-
-	out := graphql.NewFieldSet(fields)
-	deferred := make(map[string]*graphql.FieldSet)
-	for i, field := range fields {
-		switch field.Name {
-		case "__typename":
-			out.Values[i] = graphql.MarshalString("StreamEmbed")
-		case "stream":
-			out.Values[i] = ec._StreamEmbed_stream(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "embedCode":
-			out.Values[i] = ec._StreamEmbed_embedCode(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "iframeUrl":
-			out.Values[i] = ec._StreamEmbed_iframeUrl(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "width":
-			out.Values[i] = ec._StreamEmbed_width(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "height":
-			out.Values[i] = ec._StreamEmbed_height(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -21932,20 +21487,6 @@ func (ec *executionContext) marshalNStream2ᚖframeworksᚋpkgᚋmodelsᚐStream
 		return graphql.Null
 	}
 	return ec._Stream(ctx, sel, v)
-}
-
-func (ec *executionContext) marshalNStreamEmbed2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐStreamEmbed(ctx context.Context, sel ast.SelectionSet, v model.StreamEmbed) graphql.Marshaler {
-	return ec._StreamEmbed(ctx, sel, &v)
-}
-
-func (ec *executionContext) marshalNStreamEmbed2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐStreamEmbed(ctx context.Context, sel ast.SelectionSet, v *model.StreamEmbed) graphql.Marshaler {
-	if v == nil {
-		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
-			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
-		}
-		return graphql.Null
-	}
-	return ec._StreamEmbed(ctx, sel, v)
 }
 
 func (ec *executionContext) marshalNStreamEvent2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐStreamEvent(ctx context.Context, sel ast.SelectionSet, v model.StreamEvent) graphql.Marshaler {

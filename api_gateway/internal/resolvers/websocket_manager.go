@@ -20,6 +20,7 @@ type WebSocketManager struct {
 	signalmanURL string
 	cleanup      chan string // Channel for cleanup signals
 	stopChan     chan struct{}
+	metrics      *GraphQLMetrics
 }
 
 // ConnectionConfig represents configuration for a WebSocket connection
@@ -30,13 +31,14 @@ type ConnectionConfig struct {
 }
 
 // NewWebSocketManager creates a new WebSocket connection manager
-func NewWebSocketManager(signalmanURL string, logger logging.Logger) *WebSocketManager {
+func NewWebSocketManager(signalmanURL string, logger logging.Logger, metrics *GraphQLMetrics) *WebSocketManager {
 	wm := &WebSocketManager{
 		clients:      make(map[string]*signalmanclient.Client),
 		logger:       logger,
 		signalmanURL: signalmanURL,
 		cleanup:      make(chan string, 10),
 		stopChan:     make(chan struct{}),
+		metrics:      metrics,
 	}
 
 	// Start cleanup goroutine
@@ -81,10 +83,20 @@ func (wm *WebSocketManager) GetOrCreateConnection(ctx context.Context, config Co
 			"user_id":   config.UserID,
 			"tenant_id": config.TenantID,
 		}).Error("Failed to connect to Signalman")
+
+		if wm.metrics != nil {
+			wm.metrics.WebSocketMessages.WithLabelValues("outbound", "connection_error").Inc()
+		}
 		return nil, fmt.Errorf("failed to connect to Signalman: %w", err)
 	}
 
 	wm.clients[key] = client
+
+	// Record successful connection
+	if wm.metrics != nil {
+		wm.metrics.WebSocketConnections.WithLabelValues(config.TenantID).Inc()
+		wm.metrics.WebSocketMessages.WithLabelValues("outbound", "connection_success").Inc()
+	}
 
 	wm.logger.WithFields(logging.Fields{
 		"user_id":   config.UserID,

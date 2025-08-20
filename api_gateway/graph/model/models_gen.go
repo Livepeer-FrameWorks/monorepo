@@ -120,14 +120,6 @@ type RebufferingEvent struct {
 	PacketLossPercentage *float64    `json:"packetLossPercentage,omitempty"`
 }
 
-type StreamEmbed struct {
-	Stream    string `json:"stream"`
-	EmbedCode string `json:"embedCode"`
-	IframeURL string `json:"iframeUrl"`
-	Width     int    `json:"width"`
-	Height    int    `json:"height"`
-}
-
 type StreamEvent struct {
 	Type      StreamEventType `json:"type"`
 	Stream    string          `json:"stream"`

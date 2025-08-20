@@ -11,6 +11,7 @@ import (
 	"frameworks/api_gateway/internal/clients"
 	"frameworks/api_gateway/internal/handlers"
 	"frameworks/api_gateway/internal/middleware"
+	"frameworks/api_gateway/internal/resolvers"
 	pkgauth "frameworks/pkg/auth"
 	"frameworks/pkg/config"
 	"frameworks/pkg/logging"
@@ -46,9 +47,6 @@ func main() {
 	commodoreURL := config.GetEnv("COMMODORE_URL", "http://localhost:18001")
 	authProxy := handlers.NewAuthProxy(commodoreURL, logger)
 
-	// Initialize GraphQL resolver and server
-	resolver := graph.NewResolver(serviceClients, logger)
-
 	// Setup monitoring
 	healthChecker := monitoring.NewHealthChecker("bridge", version.Version)
 	metricsCollector := monitoring.NewMetricsCollector("bridge", version.Version, version.GitCommit)
@@ -64,11 +62,17 @@ func main() {
 		"SIGNALMAN_URL":     config.GetEnv("SIGNALMAN_URL", ""),
 	}))
 
-	// Create business metrics for GraphQL operations
-	_, graphqlOperations, graphqlDuration := metricsCollector.CreateBusinessMetrics()
-	// TODO: Wire these metrics into GraphQL handler
-	_ = graphqlOperations
-	_ = graphqlDuration
+	// Create custom GraphQL metrics
+	graphqlMetrics := &resolvers.GraphQLMetrics{
+		Operations:           metricsCollector.NewCounter("graphql_operations_total", "Total GraphQL operations", []string{"operation", "status"}),
+		Duration:             metricsCollector.NewHistogram("graphql_operation_duration_seconds", "GraphQL operation duration", []string{"operation"}, nil),
+		WebSocketConnections: metricsCollector.NewGauge("websocket_connections_active", "Active WebSocket connections", []string{"tenant_id"}),
+		WebSocketMessages:    metricsCollector.NewCounter("websocket_messages_total", "WebSocket messages", []string{"direction", "type"}),
+		SubscriptionsActive:  metricsCollector.NewGauge("subscription_active_count", "Active GraphQL subscriptions", []string{"operation"}),
+	}
+
+	// Initialize GraphQL resolver and server
+	resolver := graph.NewResolver(serviceClients, logger, graphqlMetrics)
 
 	// Create GraphQL server with WebSocket support for subscriptions
 	gqlHandler := handler.New(generated.NewExecutableSchema(generated.Config{Resolvers: resolver}))

@@ -173,11 +173,6 @@ func (r *queryResolver) ValidateStreamKey(ctx context.Context, streamKey string)
 	return r.DoValidateStreamKey(ctx, streamKey)
 }
 
-// StreamEmbed is the resolver for the streamEmbed field.
-func (r *queryResolver) StreamEmbed(ctx context.Context, id string) (*model.StreamEmbed, error) {
-	panic(fmt.Errorf("not implemented: StreamEmbed - streamEmbed"))
-}
-
 // StreamAnalytics is the resolver for the streamAnalytics field.
 func (r *queryResolver) StreamAnalytics(ctx context.Context, stream string, timeRange *model.TimeRangeInput) (*models.StreamAnalytics, error) {
 	return r.DoGetStreamAnalytics(ctx, stream, timeRange)

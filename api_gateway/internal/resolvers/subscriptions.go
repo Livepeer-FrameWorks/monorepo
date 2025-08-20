@@ -12,8 +12,18 @@ import (
 
 // DoStreamUpdates handles real-time stream updates via WebSocket
 func (r *Resolver) DoStreamUpdates(ctx context.Context, streamID *string) (<-chan *model.StreamEvent, error) {
+	if r.Metrics != nil {
+		r.Metrics.Operations.WithLabelValues("subscription_streams", "requested").Inc()
+		defer func() {
+			r.Metrics.SubscriptionsActive.WithLabelValues("streams").Inc()
+		}()
+	}
+
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo stream events subscription")
+		if r.Metrics != nil {
+			r.Metrics.Operations.WithLabelValues("subscription_streams", "demo").Inc()
+		}
 		ch := make(chan *model.StreamEvent, 10)
 		go func() {
 			defer close(ch)
@@ -35,6 +45,9 @@ func (r *Resolver) DoStreamUpdates(ctx context.Context, streamID *string) (<-cha
 	// Get user from context - subscriptions require authentication
 	user, err := middleware.RequireAuth(ctx)
 	if err != nil {
+		if r.Metrics != nil {
+			r.Metrics.Operations.WithLabelValues("subscription_streams", "auth_error").Inc()
+		}
 		return nil, fmt.Errorf("authentication required for stream subscriptions: %w", err)
 	}
 
@@ -54,7 +67,18 @@ func (r *Resolver) DoStreamUpdates(ctx context.Context, streamID *string) (<-cha
 	}
 
 	// Use WebSocket manager to subscribe to stream updates
-	return r.wsManager.SubscribeToStreams(ctx, config, streamID)
+	ch, err := r.wsManager.SubscribeToStreams(ctx, config, streamID)
+	if err != nil {
+		if r.Metrics != nil {
+			r.Metrics.Operations.WithLabelValues("subscription_streams", "error").Inc()
+		}
+		return nil, err
+	}
+
+	if r.Metrics != nil {
+		r.Metrics.Operations.WithLabelValues("subscription_streams", "success").Inc()
+	}
+	return ch, err
 }
 
 // DoAnalyticsUpdates handles real-time analytics updates via WebSocket

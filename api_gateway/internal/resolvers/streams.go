@@ -15,15 +15,31 @@ import (
 
 // DoGetStreams retrieves all streams for the authenticated user
 func (r *Resolver) DoGetStreams(ctx context.Context) ([]*models.Stream, error) {
+	start := time.Now()
+
+	// Record metrics
+	defer func() {
+		duration := time.Since(start).Seconds()
+		if r.Metrics != nil {
+			r.Metrics.Duration.WithLabelValues("streams").Observe(duration)
+		}
+	}()
+
 	// Check for demo mode
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo streams data")
+		if r.Metrics != nil {
+			r.Metrics.Operations.WithLabelValues("streams", "success").Inc()
+		}
 		return demo.GenerateStreams(), nil
 	}
 
 	// Extract JWT token from context (set by auth middleware)
 	userToken, ok := ctx.Value("jwt_token").(string)
 	if !ok {
+		if r.Metrics != nil {
+			r.Metrics.Operations.WithLabelValues("streams", "error").Inc()
+		}
 		return nil, fmt.Errorf("user not authenticated")
 	}
 
@@ -31,6 +47,9 @@ func (r *Resolver) DoGetStreams(ctx context.Context) ([]*models.Stream, error) {
 	streams, err := r.Clients.Commodore.GetStreams(ctx, userToken)
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to get streams")
+		if r.Metrics != nil {
+			r.Metrics.Operations.WithLabelValues("streams", "error").Inc()
+		}
 		return nil, fmt.Errorf("failed to get streams: %w", err)
 	}
 
@@ -40,24 +59,47 @@ func (r *Resolver) DoGetStreams(ctx context.Context) ([]*models.Stream, error) {
 		result[i] = &(*streams)[i]
 	}
 
+	if r.Metrics != nil {
+		r.Metrics.Operations.WithLabelValues("streams", "success").Inc()
+	}
+
 	return result, nil
 }
 
 // DoGetStream retrieves a specific stream by ID
 func (r *Resolver) DoGetStream(ctx context.Context, id string) (*models.Stream, error) {
+	start := time.Now()
+
+	// Record metrics
+	defer func() {
+		duration := time.Since(start).Seconds()
+		if r.Metrics != nil {
+			r.Metrics.Duration.WithLabelValues("stream").Observe(duration)
+		}
+	}()
+
 	// Get all streams and find the one with matching ID
 	// Note: Could be optimized with a dedicated GetStream endpoint
 	streams, err := r.DoGetStreams(ctx)
 	if err != nil {
+		if r.Metrics != nil {
+			r.Metrics.Operations.WithLabelValues("stream", "error").Inc()
+		}
 		return nil, err
 	}
 
 	for _, stream := range streams {
 		if stream.ID == id {
+			if r.Metrics != nil {
+				r.Metrics.Operations.WithLabelValues("stream", "success").Inc()
+			}
 			return stream, nil
 		}
 	}
 
+	if r.Metrics != nil {
+		r.Metrics.Operations.WithLabelValues("stream", "error").Inc()
+	}
 	return nil, fmt.Errorf("stream not found")
 }
 
