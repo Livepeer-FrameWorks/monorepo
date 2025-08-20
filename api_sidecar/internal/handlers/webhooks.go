@@ -82,6 +82,11 @@ func extractJSONField(b []byte, key string) string {
 // HandlePushEnd handles PUSH_END webhook
 // Payload: push ID, stream name, target URI (before/after), last 10 log messages, push status
 func HandlePushEnd(c *gin.Context) {
+	// Track infrastructure event
+	if metrics != nil {
+		metrics.InfrastructureEvents.WithLabelValues("push_end").Inc()
+	}
+
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
 		logger.WithFields(logging.Fields{
@@ -370,6 +375,11 @@ func HandleStreamBuffer(c *gin.Context) {
 // HandleStreamEnd handles STREAM_END webhook
 // Payload: stream name, downloaded bytes, uploaded bytes, total viewers, total inputs, total outputs, viewer seconds
 func HandleStreamEnd(c *gin.Context) {
+	// Track infrastructure event
+	if metrics != nil {
+		metrics.InfrastructureEvents.WithLabelValues("stream_end").Inc()
+	}
+
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
 		logger.WithFields(logging.Fields{
@@ -480,6 +490,11 @@ func HandleStreamEnd(c *gin.Context) {
 // Payload: stream name, connection address, connection identifier, connector, request url, session identifier
 // Response: "true" to accept session, "false" to deny
 func HandleUserNew(c *gin.Context) {
+	// Track infrastructure event
+	if metrics != nil {
+		metrics.InfrastructureEvents.WithLabelValues("user_connected").Inc()
+	}
+
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
 		logger.WithFields(logging.Fields{

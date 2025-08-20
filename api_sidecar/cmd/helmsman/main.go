@@ -89,16 +89,14 @@ func main() {
 		"PORT":      os.Getenv("PORT"),
 	}))
 
-	// Create metrics for proxy operations
-	proxyRequests, proxyOperations, proxyDuration := metricsCollector.CreateBusinessMetrics()
-
-	// TODO: Wire these metrics into handlers
-	_ = proxyRequests
-	_ = proxyOperations
-	_ = proxyDuration
-
-	// Initialize handlers with logger (no database needed - Helmsman is stateless)
-	handlers.Init(logger)
+	// Create infrastructure sidecar metrics using handlers.HandlerMetrics directly
+	handlerMetrics := &handlers.HandlerMetrics{
+		NodeOperations:             metricsCollector.NewCounter("node_operations_total", "Node management operations", []string{"operation", "status"}),
+		InfrastructureEvents:       metricsCollector.NewCounter("infrastructure_events_total", "Infrastructure events", []string{"event_type"}),
+		NodeHealthChecks:           metricsCollector.NewCounter("node_health_checks_total", "Node health check results", []string{"status"}),
+		ResourceAllocationDuration: metricsCollector.NewHistogram("resource_allocation_duration_seconds", "Resource allocation timing", []string{}, nil),
+	}
+	handlers.Init(logger, handlerMetrics)
 
 	// Initialize Prometheus monitoring
 	handlers.InitPrometheusMonitor(logger)

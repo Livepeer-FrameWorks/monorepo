@@ -15,12 +15,22 @@ import (
 	"frameworks/pkg/clients/commodore"
 	"frameworks/pkg/clients/foghorn"
 	"frameworks/pkg/logging"
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/gin-gonic/gin"
 )
 
+// HandlerMetrics holds the metrics for handler operations
+type HandlerMetrics struct {
+	NodeOperations             *prometheus.CounterVec
+	InfrastructureEvents       *prometheus.CounterVec
+	NodeHealthChecks           *prometheus.CounterVec
+	ResourceAllocationDuration *prometheus.HistogramVec
+}
+
 var (
 	logger          logging.Logger
+	metrics         *HandlerMetrics
 	apiBaseURL      string
 	clusterID       string
 	foghornURI      string
@@ -30,9 +40,10 @@ var (
 	foghornClient   *foghorn.Client
 )
 
-// Init initializes the handlers with logger and service URLs and cluster metadata
-func Init(log logging.Logger) {
+// Init initializes the handlers with logger, metrics, and service URLs and cluster metadata
+func Init(log logging.Logger, m *HandlerMetrics) {
 	logger = log
+	metrics = m
 
 	apiBaseURL = os.Getenv("COMMODORE_URL")
 	if apiBaseURL == "" {
@@ -87,6 +98,11 @@ func Init(log logging.Logger) {
 
 // HealthCheck handles health check requests
 func HealthCheck(c *gin.Context) {
+	// Track health check
+	if metrics != nil {
+		metrics.NodeHealthChecks.WithLabelValues("success").Inc()
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"status":  "healthy",
 		"service": "helmsman",
@@ -163,12 +179,24 @@ func forwardEventToCommodore(endpoint string, eventData map[string]interface{}) 
 // HandlePushRewrite handles the PUSH_REWRITE trigger from MistServer
 // This is a critical trigger - validates stream keys and routes to wildcard streams
 func HandlePushRewrite(c *gin.Context) {
+	start := time.Now()
+
+	// Track node operations
+	if metrics != nil {
+		metrics.NodeOperations.WithLabelValues("push_rewrite", "requested").Inc()
+	}
+
 	// Read the raw body - MistServer sends parameters as raw text, not JSON
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
 		logger.WithFields(logging.Fields{
 			"error": err,
 		}).Error("Failed to read PUSH_REWRITE body")
+
+		if metrics != nil {
+			metrics.NodeOperations.WithLabelValues("push_rewrite", "error").Inc()
+		}
+
 		c.String(http.StatusOK, "") // Empty response denies the push
 		return
 	}
@@ -179,6 +207,11 @@ func HandlePushRewrite(c *gin.Context) {
 		logger.WithFields(logging.Fields{
 			"error": "Invalid PUSH_REWRITE payload: expected 3 parameters, got " + fmt.Sprintf("%d", len(params)),
 		}).Error("Invalid PUSH_REWRITE payload")
+
+		if metrics != nil {
+			metrics.NodeOperations.WithLabelValues("push_rewrite", "invalid_payload").Inc()
+		}
+
 		c.String(http.StatusOK, "") // Empty response denies the push
 		return
 	}
@@ -203,6 +236,11 @@ func HandlePushRewrite(c *gin.Context) {
 			"stream_key": streamKey,
 			"error":      err,
 		}).Error("Failed to validate stream key via API")
+
+		if metrics != nil {
+			metrics.NodeOperations.WithLabelValues("push_rewrite", "validation_error").Inc()
+		}
+
 		c.String(http.StatusOK, "") // Empty response denies the push
 		return
 	}
@@ -212,6 +250,11 @@ func HandlePushRewrite(c *gin.Context) {
 			"stream_key": streamKey,
 			"api_error":  validation.Error,
 		}).Error("Invalid stream key")
+
+		if metrics != nil {
+			metrics.NodeOperations.WithLabelValues("push_rewrite", "invalid_key").Inc()
+		}
+
 		c.String(http.StatusOK, "") // Empty response denies the push
 		return
 	}
@@ -264,6 +307,13 @@ func HandlePushRewrite(c *gin.Context) {
 		"user_id":              validation.UserID,
 	}).Info("Stream key validated, routing to wildcard stream")
 
+	// Track successful operation and resource allocation duration
+	if metrics != nil {
+		metrics.NodeOperations.WithLabelValues("push_rewrite", "success").Inc()
+		metrics.ResourceAllocationDuration.WithLabelValues("stream_allocation").Observe(time.Since(start).Seconds())
+		metrics.InfrastructureEvents.WithLabelValues("stream_allocated").Inc()
+	}
+
 	// Return the wildcard stream name for MistServer to use
 	c.String(http.StatusOK, wildcardStreamName)
 }
@@ -271,12 +321,24 @@ func HandlePushRewrite(c *gin.Context) {
 // HandleDefaultStream handles the DEFAULT_STREAM trigger from MistServer
 // This maps playback IDs to internal stream names for viewing
 func HandleDefaultStream(c *gin.Context) {
+	start := time.Now()
+
+	// Track node operations
+	if metrics != nil {
+		metrics.NodeOperations.WithLabelValues("default_stream", "requested").Inc()
+	}
+
 	// Read the raw body - MistServer sends parameters as raw text, not JSON
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
 		logger.WithFields(logging.Fields{
 			"error": err,
 		}).Error("Failed to read DEFAULT_STREAM body")
+
+		if metrics != nil {
+			metrics.NodeOperations.WithLabelValues("default_stream", "error").Inc()
+		}
+
 		c.String(http.StatusOK, "") // Empty response uses default behavior
 		return
 	}
@@ -325,6 +387,11 @@ func HandleDefaultStream(c *gin.Context) {
 			"error":       err,
 			"playback_id": defaultStream,
 		}).Error("Failed to resolve playback ID")
+
+		if metrics != nil {
+			metrics.NodeOperations.WithLabelValues("default_stream", "resolution_error").Inc()
+		}
+
 		c.String(http.StatusOK, "")
 		return
 	}
@@ -352,6 +419,13 @@ func HandleDefaultStream(c *gin.Context) {
 		"wildcard_stream_name": wildcardStreamName,
 		"internal_name":        resolveResponse.InternalName,
 	}).Info("Playback ID resolved successfully")
+
+	// Track successful operation
+	if metrics != nil {
+		metrics.NodeOperations.WithLabelValues("default_stream", "success").Inc()
+		metrics.ResourceAllocationDuration.WithLabelValues("stream_resolution").Observe(time.Since(start).Seconds())
+		metrics.InfrastructureEvents.WithLabelValues("stream_resolved").Inc()
+	}
 
 	c.String(http.StatusOK, wildcardStreamName)
 }
