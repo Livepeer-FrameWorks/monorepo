@@ -12,6 +12,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus"
 
 	// HTTP client for direct API calls (we'll use this for all payment providers)
 	"github.com/go-resty/resty/v2"
@@ -25,13 +26,25 @@ var (
 	db           *sql.DB
 	logger       logging.Logger
 	emailService *EmailService
+	metrics      *PurserMetrics
 )
 
+// PurserMetrics holds all Prometheus metrics for Purser
+type PurserMetrics struct {
+	BillingCalculations *prometheus.CounterVec
+	UsageRecords        *prometheus.CounterVec
+	InvoiceOperations   *prometheus.CounterVec
+	DBQueries           *prometheus.CounterVec
+	DBDuration          *prometheus.HistogramVec
+	DBConnections       *prometheus.GaugeVec
+}
+
 // Init initializes the handlers with database and logger
-func Init(database *sql.DB, log logging.Logger) {
+func Init(database *sql.DB, log logging.Logger, purserMetrics *PurserMetrics) {
 	db = database
 	logger = log
 	emailService = NewEmailService(log)
+	metrics = purserMetrics
 }
 
 // Billing API Endpoints
@@ -75,6 +88,11 @@ func GetPlans(c *gin.Context) {
 
 // GetTiers returns all available billing tiers with available payment methods
 func GetTiers(c *gin.Context) {
+	start := time.Now()
+	if metrics != nil {
+		metrics.DBQueries.WithLabelValues("get_tiers", "requested").Inc()
+	}
+
 	rows, err := db.Query(`
 		SELECT id, tier_name, display_name, description, base_price, currency, 
 		       billing_period, bandwidth_allocation, storage_allocation, compute_allocation,
@@ -89,6 +107,9 @@ func GetTiers(c *gin.Context) {
 		logger.WithFields(logging.Fields{
 			"error": err,
 		}).Error("Failed to fetch billing tiers")
+		if metrics != nil {
+			metrics.DBQueries.WithLabelValues("get_tiers", "error").Inc()
+		}
 		c.JSON(http.StatusInternalServerError, purserapi.ErrorResponse{Error: "Failed to fetch tiers"})
 		return
 	}
@@ -117,6 +138,11 @@ func GetTiers(c *gin.Context) {
 		"tier_count": len(tiers),
 		"method":     "GetTiers",
 	}).Info("Retrieved billing tiers")
+
+	if metrics != nil {
+		metrics.DBQueries.WithLabelValues("get_tiers", "success").Inc()
+		metrics.DBDuration.WithLabelValues("get_tiers").Observe(time.Since(start).Seconds())
+	}
 
 	c.JSON(http.StatusOK, purserapi.GetBillingTiersResponse{
 		Tiers:          tiers,
@@ -303,10 +329,14 @@ func GetInvoices(c *gin.Context) {
 
 // CreatePayment creates a payment request for an invoice
 func CreatePayment(c *gin.Context) {
+	start := time.Now()
 	tenantID := c.GetString("tenant_id")
 
 	var req purserapi.PaymentRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
+		if metrics != nil {
+			metrics.InvoiceOperations.WithLabelValues("payment_create", "error").Inc()
+		}
 		c.JSON(http.StatusBadRequest, purserapi.ErrorResponse{Error: err.Error()})
 		return
 	}
@@ -322,6 +352,9 @@ func CreatePayment(c *gin.Context) {
 	}
 
 	if !methodAvailable {
+		if metrics != nil {
+			metrics.InvoiceOperations.WithLabelValues("payment_create", "error").Inc()
+		}
 		c.JSON(http.StatusBadRequest, purserapi.PaymentMethodErrorResponse{
 			Error:            "Payment method not available",
 			AvailableMethods: availableMethods,
@@ -340,6 +373,9 @@ func CreatePayment(c *gin.Context) {
 		&invoice.DueDate, &invoice.CreatedAt)
 
 	if err == sql.ErrNoRows {
+		if metrics != nil {
+			metrics.InvoiceOperations.WithLabelValues("payment_create", "error").Inc()
+		}
 		c.JSON(http.StatusNotFound, purserapi.ErrorResponse{Error: "Invoice not found or already paid"})
 		return
 	} else if err != nil {
@@ -348,6 +384,9 @@ func CreatePayment(c *gin.Context) {
 			"invoice_id": req.InvoiceID,
 			"tenant_id":  tenantID,
 		}).Error("Database error fetching invoice")
+		if metrics != nil {
+			metrics.InvoiceOperations.WithLabelValues("payment_create", "error").Inc()
+		}
 		c.JSON(http.StatusInternalServerError, purserapi.ErrorResponse{Error: "Database error"})
 		return
 	}
@@ -450,12 +489,22 @@ func CreatePayment(c *gin.Context) {
 		"amount":     invoice.Amount,
 	}).Info("Payment created successfully")
 
+	if metrics != nil {
+		metrics.InvoiceOperations.WithLabelValues("payment_create", "success").Inc()
+		metrics.DBDuration.WithLabelValues("payment_create").Observe(time.Since(start).Seconds())
+	}
+
 	c.JSON(http.StatusCreated, paymentResponse)
 }
 
 // GetBillingStatus returns current billing status for the tenant
 func GetBillingStatus(c *gin.Context) {
+	start := time.Now()
 	tenantID := c.GetString("tenant_id")
+
+	if metrics != nil {
+		metrics.BillingCalculations.WithLabelValues(tenantID, "requested").Inc()
+	}
 
 	// Get tenant's current subscription and tier
 	var subscription models.TenantSubscription
@@ -503,6 +552,9 @@ func GetBillingStatus(c *gin.Context) {
 			"error":     err,
 			"tenant_id": tenantID,
 		}).Error("Failed to fetch tenant subscription")
+		if metrics != nil {
+			metrics.BillingCalculations.WithLabelValues(tenantID, "error").Inc()
+		}
 		c.JSON(http.StatusInternalServerError, purserapi.ErrorResponse{Error: "Failed to fetch billing status"})
 		return
 	}
@@ -606,6 +658,11 @@ func GetBillingStatus(c *gin.Context) {
 		"pending_invoices": len(pendingInvoices),
 		"recent_payments":  len(recentPayments),
 	}).Info("Retrieved billing status")
+
+	if metrics != nil {
+		metrics.BillingCalculations.WithLabelValues(tenantID, "success").Inc()
+		metrics.DBDuration.WithLabelValues("billing_status").Observe(time.Since(start).Seconds())
+	}
 
 	c.JSON(http.StatusOK, billingStatus)
 }

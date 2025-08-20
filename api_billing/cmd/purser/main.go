@@ -28,9 +28,6 @@ func main() {
 	db := database.MustConnect(dbConfig, logger)
 	defer db.Close()
 
-	// Initialize handlers
-	handlers.Init(db, logger)
-
 	// Setup monitoring
 	healthChecker := monitoring.NewHealthChecker("purser", version.Version)
 	metricsCollector := monitoring.NewMetricsCollector("purser", version.Version, version.GitCommit)
@@ -42,17 +39,18 @@ func main() {
 		"JWT_SECRET":   config.GetEnv("JWT_SECRET", ""),
 	}))
 
-	// Create business metrics for billing operations
-	activeItems, operations, operationDuration := metricsCollector.CreateBusinessMetrics()
-	dbQueries, dbDuration, dbConnections := metricsCollector.CreateDatabaseMetrics()
+	// Create custom billing metrics
+	metrics := &handlers.PurserMetrics{
+		BillingCalculations: metricsCollector.NewCounter("billing_calculations_total", "Billing calculations performed", []string{"tenant_id", "status"}),
+		UsageRecords:        metricsCollector.NewCounter("usage_records_processed_total", "Usage records processed", []string{"usage_type"}),
+		InvoiceOperations:   metricsCollector.NewCounter("invoice_operations_total", "Invoice operations", []string{"operation", "status"}),
+	}
 
-	// TODO: Wire these metrics into handlers
-	_ = activeItems
-	_ = operations
-	_ = operationDuration
-	_ = dbQueries
-	_ = dbDuration
-	_ = dbConnections
+	// Create database metrics
+	metrics.DBQueries, metrics.DBDuration, metrics.DBConnections = metricsCollector.CreateDatabaseMetrics()
+
+	// Initialize handlers
+	handlers.Init(db, logger, metrics)
 
 	// Initialize and start JobManager for background billing tasks
 	jobManager := handlers.NewJobManager(db, logger)
