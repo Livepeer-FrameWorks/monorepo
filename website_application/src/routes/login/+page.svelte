@@ -4,6 +4,7 @@
   import { base } from "$app/paths";
   import { auth } from "$lib/stores/auth";
   import { getMarketingSiteUrl } from "$lib/config";
+  import { getIconComponent } from "$lib/iconUtils.js";
 
   let email = "";
   let password = "";
@@ -132,25 +133,25 @@
       </h3>
       <div class="space-y-3 text-sm mb-6">
         <div class="flex items-center gap-3">
-          <span class="text-tokyo-night-blue">🎬</span>
+          <svelte:component this={getIconComponent('Film')} class="w-5 h-5 text-tokyo-night-blue" />
           <span class="text-tokyo-night-fg-dark"
             >Multi-stream compositing with PiP and overlays</span
           >
         </div>
         <div class="flex items-center gap-3">
-          <span class="text-tokyo-night-green">🤖</span>
+          <svelte:component this={getIconComponent('Bot')} class="w-5 h-5 text-tokyo-night-green" />
           <span class="text-tokyo-night-fg-dark"
             >Real-time AI processing and analytics</span
           >
         </div>
         <div class="flex items-center gap-3">
-          <span class="text-tokyo-night-purple">🌐</span>
+          <svelte:component this={getIconComponent('Globe')} class="w-5 h-5 text-tokyo-night-purple" />
           <span class="text-tokyo-night-fg-dark"
             >Hybrid cloud + self-hosted deployment</span
           >
         </div>
         <div class="flex items-center gap-3">
-          <span class="text-tokyo-night-yellow">💰</span>
+          <svelte:component this={getIconComponent('CreditCard')} class="w-5 h-5 text-tokyo-night-yellow" />
           <span class="text-tokyo-night-fg-dark"
             >Generous free tier powered by Livepeer</span
           >

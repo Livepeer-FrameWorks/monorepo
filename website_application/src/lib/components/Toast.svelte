@@ -1,17 +1,18 @@
 <script>
   import { toast } from '$lib/stores/toast.js';
   import { fly } from 'svelte/transition';
+  import { getIconComponent } from '$lib/iconUtils.js';
   
   $: toasts = $toast;
   
   function getToastIcon(type) {
-    switch (type) {
-      case 'success': return '✅';
-      case 'error': return '❌';
-      case 'warning': return '⚠️';
-      case 'info': return 'ℹ️';
-      default: return '📢';
-    }
+    const iconMap = {
+      success: 'CheckCircle',
+      error: 'XCircle',
+      warning: 'AlertTriangle',
+      info: 'Info'
+    };
+    return getIconComponent(iconMap[type] || 'Info');
   }
   
   function getToastColors(type) {
@@ -38,8 +39,8 @@
       transition:fly={{ y: 100, duration: 300 }}
     >
       <div class="flex items-start space-x-3">
-        <div class="text-lg">
-          {getToastIcon(toastItem.type)}
+        <div class="flex-shrink-0">
+          <svelte:component this={getToastIcon(toastItem.type)} class="w-5 h-5" />
         </div>
         <div class="flex-1 min-w-0">
           <p class="text-sm font-medium break-words">
@@ -51,9 +52,7 @@
           class="text-current opacity-60 hover:opacity-100 transition-opacity"
           aria-label="Close notification"
         >
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-          </svg>
+          <svelte:component this={getIconComponent('X')} class="w-4 h-4" />
         </button>
       </div>
     </div>

@@ -8,6 +8,7 @@
   import { toast } from "$lib/stores/toast.js";
   import LoadingCard from "$lib/components/LoadingCard.svelte";
   import EmptyState from "$lib/components/EmptyState.svelte";
+  import { getIconComponent } from "$lib/iconUtils.js";
 
   let isAuthenticated = false;
   /** @type {any} */
@@ -269,7 +270,7 @@
       description:
         "Standard streaming protocol for OBS, XSplit, and most streaming software",
       key: "rtmp",
-      icon: "📡",
+      icon: "Wifi",
       recommended: true,
       setup:
         "Use this URL as your RTMP server in streaming software like OBS Studio",
@@ -278,7 +279,7 @@
       name: "WebRTC (WHIP)",
       description: "Ultra-low latency browser-based streaming",
       key: "whip",
-      icon: "🌐",
+      icon: "Globe",
       recommended: false,
       setup:
         "Modern browsers and WebRTC-compatible software can stream directly to this endpoint",
@@ -292,7 +293,7 @@
       description:
         "HTTP Live Streaming - works in all browsers and mobile apps",
       key: "hls",
-      icon: "📺",
+      icon: "FileText",
       recommended: true,
       fileExtension: ".m3u8",
     },
@@ -300,7 +301,7 @@
       name: "WebRTC (WHEP)",
       description: "Ultra-low latency playback in modern browsers",
       key: "webrtc",
-      icon: "⚡",
+      icon: "Link",
       recommended: false,
       fileExtension: "",
     },
@@ -308,7 +309,7 @@
       name: "WebM",
       description: "Direct WebM video stream",
       key: "webm",
-      icon: "🎬",
+      icon: "Play",
       recommended: false,
       fileExtension: ".webm",
     },
@@ -316,7 +317,7 @@
       name: "MKV",
       description: "Matroska video container",
       key: "mkv",
-      icon: "📼",
+      icon: "Video",
       recommended: false,
       fileExtension: ".mkv",
     },
@@ -324,7 +325,7 @@
       name: "MP4",
       description: "Direct MP4 video stream",
       key: "mp4",
-      icon: "🎥",
+      icon: "Video",
       recommended: false,
       fileExtension: ".mp4",
     },
@@ -361,15 +362,15 @@
         class="btn-secondary"
         on:click={() => showCreateModal = true}
       >
-        <span class="mr-2">➕</span>
+        <svelte:component this={getIconComponent('Plus')} class="w-4 h-4 mr-2" />
         Create Stream
       </button>
       <a href="{base}/analytics" class="btn-secondary">
-        <span class="mr-2">📊</span>
+        <svelte:component this={getIconComponent('BarChart3')} class="w-4 h-4 mr-2" />
         View Analytics
       </a>
       <button class="btn-primary cursor-not-allowed" disabled>
-        <span class="mr-2">🔴</span>
+        <svelte:component this={getIconComponent('Play')} class="w-4 h-4 mr-2 text-tokyo-night-red" />
         Go Live
       </button>
     </div>
@@ -399,10 +400,10 @@
     <!-- No Streams State -->
     <div class="card">
       <EmptyState 
-        icon="🎥"
+        iconName="Video"
         title="No Streams Found"
         description="Create your first stream to get started with broadcasting"
-        actionText="➕ Create Stream"
+        actionText="Create Stream"
         onAction={() => showCreateModal = true}
       />
     </div>
@@ -438,7 +439,11 @@
                   on:click|stopPropagation={() => confirmDeleteStream(stream)}
                   disabled={deletingStreamId === stream.id}
                 >
-                  {deletingStreamId === stream.id ? "..." : "🗑️"}
+                  {#if deletingStreamId === stream.id}
+                    ...
+                  {:else}
+                    <svelte:component this={getIconComponent('X')} class="w-4 h-4" />
+                  {/if}
                 </button>
               </div>
             </div>
@@ -493,7 +498,7 @@
               <p class="text-sm text-tokyo-night-comment">Current Viewers</p>
               <p class="text-2xl font-bold text-tokyo-night-fg">{viewers}</p>
             </div>
-            <span class="text-2xl">👥</span>
+            <svelte:component this={getIconComponent('Users')} class="w-6 h-6" />
           </div>
         </div>
 
@@ -505,7 +510,7 @@
                 {formatBandwidth(realTimeMetrics.bandwidth)}
               </p>
             </div>
-            <span class="text-2xl">📊</span>
+            <svelte:component this={getIconComponent('BarChart3')} class="w-8 h-8 text-tokyo-night-blue" />
           </div>
         </div>
 
@@ -517,7 +522,7 @@
                 {selectedStream?.resolution || "N/A"}
               </p>
             </div>
-            <span class="text-2xl">🎬</span>
+            <svelte:component this={getIconComponent('Monitor')} class="w-8 h-8 text-tokyo-night-purple" />
           </div>
         </div>
 
@@ -531,7 +536,7 @@
                   : "No stream"}
               </p>
             </div>
-            <span class="text-2xl">🔑</span>
+            <svelte:component this={getIconComponent('Key')} class="w-8 h-8 text-tokyo-night-yellow" />
           </div>
         </div>
 
@@ -545,7 +550,7 @@
                   : "No stream"}
               </p>
             </div>
-            <span class="text-2xl">📺</span>
+            <svelte:component this={getIconComponent('Play')} class="w-8 h-8 text-tokyo-night-green" />
           </div>
         </div>
       </div>
@@ -564,7 +569,7 @@
         <div class="card">
           <div class="card-header">
             <h2 class="text-xl font-semibold text-tokyo-night-fg mb-2">
-              📡 Stream Ingest
+Stream Ingest
             </h2>
             <p class="text-tokyo-night-fg-dark">
               Configure your streaming software to broadcast to these endpoints
@@ -585,7 +590,12 @@
                   class="btn-secondary text-xs px-3 py-1"
                   disabled={refreshingKey}
                 >
-                  {refreshingKey ? "Refreshing..." : "🔄 Regenerate"}
+                  {#if refreshingKey}
+          Refreshing...
+        {:else}
+          <svelte:component this={getIconComponent('RefreshCw')} class="w-4 h-4 mr-1" />
+          Regenerate
+        {/if}
                 </button>
               </div>
               <div class="flex items-center space-x-3">
@@ -601,7 +611,11 @@
                   class="btn-secondary"
                   disabled={!selectedStream?.streamKey}
                 >
-                  {copiedUrl === selectedStream?.streamKey ? "✅" : "📋"}
+                  {#if copiedUrl === selectedStream?.streamKey}
+                    <svelte:component this={getIconComponent('CheckCircle')} class="w-4 h-4" />
+                  {:else}
+                    <svelte:component this={getIconComponent('Copy')} class="w-4 h-4" />
+                  {/if}
                 </button>
               </div>
               <p class="text-xs text-tokyo-night-comment mt-2">
@@ -645,7 +659,11 @@
                     class="btn-secondary"
                     disabled={!ingestUrls[protocol.key]}
                   >
-                    {copiedUrl === ingestUrls[protocol.key] ? "✅" : "📋"}
+                    {#if copiedUrl === ingestUrls[protocol.key]}
+                      <svelte:component this={getIconComponent('CheckCircle')} class="w-4 h-4" />
+                    {:else}
+                      <svelte:component this={getIconComponent('Copy')} class="w-4 h-4" />
+                    {/if}
                   </button>
                 </div>
 
@@ -661,7 +679,7 @@
         <div class="card">
           <div class="card-header">
             <h2 class="text-xl font-semibold text-tokyo-night-fg mb-2">
-              📺 Stream Delivery
+Stream Delivery
             </h2>
             <p class="text-tokyo-night-fg-dark">
               Multiple playback options for viewers and applications
@@ -711,8 +729,8 @@
                       disabled={!deliveryUrls[protocol.key]}
                     >
                       {copiedUrl.includes(deliveryUrls[protocol.key])
-                        ? "✅ Copied"
-                        : "📋 Copy Embed Code"}
+                        ? "✓ Copied"
+                        : "Copy Embed Code"}
                     </button>
                   </div>
                 {:else}
@@ -730,7 +748,11 @@
                       class="btn-secondary"
                       disabled={!deliveryUrls[protocol.key]}
                     >
-                      {copiedUrl === deliveryUrls[protocol.key] ? "✅" : "📋"}
+                      {#if copiedUrl === deliveryUrls[protocol.key]}
+                        <svelte:component this={getIconComponent('CheckCircle')} class="w-4 h-4" />
+                      {:else}
+                        <svelte:component this={getIconComponent('Copy')} class="w-4 h-4" />
+                      {/if}
                     </button>
                   </div>
                 {/if}
@@ -744,14 +766,16 @@
       <div class="card">
         <div class="card-header">
           <h2 class="text-xl font-semibold text-tokyo-night-fg mb-2">
-            🚀 Quick Setup Guide
+Quick Setup Guide
           </h2>
           <p class="text-tokyo-night-fg-dark">Get started streaming in minutes</p>
         </div>
 
         <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
           <div class="text-center">
-            <div class="text-3xl mb-3">🎯</div>
+            <div class="text-3xl mb-3">
+              <svelte:component this={getIconComponent('Monitor')} class="w-8 h-8 text-tokyo-night-purple mx-auto" />
+            </div>
             <h3 class="font-semibold text-tokyo-night-fg mb-2">
               1. Configure Software
             </h3>
@@ -762,7 +786,9 @@
           </div>
 
           <div class="text-center">
-            <div class="text-3xl mb-3">🔑</div>
+            <div class="text-3xl mb-3">
+              <svelte:component this={getIconComponent('Key')} class="w-8 h-8 text-tokyo-night-yellow mx-auto" />
+            </div>
             <h3 class="font-semibold text-tokyo-night-fg mb-2">
               2. Add Stream Key
             </h3>
@@ -772,7 +798,9 @@
           </div>
 
           <div class="text-center">
-            <div class="text-3xl mb-3">🎬</div>
+            <div class="text-3xl mb-3">
+              <svelte:component this={getIconComponent('Video')} class="w-8 h-8 text-tokyo-night-cyan mx-auto" />
+            </div>
             <h3 class="font-semibold text-tokyo-night-fg mb-2">
               3. Start Streaming
             </h3>

@@ -7,6 +7,7 @@
   import LoadingCard from "$lib/components/LoadingCard.svelte";
   import LoadingSpinner from "$lib/components/LoadingSpinner.svelte";
   import EmptyState from "$lib/components/EmptyState.svelte";
+  import { getIconComponent } from "$lib/iconUtils.js";
 
   let isAuthenticated = false;
   let user = null;
@@ -152,13 +153,13 @@
         
         {#if clips.length === 0}
           <EmptyState 
-            icon="🎬"
             title="No clips yet"
             description="Create your first clip from a stream to get started"
             actionText={streams.length > 0 ? "Create Your First Clip" : ""}
             onAction={() => showCreateModal = true}
             showAction={streams.length > 0}
           >
+            <svelte:component this={getIconComponent('Scissors')} class="w-12 h-12 text-tokyo-night-fg-dark mx-auto mb-4" />
             {#if streams.length === 0}
               <p class="text-tokyo-night-comment text-sm mt-2">
                 You need at least one stream to create clips

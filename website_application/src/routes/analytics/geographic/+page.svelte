@@ -3,6 +3,7 @@
   import { base } from "$app/paths";
   import { auth } from "$lib/stores/auth";
   import { infrastructureService } from "$lib/graphql/services/infrastructure.js";
+  import { getIconComponent } from "$lib/iconUtils.js";
 
   let isAuthenticated = false;
   let loading = true;
@@ -41,8 +42,9 @@
   <!-- Page Header -->
   <div class="flex justify-between items-start">
     <div>
-      <h1 class="text-3xl font-bold text-tokyo-night-fg mb-2">
-        🌍 Regional Infrastructure
+      <h1 class="text-3xl font-bold text-tokyo-night-fg mb-2 flex items-center">
+        <svelte:component this={getIconComponent('Globe')} class="w-8 h-8 mr-3 text-tokyo-night-green" />
+        Regional Infrastructure
       </h1>
       <p class="text-tokyo-night-fg-dark">
         View your infrastructure nodes by region
@@ -57,7 +59,9 @@
   {:else if error}
     <div class="card border-tokyo-night-red/30">
       <div class="text-center py-12">
-        <div class="text-6xl mb-4">❌</div>
+        <div class="text-6xl mb-4">
+          <svelte:component this={getIconComponent('AlertCircle')} class="w-16 h-16 text-tokyo-night-red mx-auto" />
+        </div>
         <h3 class="text-xl font-semibold text-tokyo-night-red mb-2">
           Failed to Load Node Data
         </h3>
@@ -110,7 +114,9 @@
         </div>
       {:else}
         <div class="text-center py-12">
-          <div class="text-6xl mb-4">🖥️</div>
+          <div class="text-6xl mb-4">
+            <svelte:component this={getIconComponent('Monitor')} class="w-16 h-16 text-tokyo-night-fg mx-auto" />
+          </div>
           <h3 class="text-xl font-semibold text-tokyo-night-fg mb-2">
             No Infrastructure Nodes
           </h3>

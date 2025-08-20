@@ -18,7 +18,6 @@
     playbackId
     status
     record
-    tenantId
     createdAt
     updatedAt
   }
@@ -36,6 +35,7 @@
   let showQueryEditor = true;
   let selectedLanguage = "javascript";
   let queryHistory = [];
+  let demoMode = false;
 
   // Overlay state
   let overlayOpen = false;
@@ -116,7 +116,8 @@
       const result = await explorerService.executeQuery(
         query,
         parsedVariables,
-        operationType
+        operationType,
+        demoMode
       );
       response = explorerService.formatResponse(result);
 
@@ -128,7 +129,8 @@
           "Query execution failed - check the response panel for details"
         );
       } else {
-        toast.success(`Query executed successfully in ${response.duration}`);
+        const modeIndicator = demoMode ? " (Demo)" : "";
+        toast.success(`Query executed successfully in ${response.duration}${modeIndicator}`);
       }
     } catch (error) {
       console.error("Query execution failed:", error);
@@ -313,13 +315,40 @@
       {/if}
     </div>
 
-    <button
-      class="btn-primary flex items-center space-x-2"
-      on:click={executeQuery}
-      disabled={loading}
-    >
-      <span>{loading ? "Running..." : "Execute"}</span>
-    </button>
+    <div class="flex items-center space-x-3">
+      <!-- Demo Mode Toggle -->
+      <label class="flex items-center space-x-2 cursor-pointer group">
+        <div class="relative">
+          <input
+            type="checkbox"
+            bind:checked={demoMode}
+            class="sr-only"
+          />
+          <div
+            class="w-10 h-5 rounded-full transition-colors duration-200 {demoMode
+              ? 'bg-tokyo-night-green'
+              : 'bg-tokyo-night-fg-gutter'}"
+          >
+            <div
+              class="w-4 h-4 bg-white rounded-full shadow-md transform transition-transform duration-200 translate-y-0.5 {demoMode
+                ? 'translate-x-5'
+                : 'translate-x-0.5'}"
+            ></div>
+          </div>
+        </div>
+        <span class="text-xs text-tokyo-night-fg group-hover:text-tokyo-night-green transition-colors">
+          {demoMode ? 'Demo Mode' : 'Demo'}
+        </span>
+      </label>
+
+      <button
+        class="btn-primary flex items-center space-x-2"
+        on:click={executeQuery}
+        disabled={loading}
+      >
+        <span>{loading ? "Running..." : "Execute"}</span>
+      </button>
+    </div>
   </div>
 
   <!-- 2-Column Layout: Left (Query/Code+Variables) | Right (Response) -->

@@ -2,6 +2,7 @@
 import { 
   Activity,
   AlertCircle,
+  AlertTriangle,
   BarChart3,
   Bell,
   Bot,
@@ -9,6 +10,7 @@ import {
   Brain,
   Building2,
   Camera,
+  CheckCircle,
   Clapperboard,
   Clock,
   Code2,
@@ -22,6 +24,7 @@ import {
   Globe2,
   HardDrive,
   HelpCircle,
+  Info,
   Key,
   Lightbulb,
   Link,
@@ -48,6 +51,8 @@ import {
   Users,
   Video,
   Wifi,
+  X,
+  XCircle,
   Zap
 } from 'lucide-svelte';
 
@@ -55,6 +60,7 @@ import {
 const iconMap = {
   Activity,
   AlertCircle,
+  AlertTriangle,
   BarChart3,
   Bell,
   Bot,
@@ -62,6 +68,7 @@ const iconMap = {
   Brain,
   Building2,
   Camera,
+  CheckCircle,
   Clapperboard,
   Clock,
   Code2,
@@ -75,6 +82,7 @@ const iconMap = {
   Globe2,
   HardDrive,
   HelpCircle,
+  Info,
   Key,
   Lightbulb,
   Link,
@@ -101,6 +109,8 @@ const iconMap = {
   Users,
   Video,
   Wifi,
+  X,
+  XCircle,
   Zap
 };
 

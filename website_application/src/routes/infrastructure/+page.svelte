@@ -6,6 +6,7 @@
   import LoadingCard from "$lib/components/LoadingCard.svelte";
   import SkeletonLoader from "$lib/components/SkeletonLoader.svelte";
   import EmptyState from "$lib/components/EmptyState.svelte";
+  import { getIconComponent } from "$lib/iconUtils.js";
 
   let isAuthenticated = false;
   let user = null;
@@ -192,12 +193,13 @@
         <h2 class="text-xl font-semibold mb-4 text-tokyo-night-cyan">Clusters</h2>
         {#if clusters.length === 0}
           <EmptyState 
-            icon="🖥️"
             title="No clusters found"
             description="Infrastructure clusters will appear here when configured"
             size="sm"
             showAction={false}
-          />
+          >
+            <svelte:component this={getIconComponent('Server')} class="w-8 h-8 text-tokyo-night-fg-dark mx-auto mb-2" />
+          </EmptyState>
         {:else}
           <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {#each clusters as cluster}
@@ -224,12 +226,13 @@
         <h2 class="text-xl font-semibold mb-4 text-tokyo-night-cyan">Nodes</h2>
         {#if nodes.length === 0}
           <EmptyState 
-            icon="🔧"
             title="No nodes found"
             description="Infrastructure nodes will appear here when deployed"
             size="sm"
             showAction={false}
-          />
+          >
+            <svelte:component this={getIconComponent('HardDrive')} class="w-8 h-8 text-tokyo-night-fg-dark mx-auto mb-2" />
+          </EmptyState>
         {:else}
           <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
             {#each nodes as node}

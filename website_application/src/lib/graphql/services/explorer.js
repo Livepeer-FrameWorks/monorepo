@@ -209,22 +209,32 @@ export const explorerService = {
    * @param {string} query - The GraphQL query string
    * @param {Object} variables - Variables for the query
    * @param {string} operationType - 'query', 'mutation', or 'subscription'
+   * @param {boolean} demoMode - Enable demo mode for predictable responses
    */
-  async executeQuery(query, variables = {}, operationType = 'query') {
+  async executeQuery(query, variables = {}, operationType = 'query', demoMode = false) {
     try {
       const startTime = Date.now();
+      
+      // Configure client for demo mode
+      const headers = demoMode ? { 'X-Demo-Mode': 'true' } : {};
       
       let result;
       if (operationType === 'mutation') {
         result = await client.mutate({
           mutation: gql(query),
           variables,
+          context: {
+            headers
+          }
         });
       } else {
         result = await client.query({
           query: gql(query),
           variables,
           fetchPolicy: 'network-only', // Always fetch fresh data for explorer
+          context: {
+            headers
+          }
         });
       }
 
@@ -238,6 +248,7 @@ export const explorerService = {
         networkStatus: result.networkStatus,
         duration,
         timestamp: new Date().toISOString(),
+        demoMode
       };
     } catch (error) {
       console.error('GraphQL query execution failed:', error);
@@ -247,6 +258,7 @@ export const explorerService = {
         error,
         duration: 0,
         timestamp: new Date().toISOString(),
+        demoMode
       };
     }
   },
@@ -265,7 +277,6 @@ export const explorerService = {
     id
     email
     name
-    tenantId
     role
     createdAt
   }
@@ -284,7 +295,6 @@ export const explorerService = {
     playbackId
     status
     record
-    tenantId
     createdAt
     updatedAt
   }
@@ -303,13 +313,12 @@ export const explorerService = {
     playbackId
     status
     record
-    tenantId
     createdAt
     updatedAt
   }
 }`,
           variables: {
-            id: "stream-id-here"
+            id: "demo_live_stream_001"
           }
         },
         {
@@ -330,7 +339,7 @@ export const explorerService = {
   }
 }`,
           variables: {
-            streamId: "stream-id-here",
+            streamId: "demo_live_stream_001",
             timeRange: {
               start: "2025-01-01T00:00:00Z",
               end: "2025-01-31T23:59:59Z"
@@ -342,7 +351,6 @@ export const explorerService = {
           description: 'Get current billing status and tier',
           query: `query GetBillingStatus {
   billingStatus {
-    tenantId
     currentTier {
       id
       name
@@ -372,7 +380,6 @@ export const explorerService = {
     playbackId
     status
     record
-    tenantId
     createdAt
     updatedAt
   }
@@ -397,13 +404,12 @@ export const explorerService = {
     playbackId
     status
     record
-    tenantId
     createdAt
     updatedAt
   }
 }`,
           variables: {
-            id: "stream-id-here",
+            id: "demo_live_stream_001",
             input: {
               name: "Updated Stream Name",
               description: "Updated description",
@@ -418,7 +424,7 @@ export const explorerService = {
   deleteStream(id: $id)
 }`,
           variables: {
-            id: "stream-id-here"
+            id: "demo_live_stream_001"
           }
         },
         {
@@ -427,8 +433,7 @@ export const explorerService = {
           query: `mutation CreateClip($input: CreateClipInput!) {
   createClip(input: $input) {
     id
-    streamId
-    tenantId
+    stream
     title
     description
     startTime
@@ -442,7 +447,7 @@ export const explorerService = {
 }`,
           variables: {
             input: {
-              streamId: "stream-id-here",
+              stream: "demo_live_stream_001",
               startTime: 0,
               endTime: 30,
               title: "My Clip",
@@ -455,20 +460,17 @@ export const explorerService = {
         {
           name: 'Stream Events',
           description: 'Subscribe to stream lifecycle events',
-          query: `subscription StreamEvents($streamId: ID, $tenantId: ID) {
-  streamEvents(streamId: $streamId, tenantId: $tenantId) {
+          query: `subscription StreamEvents($streamId: ID) {
+  streamEvents(streamId: $streamId) {
     type
-    streamId
-    tenantId
+    stream
     status
     timestamp
-    nodeId
     details
   }
 }`,
           variables: {
-            streamId: "stream-id-here",
-            tenantId: null
+            streamId: "demo_live_stream_001"
           }
         },
         {
@@ -476,17 +478,12 @@ export const explorerService = {
           description: 'Subscribe to real-time viewer metrics',
           query: `subscription ViewerMetrics($streamId: ID!) {
   viewerMetrics(streamId: $streamId) {
-    streamId
-    currentViewers
-    peakViewers
-    bandwidth
-    connectionQuality
-    bufferHealth
     timestamp
+    viewerCount
   }
 }`,
           variables: {
-            streamId: "stream-id-here"
+            streamId: "demo_live_stream_001"
           }
         },
         {
@@ -736,15 +733,17 @@ ${Object.entries(variables).map(([key, value]) => `        "${key}": ${JSON.stri
   formatResponse(result) {
     const { data, error, duration, timestamp, networkStatus } = result;
     
+    // Note: These will be rendered as HTML strings in the GraphQL Explorer UI
+    // The component consuming this will handle the HTML rendering
     let status = 'success';
-    let statusIcon = '✅';
+    let statusIcon = 'success'; // Will be mapped to proper Lucide icon in UI
     
     if (error) {
       status = 'error';
-      statusIcon = '❌';
+      statusIcon = 'error';
     } else if (networkStatus === 1) {
       status = 'loading';
-      statusIcon = '⏳';
+      statusIcon = 'loading';
     }
 
     const response = {

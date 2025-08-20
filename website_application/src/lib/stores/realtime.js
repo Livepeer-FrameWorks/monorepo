@@ -37,7 +37,7 @@ export function initializeWebSocket(token) {
   // Clean up existing subscriptions
   disconnectWebSocket();
   
-  console.log('✅ Initializing GraphQL subscriptions');
+  console.log('Initializing GraphQL subscriptions');
   wsConnected.set(true);
   wsReconnecting.set(false);
   wsError.set('');
@@ -70,7 +70,7 @@ export function initializeWebSocket(token) {
         }
       },
       error: (error) => {
-        console.error('❌ Stream events subscription error:', error);
+        console.error('Stream events subscription error:', error);
         wsError.set('Stream events connection failed');
       }
     });
@@ -79,7 +79,7 @@ export function initializeWebSocket(token) {
     globalSubscriptions = [streamEventsSubscription];
 
   } catch (error) {
-    console.error('❌ Failed to initialize GraphQL subscriptions:', error);
+    console.error('Failed to initialize GraphQL subscriptions:', error);
     wsError.set('Failed to initialize real-time connections');
     wsConnected.set(false);
   }
@@ -126,7 +126,7 @@ export function subscribeToStreamMetrics(streamId) {
         }
       },
       error: (error) => {
-        console.error(`❌ Viewer metrics subscription error for stream ${streamId}:`, error);
+        console.error(`Viewer metrics subscription error for stream ${streamId}:`, error);
       }
     });
 
@@ -140,7 +140,7 @@ export function subscribeToStreamMetrics(streamId) {
       }
     };
   } catch (error) {
-    console.error(`❌ Failed to subscribe to stream metrics for ${streamId}:`, error);
+    console.error(`Failed to subscribe to stream metrics for ${streamId}:`, error);
     return () => {};
   }
 }
@@ -177,7 +177,7 @@ export function subscribeToSystemHealth() {
         }
       },
       error: (error) => {
-        console.error('❌ System health subscription error:', error);
+        console.error('System health subscription error:', error);
         // Don't set global error for system health as it might not be available for all users
       }
     });
@@ -190,7 +190,7 @@ export function subscribeToSystemHealth() {
       }
     };
   } catch (error) {
-    console.error('❌ Failed to subscribe to system health:', error);
+    console.error('Failed to subscribe to system health:', error);
     return () => {};
   }
 }
@@ -225,7 +225,7 @@ export function disconnectWebSocket() {
   wsReconnecting.set(false);
   wsError.set('');
   
-  console.log('✅ GraphQL subscriptions disconnected');
+  console.log('GraphQL subscriptions disconnected');
 }
 
 // Derived stores for computed values

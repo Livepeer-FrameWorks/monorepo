@@ -6,6 +6,7 @@
   import { analyticsService } from "$lib/graphql/services/analytics.js";
   import { billingService } from "$lib/graphql/services/billing.js";
   import { toast } from "$lib/stores/toast.js";
+  import { getIconComponent } from "$lib/iconUtils.js";
   import {
     realtimeStreams,
     streamMetrics,
@@ -180,7 +181,9 @@
             <span class="text-tokyo-night-comment">Live</span>
           </div>
         </div>
-        <div class="text-3xl mb-2">🔴</div>
+        <div class="text-3xl mb-2">
+          <svelte:component this={getIconComponent('Play')} class="w-8 h-8 text-tokyo-night-red mx-auto" />
+        </div>
         <div class="text-2xl font-bold text-tokyo-night-green mb-1">
           {enhancedStreamStats.live}
         </div>
@@ -189,7 +192,9 @@
 
       <!-- Total Viewers -->
       <div class="glow-card p-6 text-center">
-        <div class="text-3xl mb-2">👥</div>
+        <div class="text-3xl mb-2">
+          <svelte:component this={getIconComponent('Users')} class="w-8 h-8 text-tokyo-night-cyan mx-auto" />
+        </div>
         <div class="text-2xl font-bold text-tokyo-night-cyan mb-1">
           {formatNumber(enhancedStreamStats.totalViewers)}
         </div>
@@ -198,7 +203,9 @@
 
       <!-- Bandwidth Usage -->
       <div class="glow-card p-6 text-center">
-        <div class="text-3xl mb-2">📡</div>
+        <div class="text-3xl mb-2">
+          <svelte:component this={getIconComponent('Wifi')} class="w-8 h-8 text-tokyo-night-purple mx-auto" />
+        </div>
         <div class="text-2xl font-bold text-tokyo-night-purple mb-1">
           {formatBytes(totalBandwidth)}/s
         </div>
@@ -207,7 +214,9 @@
 
       <!-- Usage This Week -->
       <div class="glow-card p-6 text-center">
-        <div class="text-3xl mb-2">💰</div>
+        <div class="text-3xl mb-2">
+          <svelte:component this={getIconComponent('CreditCard')} class="w-8 h-8 text-tokyo-night-yellow mx-auto" />
+        </div>
         <div class="text-2xl font-bold text-tokyo-night-yellow mb-1">
           {usageData?.stream_hours
             ? formatNumber(usageData.stream_hours)
@@ -339,10 +348,12 @@
             </div>
           {:else}
             <div class="text-center py-6">
-              <div class="text-4xl mb-2">🎥</div>
+              <div class="text-4xl mb-2">
+                <svelte:component this={getIconComponent('Video')} class="w-10 h-10 text-tokyo-night-fg-dark mx-auto" />
+              </div>
               <p class="text-tokyo-night-fg-dark mb-4">No streams found</p>
               <a href="{base}/streams" class="btn-primary">
-                <span class="mr-2">➕</span>
+                <svelte:component this={getIconComponent('Plus')} class="w-4 h-4 mr-2" />
                 Create Your First Stream
               </a>
             </div>
@@ -351,11 +362,11 @@
           <!-- Quick Actions -->
           <div class="flex space-x-3">
             <a href="{base}/streams" class="btn-primary flex-1 text-center">
-              <span class="mr-2">🎥</span>
+              <svelte:component this={getIconComponent('Video')} class="w-4 h-4 mr-2" />
               Manage Streams
             </a>
             <a href="{base}/analytics" class="btn-secondary flex-1 text-center">
-              <span class="mr-2">📊</span>
+              <svelte:component this={getIconComponent('BarChart3')} class="w-4 h-4 mr-2" />
               View Analytics
             </a>
           </div>
@@ -443,14 +454,14 @@
               href="{base}/analytics/usage"
               class="btn-primary w-full text-center block"
             >
-              <span class="mr-2">💰</span>
+              <svelte:component this={getIconComponent('CreditCard')} class="w-4 h-4 mr-2" />
               View Detailed Usage & Costs
             </a>
             <a
               href="{base}/account/billing"
               class="btn-secondary w-full text-center block"
             >
-              <span class="mr-2">💳</span>
+              <svelte:component this={getIconComponent('CreditCard')} class="w-4 h-4 mr-2" />
               Manage Billing
             </a>
           </div>
@@ -596,11 +607,11 @@
               href="{base}/analytics/realtime"
               class="btn-primary w-full text-center block"
             >
-              <span class="mr-2">⚡</span>
+              <svelte:component this={getIconComponent('Zap')} class="w-4 h-4 mr-2" />
               Real-time Analytics
             </a>
             <a href="{base}/analytics" class="btn-secondary w-full text-center block">
-              <span class="mr-2">📊</span>
+              <svelte:component this={getIconComponent('BarChart3')} class="w-4 h-4 mr-2" />
               Full Analytics
             </a>
           </div>
