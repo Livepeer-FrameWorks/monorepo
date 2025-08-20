@@ -128,6 +128,11 @@ func (r *mutationResolver) UpdateBillingTier(ctx context.Context, tierID string)
 	return r.DoUpdateBillingTier(ctx, tierID)
 }
 
+// UpdateTenant is the resolver for the updateTenant field.
+func (r *mutationResolver) UpdateTenant(ctx context.Context, input model.UpdateTenantInput) (*models.Tenant, error) {
+	return r.DoUpdateTenant(ctx, input)
+}
+
 // CreateDeveloperToken is the resolver for the createDeveloperToken field.
 func (r *mutationResolver) CreateDeveloperToken(ctx context.Context, input model.CreateDeveloperTokenInput) (*model.DeveloperToken, error) {
 	return r.DoCreateDeveloperToken(ctx, input)
@@ -136,11 +141,6 @@ func (r *mutationResolver) CreateDeveloperToken(ctx context.Context, input model
 // RevokeDeveloperToken is the resolver for the revokeDeveloperToken field.
 func (r *mutationResolver) RevokeDeveloperToken(ctx context.Context, id string) (bool, error) {
 	return r.DoRevokeDeveloperToken(ctx, id)
-}
-
-// UpdateTenant is the resolver for the updateTenant field.
-func (r *mutationResolver) UpdateTenant(ctx context.Context, input model.UpdateTenantInput) (*models.Tenant, error) {
-	return r.DoUpdateTenant(ctx, input)
 }
 
 // Method is the resolver for the method field.
@@ -191,6 +191,31 @@ func (r *queryResolver) ViewerMetrics(ctx context.Context, stream *string, timeR
 // PlatformOverview is the resolver for the platformOverview field.
 func (r *queryResolver) PlatformOverview(ctx context.Context, timeRange *model.TimeRangeInput) (*model.PlatformOverview, error) {
 	return r.DoGetPlatformOverview(ctx, timeRange)
+}
+
+// StreamHealthMetrics is the resolver for the streamHealthMetrics field.
+func (r *queryResolver) StreamHealthMetrics(ctx context.Context, stream string, timeRange *model.TimeRangeInput) ([]*model.StreamHealthMetric, error) {
+	return r.DoGetStreamHealthMetrics(ctx, stream, timeRange)
+}
+
+// StreamQualityChanges is the resolver for the streamQualityChanges field.
+func (r *queryResolver) StreamQualityChanges(ctx context.Context, stream string, timeRange *model.TimeRangeInput) ([]*model.StreamQualityChange, error) {
+	return r.DoGetStreamQualityChanges(ctx, stream, timeRange)
+}
+
+// StreamHealthAlerts is the resolver for the streamHealthAlerts field.
+func (r *queryResolver) StreamHealthAlerts(ctx context.Context, stream *string, timeRange *model.TimeRangeInput) ([]*model.StreamHealthAlert, error) {
+	return r.DoGetStreamHealthAlerts(ctx, stream, timeRange)
+}
+
+// CurrentStreamHealth is the resolver for the currentStreamHealth field.
+func (r *queryResolver) CurrentStreamHealth(ctx context.Context, stream string) (*model.StreamHealthMetric, error) {
+	return r.DoGetCurrentStreamHealth(ctx, stream)
+}
+
+// RebufferingEvents is the resolver for the rebufferingEvents field.
+func (r *queryResolver) RebufferingEvents(ctx context.Context, stream string, timeRange *model.TimeRangeInput) ([]*model.RebufferingEvent, error) {
+	return r.DoGetRebufferingEvents(ctx, stream, timeRange)
 }
 
 // BillingTiers is the resolver for the billingTiers field.
@@ -307,6 +332,76 @@ func (r *streamAnalyticsResolver) TimeRange(ctx context.Context, obj *models.Str
 		Start: obj.SessionStartTime,
 		End:   obj.SessionEndTime,
 	}, nil
+}
+
+// CurrentHealthScore is the resolver for the currentHealthScore field.
+func (r *streamAnalyticsResolver) CurrentHealthScore(ctx context.Context, obj *models.StreamAnalytics) (*float64, error) {
+	panic(fmt.Errorf("not implemented: CurrentHealthScore - currentHealthScore"))
+}
+
+// AverageHealthScore is the resolver for the averageHealthScore field.
+func (r *streamAnalyticsResolver) AverageHealthScore(ctx context.Context, obj *models.StreamAnalytics) (*float64, error) {
+	panic(fmt.Errorf("not implemented: AverageHealthScore - averageHealthScore"))
+}
+
+// FrameJitterMs is the resolver for the frameJitterMs field.
+func (r *streamAnalyticsResolver) FrameJitterMs(ctx context.Context, obj *models.StreamAnalytics) (*float64, error) {
+	panic(fmt.Errorf("not implemented: FrameJitterMs - frameJitterMs"))
+}
+
+// KeyframeStabilityMs is the resolver for the keyframeStabilityMs field.
+func (r *streamAnalyticsResolver) KeyframeStabilityMs(ctx context.Context, obj *models.StreamAnalytics) (*float64, error) {
+	panic(fmt.Errorf("not implemented: KeyframeStabilityMs - keyframeStabilityMs"))
+}
+
+// CurrentIssues is the resolver for the currentIssues field.
+func (r *streamAnalyticsResolver) CurrentIssues(ctx context.Context, obj *models.StreamAnalytics) (*string, error) {
+	panic(fmt.Errorf("not implemented: CurrentIssues - currentIssues"))
+}
+
+// BufferState is the resolver for the bufferState field.
+func (r *streamAnalyticsResolver) BufferState(ctx context.Context, obj *models.StreamAnalytics) (*model.BufferState, error) {
+	panic(fmt.Errorf("not implemented: BufferState - bufferState"))
+}
+
+// PacketLossPercentage is the resolver for the packetLossPercentage field.
+func (r *streamAnalyticsResolver) PacketLossPercentage(ctx context.Context, obj *models.StreamAnalytics) (*float64, error) {
+	panic(fmt.Errorf("not implemented: PacketLossPercentage - packetLossPercentage"))
+}
+
+// QualityTier is the resolver for the qualityTier field.
+func (r *streamAnalyticsResolver) QualityTier(ctx context.Context, obj *models.StreamAnalytics) (*string, error) {
+	panic(fmt.Errorf("not implemented: QualityTier - qualityTier"))
+}
+
+// CurrentCodec is the resolver for the currentCodec field.
+func (r *streamAnalyticsResolver) CurrentCodec(ctx context.Context, obj *models.StreamAnalytics) (*string, error) {
+	panic(fmt.Errorf("not implemented: CurrentCodec - currentCodec"))
+}
+
+// CurrentResolution is the resolver for the currentResolution field.
+func (r *streamAnalyticsResolver) CurrentResolution(ctx context.Context, obj *models.StreamAnalytics) (*string, error) {
+	panic(fmt.Errorf("not implemented: CurrentResolution - currentResolution"))
+}
+
+// CurrentBitrate is the resolver for the currentBitrate field.
+func (r *streamAnalyticsResolver) CurrentBitrate(ctx context.Context, obj *models.StreamAnalytics) (*int, error) {
+	panic(fmt.Errorf("not implemented: CurrentBitrate - currentBitrate"))
+}
+
+// CurrentFps is the resolver for the currentFps field.
+func (r *streamAnalyticsResolver) CurrentFps(ctx context.Context, obj *models.StreamAnalytics) (*float64, error) {
+	panic(fmt.Errorf("not implemented: CurrentFps - currentFps"))
+}
+
+// RebufferCount is the resolver for the rebufferCount field.
+func (r *streamAnalyticsResolver) RebufferCount(ctx context.Context, obj *models.StreamAnalytics) (*int, error) {
+	panic(fmt.Errorf("not implemented: RebufferCount - rebufferCount"))
+}
+
+// AlertCount is the resolver for the alertCount field.
+func (r *streamAnalyticsResolver) AlertCount(ctx context.Context, obj *models.StreamAnalytics) (*int, error) {
+	panic(fmt.Errorf("not implemented: AlertCount - alertCount"))
 }
 
 // StreamEvents is the resolver for the streamEvents field.

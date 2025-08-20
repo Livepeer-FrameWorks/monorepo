@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strconv"
 
 	"frameworks/pkg/database"
@@ -54,6 +55,8 @@ func (h *AnalyticsHandler) HandleAnalyticsEvent(ydb database.PostgresConn, event
 		return h.processLoadBalancing(ctx, event)
 	case "track-list":
 		return h.processTrackList(ctx, event)
+	case "bandwidth-threshold":
+		return h.processBandwidthThreshold(ctx, event)
 	default:
 		h.logger.Warnf("Unknown event type: %s", event.EventType)
 		return nil
@@ -469,8 +472,11 @@ func (h *AnalyticsHandler) processNodeLifecycle(ctx context.Context, event kafka
 	return nil
 }
 
-// processStreamBuffer handles STREAM_BUFFER webhook events
+// processStreamBuffer handles STREAM_BUFFER webhook events with rich health metrics
 func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event kafka.AnalyticsEvent) error {
+	h.logger.Infof("Processing stream buffer event: %s", event.EventID)
+
+	// Write to stream_events for historical record
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO stream_events (
 			timestamp, event_id, tenant_id, internal_name, event_type, status, node_id, event_data
@@ -478,7 +484,68 @@ func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event kafka.
 	if err != nil {
 		return err
 	}
-	return appendAndSend(batch, event.Timestamp, event.EventID, getTenantIDFromEvent(event), *event.InternalName, "stream-buffer", event.Data["status"], event.Data["node_id"], marshalEventData(event.Data))
+	if err := appendAndSend(batch, event.Timestamp, event.EventID, getTenantIDFromEvent(event), *event.InternalName, "stream-buffer", event.Data["status"], event.Data["node_id"], marshalEventData(event.Data)); err != nil {
+		return err
+	}
+
+	// Write rich health metrics to stream_health_metrics table
+	healthBatch, err := h.clickhouse.PrepareBatch(ctx, `
+		INSERT INTO stream_health_metrics (
+			timestamp, tenant_id, internal_name, node_id,
+			bitrate, fps, width, height, codec, profile,
+			buffer_state, frame_jitter_ms, keyframe_stability_ms,
+			issues_description, has_issues, health_score, track_count,
+			frame_ms_max, frame_ms_min, frames_max, frames_min,
+			keyframe_ms_max, keyframe_ms_min, packets_sent, packets_lost,
+			audio_channels, audio_sample_rate, audio_codec, audio_bitrate
+		)`)
+	if err != nil {
+		h.logger.Errorf("Failed to prepare health metrics batch: %v", err)
+		return err
+	}
+
+	if err := healthBatch.Append(
+		event.Timestamp,
+		getTenantIDFromEvent(event),
+		*event.InternalName,
+		event.Data["node_id"],
+		convertToInt(event.Data["bitrate"]),
+		convertToFloat32(event.Data["fps"]),
+		convertToInt(event.Data["width"]),
+		convertToInt(event.Data["height"]),
+		event.Data["codec"],
+		event.Data["profile"],
+		event.Data["buffer_state"],
+		convertToFloat32(event.Data["frame_jitter_ms"]),
+		convertToFloat32(event.Data["keyframe_stability_ms"]),
+		event.Data["issues_description"],
+		convertToInt(event.Data["has_issues"]),
+		convertToFloat32(event.Data["health_score"]),
+		convertToInt(event.Data["track_count"]),
+		convertToFloat32(event.Data["frame_ms_max"]),
+		convertToFloat32(event.Data["frame_ms_min"]),
+		convertToInt(event.Data["frames_max"]),
+		convertToInt(event.Data["frames_min"]),
+		convertToFloat32(event.Data["keyframe_ms_max"]),
+		convertToFloat32(event.Data["keyframe_ms_min"]),
+		convertToInt64(event.Data["packets_sent"]),
+		convertToInt64(event.Data["packets_lost"]),
+		convertToInt(event.Data["audio_channels"]),
+		convertToInt(event.Data["audio_sample_rate"]),
+		event.Data["audio_codec"],
+		convertToInt(event.Data["audio_bitrate"]),
+	); err != nil {
+		h.logger.Errorf("Failed to append health metrics: %v", err)
+		return err
+	}
+
+	if err := healthBatch.Send(); err != nil {
+		h.logger.Errorf("Failed to send health metrics batch: %v", err)
+		return err
+	}
+
+	h.logger.Debugf("Successfully processed stream buffer health metrics for stream: %s", *event.InternalName)
+	return nil
 }
 
 // processStreamEnd handles STREAM_END webhook events
@@ -687,29 +754,145 @@ func (h *AnalyticsHandler) writeViewerMetric(ctx context.Context, event kafka.An
 	return batch.Send()
 }
 
-// processTrackList handles track list events
+// processTrackList handles track list events with quality metrics
 func (h *AnalyticsHandler) processTrackList(ctx context.Context, event kafka.AnalyticsEvent) error {
 	h.logger.Infof("Processing track list event: %s", event.EventID)
 
+	// Write to track_list_events with enhanced quality metrics
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO track_list_events (
-			timestamp, event_id, tenant_id, internal_name, node_id, track_list, track_count
+			timestamp, event_id, tenant_id, internal_name, node_id, 
+			track_list, track_count, video_track_count, audio_track_count,
+			primary_width, primary_height, primary_fps, primary_video_codec, primary_video_bitrate,
+			quality_tier, primary_audio_channels, primary_audio_sample_rate, 
+			primary_audio_codec, primary_audio_bitrate
 		)`)
 	if err != nil {
+		h.logger.Errorf("Failed to prepare track list batch: %v", err)
 		return err
 	}
+
 	trackList := ""
 	if v, ok := event.Data["track_list"].(string); ok {
 		trackList = v
 	}
-	var count int
-	if v, ok := event.Data["track_count"]; ok {
-		count = convertToInt(v)
-	}
-	if err := batch.Append(event.Timestamp, event.EventID, getTenantIDFromEvent(event), *event.InternalName, event.Data["node_id"], trackList, count); err != nil {
+
+	if err := batch.Append(
+		event.Timestamp,
+		event.EventID,
+		getTenantIDFromEvent(event),
+		*event.InternalName,
+		event.Data["node_id"],
+		trackList,
+		convertToInt(event.Data["track_count"]),
+		convertToInt(event.Data["video_track_count"]),
+		convertToInt(event.Data["audio_track_count"]),
+		convertToInt(event.Data["primary_width"]),
+		convertToInt(event.Data["primary_height"]),
+		convertToFloat32(event.Data["primary_fps"]),
+		event.Data["primary_video_codec"],
+		convertToInt(event.Data["primary_video_bitrate"]),
+		event.Data["quality_tier"],
+		convertToInt(event.Data["primary_audio_channels"]),
+		convertToInt(event.Data["primary_audio_sample_rate"]),
+		event.Data["primary_audio_codec"],
+		convertToInt(event.Data["primary_audio_bitrate"]),
+	); err != nil {
+		h.logger.Errorf("Failed to append track list data: %v", err)
 		return err
 	}
-	return batch.Send()
+
+	if err := batch.Send(); err != nil {
+		h.logger.Errorf("Failed to send track list batch: %v", err)
+		return err
+	}
+
+	// Detect quality changes if we have previous track data
+	if err := h.detectQualityChanges(ctx, event); err != nil {
+		h.logger.Errorf("Failed to detect quality changes: %v", err)
+		// Don't fail the main operation for this
+	}
+
+	h.logger.Debugf("Successfully processed track list for stream: %s", *event.InternalName)
+	return nil
+}
+
+// processBandwidthThreshold handles bandwidth threshold events
+func (h *AnalyticsHandler) processBandwidthThreshold(ctx context.Context, event kafka.AnalyticsEvent) error {
+	h.logger.Infof("Processing bandwidth threshold event: %s", event.EventID)
+
+	// Write to stream_events for threshold alerts
+	batch, err := h.clickhouse.PrepareBatch(ctx, `
+		INSERT INTO stream_events (
+			timestamp, event_id, tenant_id, internal_name, event_type, status, node_id, event_data
+		)`)
+	if err != nil {
+		h.logger.Errorf("Failed to prepare bandwidth threshold batch: %v", err)
+		return err
+	}
+
+	if err := appendAndSend(batch,
+		event.Timestamp,
+		event.EventID,
+		getTenantIDFromEvent(event),
+		*event.InternalName,
+		"bandwidth-threshold",
+		event.Data["threshold_type"],
+		event.Data["node_id"],
+		marshalEventData(event.Data)); err != nil {
+		h.logger.Errorf("Failed to write bandwidth threshold event: %v", err)
+		return err
+	}
+
+	h.logger.Debugf("Successfully processed bandwidth threshold for stream: %s", *event.InternalName)
+	return nil
+}
+
+// detectQualityChanges detects and records quality tier changes
+func (h *AnalyticsHandler) detectQualityChanges(ctx context.Context, event kafka.AnalyticsEvent) error {
+	// For now, we'll record every track list event as a potential change
+	// In a full implementation, we'd query the previous state and compare
+	currentQuality := event.Data["quality_tier"]
+	currentCodec := event.Data["primary_video_codec"]
+	currentResolution := ""
+	if w, ok := event.Data["primary_width"]; ok {
+		if h, ok := event.Data["primary_height"]; ok {
+			currentResolution = fmt.Sprintf("%dx%d", convertToInt(w), convertToInt(h))
+		}
+	}
+
+	// Simple change detection - record when we have quality info
+	if currentQuality != nil || currentCodec != nil {
+		batch, err := h.clickhouse.PrepareBatch(ctx, `
+			INSERT INTO track_change_events (
+				timestamp, event_id, tenant_id, internal_name, node_id,
+				change_type, new_tracks, new_quality_tier, new_resolution, new_codec
+			)`)
+		if err != nil {
+			return err
+		}
+
+		if err := batch.Append(
+			event.Timestamp,
+			event.EventID,
+			getTenantIDFromEvent(event),
+			*event.InternalName,
+			event.Data["node_id"],
+			"track_update", // Generic change type
+			event.Data["track_list"],
+			currentQuality,
+			currentResolution,
+			currentCodec,
+		); err != nil {
+			return err
+		}
+
+		if err := batch.Send(); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // getTenantIDFromEvent extracts tenant_id from event if present

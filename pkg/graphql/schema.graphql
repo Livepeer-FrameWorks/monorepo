@@ -15,6 +15,13 @@ type Query {
   viewerMetrics(stream: String, timeRange: TimeRangeInput): [ViewerMetric!]!
   platformOverview(timeRange: TimeRangeInput): PlatformOverview!
   
+  # New health and quality queries
+  streamHealthMetrics(stream: String!, timeRange: TimeRangeInput): [StreamHealthMetric!]!
+  streamQualityChanges(stream: String!, timeRange: TimeRangeInput): [StreamQualityChange!]!
+  streamHealthAlerts(stream: String, timeRange: TimeRangeInput): [StreamHealthAlert!]!
+  currentStreamHealth(stream: String!): StreamHealthMetric
+  rebufferingEvents(stream: String!, timeRange: TimeRangeInput): [RebufferingEvent!]!
+  
   # Billing (from Purser)  
   billingTiers: [BillingTier!]!
   invoices: [Invoice!]!
@@ -29,7 +36,7 @@ type Query {
   nodes: [Node!]!
   node(id: ID!): Node
 
-  # Developer operations
+  # Developer API (from Commodore)
   developerTokens: [DeveloperToken!]!
 }
 
@@ -49,11 +56,11 @@ type Mutation {
   updateBillingTier(tierId: ID!): BillingStatus!
 
   # Infrastructure operations (via Quartermaster)
+  updateTenant(input: UpdateTenantInput!): Tenant!
 
-  # Developer operations  
+  # Developer API operations (via Commodore)
   createDeveloperToken(input: CreateDeveloperTokenInput!): DeveloperToken!
   revokeDeveloperToken(id: ID!): Boolean!
-  updateTenant(input: UpdateTenantInput!): Tenant!
 }
 
 # Root Subscription type for real-time updates
@@ -109,7 +116,7 @@ input UpdateTenantInput {
 
 input CreateDeveloperTokenInput {
   name: String!
-  permissions: String = "read,write"
+  permissions: String
   expiresIn: Int
 }
 
@@ -149,7 +156,7 @@ type StreamEvent {
   stream: String!
   status: StreamStatus!
   timestamp: Time!
-  details: JSON
+  details: String
 }
 
 enum StreamEventType {
@@ -246,6 +253,22 @@ type StreamAnalytics {
   averageViewers: Float!
   uniqueViewers: Int!
   timeRange: TimeRange!
+  
+  # New health metrics
+  currentHealthScore: Float
+  averageHealthScore: Float
+  frameJitterMs: Float
+  keyframeStabilityMs: Float
+  currentIssues: String
+  bufferState: BufferState
+  packetLossPercentage: Float
+  qualityTier: String
+  currentCodec: String
+  currentResolution: String
+  currentBitrate: Int
+  currentFps: Float
+  rebufferCount: Int
+  alertCount: Int
 }
 
 type ViewerMetric {
@@ -356,4 +379,137 @@ type DeveloperToken {
   lastUsedAt: Time
   expiresAt: Time
   createdAt: Time!
+}
+
+# ============================================================================
+# STREAM HEALTH & QUALITY TYPES
+# ============================================================================
+
+# Buffer state enumeration
+enum BufferState {
+  FULL
+  EMPTY
+  DRY
+  RECOVER
+}
+
+# Quality change types
+enum QualityChangeType {
+  CODEC_CHANGE
+  RESOLUTION_CHANGE
+  BITRATE_CHANGE
+  TRACK_ADDED
+  TRACK_REMOVED
+  TRACK_UPDATE
+}
+
+# Alert severity levels
+enum AlertSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+# Alert types
+enum AlertType {
+  HIGH_JITTER
+  KEYFRAME_INSTABILITY
+  PACKET_LOSS
+  REBUFFERING
+  QUALITY_DEGRADATION
+}
+
+# Stream health metrics from detailed monitoring
+type StreamHealthMetric {
+  timestamp: Time!
+  stream: String!
+  nodeId: String!
+  
+  # Health scores and indicators
+  healthScore: Float!
+  frameJitterMs: Float
+  keyframeStabilityMs: Float
+  issuesDescription: String
+  hasIssues: Boolean!
+  
+  # Video quality
+  bitrate: Int
+  fps: Float
+  width: Int
+  height: Int
+  codec: String
+  qualityTier: String
+  
+  # Network performance
+  packetsSent: Int
+  packetsLost: Int
+  packetLossPercentage: Float
+  
+  # Buffer state
+  bufferState: BufferState!
+  bufferHealth: Float
+  
+  # Audio metrics
+  audioChannels: Int
+  audioSampleRate: Int
+  audioCodec: String
+  audioBitrate: Int
+}
+
+# Stream quality changes tracking
+type StreamQualityChange {
+  timestamp: Time!
+  stream: String!
+  nodeId: String!
+  changeType: QualityChangeType!
+  
+  # Change details
+  previousQualityTier: String
+  newQualityTier: String
+  previousResolution: String
+  newResolution: String
+  previousCodec: String
+  newCodec: String
+  
+  # Track data
+  previousTracks: String  # JSON
+  newTracks: String       # JSON
+}
+
+# Stream health alerts for issues
+type StreamHealthAlert {
+  timestamp: Time!
+  stream: String!
+  nodeId: String!
+  alertType: AlertType!
+  severity: AlertSeverity!
+  
+  # Alert details
+  healthScore: Float
+  frameJitterMs: Float
+  packetLossPercentage: Float
+  issuesDescription: String
+  
+  # Context
+  bufferState: BufferState
+  qualityTier: String
+}
+
+# Rebuffering events for UX analysis
+type RebufferingEvent {
+  timestamp: Time!
+  stream: String!
+  nodeId: String!
+  
+  # Rebuffer details
+  bufferState: BufferState!
+  previousState: BufferState!
+  rebufferStart: Boolean!
+  rebufferEnd: Boolean!
+  healthScore: Float
+  
+  # Performance at rebuffer time
+  frameJitterMs: Float
+  packetLossPercentage: Float
 }

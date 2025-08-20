@@ -169,24 +169,42 @@ type ComplexityRoot struct {
 	}
 
 	Query struct {
-		BillingStatus     func(childComplexity int) int
-		BillingTiers      func(childComplexity int) int
-		Cluster           func(childComplexity int, id string) int
-		Clusters          func(childComplexity int) int
-		DeveloperTokens   func(childComplexity int) int
-		Invoice           func(childComplexity int, id string) int
-		Invoices          func(childComplexity int) int
-		Node              func(childComplexity int, id string) int
-		Nodes             func(childComplexity int) int
-		PlatformOverview  func(childComplexity int, timeRange *model.TimeRangeInput) int
-		Stream            func(childComplexity int, id string) int
-		StreamAnalytics   func(childComplexity int, stream string, timeRange *model.TimeRangeInput) int
-		StreamEmbed       func(childComplexity int, id string) int
-		Streams           func(childComplexity int) int
-		Tenant            func(childComplexity int) int
-		UsageRecords      func(childComplexity int, timeRange *model.TimeRangeInput) int
-		ValidateStreamKey func(childComplexity int, streamKey string) int
-		ViewerMetrics     func(childComplexity int, stream *string, timeRange *model.TimeRangeInput) int
+		BillingStatus        func(childComplexity int) int
+		BillingTiers         func(childComplexity int) int
+		Cluster              func(childComplexity int, id string) int
+		Clusters             func(childComplexity int) int
+		CurrentStreamHealth  func(childComplexity int, stream string) int
+		DeveloperTokens      func(childComplexity int) int
+		Invoice              func(childComplexity int, id string) int
+		Invoices             func(childComplexity int) int
+		Node                 func(childComplexity int, id string) int
+		Nodes                func(childComplexity int) int
+		PlatformOverview     func(childComplexity int, timeRange *model.TimeRangeInput) int
+		RebufferingEvents    func(childComplexity int, stream string, timeRange *model.TimeRangeInput) int
+		Stream               func(childComplexity int, id string) int
+		StreamAnalytics      func(childComplexity int, stream string, timeRange *model.TimeRangeInput) int
+		StreamEmbed          func(childComplexity int, id string) int
+		StreamHealthAlerts   func(childComplexity int, stream *string, timeRange *model.TimeRangeInput) int
+		StreamHealthMetrics  func(childComplexity int, stream string, timeRange *model.TimeRangeInput) int
+		StreamQualityChanges func(childComplexity int, stream string, timeRange *model.TimeRangeInput) int
+		Streams              func(childComplexity int) int
+		Tenant               func(childComplexity int) int
+		UsageRecords         func(childComplexity int, timeRange *model.TimeRangeInput) int
+		ValidateStreamKey    func(childComplexity int, streamKey string) int
+		ViewerMetrics        func(childComplexity int, stream *string, timeRange *model.TimeRangeInput) int
+	}
+
+	RebufferingEvent struct {
+		BufferState          func(childComplexity int) int
+		FrameJitterMs        func(childComplexity int) int
+		HealthScore          func(childComplexity int) int
+		NodeID               func(childComplexity int) int
+		PacketLossPercentage func(childComplexity int) int
+		PreviousState        func(childComplexity int) int
+		RebufferEnd          func(childComplexity int) int
+		RebufferStart        func(childComplexity int) int
+		Stream               func(childComplexity int) int
+		Timestamp            func(childComplexity int) int
 	}
 
 	Stream struct {
@@ -202,13 +220,27 @@ type ComplexityRoot struct {
 	}
 
 	StreamAnalytics struct {
-		AverageViewers func(childComplexity int) int
-		PeakViewers    func(childComplexity int) int
-		Stream         func(childComplexity int) int
-		TimeRange      func(childComplexity int) int
-		TotalViewTime  func(childComplexity int) int
-		TotalViews     func(childComplexity int) int
-		UniqueViewers  func(childComplexity int) int
+		AlertCount           func(childComplexity int) int
+		AverageHealthScore   func(childComplexity int) int
+		AverageViewers       func(childComplexity int) int
+		BufferState          func(childComplexity int) int
+		CurrentBitrate       func(childComplexity int) int
+		CurrentCodec         func(childComplexity int) int
+		CurrentFps           func(childComplexity int) int
+		CurrentHealthScore   func(childComplexity int) int
+		CurrentIssues        func(childComplexity int) int
+		CurrentResolution    func(childComplexity int) int
+		FrameJitterMs        func(childComplexity int) int
+		KeyframeStabilityMs  func(childComplexity int) int
+		PacketLossPercentage func(childComplexity int) int
+		PeakViewers          func(childComplexity int) int
+		QualityTier          func(childComplexity int) int
+		RebufferCount        func(childComplexity int) int
+		Stream               func(childComplexity int) int
+		TimeRange            func(childComplexity int) int
+		TotalViewTime        func(childComplexity int) int
+		TotalViews           func(childComplexity int) int
+		UniqueViewers        func(childComplexity int) int
 	}
 
 	StreamEmbed struct {
@@ -225,6 +257,61 @@ type ComplexityRoot struct {
 		Stream    func(childComplexity int) int
 		Timestamp func(childComplexity int) int
 		Type      func(childComplexity int) int
+	}
+
+	StreamHealthAlert struct {
+		AlertType            func(childComplexity int) int
+		BufferState          func(childComplexity int) int
+		FrameJitterMs        func(childComplexity int) int
+		HealthScore          func(childComplexity int) int
+		IssuesDescription    func(childComplexity int) int
+		NodeID               func(childComplexity int) int
+		PacketLossPercentage func(childComplexity int) int
+		QualityTier          func(childComplexity int) int
+		Severity             func(childComplexity int) int
+		Stream               func(childComplexity int) int
+		Timestamp            func(childComplexity int) int
+	}
+
+	StreamHealthMetric struct {
+		AudioBitrate         func(childComplexity int) int
+		AudioChannels        func(childComplexity int) int
+		AudioCodec           func(childComplexity int) int
+		AudioSampleRate      func(childComplexity int) int
+		Bitrate              func(childComplexity int) int
+		BufferHealth         func(childComplexity int) int
+		BufferState          func(childComplexity int) int
+		Codec                func(childComplexity int) int
+		Fps                  func(childComplexity int) int
+		FrameJitterMs        func(childComplexity int) int
+		HasIssues            func(childComplexity int) int
+		HealthScore          func(childComplexity int) int
+		Height               func(childComplexity int) int
+		IssuesDescription    func(childComplexity int) int
+		KeyframeStabilityMs  func(childComplexity int) int
+		NodeID               func(childComplexity int) int
+		PacketLossPercentage func(childComplexity int) int
+		PacketsLost          func(childComplexity int) int
+		PacketsSent          func(childComplexity int) int
+		QualityTier          func(childComplexity int) int
+		Stream               func(childComplexity int) int
+		Timestamp            func(childComplexity int) int
+		Width                func(childComplexity int) int
+	}
+
+	StreamQualityChange struct {
+		ChangeType          func(childComplexity int) int
+		NewCodec            func(childComplexity int) int
+		NewQualityTier      func(childComplexity int) int
+		NewResolution       func(childComplexity int) int
+		NewTracks           func(childComplexity int) int
+		NodeID              func(childComplexity int) int
+		PreviousCodec       func(childComplexity int) int
+		PreviousQualityTier func(childComplexity int) int
+		PreviousResolution  func(childComplexity int) int
+		PreviousTracks      func(childComplexity int) int
+		Stream              func(childComplexity int) int
+		Timestamp           func(childComplexity int) int
 	}
 
 	StreamValidation struct {
@@ -328,9 +415,9 @@ type MutationResolver interface {
 	CreateClip(ctx context.Context, input model.CreateClipInput) (*model.Clip, error)
 	CreatePayment(ctx context.Context, input model.CreatePaymentInput) (*models.Payment, error)
 	UpdateBillingTier(ctx context.Context, tierID string) (*models.BillingStatus, error)
+	UpdateTenant(ctx context.Context, input model.UpdateTenantInput) (*models.Tenant, error)
 	CreateDeveloperToken(ctx context.Context, input model.CreateDeveloperTokenInput) (*model.DeveloperToken, error)
 	RevokeDeveloperToken(ctx context.Context, id string) (bool, error)
-	UpdateTenant(ctx context.Context, input model.UpdateTenantInput) (*models.Tenant, error)
 }
 type PaymentResolver interface {
 	Method(ctx context.Context, obj *models.Payment) (model.PaymentMethod, error)
@@ -343,6 +430,11 @@ type QueryResolver interface {
 	StreamAnalytics(ctx context.Context, stream string, timeRange *model.TimeRangeInput) (*models.StreamAnalytics, error)
 	ViewerMetrics(ctx context.Context, stream *string, timeRange *model.TimeRangeInput) ([]*model.ViewerMetric, error)
 	PlatformOverview(ctx context.Context, timeRange *model.TimeRangeInput) (*model.PlatformOverview, error)
+	StreamHealthMetrics(ctx context.Context, stream string, timeRange *model.TimeRangeInput) ([]*model.StreamHealthMetric, error)
+	StreamQualityChanges(ctx context.Context, stream string, timeRange *model.TimeRangeInput) ([]*model.StreamQualityChange, error)
+	StreamHealthAlerts(ctx context.Context, stream *string, timeRange *model.TimeRangeInput) ([]*model.StreamHealthAlert, error)
+	CurrentStreamHealth(ctx context.Context, stream string) (*model.StreamHealthMetric, error)
+	RebufferingEvents(ctx context.Context, stream string, timeRange *model.TimeRangeInput) ([]*model.RebufferingEvent, error)
 	BillingTiers(ctx context.Context) ([]*models.BillingTier, error)
 	Invoices(ctx context.Context) ([]*models.Invoice, error)
 	Invoice(ctx context.Context, id string) (*models.Invoice, error)
@@ -369,6 +461,20 @@ type StreamAnalyticsResolver interface {
 	AverageViewers(ctx context.Context, obj *models.StreamAnalytics) (float64, error)
 	UniqueViewers(ctx context.Context, obj *models.StreamAnalytics) (int, error)
 	TimeRange(ctx context.Context, obj *models.StreamAnalytics) (*model.TimeRange, error)
+	CurrentHealthScore(ctx context.Context, obj *models.StreamAnalytics) (*float64, error)
+	AverageHealthScore(ctx context.Context, obj *models.StreamAnalytics) (*float64, error)
+	FrameJitterMs(ctx context.Context, obj *models.StreamAnalytics) (*float64, error)
+	KeyframeStabilityMs(ctx context.Context, obj *models.StreamAnalytics) (*float64, error)
+	CurrentIssues(ctx context.Context, obj *models.StreamAnalytics) (*string, error)
+	BufferState(ctx context.Context, obj *models.StreamAnalytics) (*model.BufferState, error)
+	PacketLossPercentage(ctx context.Context, obj *models.StreamAnalytics) (*float64, error)
+	QualityTier(ctx context.Context, obj *models.StreamAnalytics) (*string, error)
+	CurrentCodec(ctx context.Context, obj *models.StreamAnalytics) (*string, error)
+	CurrentResolution(ctx context.Context, obj *models.StreamAnalytics) (*string, error)
+	CurrentBitrate(ctx context.Context, obj *models.StreamAnalytics) (*int, error)
+	CurrentFps(ctx context.Context, obj *models.StreamAnalytics) (*float64, error)
+	RebufferCount(ctx context.Context, obj *models.StreamAnalytics) (*int, error)
+	AlertCount(ctx context.Context, obj *models.StreamAnalytics) (*int, error)
 }
 type SubscriptionResolver interface {
 	StreamEvents(ctx context.Context, stream *string) (<-chan *model.StreamEvent, error)
@@ -1026,6 +1132,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.Query.Clusters(childComplexity), true
 
+	case "Query.currentStreamHealth":
+		if e.complexity.Query.CurrentStreamHealth == nil {
+			break
+		}
+
+		args, err := ec.field_Query_currentStreamHealth_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.complexity.Query.CurrentStreamHealth(childComplexity, args["stream"].(string)), true
+
 	case "Query.developerTokens":
 		if e.complexity.Query.DeveloperTokens == nil {
 			break
@@ -1083,6 +1201,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.Query.PlatformOverview(childComplexity, args["timeRange"].(*model.TimeRangeInput)), true
 
+	case "Query.rebufferingEvents":
+		if e.complexity.Query.RebufferingEvents == nil {
+			break
+		}
+
+		args, err := ec.field_Query_rebufferingEvents_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.complexity.Query.RebufferingEvents(childComplexity, args["stream"].(string), args["timeRange"].(*model.TimeRangeInput)), true
+
 	case "Query.stream":
 		if e.complexity.Query.Stream == nil {
 			break
@@ -1118,6 +1248,42 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.complexity.Query.StreamEmbed(childComplexity, args["id"].(string)), true
+
+	case "Query.streamHealthAlerts":
+		if e.complexity.Query.StreamHealthAlerts == nil {
+			break
+		}
+
+		args, err := ec.field_Query_streamHealthAlerts_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.complexity.Query.StreamHealthAlerts(childComplexity, args["stream"].(*string), args["timeRange"].(*model.TimeRangeInput)), true
+
+	case "Query.streamHealthMetrics":
+		if e.complexity.Query.StreamHealthMetrics == nil {
+			break
+		}
+
+		args, err := ec.field_Query_streamHealthMetrics_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.complexity.Query.StreamHealthMetrics(childComplexity, args["stream"].(string), args["timeRange"].(*model.TimeRangeInput)), true
+
+	case "Query.streamQualityChanges":
+		if e.complexity.Query.StreamQualityChanges == nil {
+			break
+		}
+
+		args, err := ec.field_Query_streamQualityChanges_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.complexity.Query.StreamQualityChanges(childComplexity, args["stream"].(string), args["timeRange"].(*model.TimeRangeInput)), true
 
 	case "Query.streams":
 		if e.complexity.Query.Streams == nil {
@@ -1168,6 +1334,76 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.complexity.Query.ViewerMetrics(childComplexity, args["stream"].(*string), args["timeRange"].(*model.TimeRangeInput)), true
+
+	case "RebufferingEvent.bufferState":
+		if e.complexity.RebufferingEvent.BufferState == nil {
+			break
+		}
+
+		return e.complexity.RebufferingEvent.BufferState(childComplexity), true
+
+	case "RebufferingEvent.frameJitterMs":
+		if e.complexity.RebufferingEvent.FrameJitterMs == nil {
+			break
+		}
+
+		return e.complexity.RebufferingEvent.FrameJitterMs(childComplexity), true
+
+	case "RebufferingEvent.healthScore":
+		if e.complexity.RebufferingEvent.HealthScore == nil {
+			break
+		}
+
+		return e.complexity.RebufferingEvent.HealthScore(childComplexity), true
+
+	case "RebufferingEvent.nodeId":
+		if e.complexity.RebufferingEvent.NodeID == nil {
+			break
+		}
+
+		return e.complexity.RebufferingEvent.NodeID(childComplexity), true
+
+	case "RebufferingEvent.packetLossPercentage":
+		if e.complexity.RebufferingEvent.PacketLossPercentage == nil {
+			break
+		}
+
+		return e.complexity.RebufferingEvent.PacketLossPercentage(childComplexity), true
+
+	case "RebufferingEvent.previousState":
+		if e.complexity.RebufferingEvent.PreviousState == nil {
+			break
+		}
+
+		return e.complexity.RebufferingEvent.PreviousState(childComplexity), true
+
+	case "RebufferingEvent.rebufferEnd":
+		if e.complexity.RebufferingEvent.RebufferEnd == nil {
+			break
+		}
+
+		return e.complexity.RebufferingEvent.RebufferEnd(childComplexity), true
+
+	case "RebufferingEvent.rebufferStart":
+		if e.complexity.RebufferingEvent.RebufferStart == nil {
+			break
+		}
+
+		return e.complexity.RebufferingEvent.RebufferStart(childComplexity), true
+
+	case "RebufferingEvent.stream":
+		if e.complexity.RebufferingEvent.Stream == nil {
+			break
+		}
+
+		return e.complexity.RebufferingEvent.Stream(childComplexity), true
+
+	case "RebufferingEvent.timestamp":
+		if e.complexity.RebufferingEvent.Timestamp == nil {
+			break
+		}
+
+		return e.complexity.RebufferingEvent.Timestamp(childComplexity), true
 
 	case "Stream.createdAt":
 		if e.complexity.Stream.CreatedAt == nil {
@@ -1232,6 +1468,20 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.Stream.UpdatedAt(childComplexity), true
 
+	case "StreamAnalytics.alertCount":
+		if e.complexity.StreamAnalytics.AlertCount == nil {
+			break
+		}
+
+		return e.complexity.StreamAnalytics.AlertCount(childComplexity), true
+
+	case "StreamAnalytics.averageHealthScore":
+		if e.complexity.StreamAnalytics.AverageHealthScore == nil {
+			break
+		}
+
+		return e.complexity.StreamAnalytics.AverageHealthScore(childComplexity), true
+
 	case "StreamAnalytics.averageViewers":
 		if e.complexity.StreamAnalytics.AverageViewers == nil {
 			break
@@ -1239,12 +1489,96 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.StreamAnalytics.AverageViewers(childComplexity), true
 
+	case "StreamAnalytics.bufferState":
+		if e.complexity.StreamAnalytics.BufferState == nil {
+			break
+		}
+
+		return e.complexity.StreamAnalytics.BufferState(childComplexity), true
+
+	case "StreamAnalytics.currentBitrate":
+		if e.complexity.StreamAnalytics.CurrentBitrate == nil {
+			break
+		}
+
+		return e.complexity.StreamAnalytics.CurrentBitrate(childComplexity), true
+
+	case "StreamAnalytics.currentCodec":
+		if e.complexity.StreamAnalytics.CurrentCodec == nil {
+			break
+		}
+
+		return e.complexity.StreamAnalytics.CurrentCodec(childComplexity), true
+
+	case "StreamAnalytics.currentFps":
+		if e.complexity.StreamAnalytics.CurrentFps == nil {
+			break
+		}
+
+		return e.complexity.StreamAnalytics.CurrentFps(childComplexity), true
+
+	case "StreamAnalytics.currentHealthScore":
+		if e.complexity.StreamAnalytics.CurrentHealthScore == nil {
+			break
+		}
+
+		return e.complexity.StreamAnalytics.CurrentHealthScore(childComplexity), true
+
+	case "StreamAnalytics.currentIssues":
+		if e.complexity.StreamAnalytics.CurrentIssues == nil {
+			break
+		}
+
+		return e.complexity.StreamAnalytics.CurrentIssues(childComplexity), true
+
+	case "StreamAnalytics.currentResolution":
+		if e.complexity.StreamAnalytics.CurrentResolution == nil {
+			break
+		}
+
+		return e.complexity.StreamAnalytics.CurrentResolution(childComplexity), true
+
+	case "StreamAnalytics.frameJitterMs":
+		if e.complexity.StreamAnalytics.FrameJitterMs == nil {
+			break
+		}
+
+		return e.complexity.StreamAnalytics.FrameJitterMs(childComplexity), true
+
+	case "StreamAnalytics.keyframeStabilityMs":
+		if e.complexity.StreamAnalytics.KeyframeStabilityMs == nil {
+			break
+		}
+
+		return e.complexity.StreamAnalytics.KeyframeStabilityMs(childComplexity), true
+
+	case "StreamAnalytics.packetLossPercentage":
+		if e.complexity.StreamAnalytics.PacketLossPercentage == nil {
+			break
+		}
+
+		return e.complexity.StreamAnalytics.PacketLossPercentage(childComplexity), true
+
 	case "StreamAnalytics.peakViewers":
 		if e.complexity.StreamAnalytics.PeakViewers == nil {
 			break
 		}
 
 		return e.complexity.StreamAnalytics.PeakViewers(childComplexity), true
+
+	case "StreamAnalytics.qualityTier":
+		if e.complexity.StreamAnalytics.QualityTier == nil {
+			break
+		}
+
+		return e.complexity.StreamAnalytics.QualityTier(childComplexity), true
+
+	case "StreamAnalytics.rebufferCount":
+		if e.complexity.StreamAnalytics.RebufferCount == nil {
+			break
+		}
+
+		return e.complexity.StreamAnalytics.RebufferCount(childComplexity), true
 
 	case "StreamAnalytics.stream":
 		if e.complexity.StreamAnalytics.Stream == nil {
@@ -1350,6 +1684,328 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.complexity.StreamEvent.Type(childComplexity), true
+
+	case "StreamHealthAlert.alertType":
+		if e.complexity.StreamHealthAlert.AlertType == nil {
+			break
+		}
+
+		return e.complexity.StreamHealthAlert.AlertType(childComplexity), true
+
+	case "StreamHealthAlert.bufferState":
+		if e.complexity.StreamHealthAlert.BufferState == nil {
+			break
+		}
+
+		return e.complexity.StreamHealthAlert.BufferState(childComplexity), true
+
+	case "StreamHealthAlert.frameJitterMs":
+		if e.complexity.StreamHealthAlert.FrameJitterMs == nil {
+			break
+		}
+
+		return e.complexity.StreamHealthAlert.FrameJitterMs(childComplexity), true
+
+	case "StreamHealthAlert.healthScore":
+		if e.complexity.StreamHealthAlert.HealthScore == nil {
+			break
+		}
+
+		return e.complexity.StreamHealthAlert.HealthScore(childComplexity), true
+
+	case "StreamHealthAlert.issuesDescription":
+		if e.complexity.StreamHealthAlert.IssuesDescription == nil {
+			break
+		}
+
+		return e.complexity.StreamHealthAlert.IssuesDescription(childComplexity), true
+
+	case "StreamHealthAlert.nodeId":
+		if e.complexity.StreamHealthAlert.NodeID == nil {
+			break
+		}
+
+		return e.complexity.StreamHealthAlert.NodeID(childComplexity), true
+
+	case "StreamHealthAlert.packetLossPercentage":
+		if e.complexity.StreamHealthAlert.PacketLossPercentage == nil {
+			break
+		}
+
+		return e.complexity.StreamHealthAlert.PacketLossPercentage(childComplexity), true
+
+	case "StreamHealthAlert.qualityTier":
+		if e.complexity.StreamHealthAlert.QualityTier == nil {
+			break
+		}
+
+		return e.complexity.StreamHealthAlert.QualityTier(childComplexity), true
+
+	case "StreamHealthAlert.severity":
+		if e.complexity.StreamHealthAlert.Severity == nil {
+			break
+		}
+
+		return e.complexity.StreamHealthAlert.Severity(childComplexity), true
+
+	case "StreamHealthAlert.stream":
+		if e.complexity.StreamHealthAlert.Stream == nil {
+			break
+		}
+
+		return e.complexity.StreamHealthAlert.Stream(childComplexity), true
+
+	case "StreamHealthAlert.timestamp":
+		if e.complexity.StreamHealthAlert.Timestamp == nil {
+			break
+		}
+
+		return e.complexity.StreamHealthAlert.Timestamp(childComplexity), true
+
+	case "StreamHealthMetric.audioBitrate":
+		if e.complexity.StreamHealthMetric.AudioBitrate == nil {
+			break
+		}
+
+		return e.complexity.StreamHealthMetric.AudioBitrate(childComplexity), true
+
+	case "StreamHealthMetric.audioChannels":
+		if e.complexity.StreamHealthMetric.AudioChannels == nil {
+			break
+		}
+
+		return e.complexity.StreamHealthMetric.AudioChannels(childComplexity), true
+
+	case "StreamHealthMetric.audioCodec":
+		if e.complexity.StreamHealthMetric.AudioCodec == nil {
+			break
+		}
+
+		return e.complexity.StreamHealthMetric.AudioCodec(childComplexity), true
+
+	case "StreamHealthMetric.audioSampleRate":
+		if e.complexity.StreamHealthMetric.AudioSampleRate == nil {
+			break
+		}
+
+		return e.complexity.StreamHealthMetric.AudioSampleRate(childComplexity), true
+
+	case "StreamHealthMetric.bitrate":
+		if e.complexity.StreamHealthMetric.Bitrate == nil {
+			break
+		}
+
+		return e.complexity.StreamHealthMetric.Bitrate(childComplexity), true
+
+	case "StreamHealthMetric.bufferHealth":
+		if e.complexity.StreamHealthMetric.BufferHealth == nil {
+			break
+		}
+
+		return e.complexity.StreamHealthMetric.BufferHealth(childComplexity), true
+
+	case "StreamHealthMetric.bufferState":
+		if e.complexity.StreamHealthMetric.BufferState == nil {
+			break
+		}
+
+		return e.complexity.StreamHealthMetric.BufferState(childComplexity), true
+
+	case "StreamHealthMetric.codec":
+		if e.complexity.StreamHealthMetric.Codec == nil {
+			break
+		}
+
+		return e.complexity.StreamHealthMetric.Codec(childComplexity), true
+
+	case "StreamHealthMetric.fps":
+		if e.complexity.StreamHealthMetric.Fps == nil {
+			break
+		}
+
+		return e.complexity.StreamHealthMetric.Fps(childComplexity), true
+
+	case "StreamHealthMetric.frameJitterMs":
+		if e.complexity.StreamHealthMetric.FrameJitterMs == nil {
+			break
+		}
+
+		return e.complexity.StreamHealthMetric.FrameJitterMs(childComplexity), true
+
+	case "StreamHealthMetric.hasIssues":
+		if e.complexity.StreamHealthMetric.HasIssues == nil {
+			break
+		}
+
+		return e.complexity.StreamHealthMetric.HasIssues(childComplexity), true
+
+	case "StreamHealthMetric.healthScore":
+		if e.complexity.StreamHealthMetric.HealthScore == nil {
+			break
+		}
+
+		return e.complexity.StreamHealthMetric.HealthScore(childComplexity), true
+
+	case "StreamHealthMetric.height":
+		if e.complexity.StreamHealthMetric.Height == nil {
+			break
+		}
+
+		return e.complexity.StreamHealthMetric.Height(childComplexity), true
+
+	case "StreamHealthMetric.issuesDescription":
+		if e.complexity.StreamHealthMetric.IssuesDescription == nil {
+			break
+		}
+
+		return e.complexity.StreamHealthMetric.IssuesDescription(childComplexity), true
+
+	case "StreamHealthMetric.keyframeStabilityMs":
+		if e.complexity.StreamHealthMetric.KeyframeStabilityMs == nil {
+			break
+		}
+
+		return e.complexity.StreamHealthMetric.KeyframeStabilityMs(childComplexity), true
+
+	case "StreamHealthMetric.nodeId":
+		if e.complexity.StreamHealthMetric.NodeID == nil {
+			break
+		}
+
+		return e.complexity.StreamHealthMetric.NodeID(childComplexity), true
+
+	case "StreamHealthMetric.packetLossPercentage":
+		if e.complexity.StreamHealthMetric.PacketLossPercentage == nil {
+			break
+		}
+
+		return e.complexity.StreamHealthMetric.PacketLossPercentage(childComplexity), true
+
+	case "StreamHealthMetric.packetsLost":
+		if e.complexity.StreamHealthMetric.PacketsLost == nil {
+			break
+		}
+
+		return e.complexity.StreamHealthMetric.PacketsLost(childComplexity), true
+
+	case "StreamHealthMetric.packetsSent":
+		if e.complexity.StreamHealthMetric.PacketsSent == nil {
+			break
+		}
+
+		return e.complexity.StreamHealthMetric.PacketsSent(childComplexity), true
+
+	case "StreamHealthMetric.qualityTier":
+		if e.complexity.StreamHealthMetric.QualityTier == nil {
+			break
+		}
+
+		return e.complexity.StreamHealthMetric.QualityTier(childComplexity), true
+
+	case "StreamHealthMetric.stream":
+		if e.complexity.StreamHealthMetric.Stream == nil {
+			break
+		}
+
+		return e.complexity.StreamHealthMetric.Stream(childComplexity), true
+
+	case "StreamHealthMetric.timestamp":
+		if e.complexity.StreamHealthMetric.Timestamp == nil {
+			break
+		}
+
+		return e.complexity.StreamHealthMetric.Timestamp(childComplexity), true
+
+	case "StreamHealthMetric.width":
+		if e.complexity.StreamHealthMetric.Width == nil {
+			break
+		}
+
+		return e.complexity.StreamHealthMetric.Width(childComplexity), true
+
+	case "StreamQualityChange.changeType":
+		if e.complexity.StreamQualityChange.ChangeType == nil {
+			break
+		}
+
+		return e.complexity.StreamQualityChange.ChangeType(childComplexity), true
+
+	case "StreamQualityChange.newCodec":
+		if e.complexity.StreamQualityChange.NewCodec == nil {
+			break
+		}
+
+		return e.complexity.StreamQualityChange.NewCodec(childComplexity), true
+
+	case "StreamQualityChange.newQualityTier":
+		if e.complexity.StreamQualityChange.NewQualityTier == nil {
+			break
+		}
+
+		return e.complexity.StreamQualityChange.NewQualityTier(childComplexity), true
+
+	case "StreamQualityChange.newResolution":
+		if e.complexity.StreamQualityChange.NewResolution == nil {
+			break
+		}
+
+		return e.complexity.StreamQualityChange.NewResolution(childComplexity), true
+
+	case "StreamQualityChange.newTracks":
+		if e.complexity.StreamQualityChange.NewTracks == nil {
+			break
+		}
+
+		return e.complexity.StreamQualityChange.NewTracks(childComplexity), true
+
+	case "StreamQualityChange.nodeId":
+		if e.complexity.StreamQualityChange.NodeID == nil {
+			break
+		}
+
+		return e.complexity.StreamQualityChange.NodeID(childComplexity), true
+
+	case "StreamQualityChange.previousCodec":
+		if e.complexity.StreamQualityChange.PreviousCodec == nil {
+			break
+		}
+
+		return e.complexity.StreamQualityChange.PreviousCodec(childComplexity), true
+
+	case "StreamQualityChange.previousQualityTier":
+		if e.complexity.StreamQualityChange.PreviousQualityTier == nil {
+			break
+		}
+
+		return e.complexity.StreamQualityChange.PreviousQualityTier(childComplexity), true
+
+	case "StreamQualityChange.previousResolution":
+		if e.complexity.StreamQualityChange.PreviousResolution == nil {
+			break
+		}
+
+		return e.complexity.StreamQualityChange.PreviousResolution(childComplexity), true
+
+	case "StreamQualityChange.previousTracks":
+		if e.complexity.StreamQualityChange.PreviousTracks == nil {
+			break
+		}
+
+		return e.complexity.StreamQualityChange.PreviousTracks(childComplexity), true
+
+	case "StreamQualityChange.stream":
+		if e.complexity.StreamQualityChange.Stream == nil {
+			break
+		}
+
+		return e.complexity.StreamQualityChange.Stream(childComplexity), true
+
+	case "StreamQualityChange.timestamp":
+		if e.complexity.StreamQualityChange.Timestamp == nil {
+			break
+		}
+
+		return e.complexity.StreamQualityChange.Timestamp(childComplexity), true
 
 	case "StreamValidation.error":
 		if e.complexity.StreamValidation.Error == nil {
@@ -1841,6 +2497,13 @@ type Query {
   viewerMetrics(stream: String, timeRange: TimeRangeInput): [ViewerMetric!]!
   platformOverview(timeRange: TimeRangeInput): PlatformOverview!
   
+  # New health and quality queries
+  streamHealthMetrics(stream: String!, timeRange: TimeRangeInput): [StreamHealthMetric!]!
+  streamQualityChanges(stream: String!, timeRange: TimeRangeInput): [StreamQualityChange!]!
+  streamHealthAlerts(stream: String, timeRange: TimeRangeInput): [StreamHealthAlert!]!
+  currentStreamHealth(stream: String!): StreamHealthMetric
+  rebufferingEvents(stream: String!, timeRange: TimeRangeInput): [RebufferingEvent!]!
+  
   # Billing (from Purser)  
   billingTiers: [BillingTier!]!
   invoices: [Invoice!]!
@@ -1855,7 +2518,7 @@ type Query {
   nodes: [Node!]!
   node(id: ID!): Node
 
-  # Developer operations
+  # Developer API (from Commodore)
   developerTokens: [DeveloperToken!]!
 }
 
@@ -1875,11 +2538,11 @@ type Mutation {
   updateBillingTier(tierId: ID!): BillingStatus!
 
   # Infrastructure operations (via Quartermaster)
+  updateTenant(input: UpdateTenantInput!): Tenant!
 
-  # Developer operations  
+  # Developer API operations (via Commodore)
   createDeveloperToken(input: CreateDeveloperTokenInput!): DeveloperToken!
   revokeDeveloperToken(id: ID!): Boolean!
-  updateTenant(input: UpdateTenantInput!): Tenant!
 }
 
 # Root Subscription type for real-time updates
@@ -1935,7 +2598,7 @@ input UpdateTenantInput {
 
 input CreateDeveloperTokenInput {
   name: String!
-  permissions: String = "read,write"
+  permissions: String
   expiresIn: Int
 }
 
@@ -1975,7 +2638,7 @@ type StreamEvent {
   stream: String!
   status: StreamStatus!
   timestamp: Time!
-  details: JSON
+  details: String
 }
 
 enum StreamEventType {
@@ -2072,6 +2735,22 @@ type StreamAnalytics {
   averageViewers: Float!
   uniqueViewers: Int!
   timeRange: TimeRange!
+  
+  # New health metrics
+  currentHealthScore: Float
+  averageHealthScore: Float
+  frameJitterMs: Float
+  keyframeStabilityMs: Float
+  currentIssues: String
+  bufferState: BufferState
+  packetLossPercentage: Float
+  qualityTier: String
+  currentCodec: String
+  currentResolution: String
+  currentBitrate: Int
+  currentFps: Float
+  rebufferCount: Int
+  alertCount: Int
 }
 
 type ViewerMetric {
@@ -2182,6 +2861,139 @@ type DeveloperToken {
   lastUsedAt: Time
   expiresAt: Time
   createdAt: Time!
+}
+
+# ============================================================================
+# STREAM HEALTH & QUALITY TYPES
+# ============================================================================
+
+# Buffer state enumeration
+enum BufferState {
+  FULL
+  EMPTY
+  DRY
+  RECOVER
+}
+
+# Quality change types
+enum QualityChangeType {
+  CODEC_CHANGE
+  RESOLUTION_CHANGE
+  BITRATE_CHANGE
+  TRACK_ADDED
+  TRACK_REMOVED
+  TRACK_UPDATE
+}
+
+# Alert severity levels
+enum AlertSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+# Alert types
+enum AlertType {
+  HIGH_JITTER
+  KEYFRAME_INSTABILITY
+  PACKET_LOSS
+  REBUFFERING
+  QUALITY_DEGRADATION
+}
+
+# Stream health metrics from detailed monitoring
+type StreamHealthMetric {
+  timestamp: Time!
+  stream: String!
+  nodeId: String!
+  
+  # Health scores and indicators
+  healthScore: Float!
+  frameJitterMs: Float
+  keyframeStabilityMs: Float
+  issuesDescription: String
+  hasIssues: Boolean!
+  
+  # Video quality
+  bitrate: Int
+  fps: Float
+  width: Int
+  height: Int
+  codec: String
+  qualityTier: String
+  
+  # Network performance
+  packetsSent: Int
+  packetsLost: Int
+  packetLossPercentage: Float
+  
+  # Buffer state
+  bufferState: BufferState!
+  bufferHealth: Float
+  
+  # Audio metrics
+  audioChannels: Int
+  audioSampleRate: Int
+  audioCodec: String
+  audioBitrate: Int
+}
+
+# Stream quality changes tracking
+type StreamQualityChange {
+  timestamp: Time!
+  stream: String!
+  nodeId: String!
+  changeType: QualityChangeType!
+  
+  # Change details
+  previousQualityTier: String
+  newQualityTier: String
+  previousResolution: String
+  newResolution: String
+  previousCodec: String
+  newCodec: String
+  
+  # Track data
+  previousTracks: String  # JSON
+  newTracks: String       # JSON
+}
+
+# Stream health alerts for issues
+type StreamHealthAlert {
+  timestamp: Time!
+  stream: String!
+  nodeId: String!
+  alertType: AlertType!
+  severity: AlertSeverity!
+  
+  # Alert details
+  healthScore: Float
+  frameJitterMs: Float
+  packetLossPercentage: Float
+  issuesDescription: String
+  
+  # Context
+  bufferState: BufferState
+  qualityTier: String
+}
+
+# Rebuffering events for UX analysis
+type RebufferingEvent {
+  timestamp: Time!
+  stream: String!
+  nodeId: String!
+  
+  # Rebuffer details
+  bufferState: BufferState!
+  previousState: BufferState!
+  rebufferStart: Boolean!
+  rebufferEnd: Boolean!
+  healthScore: Float
+  
+  # Performance at rebuffer time
+  frameJitterMs: Float
+  packetLossPercentage: Float
 }`, BuiltIn: false},
 }
 var parsedSchema = gqlparser.MustLoadSchema(sources...)
@@ -2327,6 +3139,17 @@ func (ec *executionContext) field_Query_cluster_args(ctx context.Context, rawArg
 	return args, nil
 }
 
+func (ec *executionContext) field_Query_currentStreamHealth_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "stream", ec.unmarshalNString2string)
+	if err != nil {
+		return nil, err
+	}
+	args["stream"] = arg0
+	return args, nil
+}
+
 func (ec *executionContext) field_Query_invoice_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
@@ -2360,6 +3183,22 @@ func (ec *executionContext) field_Query_platformOverview_args(ctx context.Contex
 	return args, nil
 }
 
+func (ec *executionContext) field_Query_rebufferingEvents_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "stream", ec.unmarshalNString2string)
+	if err != nil {
+		return nil, err
+	}
+	args["stream"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "timeRange", ec.unmarshalOTimeRangeInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐTimeRangeInput)
+	if err != nil {
+		return nil, err
+	}
+	args["timeRange"] = arg1
+	return args, nil
+}
+
 func (ec *executionContext) field_Query_streamAnalytics_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
@@ -2384,6 +3223,54 @@ func (ec *executionContext) field_Query_streamEmbed_args(ctx context.Context, ra
 		return nil, err
 	}
 	args["id"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Query_streamHealthAlerts_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "stream", ec.unmarshalOString2ᚖstring)
+	if err != nil {
+		return nil, err
+	}
+	args["stream"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "timeRange", ec.unmarshalOTimeRangeInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐTimeRangeInput)
+	if err != nil {
+		return nil, err
+	}
+	args["timeRange"] = arg1
+	return args, nil
+}
+
+func (ec *executionContext) field_Query_streamHealthMetrics_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "stream", ec.unmarshalNString2string)
+	if err != nil {
+		return nil, err
+	}
+	args["stream"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "timeRange", ec.unmarshalOTimeRangeInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐTimeRangeInput)
+	if err != nil {
+		return nil, err
+	}
+	args["timeRange"] = arg1
+	return args, nil
+}
+
+func (ec *executionContext) field_Query_streamQualityChanges_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "stream", ec.unmarshalNString2string)
+	if err != nil {
+		return nil, err
+	}
+	args["stream"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "timeRange", ec.unmarshalOTimeRangeInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐTimeRangeInput)
+	if err != nil {
+		return nil, err
+	}
+	args["timeRange"] = arg1
 	return args, nil
 }
 
@@ -5067,6 +5954,73 @@ func (ec *executionContext) fieldContext_Mutation_updateBillingTier(ctx context.
 	return fc, nil
 }
 
+func (ec *executionContext) _Mutation_updateTenant(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Mutation_updateTenant(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.Mutation().UpdateTenant(rctx, fc.Args["input"].(model.UpdateTenantInput))
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(*models.Tenant)
+	fc.Result = res
+	return ec.marshalNTenant2ᚖframeworksᚋpkgᚋmodelsᚐTenant(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Mutation_updateTenant(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "id":
+				return ec.fieldContext_Tenant_id(ctx, field)
+			case "name":
+				return ec.fieldContext_Tenant_name(ctx, field)
+			case "settings":
+				return ec.fieldContext_Tenant_settings(ctx, field)
+			case "cluster":
+				return ec.fieldContext_Tenant_cluster(ctx, field)
+			case "createdAt":
+				return ec.fieldContext_Tenant_createdAt(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type Tenant", field.Name)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_updateTenant_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Mutation_createDeveloperToken(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_Mutation_createDeveloperToken(ctx, field)
 	if err != nil {
@@ -5189,73 +6143,6 @@ func (ec *executionContext) fieldContext_Mutation_revokeDeveloperToken(ctx conte
 	}()
 	ctx = graphql.WithFieldContext(ctx, fc)
 	if fc.Args, err = ec.field_Mutation_revokeDeveloperToken_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
-		ec.Error(ctx, err)
-		return fc, err
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _Mutation_updateTenant(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_Mutation_updateTenant(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return ec.resolvers.Mutation().UpdateTenant(rctx, fc.Args["input"].(model.UpdateTenantInput))
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.(*models.Tenant)
-	fc.Result = res
-	return ec.marshalNTenant2ᚖframeworksᚋpkgᚋmodelsᚐTenant(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_Mutation_updateTenant(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "Mutation",
-		Field:      field,
-		IsMethod:   true,
-		IsResolver: true,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			switch field.Name {
-			case "id":
-				return ec.fieldContext_Tenant_id(ctx, field)
-			case "name":
-				return ec.fieldContext_Tenant_name(ctx, field)
-			case "settings":
-				return ec.fieldContext_Tenant_settings(ctx, field)
-			case "cluster":
-				return ec.fieldContext_Tenant_cluster(ctx, field)
-			case "createdAt":
-				return ec.fieldContext_Tenant_createdAt(ctx, field)
-			}
-			return nil, fmt.Errorf("no field named %q was found under type Tenant", field.Name)
-		},
-	}
-	defer func() {
-		if r := recover(); r != nil {
-			err = ec.Recover(ctx, r)
-			ec.Error(ctx, err)
-		}
-	}()
-	ctx = graphql.WithFieldContext(ctx, fc)
-	if fc.Args, err = ec.field_Mutation_updateTenant_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
 		ec.Error(ctx, err)
 		return fc, err
 	}
@@ -6461,6 +7348,34 @@ func (ec *executionContext) fieldContext_Query_streamAnalytics(ctx context.Conte
 				return ec.fieldContext_StreamAnalytics_uniqueViewers(ctx, field)
 			case "timeRange":
 				return ec.fieldContext_StreamAnalytics_timeRange(ctx, field)
+			case "currentHealthScore":
+				return ec.fieldContext_StreamAnalytics_currentHealthScore(ctx, field)
+			case "averageHealthScore":
+				return ec.fieldContext_StreamAnalytics_averageHealthScore(ctx, field)
+			case "frameJitterMs":
+				return ec.fieldContext_StreamAnalytics_frameJitterMs(ctx, field)
+			case "keyframeStabilityMs":
+				return ec.fieldContext_StreamAnalytics_keyframeStabilityMs(ctx, field)
+			case "currentIssues":
+				return ec.fieldContext_StreamAnalytics_currentIssues(ctx, field)
+			case "bufferState":
+				return ec.fieldContext_StreamAnalytics_bufferState(ctx, field)
+			case "packetLossPercentage":
+				return ec.fieldContext_StreamAnalytics_packetLossPercentage(ctx, field)
+			case "qualityTier":
+				return ec.fieldContext_StreamAnalytics_qualityTier(ctx, field)
+			case "currentCodec":
+				return ec.fieldContext_StreamAnalytics_currentCodec(ctx, field)
+			case "currentResolution":
+				return ec.fieldContext_StreamAnalytics_currentResolution(ctx, field)
+			case "currentBitrate":
+				return ec.fieldContext_StreamAnalytics_currentBitrate(ctx, field)
+			case "currentFps":
+				return ec.fieldContext_StreamAnalytics_currentFps(ctx, field)
+			case "rebufferCount":
+				return ec.fieldContext_StreamAnalytics_rebufferCount(ctx, field)
+			case "alertCount":
+				return ec.fieldContext_StreamAnalytics_alertCount(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type StreamAnalytics", field.Name)
 		},
@@ -6601,6 +7516,446 @@ func (ec *executionContext) fieldContext_Query_platformOverview(ctx context.Cont
 	}()
 	ctx = graphql.WithFieldContext(ctx, fc)
 	if fc.Args, err = ec.field_Query_platformOverview_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_streamHealthMetrics(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Query_streamHealthMetrics(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.Query().StreamHealthMetrics(rctx, fc.Args["stream"].(string), fc.Args["timeRange"].(*model.TimeRangeInput))
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.([]*model.StreamHealthMetric)
+	fc.Result = res
+	return ec.marshalNStreamHealthMetric2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐStreamHealthMetricᚄ(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Query_streamHealthMetrics(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "timestamp":
+				return ec.fieldContext_StreamHealthMetric_timestamp(ctx, field)
+			case "stream":
+				return ec.fieldContext_StreamHealthMetric_stream(ctx, field)
+			case "nodeId":
+				return ec.fieldContext_StreamHealthMetric_nodeId(ctx, field)
+			case "healthScore":
+				return ec.fieldContext_StreamHealthMetric_healthScore(ctx, field)
+			case "frameJitterMs":
+				return ec.fieldContext_StreamHealthMetric_frameJitterMs(ctx, field)
+			case "keyframeStabilityMs":
+				return ec.fieldContext_StreamHealthMetric_keyframeStabilityMs(ctx, field)
+			case "issuesDescription":
+				return ec.fieldContext_StreamHealthMetric_issuesDescription(ctx, field)
+			case "hasIssues":
+				return ec.fieldContext_StreamHealthMetric_hasIssues(ctx, field)
+			case "bitrate":
+				return ec.fieldContext_StreamHealthMetric_bitrate(ctx, field)
+			case "fps":
+				return ec.fieldContext_StreamHealthMetric_fps(ctx, field)
+			case "width":
+				return ec.fieldContext_StreamHealthMetric_width(ctx, field)
+			case "height":
+				return ec.fieldContext_StreamHealthMetric_height(ctx, field)
+			case "codec":
+				return ec.fieldContext_StreamHealthMetric_codec(ctx, field)
+			case "qualityTier":
+				return ec.fieldContext_StreamHealthMetric_qualityTier(ctx, field)
+			case "packetsSent":
+				return ec.fieldContext_StreamHealthMetric_packetsSent(ctx, field)
+			case "packetsLost":
+				return ec.fieldContext_StreamHealthMetric_packetsLost(ctx, field)
+			case "packetLossPercentage":
+				return ec.fieldContext_StreamHealthMetric_packetLossPercentage(ctx, field)
+			case "bufferState":
+				return ec.fieldContext_StreamHealthMetric_bufferState(ctx, field)
+			case "bufferHealth":
+				return ec.fieldContext_StreamHealthMetric_bufferHealth(ctx, field)
+			case "audioChannels":
+				return ec.fieldContext_StreamHealthMetric_audioChannels(ctx, field)
+			case "audioSampleRate":
+				return ec.fieldContext_StreamHealthMetric_audioSampleRate(ctx, field)
+			case "audioCodec":
+				return ec.fieldContext_StreamHealthMetric_audioCodec(ctx, field)
+			case "audioBitrate":
+				return ec.fieldContext_StreamHealthMetric_audioBitrate(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type StreamHealthMetric", field.Name)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_streamHealthMetrics_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_streamQualityChanges(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Query_streamQualityChanges(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.Query().StreamQualityChanges(rctx, fc.Args["stream"].(string), fc.Args["timeRange"].(*model.TimeRangeInput))
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.([]*model.StreamQualityChange)
+	fc.Result = res
+	return ec.marshalNStreamQualityChange2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐStreamQualityChangeᚄ(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Query_streamQualityChanges(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "timestamp":
+				return ec.fieldContext_StreamQualityChange_timestamp(ctx, field)
+			case "stream":
+				return ec.fieldContext_StreamQualityChange_stream(ctx, field)
+			case "nodeId":
+				return ec.fieldContext_StreamQualityChange_nodeId(ctx, field)
+			case "changeType":
+				return ec.fieldContext_StreamQualityChange_changeType(ctx, field)
+			case "previousQualityTier":
+				return ec.fieldContext_StreamQualityChange_previousQualityTier(ctx, field)
+			case "newQualityTier":
+				return ec.fieldContext_StreamQualityChange_newQualityTier(ctx, field)
+			case "previousResolution":
+				return ec.fieldContext_StreamQualityChange_previousResolution(ctx, field)
+			case "newResolution":
+				return ec.fieldContext_StreamQualityChange_newResolution(ctx, field)
+			case "previousCodec":
+				return ec.fieldContext_StreamQualityChange_previousCodec(ctx, field)
+			case "newCodec":
+				return ec.fieldContext_StreamQualityChange_newCodec(ctx, field)
+			case "previousTracks":
+				return ec.fieldContext_StreamQualityChange_previousTracks(ctx, field)
+			case "newTracks":
+				return ec.fieldContext_StreamQualityChange_newTracks(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type StreamQualityChange", field.Name)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_streamQualityChanges_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_streamHealthAlerts(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Query_streamHealthAlerts(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.Query().StreamHealthAlerts(rctx, fc.Args["stream"].(*string), fc.Args["timeRange"].(*model.TimeRangeInput))
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.([]*model.StreamHealthAlert)
+	fc.Result = res
+	return ec.marshalNStreamHealthAlert2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐStreamHealthAlertᚄ(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Query_streamHealthAlerts(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "timestamp":
+				return ec.fieldContext_StreamHealthAlert_timestamp(ctx, field)
+			case "stream":
+				return ec.fieldContext_StreamHealthAlert_stream(ctx, field)
+			case "nodeId":
+				return ec.fieldContext_StreamHealthAlert_nodeId(ctx, field)
+			case "alertType":
+				return ec.fieldContext_StreamHealthAlert_alertType(ctx, field)
+			case "severity":
+				return ec.fieldContext_StreamHealthAlert_severity(ctx, field)
+			case "healthScore":
+				return ec.fieldContext_StreamHealthAlert_healthScore(ctx, field)
+			case "frameJitterMs":
+				return ec.fieldContext_StreamHealthAlert_frameJitterMs(ctx, field)
+			case "packetLossPercentage":
+				return ec.fieldContext_StreamHealthAlert_packetLossPercentage(ctx, field)
+			case "issuesDescription":
+				return ec.fieldContext_StreamHealthAlert_issuesDescription(ctx, field)
+			case "bufferState":
+				return ec.fieldContext_StreamHealthAlert_bufferState(ctx, field)
+			case "qualityTier":
+				return ec.fieldContext_StreamHealthAlert_qualityTier(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type StreamHealthAlert", field.Name)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_streamHealthAlerts_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_currentStreamHealth(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Query_currentStreamHealth(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.Query().CurrentStreamHealth(rctx, fc.Args["stream"].(string))
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*model.StreamHealthMetric)
+	fc.Result = res
+	return ec.marshalOStreamHealthMetric2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐStreamHealthMetric(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Query_currentStreamHealth(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "timestamp":
+				return ec.fieldContext_StreamHealthMetric_timestamp(ctx, field)
+			case "stream":
+				return ec.fieldContext_StreamHealthMetric_stream(ctx, field)
+			case "nodeId":
+				return ec.fieldContext_StreamHealthMetric_nodeId(ctx, field)
+			case "healthScore":
+				return ec.fieldContext_StreamHealthMetric_healthScore(ctx, field)
+			case "frameJitterMs":
+				return ec.fieldContext_StreamHealthMetric_frameJitterMs(ctx, field)
+			case "keyframeStabilityMs":
+				return ec.fieldContext_StreamHealthMetric_keyframeStabilityMs(ctx, field)
+			case "issuesDescription":
+				return ec.fieldContext_StreamHealthMetric_issuesDescription(ctx, field)
+			case "hasIssues":
+				return ec.fieldContext_StreamHealthMetric_hasIssues(ctx, field)
+			case "bitrate":
+				return ec.fieldContext_StreamHealthMetric_bitrate(ctx, field)
+			case "fps":
+				return ec.fieldContext_StreamHealthMetric_fps(ctx, field)
+			case "width":
+				return ec.fieldContext_StreamHealthMetric_width(ctx, field)
+			case "height":
+				return ec.fieldContext_StreamHealthMetric_height(ctx, field)
+			case "codec":
+				return ec.fieldContext_StreamHealthMetric_codec(ctx, field)
+			case "qualityTier":
+				return ec.fieldContext_StreamHealthMetric_qualityTier(ctx, field)
+			case "packetsSent":
+				return ec.fieldContext_StreamHealthMetric_packetsSent(ctx, field)
+			case "packetsLost":
+				return ec.fieldContext_StreamHealthMetric_packetsLost(ctx, field)
+			case "packetLossPercentage":
+				return ec.fieldContext_StreamHealthMetric_packetLossPercentage(ctx, field)
+			case "bufferState":
+				return ec.fieldContext_StreamHealthMetric_bufferState(ctx, field)
+			case "bufferHealth":
+				return ec.fieldContext_StreamHealthMetric_bufferHealth(ctx, field)
+			case "audioChannels":
+				return ec.fieldContext_StreamHealthMetric_audioChannels(ctx, field)
+			case "audioSampleRate":
+				return ec.fieldContext_StreamHealthMetric_audioSampleRate(ctx, field)
+			case "audioCodec":
+				return ec.fieldContext_StreamHealthMetric_audioCodec(ctx, field)
+			case "audioBitrate":
+				return ec.fieldContext_StreamHealthMetric_audioBitrate(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type StreamHealthMetric", field.Name)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_currentStreamHealth_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_rebufferingEvents(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Query_rebufferingEvents(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.Query().RebufferingEvents(rctx, fc.Args["stream"].(string), fc.Args["timeRange"].(*model.TimeRangeInput))
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.([]*model.RebufferingEvent)
+	fc.Result = res
+	return ec.marshalNRebufferingEvent2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐRebufferingEventᚄ(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Query_rebufferingEvents(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "timestamp":
+				return ec.fieldContext_RebufferingEvent_timestamp(ctx, field)
+			case "stream":
+				return ec.fieldContext_RebufferingEvent_stream(ctx, field)
+			case "nodeId":
+				return ec.fieldContext_RebufferingEvent_nodeId(ctx, field)
+			case "bufferState":
+				return ec.fieldContext_RebufferingEvent_bufferState(ctx, field)
+			case "previousState":
+				return ec.fieldContext_RebufferingEvent_previousState(ctx, field)
+			case "rebufferStart":
+				return ec.fieldContext_RebufferingEvent_rebufferStart(ctx, field)
+			case "rebufferEnd":
+				return ec.fieldContext_RebufferingEvent_rebufferEnd(ctx, field)
+			case "healthScore":
+				return ec.fieldContext_RebufferingEvent_healthScore(ctx, field)
+			case "frameJitterMs":
+				return ec.fieldContext_RebufferingEvent_frameJitterMs(ctx, field)
+			case "packetLossPercentage":
+				return ec.fieldContext_RebufferingEvent_packetLossPercentage(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type RebufferingEvent", field.Name)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_rebufferingEvents_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
 		ec.Error(ctx, err)
 		return fc, err
 	}
@@ -7422,6 +8777,437 @@ func (ec *executionContext) fieldContext_Query___schema(_ context.Context, field
 	return fc, nil
 }
 
+func (ec *executionContext) _RebufferingEvent_timestamp(ctx context.Context, field graphql.CollectedField, obj *model.RebufferingEvent) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_RebufferingEvent_timestamp(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Timestamp, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(time.Time)
+	fc.Result = res
+	return ec.marshalNTime2timeᚐTime(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_RebufferingEvent_timestamp(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RebufferingEvent",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Time does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RebufferingEvent_stream(ctx context.Context, field graphql.CollectedField, obj *model.RebufferingEvent) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_RebufferingEvent_stream(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Stream, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_RebufferingEvent_stream(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RebufferingEvent",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RebufferingEvent_nodeId(ctx context.Context, field graphql.CollectedField, obj *model.RebufferingEvent) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_RebufferingEvent_nodeId(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.NodeID, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_RebufferingEvent_nodeId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RebufferingEvent",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RebufferingEvent_bufferState(ctx context.Context, field graphql.CollectedField, obj *model.RebufferingEvent) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_RebufferingEvent_bufferState(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.BufferState, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(model.BufferState)
+	fc.Result = res
+	return ec.marshalNBufferState2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐBufferState(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_RebufferingEvent_bufferState(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RebufferingEvent",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type BufferState does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RebufferingEvent_previousState(ctx context.Context, field graphql.CollectedField, obj *model.RebufferingEvent) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_RebufferingEvent_previousState(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.PreviousState, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(model.BufferState)
+	fc.Result = res
+	return ec.marshalNBufferState2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐBufferState(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_RebufferingEvent_previousState(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RebufferingEvent",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type BufferState does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RebufferingEvent_rebufferStart(ctx context.Context, field graphql.CollectedField, obj *model.RebufferingEvent) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_RebufferingEvent_rebufferStart(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.RebufferStart, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(bool)
+	fc.Result = res
+	return ec.marshalNBoolean2bool(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_RebufferingEvent_rebufferStart(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RebufferingEvent",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RebufferingEvent_rebufferEnd(ctx context.Context, field graphql.CollectedField, obj *model.RebufferingEvent) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_RebufferingEvent_rebufferEnd(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.RebufferEnd, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(bool)
+	fc.Result = res
+	return ec.marshalNBoolean2bool(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_RebufferingEvent_rebufferEnd(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RebufferingEvent",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RebufferingEvent_healthScore(ctx context.Context, field graphql.CollectedField, obj *model.RebufferingEvent) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_RebufferingEvent_healthScore(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.HealthScore, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*float64)
+	fc.Result = res
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_RebufferingEvent_healthScore(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RebufferingEvent",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RebufferingEvent_frameJitterMs(ctx context.Context, field graphql.CollectedField, obj *model.RebufferingEvent) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_RebufferingEvent_frameJitterMs(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.FrameJitterMs, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*float64)
+	fc.Result = res
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_RebufferingEvent_frameJitterMs(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RebufferingEvent",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RebufferingEvent_packetLossPercentage(ctx context.Context, field graphql.CollectedField, obj *model.RebufferingEvent) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_RebufferingEvent_packetLossPercentage(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.PacketLossPercentage, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*float64)
+	fc.Result = res
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_RebufferingEvent_packetLossPercentage(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RebufferingEvent",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Stream_id(ctx context.Context, field graphql.CollectedField, obj *models.Stream) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_Stream_id(ctx, field)
 	if err != nil {
@@ -8129,6 +9915,580 @@ func (ec *executionContext) fieldContext_StreamAnalytics_timeRange(_ context.Con
 	return fc, nil
 }
 
+func (ec *executionContext) _StreamAnalytics_currentHealthScore(ctx context.Context, field graphql.CollectedField, obj *models.StreamAnalytics) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamAnalytics_currentHealthScore(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.StreamAnalytics().CurrentHealthScore(rctx, obj)
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*float64)
+	fc.Result = res
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StreamAnalytics_currentHealthScore(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamAnalytics",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamAnalytics_averageHealthScore(ctx context.Context, field graphql.CollectedField, obj *models.StreamAnalytics) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamAnalytics_averageHealthScore(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.StreamAnalytics().AverageHealthScore(rctx, obj)
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*float64)
+	fc.Result = res
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StreamAnalytics_averageHealthScore(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamAnalytics",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamAnalytics_frameJitterMs(ctx context.Context, field graphql.CollectedField, obj *models.StreamAnalytics) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamAnalytics_frameJitterMs(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.StreamAnalytics().FrameJitterMs(rctx, obj)
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*float64)
+	fc.Result = res
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StreamAnalytics_frameJitterMs(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamAnalytics",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamAnalytics_keyframeStabilityMs(ctx context.Context, field graphql.CollectedField, obj *models.StreamAnalytics) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamAnalytics_keyframeStabilityMs(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.StreamAnalytics().KeyframeStabilityMs(rctx, obj)
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*float64)
+	fc.Result = res
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StreamAnalytics_keyframeStabilityMs(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamAnalytics",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamAnalytics_currentIssues(ctx context.Context, field graphql.CollectedField, obj *models.StreamAnalytics) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamAnalytics_currentIssues(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.StreamAnalytics().CurrentIssues(rctx, obj)
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StreamAnalytics_currentIssues(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamAnalytics",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamAnalytics_bufferState(ctx context.Context, field graphql.CollectedField, obj *models.StreamAnalytics) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamAnalytics_bufferState(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.StreamAnalytics().BufferState(rctx, obj)
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*model.BufferState)
+	fc.Result = res
+	return ec.marshalOBufferState2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐBufferState(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StreamAnalytics_bufferState(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamAnalytics",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type BufferState does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamAnalytics_packetLossPercentage(ctx context.Context, field graphql.CollectedField, obj *models.StreamAnalytics) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamAnalytics_packetLossPercentage(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.StreamAnalytics().PacketLossPercentage(rctx, obj)
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*float64)
+	fc.Result = res
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StreamAnalytics_packetLossPercentage(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamAnalytics",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamAnalytics_qualityTier(ctx context.Context, field graphql.CollectedField, obj *models.StreamAnalytics) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamAnalytics_qualityTier(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.StreamAnalytics().QualityTier(rctx, obj)
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StreamAnalytics_qualityTier(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamAnalytics",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamAnalytics_currentCodec(ctx context.Context, field graphql.CollectedField, obj *models.StreamAnalytics) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamAnalytics_currentCodec(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.StreamAnalytics().CurrentCodec(rctx, obj)
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StreamAnalytics_currentCodec(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamAnalytics",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamAnalytics_currentResolution(ctx context.Context, field graphql.CollectedField, obj *models.StreamAnalytics) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamAnalytics_currentResolution(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.StreamAnalytics().CurrentResolution(rctx, obj)
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StreamAnalytics_currentResolution(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamAnalytics",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamAnalytics_currentBitrate(ctx context.Context, field graphql.CollectedField, obj *models.StreamAnalytics) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamAnalytics_currentBitrate(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.StreamAnalytics().CurrentBitrate(rctx, obj)
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*int)
+	fc.Result = res
+	return ec.marshalOInt2ᚖint(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StreamAnalytics_currentBitrate(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamAnalytics",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamAnalytics_currentFps(ctx context.Context, field graphql.CollectedField, obj *models.StreamAnalytics) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamAnalytics_currentFps(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.StreamAnalytics().CurrentFps(rctx, obj)
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*float64)
+	fc.Result = res
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StreamAnalytics_currentFps(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamAnalytics",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamAnalytics_rebufferCount(ctx context.Context, field graphql.CollectedField, obj *models.StreamAnalytics) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamAnalytics_rebufferCount(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.StreamAnalytics().RebufferCount(rctx, obj)
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*int)
+	fc.Result = res
+	return ec.marshalOInt2ᚖint(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StreamAnalytics_rebufferCount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamAnalytics",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamAnalytics_alertCount(ctx context.Context, field graphql.CollectedField, obj *models.StreamAnalytics) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamAnalytics_alertCount(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.StreamAnalytics().AlertCount(rctx, obj)
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*int)
+	fc.Result = res
+	return ec.marshalOInt2ᚖint(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StreamAnalytics_alertCount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamAnalytics",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _StreamEmbed_stream(ctx context.Context, field graphql.CollectedField, obj *model.StreamEmbed) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_StreamEmbed_stream(ctx, field)
 	if err != nil {
@@ -8550,7 +10910,7 @@ func (ec *executionContext) _StreamEvent_details(ctx context.Context, field grap
 	}
 	res := resTmp.(*string)
 	fc.Result = res
-	return ec.marshalOJSON2ᚖstring(ctx, field.Selections, res)
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_StreamEvent_details(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -8560,7 +10920,1938 @@ func (ec *executionContext) fieldContext_StreamEvent_details(_ context.Context, 
 		IsMethod:   false,
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type JSON does not have child fields")
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamHealthAlert_timestamp(ctx context.Context, field graphql.CollectedField, obj *model.StreamHealthAlert) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamHealthAlert_timestamp(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Timestamp, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(time.Time)
+	fc.Result = res
+	return ec.marshalNTime2timeᚐTime(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StreamHealthAlert_timestamp(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamHealthAlert",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Time does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamHealthAlert_stream(ctx context.Context, field graphql.CollectedField, obj *model.StreamHealthAlert) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamHealthAlert_stream(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Stream, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StreamHealthAlert_stream(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamHealthAlert",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamHealthAlert_nodeId(ctx context.Context, field graphql.CollectedField, obj *model.StreamHealthAlert) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamHealthAlert_nodeId(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.NodeID, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StreamHealthAlert_nodeId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamHealthAlert",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamHealthAlert_alertType(ctx context.Context, field graphql.CollectedField, obj *model.StreamHealthAlert) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamHealthAlert_alertType(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.AlertType, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(model.AlertType)
+	fc.Result = res
+	return ec.marshalNAlertType2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐAlertType(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StreamHealthAlert_alertType(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamHealthAlert",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type AlertType does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamHealthAlert_severity(ctx context.Context, field graphql.CollectedField, obj *model.StreamHealthAlert) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamHealthAlert_severity(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Severity, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(model.AlertSeverity)
+	fc.Result = res
+	return ec.marshalNAlertSeverity2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐAlertSeverity(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StreamHealthAlert_severity(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamHealthAlert",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type AlertSeverity does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamHealthAlert_healthScore(ctx context.Context, field graphql.CollectedField, obj *model.StreamHealthAlert) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamHealthAlert_healthScore(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.HealthScore, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*float64)
+	fc.Result = res
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StreamHealthAlert_healthScore(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamHealthAlert",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamHealthAlert_frameJitterMs(ctx context.Context, field graphql.CollectedField, obj *model.StreamHealthAlert) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamHealthAlert_frameJitterMs(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.FrameJitterMs, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*float64)
+	fc.Result = res
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StreamHealthAlert_frameJitterMs(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamHealthAlert",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamHealthAlert_packetLossPercentage(ctx context.Context, field graphql.CollectedField, obj *model.StreamHealthAlert) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamHealthAlert_packetLossPercentage(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.PacketLossPercentage, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*float64)
+	fc.Result = res
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StreamHealthAlert_packetLossPercentage(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamHealthAlert",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamHealthAlert_issuesDescription(ctx context.Context, field graphql.CollectedField, obj *model.StreamHealthAlert) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamHealthAlert_issuesDescription(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.IssuesDescription, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StreamHealthAlert_issuesDescription(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamHealthAlert",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamHealthAlert_bufferState(ctx context.Context, field graphql.CollectedField, obj *model.StreamHealthAlert) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamHealthAlert_bufferState(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.BufferState, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*model.BufferState)
+	fc.Result = res
+	return ec.marshalOBufferState2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐBufferState(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StreamHealthAlert_bufferState(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamHealthAlert",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type BufferState does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamHealthAlert_qualityTier(ctx context.Context, field graphql.CollectedField, obj *model.StreamHealthAlert) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamHealthAlert_qualityTier(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.QualityTier, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StreamHealthAlert_qualityTier(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamHealthAlert",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamHealthMetric_timestamp(ctx context.Context, field graphql.CollectedField, obj *model.StreamHealthMetric) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamHealthMetric_timestamp(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Timestamp, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(time.Time)
+	fc.Result = res
+	return ec.marshalNTime2timeᚐTime(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StreamHealthMetric_timestamp(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamHealthMetric",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Time does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamHealthMetric_stream(ctx context.Context, field graphql.CollectedField, obj *model.StreamHealthMetric) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamHealthMetric_stream(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Stream, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StreamHealthMetric_stream(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamHealthMetric",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamHealthMetric_nodeId(ctx context.Context, field graphql.CollectedField, obj *model.StreamHealthMetric) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamHealthMetric_nodeId(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.NodeID, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StreamHealthMetric_nodeId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamHealthMetric",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamHealthMetric_healthScore(ctx context.Context, field graphql.CollectedField, obj *model.StreamHealthMetric) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamHealthMetric_healthScore(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.HealthScore, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(float64)
+	fc.Result = res
+	return ec.marshalNFloat2float64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StreamHealthMetric_healthScore(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamHealthMetric",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamHealthMetric_frameJitterMs(ctx context.Context, field graphql.CollectedField, obj *model.StreamHealthMetric) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamHealthMetric_frameJitterMs(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.FrameJitterMs, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*float64)
+	fc.Result = res
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StreamHealthMetric_frameJitterMs(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamHealthMetric",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamHealthMetric_keyframeStabilityMs(ctx context.Context, field graphql.CollectedField, obj *model.StreamHealthMetric) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamHealthMetric_keyframeStabilityMs(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.KeyframeStabilityMs, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*float64)
+	fc.Result = res
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StreamHealthMetric_keyframeStabilityMs(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamHealthMetric",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamHealthMetric_issuesDescription(ctx context.Context, field graphql.CollectedField, obj *model.StreamHealthMetric) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamHealthMetric_issuesDescription(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.IssuesDescription, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StreamHealthMetric_issuesDescription(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamHealthMetric",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamHealthMetric_hasIssues(ctx context.Context, field graphql.CollectedField, obj *model.StreamHealthMetric) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamHealthMetric_hasIssues(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.HasIssues, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(bool)
+	fc.Result = res
+	return ec.marshalNBoolean2bool(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StreamHealthMetric_hasIssues(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamHealthMetric",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamHealthMetric_bitrate(ctx context.Context, field graphql.CollectedField, obj *model.StreamHealthMetric) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamHealthMetric_bitrate(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Bitrate, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*int)
+	fc.Result = res
+	return ec.marshalOInt2ᚖint(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StreamHealthMetric_bitrate(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamHealthMetric",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamHealthMetric_fps(ctx context.Context, field graphql.CollectedField, obj *model.StreamHealthMetric) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamHealthMetric_fps(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Fps, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*float64)
+	fc.Result = res
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StreamHealthMetric_fps(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamHealthMetric",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamHealthMetric_width(ctx context.Context, field graphql.CollectedField, obj *model.StreamHealthMetric) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamHealthMetric_width(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Width, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*int)
+	fc.Result = res
+	return ec.marshalOInt2ᚖint(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StreamHealthMetric_width(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamHealthMetric",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamHealthMetric_height(ctx context.Context, field graphql.CollectedField, obj *model.StreamHealthMetric) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamHealthMetric_height(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Height, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*int)
+	fc.Result = res
+	return ec.marshalOInt2ᚖint(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StreamHealthMetric_height(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamHealthMetric",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamHealthMetric_codec(ctx context.Context, field graphql.CollectedField, obj *model.StreamHealthMetric) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamHealthMetric_codec(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Codec, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StreamHealthMetric_codec(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamHealthMetric",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamHealthMetric_qualityTier(ctx context.Context, field graphql.CollectedField, obj *model.StreamHealthMetric) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamHealthMetric_qualityTier(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.QualityTier, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StreamHealthMetric_qualityTier(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamHealthMetric",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamHealthMetric_packetsSent(ctx context.Context, field graphql.CollectedField, obj *model.StreamHealthMetric) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamHealthMetric_packetsSent(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.PacketsSent, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*int)
+	fc.Result = res
+	return ec.marshalOInt2ᚖint(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StreamHealthMetric_packetsSent(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamHealthMetric",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamHealthMetric_packetsLost(ctx context.Context, field graphql.CollectedField, obj *model.StreamHealthMetric) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamHealthMetric_packetsLost(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.PacketsLost, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*int)
+	fc.Result = res
+	return ec.marshalOInt2ᚖint(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StreamHealthMetric_packetsLost(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamHealthMetric",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamHealthMetric_packetLossPercentage(ctx context.Context, field graphql.CollectedField, obj *model.StreamHealthMetric) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamHealthMetric_packetLossPercentage(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.PacketLossPercentage, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*float64)
+	fc.Result = res
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StreamHealthMetric_packetLossPercentage(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamHealthMetric",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamHealthMetric_bufferState(ctx context.Context, field graphql.CollectedField, obj *model.StreamHealthMetric) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamHealthMetric_bufferState(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.BufferState, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(model.BufferState)
+	fc.Result = res
+	return ec.marshalNBufferState2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐBufferState(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StreamHealthMetric_bufferState(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamHealthMetric",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type BufferState does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamHealthMetric_bufferHealth(ctx context.Context, field graphql.CollectedField, obj *model.StreamHealthMetric) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamHealthMetric_bufferHealth(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.BufferHealth, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*float64)
+	fc.Result = res
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StreamHealthMetric_bufferHealth(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamHealthMetric",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamHealthMetric_audioChannels(ctx context.Context, field graphql.CollectedField, obj *model.StreamHealthMetric) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamHealthMetric_audioChannels(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.AudioChannels, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*int)
+	fc.Result = res
+	return ec.marshalOInt2ᚖint(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StreamHealthMetric_audioChannels(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamHealthMetric",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamHealthMetric_audioSampleRate(ctx context.Context, field graphql.CollectedField, obj *model.StreamHealthMetric) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamHealthMetric_audioSampleRate(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.AudioSampleRate, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*int)
+	fc.Result = res
+	return ec.marshalOInt2ᚖint(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StreamHealthMetric_audioSampleRate(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamHealthMetric",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamHealthMetric_audioCodec(ctx context.Context, field graphql.CollectedField, obj *model.StreamHealthMetric) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamHealthMetric_audioCodec(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.AudioCodec, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StreamHealthMetric_audioCodec(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamHealthMetric",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamHealthMetric_audioBitrate(ctx context.Context, field graphql.CollectedField, obj *model.StreamHealthMetric) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamHealthMetric_audioBitrate(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.AudioBitrate, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*int)
+	fc.Result = res
+	return ec.marshalOInt2ᚖint(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StreamHealthMetric_audioBitrate(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamHealthMetric",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamQualityChange_timestamp(ctx context.Context, field graphql.CollectedField, obj *model.StreamQualityChange) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamQualityChange_timestamp(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Timestamp, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(time.Time)
+	fc.Result = res
+	return ec.marshalNTime2timeᚐTime(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StreamQualityChange_timestamp(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamQualityChange",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Time does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamQualityChange_stream(ctx context.Context, field graphql.CollectedField, obj *model.StreamQualityChange) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamQualityChange_stream(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Stream, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StreamQualityChange_stream(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamQualityChange",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamQualityChange_nodeId(ctx context.Context, field graphql.CollectedField, obj *model.StreamQualityChange) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamQualityChange_nodeId(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.NodeID, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StreamQualityChange_nodeId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamQualityChange",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamQualityChange_changeType(ctx context.Context, field graphql.CollectedField, obj *model.StreamQualityChange) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamQualityChange_changeType(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.ChangeType, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(model.QualityChangeType)
+	fc.Result = res
+	return ec.marshalNQualityChangeType2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐQualityChangeType(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StreamQualityChange_changeType(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamQualityChange",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type QualityChangeType does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamQualityChange_previousQualityTier(ctx context.Context, field graphql.CollectedField, obj *model.StreamQualityChange) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamQualityChange_previousQualityTier(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.PreviousQualityTier, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StreamQualityChange_previousQualityTier(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamQualityChange",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamQualityChange_newQualityTier(ctx context.Context, field graphql.CollectedField, obj *model.StreamQualityChange) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamQualityChange_newQualityTier(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.NewQualityTier, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StreamQualityChange_newQualityTier(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamQualityChange",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamQualityChange_previousResolution(ctx context.Context, field graphql.CollectedField, obj *model.StreamQualityChange) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamQualityChange_previousResolution(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.PreviousResolution, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StreamQualityChange_previousResolution(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamQualityChange",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamQualityChange_newResolution(ctx context.Context, field graphql.CollectedField, obj *model.StreamQualityChange) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamQualityChange_newResolution(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.NewResolution, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StreamQualityChange_newResolution(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamQualityChange",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamQualityChange_previousCodec(ctx context.Context, field graphql.CollectedField, obj *model.StreamQualityChange) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamQualityChange_previousCodec(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.PreviousCodec, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StreamQualityChange_previousCodec(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamQualityChange",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamQualityChange_newCodec(ctx context.Context, field graphql.CollectedField, obj *model.StreamQualityChange) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamQualityChange_newCodec(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.NewCodec, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StreamQualityChange_newCodec(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamQualityChange",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamQualityChange_previousTracks(ctx context.Context, field graphql.CollectedField, obj *model.StreamQualityChange) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamQualityChange_previousTracks(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.PreviousTracks, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StreamQualityChange_previousTracks(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamQualityChange",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamQualityChange_newTracks(ctx context.Context, field graphql.CollectedField, obj *model.StreamQualityChange) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamQualityChange_newTracks(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.NewTracks, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_StreamQualityChange_newTracks(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamQualityChange",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
 		},
 	}
 	return fc, nil
@@ -12788,10 +17079,6 @@ func (ec *executionContext) unmarshalInputCreateDeveloperTokenInput(ctx context.
 		asMap[k] = v
 	}
 
-	if _, present := asMap["permissions"]; !present {
-		asMap["permissions"] = "read,write"
-	}
-
 	fieldsInOrder := [...]string{"name", "permissions", "expiresIn"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
@@ -13770,6 +18057,13 @@ func (ec *executionContext) _Mutation(ctx context.Context, sel ast.SelectionSet)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "updateTenant":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_updateTenant(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		case "createDeveloperToken":
 			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
 				return ec._Mutation_createDeveloperToken(ctx, field)
@@ -13780,13 +18074,6 @@ func (ec *executionContext) _Mutation(ctx context.Context, sel ast.SelectionSet)
 		case "revokeDeveloperToken":
 			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
 				return ec._Mutation_revokeDeveloperToken(ctx, field)
-			})
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "updateTenant":
-			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
-				return ec._Mutation_updateTenant(ctx, field)
 			})
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
@@ -14211,6 +18498,113 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "streamHealthMetrics":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_streamHealthMetrics(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "streamQualityChanges":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_streamQualityChanges(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "streamHealthAlerts":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_streamHealthAlerts(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "currentStreamHealth":
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_currentStreamHealth(ctx, field)
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "rebufferingEvents":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_rebufferingEvents(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
 		case "billingTiers":
 			field := field
 
@@ -14449,6 +18843,81 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
 				return ec._Query___schema(ctx, field)
 			})
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.processDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var rebufferingEventImplementors = []string{"RebufferingEvent"}
+
+func (ec *executionContext) _RebufferingEvent(ctx context.Context, sel ast.SelectionSet, obj *model.RebufferingEvent) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, rebufferingEventImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("RebufferingEvent")
+		case "timestamp":
+			out.Values[i] = ec._RebufferingEvent_timestamp(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "stream":
+			out.Values[i] = ec._RebufferingEvent_stream(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "nodeId":
+			out.Values[i] = ec._RebufferingEvent_nodeId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "bufferState":
+			out.Values[i] = ec._RebufferingEvent_bufferState(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "previousState":
+			out.Values[i] = ec._RebufferingEvent_previousState(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "rebufferStart":
+			out.Values[i] = ec._RebufferingEvent_rebufferStart(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "rebufferEnd":
+			out.Values[i] = ec._RebufferingEvent_rebufferEnd(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "healthScore":
+			out.Values[i] = ec._RebufferingEvent_healthScore(ctx, field, obj)
+		case "frameJitterMs":
+			out.Values[i] = ec._RebufferingEvent_frameJitterMs(ctx, field, obj)
+		case "packetLossPercentage":
+			out.Values[i] = ec._RebufferingEvent_packetLossPercentage(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -14873,6 +19342,468 @@ func (ec *executionContext) _StreamAnalytics(ctx context.Context, sel ast.Select
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "currentHealthScore":
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._StreamAnalytics_currentHealthScore(ctx, field, obj)
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "averageHealthScore":
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._StreamAnalytics_averageHealthScore(ctx, field, obj)
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "frameJitterMs":
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._StreamAnalytics_frameJitterMs(ctx, field, obj)
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "keyframeStabilityMs":
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._StreamAnalytics_keyframeStabilityMs(ctx, field, obj)
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "currentIssues":
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._StreamAnalytics_currentIssues(ctx, field, obj)
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "bufferState":
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._StreamAnalytics_bufferState(ctx, field, obj)
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "packetLossPercentage":
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._StreamAnalytics_packetLossPercentage(ctx, field, obj)
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "qualityTier":
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._StreamAnalytics_qualityTier(ctx, field, obj)
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "currentCodec":
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._StreamAnalytics_currentCodec(ctx, field, obj)
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "currentResolution":
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._StreamAnalytics_currentResolution(ctx, field, obj)
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "currentBitrate":
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._StreamAnalytics_currentBitrate(ctx, field, obj)
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "currentFps":
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._StreamAnalytics_currentFps(ctx, field, obj)
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "rebufferCount":
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._StreamAnalytics_rebufferCount(ctx, field, obj)
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "alertCount":
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._StreamAnalytics_alertCount(ctx, field, obj)
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -14988,6 +19919,245 @@ func (ec *executionContext) _StreamEvent(ctx context.Context, sel ast.SelectionS
 			}
 		case "details":
 			out.Values[i] = ec._StreamEvent_details(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.processDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var streamHealthAlertImplementors = []string{"StreamHealthAlert"}
+
+func (ec *executionContext) _StreamHealthAlert(ctx context.Context, sel ast.SelectionSet, obj *model.StreamHealthAlert) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, streamHealthAlertImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("StreamHealthAlert")
+		case "timestamp":
+			out.Values[i] = ec._StreamHealthAlert_timestamp(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "stream":
+			out.Values[i] = ec._StreamHealthAlert_stream(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "nodeId":
+			out.Values[i] = ec._StreamHealthAlert_nodeId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "alertType":
+			out.Values[i] = ec._StreamHealthAlert_alertType(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "severity":
+			out.Values[i] = ec._StreamHealthAlert_severity(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "healthScore":
+			out.Values[i] = ec._StreamHealthAlert_healthScore(ctx, field, obj)
+		case "frameJitterMs":
+			out.Values[i] = ec._StreamHealthAlert_frameJitterMs(ctx, field, obj)
+		case "packetLossPercentage":
+			out.Values[i] = ec._StreamHealthAlert_packetLossPercentage(ctx, field, obj)
+		case "issuesDescription":
+			out.Values[i] = ec._StreamHealthAlert_issuesDescription(ctx, field, obj)
+		case "bufferState":
+			out.Values[i] = ec._StreamHealthAlert_bufferState(ctx, field, obj)
+		case "qualityTier":
+			out.Values[i] = ec._StreamHealthAlert_qualityTier(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.processDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var streamHealthMetricImplementors = []string{"StreamHealthMetric"}
+
+func (ec *executionContext) _StreamHealthMetric(ctx context.Context, sel ast.SelectionSet, obj *model.StreamHealthMetric) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, streamHealthMetricImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("StreamHealthMetric")
+		case "timestamp":
+			out.Values[i] = ec._StreamHealthMetric_timestamp(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "stream":
+			out.Values[i] = ec._StreamHealthMetric_stream(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "nodeId":
+			out.Values[i] = ec._StreamHealthMetric_nodeId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "healthScore":
+			out.Values[i] = ec._StreamHealthMetric_healthScore(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "frameJitterMs":
+			out.Values[i] = ec._StreamHealthMetric_frameJitterMs(ctx, field, obj)
+		case "keyframeStabilityMs":
+			out.Values[i] = ec._StreamHealthMetric_keyframeStabilityMs(ctx, field, obj)
+		case "issuesDescription":
+			out.Values[i] = ec._StreamHealthMetric_issuesDescription(ctx, field, obj)
+		case "hasIssues":
+			out.Values[i] = ec._StreamHealthMetric_hasIssues(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "bitrate":
+			out.Values[i] = ec._StreamHealthMetric_bitrate(ctx, field, obj)
+		case "fps":
+			out.Values[i] = ec._StreamHealthMetric_fps(ctx, field, obj)
+		case "width":
+			out.Values[i] = ec._StreamHealthMetric_width(ctx, field, obj)
+		case "height":
+			out.Values[i] = ec._StreamHealthMetric_height(ctx, field, obj)
+		case "codec":
+			out.Values[i] = ec._StreamHealthMetric_codec(ctx, field, obj)
+		case "qualityTier":
+			out.Values[i] = ec._StreamHealthMetric_qualityTier(ctx, field, obj)
+		case "packetsSent":
+			out.Values[i] = ec._StreamHealthMetric_packetsSent(ctx, field, obj)
+		case "packetsLost":
+			out.Values[i] = ec._StreamHealthMetric_packetsLost(ctx, field, obj)
+		case "packetLossPercentage":
+			out.Values[i] = ec._StreamHealthMetric_packetLossPercentage(ctx, field, obj)
+		case "bufferState":
+			out.Values[i] = ec._StreamHealthMetric_bufferState(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "bufferHealth":
+			out.Values[i] = ec._StreamHealthMetric_bufferHealth(ctx, field, obj)
+		case "audioChannels":
+			out.Values[i] = ec._StreamHealthMetric_audioChannels(ctx, field, obj)
+		case "audioSampleRate":
+			out.Values[i] = ec._StreamHealthMetric_audioSampleRate(ctx, field, obj)
+		case "audioCodec":
+			out.Values[i] = ec._StreamHealthMetric_audioCodec(ctx, field, obj)
+		case "audioBitrate":
+			out.Values[i] = ec._StreamHealthMetric_audioBitrate(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.processDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var streamQualityChangeImplementors = []string{"StreamQualityChange"}
+
+func (ec *executionContext) _StreamQualityChange(ctx context.Context, sel ast.SelectionSet, obj *model.StreamQualityChange) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, streamQualityChangeImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("StreamQualityChange")
+		case "timestamp":
+			out.Values[i] = ec._StreamQualityChange_timestamp(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "stream":
+			out.Values[i] = ec._StreamQualityChange_stream(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "nodeId":
+			out.Values[i] = ec._StreamQualityChange_nodeId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "changeType":
+			out.Values[i] = ec._StreamQualityChange_changeType(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "previousQualityTier":
+			out.Values[i] = ec._StreamQualityChange_previousQualityTier(ctx, field, obj)
+		case "newQualityTier":
+			out.Values[i] = ec._StreamQualityChange_newQualityTier(ctx, field, obj)
+		case "previousResolution":
+			out.Values[i] = ec._StreamQualityChange_previousResolution(ctx, field, obj)
+		case "newResolution":
+			out.Values[i] = ec._StreamQualityChange_newResolution(ctx, field, obj)
+		case "previousCodec":
+			out.Values[i] = ec._StreamQualityChange_previousCodec(ctx, field, obj)
+		case "newCodec":
+			out.Values[i] = ec._StreamQualityChange_newCodec(ctx, field, obj)
+		case "previousTracks":
+			out.Values[i] = ec._StreamQualityChange_previousTracks(ctx, field, obj)
+		case "newTracks":
+			out.Values[i] = ec._StreamQualityChange_newTracks(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -16120,6 +21290,26 @@ func (ec *executionContext) ___Type(ctx context.Context, sel ast.SelectionSet, o
 
 // region    ***************************** type.gotpl *****************************
 
+func (ec *executionContext) unmarshalNAlertSeverity2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐAlertSeverity(ctx context.Context, v any) (model.AlertSeverity, error) {
+	var res model.AlertSeverity
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNAlertSeverity2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐAlertSeverity(ctx context.Context, sel ast.SelectionSet, v model.AlertSeverity) graphql.Marshaler {
+	return v
+}
+
+func (ec *executionContext) unmarshalNAlertType2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐAlertType(ctx context.Context, v any) (model.AlertType, error) {
+	var res model.AlertType
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNAlertType2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐAlertType(ctx context.Context, sel ast.SelectionSet, v model.AlertType) graphql.Marshaler {
+	return v
+}
+
 func (ec *executionContext) marshalNBillingStatus2frameworksᚋpkgᚋmodelsᚐBillingStatus(ctx context.Context, sel ast.SelectionSet, v models.BillingStatus) graphql.Marshaler {
 	return ec._BillingStatus(ctx, sel, &v)
 }
@@ -16206,6 +21396,16 @@ func (ec *executionContext) marshalNBoolean2bool(ctx context.Context, sel ast.Se
 		}
 	}
 	return res
+}
+
+func (ec *executionContext) unmarshalNBufferState2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐBufferState(ctx context.Context, v any) (model.BufferState, error) {
+	var res model.BufferState
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNBufferState2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐBufferState(ctx context.Context, sel ast.SelectionSet, v model.BufferState) graphql.Marshaler {
+	return v
 }
 
 func (ec *executionContext) marshalNClip2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐClip(ctx context.Context, sel ast.SelectionSet, v model.Clip) graphql.Marshaler {
@@ -16612,6 +21812,70 @@ func (ec *executionContext) marshalNPlatformOverview2ᚖframeworksᚋapi_gateway
 	return ec._PlatformOverview(ctx, sel, v)
 }
 
+func (ec *executionContext) unmarshalNQualityChangeType2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐQualityChangeType(ctx context.Context, v any) (model.QualityChangeType, error) {
+	var res model.QualityChangeType
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNQualityChangeType2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐQualityChangeType(ctx context.Context, sel ast.SelectionSet, v model.QualityChangeType) graphql.Marshaler {
+	return v
+}
+
+func (ec *executionContext) marshalNRebufferingEvent2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐRebufferingEventᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.RebufferingEvent) graphql.Marshaler {
+	ret := make(graphql.Array, len(v))
+	var wg sync.WaitGroup
+	isLen1 := len(v) == 1
+	if !isLen1 {
+		wg.Add(len(v))
+	}
+	for i := range v {
+		i := i
+		fc := &graphql.FieldContext{
+			Index:  &i,
+			Result: &v[i],
+		}
+		ctx := graphql.WithFieldContext(ctx, fc)
+		f := func(i int) {
+			defer func() {
+				if r := recover(); r != nil {
+					ec.Error(ctx, ec.Recover(ctx, r))
+					ret = nil
+				}
+			}()
+			if !isLen1 {
+				defer wg.Done()
+			}
+			ret[i] = ec.marshalNRebufferingEvent2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐRebufferingEvent(ctx, sel, v[i])
+		}
+		if isLen1 {
+			f(i)
+		} else {
+			go f(i)
+		}
+
+	}
+	wg.Wait()
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNRebufferingEvent2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐRebufferingEvent(ctx context.Context, sel ast.SelectionSet, v *model.RebufferingEvent) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._RebufferingEvent(ctx, sel, v)
+}
+
 func (ec *executionContext) marshalNStream2frameworksᚋpkgᚋmodelsᚐStream(ctx context.Context, sel ast.SelectionSet, v models.Stream) graphql.Marshaler {
 	return ec._Stream(ctx, sel, &v)
 }
@@ -16706,6 +21970,168 @@ func (ec *executionContext) unmarshalNStreamEventType2frameworksᚋapi_gateway�
 
 func (ec *executionContext) marshalNStreamEventType2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐStreamEventType(ctx context.Context, sel ast.SelectionSet, v model.StreamEventType) graphql.Marshaler {
 	return v
+}
+
+func (ec *executionContext) marshalNStreamHealthAlert2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐStreamHealthAlertᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.StreamHealthAlert) graphql.Marshaler {
+	ret := make(graphql.Array, len(v))
+	var wg sync.WaitGroup
+	isLen1 := len(v) == 1
+	if !isLen1 {
+		wg.Add(len(v))
+	}
+	for i := range v {
+		i := i
+		fc := &graphql.FieldContext{
+			Index:  &i,
+			Result: &v[i],
+		}
+		ctx := graphql.WithFieldContext(ctx, fc)
+		f := func(i int) {
+			defer func() {
+				if r := recover(); r != nil {
+					ec.Error(ctx, ec.Recover(ctx, r))
+					ret = nil
+				}
+			}()
+			if !isLen1 {
+				defer wg.Done()
+			}
+			ret[i] = ec.marshalNStreamHealthAlert2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐStreamHealthAlert(ctx, sel, v[i])
+		}
+		if isLen1 {
+			f(i)
+		} else {
+			go f(i)
+		}
+
+	}
+	wg.Wait()
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNStreamHealthAlert2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐStreamHealthAlert(ctx context.Context, sel ast.SelectionSet, v *model.StreamHealthAlert) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._StreamHealthAlert(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNStreamHealthMetric2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐStreamHealthMetricᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.StreamHealthMetric) graphql.Marshaler {
+	ret := make(graphql.Array, len(v))
+	var wg sync.WaitGroup
+	isLen1 := len(v) == 1
+	if !isLen1 {
+		wg.Add(len(v))
+	}
+	for i := range v {
+		i := i
+		fc := &graphql.FieldContext{
+			Index:  &i,
+			Result: &v[i],
+		}
+		ctx := graphql.WithFieldContext(ctx, fc)
+		f := func(i int) {
+			defer func() {
+				if r := recover(); r != nil {
+					ec.Error(ctx, ec.Recover(ctx, r))
+					ret = nil
+				}
+			}()
+			if !isLen1 {
+				defer wg.Done()
+			}
+			ret[i] = ec.marshalNStreamHealthMetric2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐStreamHealthMetric(ctx, sel, v[i])
+		}
+		if isLen1 {
+			f(i)
+		} else {
+			go f(i)
+		}
+
+	}
+	wg.Wait()
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNStreamHealthMetric2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐStreamHealthMetric(ctx context.Context, sel ast.SelectionSet, v *model.StreamHealthMetric) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._StreamHealthMetric(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNStreamQualityChange2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐStreamQualityChangeᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.StreamQualityChange) graphql.Marshaler {
+	ret := make(graphql.Array, len(v))
+	var wg sync.WaitGroup
+	isLen1 := len(v) == 1
+	if !isLen1 {
+		wg.Add(len(v))
+	}
+	for i := range v {
+		i := i
+		fc := &graphql.FieldContext{
+			Index:  &i,
+			Result: &v[i],
+		}
+		ctx := graphql.WithFieldContext(ctx, fc)
+		f := func(i int) {
+			defer func() {
+				if r := recover(); r != nil {
+					ec.Error(ctx, ec.Recover(ctx, r))
+					ret = nil
+				}
+			}()
+			if !isLen1 {
+				defer wg.Done()
+			}
+			ret[i] = ec.marshalNStreamQualityChange2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐStreamQualityChange(ctx, sel, v[i])
+		}
+		if isLen1 {
+			f(i)
+		} else {
+			go f(i)
+		}
+
+	}
+	wg.Wait()
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNStreamQualityChange2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐStreamQualityChange(ctx context.Context, sel ast.SelectionSet, v *model.StreamQualityChange) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._StreamQualityChange(ctx, sel, v)
 }
 
 func (ec *executionContext) unmarshalNStreamStatus2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐStreamStatus(ctx context.Context, v any) (model.StreamStatus, error) {
@@ -17297,6 +22723,22 @@ func (ec *executionContext) marshalOBoolean2ᚖbool(ctx context.Context, sel ast
 	return res
 }
 
+func (ec *executionContext) unmarshalOBufferState2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐBufferState(ctx context.Context, v any) (*model.BufferState, error) {
+	if v == nil {
+		return nil, nil
+	}
+	var res = new(model.BufferState)
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalOBufferState2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐBufferState(ctx context.Context, sel ast.SelectionSet, v *model.BufferState) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return v
+}
+
 func (ec *executionContext) marshalOCluster2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐCluster(ctx context.Context, sel ast.SelectionSet, v *model.Cluster) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
@@ -17383,6 +22825,13 @@ func (ec *executionContext) marshalOStreamAnalytics2ᚖframeworksᚋpkgᚋmodels
 		return graphql.Null
 	}
 	return ec._StreamAnalytics(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalOStreamHealthMetric2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐStreamHealthMetric(ctx context.Context, sel ast.SelectionSet, v *model.StreamHealthMetric) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._StreamHealthMetric(ctx, sel, v)
 }
 
 func (ec *executionContext) unmarshalOString2string(ctx context.Context, v any) (string, error) {

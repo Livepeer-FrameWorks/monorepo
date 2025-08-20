@@ -1,0 +1,93 @@
+# Stream health and quality monitoring queries
+
+query GetStreamHealthMetrics($stream: String!, $timeRange: TimeRangeInput) {
+  streamHealthMetrics(stream: $stream, timeRange: $timeRange) {
+    timestamp
+    stream
+    nodeId
+    healthScore
+    frameJitterMs
+    keyframeStabilityMs
+    issuesDescription
+    hasIssues
+    bitrate
+    fps
+    width
+    height
+    codec
+    qualityTier
+    packetsSent
+    packetsLost
+    packetLossPercentage
+    bufferState
+    bufferHealth
+    audioChannels
+    audioSampleRate
+    audioCodec
+    audioBitrate
+  }
+}
+
+query GetCurrentStreamHealth($stream: String!) {
+  currentStreamHealth(stream: $stream) {
+    timestamp
+    stream
+    nodeId
+    healthScore
+    frameJitterMs
+    keyframeStabilityMs
+    issuesDescription
+    hasIssues
+    bufferState
+    packetLossPercentage
+    qualityTier
+  }
+}
+
+query GetStreamQualityChanges($stream: String!, $timeRange: TimeRangeInput) {
+  streamQualityChanges(stream: $stream, timeRange: $timeRange) {
+    timestamp
+    stream
+    nodeId
+    changeType
+    previousQualityTier
+    newQualityTier
+    previousResolution
+    newResolution
+    previousCodec
+    newCodec
+    previousTracks
+    newTracks
+  }
+}
+
+query GetStreamHealthAlerts($stream: String, $timeRange: TimeRangeInput) {
+  streamHealthAlerts(stream: $stream, timeRange: $timeRange) {
+    timestamp
+    stream
+    nodeId
+    alertType
+    severity
+    healthScore
+    frameJitterMs
+    packetLossPercentage
+    issuesDescription
+    bufferState
+    qualityTier
+  }
+}
+
+query GetRebufferingEvents($stream: String!, $timeRange: TimeRangeInput) {
+  rebufferingEvents(stream: $stream, timeRange: $timeRange) {
+    timestamp
+    stream
+    nodeId
+    bufferState
+    previousState
+    rebufferStart
+    rebufferEnd
+    healthScore
+    frameJitterMs
+    packetLossPercentage
+  }
+}

@@ -190,6 +190,7 @@ CREATE TABLE IF NOT EXISTS stream_health_metrics (
     buffer_size UInt32,
     buffer_used UInt32,
     buffer_health Float32,
+    buffer_state LowCardinality(String), -- FULL, EMPTY, DRY, RECOVER
     
     -- Network performance
     packets_sent UInt64,
@@ -201,7 +202,29 @@ CREATE TABLE IF NOT EXISTS stream_health_metrics (
     -- Codec information
     codec LowCardinality(String),
     profile LowCardinality(String),
-    track_metadata JSON
+    track_metadata JSON,
+    
+    -- Enhanced health metrics from STREAM_BUFFER parsing
+    frame_jitter_ms Float32,
+    keyframe_stability_ms Float32,
+    issues_description String,
+    has_issues UInt8,
+    health_score Float32,
+    track_count UInt16,
+    
+    -- Frame timing metrics
+    frame_ms_max Float32,
+    frame_ms_min Float32,
+    frames_max UInt32,
+    frames_min UInt32,
+    keyframe_ms_max Float32,
+    keyframe_ms_min Float32,
+    
+    -- Audio metrics
+    audio_channels UInt8,
+    audio_sample_rate UInt32,
+    audio_codec LowCardinality(String),
+    audio_bitrate UInt32
 ) ENGINE = MergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (timestamp, internal_name)
@@ -261,7 +284,7 @@ SELECT
 FROM viewer_metrics
 GROUP BY timestamp_5m, tenant_id, internal_name, node_id;
 
--- Track list events
+-- Track list events with enhanced quality metrics
 CREATE TABLE IF NOT EXISTS track_list_events (
     timestamp DateTime,
     event_id UUID,
@@ -269,7 +292,48 @@ CREATE TABLE IF NOT EXISTS track_list_events (
     internal_name String,
     node_id LowCardinality(String),
     track_list String,
-    track_count UInt16
+    track_count UInt16,
+    
+    -- Video track metrics
+    video_track_count UInt16,
+    audio_track_count UInt16,
+    primary_width UInt16,
+    primary_height UInt16,
+    primary_fps Float32,
+    primary_video_codec LowCardinality(String),
+    primary_video_bitrate UInt32,
+    quality_tier LowCardinality(String), -- 1080p+, 720p, 480p, SD
+    
+    -- Audio track metrics
+    primary_audio_channels UInt8,
+    primary_audio_sample_rate UInt32,
+    primary_audio_codec LowCardinality(String),
+    primary_audio_bitrate UInt32
+) ENGINE = MergeTree()
+PARTITION BY (toYYYYMM(timestamp), tenant_id)
+ORDER BY (timestamp, internal_name)
+TTL timestamp + INTERVAL 90 DAY;
+
+-- Track change events for quality monitoring
+CREATE TABLE IF NOT EXISTS track_change_events (
+    timestamp DateTime,
+    event_id UUID,
+    tenant_id UUID,
+    internal_name String,
+    node_id LowCardinality(String),
+    
+    -- Change detection
+    change_type LowCardinality(String), -- codec_change, resolution_change, bitrate_change, track_added, track_removed
+    previous_tracks String, -- JSON
+    new_tracks String, -- JSON
+    
+    -- Change details
+    previous_quality_tier LowCardinality(String),
+    new_quality_tier LowCardinality(String),
+    previous_resolution String, -- e.g., "1920x1080"
+    new_resolution String,
+    previous_codec LowCardinality(String),
+    new_codec LowCardinality(String)
 ) ENGINE = MergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (timestamp, internal_name)
@@ -425,5 +489,197 @@ SELECT
 FROM viewer_metrics
 WHERE latitude != 0 AND longitude != 0
 GROUP BY hour, tenant_id, country_code, city;
+
+-- ============================================================================
+-- STREAM HEALTH MATERIALIZED VIEWS
+-- ============================================================================
+
+-- Stream health summary (5-minute aggregates)
+CREATE TABLE IF NOT EXISTS stream_health_5m (
+    timestamp_5m DateTime,
+    tenant_id UUID,
+    internal_name String,
+    node_id LowCardinality(String),
+    avg_health_score Float32,
+    max_jitter Float32,
+    avg_keyframe_stability Float32,
+    rebuffer_count UInt32,
+    issue_count UInt32,
+    sample_issues String,
+    avg_bitrate Float32,
+    avg_fps Float32,
+    packet_loss_percentage Float32,
+    buffer_dry_count UInt32,
+    quality_tier LowCardinality(String)
+) ENGINE = MergeTree()
+PARTITION BY toYYYYMM(timestamp_5m)
+ORDER BY (timestamp_5m, tenant_id, internal_name, node_id);
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS stream_health_5m_mv TO stream_health_5m AS
+SELECT
+    toStartOfInterval(timestamp, INTERVAL 5 MINUTE) AS timestamp_5m,
+    tenant_id,
+    internal_name,
+    node_id,
+    avg(health_score) AS avg_health_score,
+    max(frame_jitter_ms) AS max_jitter,
+    avg(keyframe_stability_ms) AS avg_keyframe_stability,
+    countIf(buffer_state = 'DRY') AS rebuffer_count,
+    countIf(has_issues = 1) AS issue_count,
+    any(issues_description) AS sample_issues,
+    avg(bitrate) AS avg_bitrate,
+    avg(fps) AS avg_fps,
+    avg(if(packets_sent > 0, (packets_lost / packets_sent) * 100, 0)) AS packet_loss_percentage,
+    countIf(buffer_state = 'DRY') AS buffer_dry_count,
+    argMax(
+        if(height >= 1080, '1080p+',
+           if(height >= 720, '720p',
+              if(height >= 480, '480p', 'SD'))), 
+        timestamp
+    ) AS quality_tier
+FROM stream_health_metrics
+GROUP BY timestamp_5m, tenant_id, internal_name, node_id;
+
+-- Quality changes aggregation (hourly)
+CREATE TABLE IF NOT EXISTS quality_changes_1h (
+    hour DateTime,
+    tenant_id UUID,
+    internal_name String,
+    total_changes UInt32,
+    resolution_changes UInt32,
+    codec_changes UInt32,
+    quality_tiers Array(String),
+    latest_quality LowCardinality(String),
+    latest_codec LowCardinality(String),
+    latest_resolution String
+) ENGINE = MergeTree()
+PARTITION BY toYYYYMM(hour)
+ORDER BY (hour, tenant_id, internal_name);
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS quality_changes_1h_mv TO quality_changes_1h AS
+SELECT
+    toStartOfHour(timestamp) AS hour,
+    tenant_id,
+    internal_name,
+    count() AS total_changes,
+    countIf(change_type = 'resolution_change') AS resolution_changes,
+    countIf(change_type = 'codec_change') AS codec_changes,
+    groupArray(new_quality_tier) AS quality_tiers,
+    argMax(new_quality_tier, timestamp) AS latest_quality,
+    argMax(new_codec, timestamp) AS latest_codec,
+    argMax(new_resolution, timestamp) AS latest_resolution
+FROM track_change_events
+GROUP BY hour, tenant_id, internal_name;
+
+-- Rebuffering events materialized view
+CREATE TABLE IF NOT EXISTS rebuffering_events (
+    timestamp DateTime,
+    tenant_id UUID,
+    internal_name String,
+    node_id LowCardinality(String),
+    buffer_state LowCardinality(String),
+    prev_state LowCardinality(String),
+    rebuffer_start UInt8,
+    rebuffer_end UInt8,
+    health_score Float32
+) ENGINE = MergeTree()
+PARTITION BY (toYYYYMM(timestamp), tenant_id)
+ORDER BY (timestamp, internal_name);
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS rebuffering_events_mv TO rebuffering_events AS
+SELECT
+    timestamp,
+    tenant_id,
+    internal_name,
+    node_id,
+    buffer_state,
+    lagInFrame(buffer_state) OVER (PARTITION BY tenant_id, internal_name ORDER BY timestamp) AS prev_state,
+    if(buffer_state = 'DRY' AND prev_state IN ('FULL', 'RECOVER'), 1, 0) AS rebuffer_start,
+    if(buffer_state = 'RECOVER' AND prev_state = 'DRY', 1, 0) AS rebuffer_end,
+    health_score
+FROM stream_health_metrics
+WHERE buffer_state IN ('FULL', 'DRY', 'RECOVER');
+
+-- Stream health alerts (issues detected)
+CREATE TABLE IF NOT EXISTS stream_health_alerts (
+    timestamp DateTime,
+    tenant_id UUID,
+    internal_name String,
+    node_id LowCardinality(String),
+    alert_type LowCardinality(String), -- high_jitter, keyframe_instability, packet_loss, rebuffering
+    severity LowCardinality(String),   -- low, medium, high, critical
+    health_score Float32,
+    frame_jitter_ms Float32,
+    packet_loss_percentage Float32,
+    issues_description String
+) ENGINE = MergeTree()
+PARTITION BY (toYYYYMM(timestamp), tenant_id)
+ORDER BY (timestamp, internal_name, alert_type);
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS stream_health_alerts_mv TO stream_health_alerts AS
+SELECT
+    timestamp,
+    tenant_id,
+    internal_name,
+    node_id,
+    multiIf(
+        frame_jitter_ms > 50, 'high_jitter',
+        keyframe_stability_ms > 100, 'keyframe_instability',
+        (packets_lost / packets_sent) > 0.05, 'packet_loss',
+        buffer_state = 'DRY', 'rebuffering',
+        'unknown'
+    ) AS alert_type,
+    multiIf(
+        frame_jitter_ms > 100 OR (packets_lost / packets_sent) > 0.1, 'critical',
+        frame_jitter_ms > 75 OR (packets_lost / packets_sent) > 0.05, 'high',
+        frame_jitter_ms > 30 OR keyframe_stability_ms > 50, 'medium',
+        'low'
+    ) AS severity,
+    health_score,
+    frame_jitter_ms,
+    if(packets_sent > 0, (packets_lost / packets_sent) * 100, 0) AS packet_loss_percentage,
+    issues_description
+FROM stream_health_metrics
+WHERE has_issues = 1 
+   OR frame_jitter_ms > 30 
+   OR keyframe_stability_ms > 50 
+   OR (packets_sent > 0 AND (packets_lost / packets_sent) > 0.02)
+   OR buffer_state = 'DRY';
+
+-- Track quality tier trends (daily)
+CREATE TABLE IF NOT EXISTS quality_tier_daily (
+    day Date,
+    tenant_id UUID,
+    internal_name String,
+    tier_1080p_minutes UInt32,
+    tier_720p_minutes UInt32,
+    tier_480p_minutes UInt32,
+    tier_sd_minutes UInt32,
+    primary_tier LowCardinality(String),
+    codec_h264_minutes UInt32,
+    codec_h265_minutes UInt32,
+    avg_bitrate UInt32,
+    avg_fps Float32
+) ENGINE = SummingMergeTree()
+PARTITION BY toYYYYMM(day)
+ORDER BY (day, tenant_id, internal_name);
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS quality_tier_daily_mv TO quality_tier_daily AS
+SELECT
+    toDate(timestamp) as day,
+    tenant_id,
+    internal_name,
+    countIf(primary_height >= 1080) * 5 AS tier_1080p_minutes,
+    countIf(primary_height >= 720 AND primary_height < 1080) * 5 AS tier_720p_minutes,
+    countIf(primary_height >= 480 AND primary_height < 720) * 5 AS tier_480p_minutes,
+    countIf(primary_height < 480) * 5 AS tier_sd_minutes,
+    argMax(quality_tier, timestamp) AS primary_tier,
+    countIf(primary_video_codec LIKE '%264%') * 5 AS codec_h264_minutes,
+    countIf(primary_video_codec LIKE '%265%' OR primary_video_codec LIKE '%HEVC%') * 5 AS codec_h265_minutes,
+    avg(primary_video_bitrate) AS avg_bitrate,
+    avg(primary_fps) AS avg_fps
+FROM track_list_events
+WHERE track_count > 0
+GROUP BY day, tenant_id, internal_name;
 
 

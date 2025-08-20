@@ -16,13 +16,27 @@ export type Scalars = {
   Time: { input: string; output: string; }
 };
 
+export enum AlertSeverity {
+  Critical = 'CRITICAL',
+  High = 'HIGH',
+  Low = 'LOW',
+  Medium = 'MEDIUM'
+}
+
+export enum AlertType {
+  HighJitter = 'HIGH_JITTER',
+  KeyframeInstability = 'KEYFRAME_INSTABILITY',
+  PacketLoss = 'PACKET_LOSS',
+  QualityDegradation = 'QUALITY_DEGRADATION',
+  Rebuffering = 'REBUFFERING'
+}
+
 export type BillingStatus = {
   __typename?: 'BillingStatus';
   currentTier: BillingTier;
   nextBillingDate: Scalars['Time']['output'];
   outstandingAmount: Scalars['Float']['output'];
   status: Scalars['String']['output'];
-  tenantId: Scalars['String']['output'];
 };
 
 export type BillingTier = {
@@ -35,6 +49,13 @@ export type BillingTier = {
   price: Scalars['Float']['output'];
 };
 
+export enum BufferState {
+  Dry = 'DRY',
+  Empty = 'EMPTY',
+  Full = 'FULL',
+  Recover = 'RECOVER'
+}
+
 export type Clip = {
   __typename?: 'Clip';
   createdAt: Scalars['Time']['output'];
@@ -45,8 +66,7 @@ export type Clip = {
   playbackId: Scalars['String']['output'];
   startTime: Scalars['Int']['output'];
   status: Scalars['String']['output'];
-  streamId: Scalars['String']['output'];
-  tenantId: Scalars['String']['output'];
+  stream: Scalars['String']['output'];
   title: Scalars['String']['output'];
   updatedAt: Scalars['Time']['output'];
 };
@@ -65,7 +85,7 @@ export type CreateClipInput = {
   description?: InputMaybe<Scalars['String']['input']>;
   endTime: Scalars['Int']['input'];
   startTime: Scalars['Int']['input'];
-  streamId: Scalars['ID']['input'];
+  stream: Scalars['String']['input'];
   title: Scalars['String']['input'];
 };
 
@@ -108,7 +128,6 @@ export type Invoice = {
   id: Scalars['ID']['output'];
   lineItems: Array<LineItem>;
   status: Scalars['String']['output'];
-  tenantId: Scalars['String']['output'];
 };
 
 export type LineItem = {
@@ -186,7 +205,7 @@ export type MutationUpdateTenantArgs = {
 
 export type Node = {
   __typename?: 'Node';
-  clusterId: Scalars['String']['output'];
+  cluster: Scalars['String']['output'];
   createdAt: Scalars['Time']['output'];
   id: Scalars['ID']['output'];
   ipAddress?: Maybe<Scalars['String']['output']>;
@@ -228,22 +247,35 @@ export type PlatformOverview = {
   totalViewers: Scalars['Int']['output'];
 };
 
+export enum QualityChangeType {
+  BitrateChange = 'BITRATE_CHANGE',
+  CodecChange = 'CODEC_CHANGE',
+  ResolutionChange = 'RESOLUTION_CHANGE',
+  TrackAdded = 'TRACK_ADDED',
+  TrackRemoved = 'TRACK_REMOVED',
+  TrackUpdate = 'TRACK_UPDATE'
+}
+
 export type Query = {
   __typename?: 'Query';
   billingStatus: BillingStatus;
   billingTiers: Array<BillingTier>;
   cluster?: Maybe<Cluster>;
   clusters: Array<Cluster>;
+  currentStreamHealth?: Maybe<StreamHealthMetric>;
   developerTokens: Array<DeveloperToken>;
   invoice?: Maybe<Invoice>;
   invoices: Array<Invoice>;
-  me?: Maybe<User>;
   node?: Maybe<Node>;
   nodes: Array<Node>;
   platformOverview: PlatformOverview;
+  rebufferingEvents: Array<RebufferingEvent>;
   stream?: Maybe<Stream>;
   streamAnalytics?: Maybe<StreamAnalytics>;
   streamEmbed: StreamEmbed;
+  streamHealthAlerts: Array<StreamHealthAlert>;
+  streamHealthMetrics: Array<StreamHealthMetric>;
+  streamQualityChanges: Array<StreamQualityChange>;
   streams: Array<Stream>;
   tenant?: Maybe<Tenant>;
   usageRecords: Array<UsageRecord>;
@@ -254,6 +286,11 @@ export type Query = {
 
 export type QueryClusterArgs = {
   id: Scalars['ID']['input'];
+};
+
+
+export type QueryCurrentStreamHealthArgs = {
+  stream: Scalars['String']['input'];
 };
 
 
@@ -272,19 +309,43 @@ export type QueryPlatformOverviewArgs = {
 };
 
 
+export type QueryRebufferingEventsArgs = {
+  stream: Scalars['String']['input'];
+  timeRange?: InputMaybe<TimeRangeInput>;
+};
+
+
 export type QueryStreamArgs = {
   id: Scalars['ID']['input'];
 };
 
 
 export type QueryStreamAnalyticsArgs = {
-  streamId: Scalars['ID']['input'];
+  stream: Scalars['String']['input'];
   timeRange?: InputMaybe<TimeRangeInput>;
 };
 
 
 export type QueryStreamEmbedArgs = {
   id: Scalars['ID']['input'];
+};
+
+
+export type QueryStreamHealthAlertsArgs = {
+  stream?: InputMaybe<Scalars['String']['input']>;
+  timeRange?: InputMaybe<TimeRangeInput>;
+};
+
+
+export type QueryStreamHealthMetricsArgs = {
+  stream: Scalars['String']['input'];
+  timeRange?: InputMaybe<TimeRangeInput>;
+};
+
+
+export type QueryStreamQualityChangesArgs = {
+  stream: Scalars['String']['input'];
+  timeRange?: InputMaybe<TimeRangeInput>;
 };
 
 
@@ -299,8 +360,22 @@ export type QueryValidateStreamKeyArgs = {
 
 
 export type QueryViewerMetricsArgs = {
-  streamId?: InputMaybe<Scalars['ID']['input']>;
+  stream?: InputMaybe<Scalars['String']['input']>;
   timeRange?: InputMaybe<TimeRangeInput>;
+};
+
+export type RebufferingEvent = {
+  __typename?: 'RebufferingEvent';
+  bufferState: BufferState;
+  frameJitterMs?: Maybe<Scalars['Float']['output']>;
+  healthScore?: Maybe<Scalars['Float']['output']>;
+  nodeId: Scalars['String']['output'];
+  packetLossPercentage?: Maybe<Scalars['Float']['output']>;
+  previousState: BufferState;
+  rebufferEnd: Scalars['Boolean']['output'];
+  rebufferStart: Scalars['Boolean']['output'];
+  stream: Scalars['String']['output'];
+  timestamp: Scalars['Time']['output'];
 };
 
 export type Stream = {
@@ -313,15 +388,28 @@ export type Stream = {
   record: Scalars['Boolean']['output'];
   status: StreamStatus;
   streamKey: Scalars['String']['output'];
-  tenantId: Scalars['String']['output'];
   updatedAt: Scalars['Time']['output'];
 };
 
 export type StreamAnalytics = {
   __typename?: 'StreamAnalytics';
+  alertCount?: Maybe<Scalars['Int']['output']>;
+  averageHealthScore?: Maybe<Scalars['Float']['output']>;
   averageViewers: Scalars['Float']['output'];
+  bufferState?: Maybe<BufferState>;
+  currentBitrate?: Maybe<Scalars['Int']['output']>;
+  currentCodec?: Maybe<Scalars['String']['output']>;
+  currentFps?: Maybe<Scalars['Float']['output']>;
+  currentHealthScore?: Maybe<Scalars['Float']['output']>;
+  currentIssues?: Maybe<Scalars['String']['output']>;
+  currentResolution?: Maybe<Scalars['String']['output']>;
+  frameJitterMs?: Maybe<Scalars['Float']['output']>;
+  keyframeStabilityMs?: Maybe<Scalars['Float']['output']>;
+  packetLossPercentage?: Maybe<Scalars['Float']['output']>;
   peakViewers: Scalars['Int']['output'];
-  streamId: Scalars['ID']['output'];
+  qualityTier?: Maybe<Scalars['String']['output']>;
+  rebufferCount?: Maybe<Scalars['Int']['output']>;
+  stream: Scalars['String']['output'];
   timeRange: TimeRange;
   totalViewTime: Scalars['Float']['output'];
   totalViews: Scalars['Int']['output'];
@@ -333,17 +421,15 @@ export type StreamEmbed = {
   embedCode: Scalars['String']['output'];
   height: Scalars['Int']['output'];
   iframeUrl: Scalars['String']['output'];
-  streamId: Scalars['ID']['output'];
+  stream: Scalars['String']['output'];
   width: Scalars['Int']['output'];
 };
 
 export type StreamEvent = {
   __typename?: 'StreamEvent';
-  details?: Maybe<Scalars['JSON']['output']>;
-  nodeId?: Maybe<Scalars['String']['output']>;
+  details?: Maybe<Scalars['String']['output']>;
   status: StreamStatus;
-  streamId: Scalars['ID']['output'];
-  tenantId: Scalars['ID']['output'];
+  stream: Scalars['String']['output'];
   timestamp: Scalars['Time']['output'];
   type: StreamEventType;
 };
@@ -356,6 +442,64 @@ export enum StreamEventType {
   TrackListUpdate = 'TRACK_LIST_UPDATE'
 }
 
+export type StreamHealthAlert = {
+  __typename?: 'StreamHealthAlert';
+  alertType: AlertType;
+  bufferState?: Maybe<BufferState>;
+  frameJitterMs?: Maybe<Scalars['Float']['output']>;
+  healthScore?: Maybe<Scalars['Float']['output']>;
+  issuesDescription?: Maybe<Scalars['String']['output']>;
+  nodeId: Scalars['String']['output'];
+  packetLossPercentage?: Maybe<Scalars['Float']['output']>;
+  qualityTier?: Maybe<Scalars['String']['output']>;
+  severity: AlertSeverity;
+  stream: Scalars['String']['output'];
+  timestamp: Scalars['Time']['output'];
+};
+
+export type StreamHealthMetric = {
+  __typename?: 'StreamHealthMetric';
+  audioBitrate?: Maybe<Scalars['Int']['output']>;
+  audioChannels?: Maybe<Scalars['Int']['output']>;
+  audioCodec?: Maybe<Scalars['String']['output']>;
+  audioSampleRate?: Maybe<Scalars['Int']['output']>;
+  bitrate?: Maybe<Scalars['Int']['output']>;
+  bufferHealth?: Maybe<Scalars['Float']['output']>;
+  bufferState: BufferState;
+  codec?: Maybe<Scalars['String']['output']>;
+  fps?: Maybe<Scalars['Float']['output']>;
+  frameJitterMs?: Maybe<Scalars['Float']['output']>;
+  hasIssues: Scalars['Boolean']['output'];
+  healthScore: Scalars['Float']['output'];
+  height?: Maybe<Scalars['Int']['output']>;
+  issuesDescription?: Maybe<Scalars['String']['output']>;
+  keyframeStabilityMs?: Maybe<Scalars['Float']['output']>;
+  nodeId: Scalars['String']['output'];
+  packetLossPercentage?: Maybe<Scalars['Float']['output']>;
+  packetsLost?: Maybe<Scalars['Int']['output']>;
+  packetsSent?: Maybe<Scalars['Int']['output']>;
+  qualityTier?: Maybe<Scalars['String']['output']>;
+  stream: Scalars['String']['output'];
+  timestamp: Scalars['Time']['output'];
+  width?: Maybe<Scalars['Int']['output']>;
+};
+
+export type StreamQualityChange = {
+  __typename?: 'StreamQualityChange';
+  changeType: QualityChangeType;
+  newCodec?: Maybe<Scalars['String']['output']>;
+  newQualityTier?: Maybe<Scalars['String']['output']>;
+  newResolution?: Maybe<Scalars['String']['output']>;
+  newTracks?: Maybe<Scalars['String']['output']>;
+  nodeId: Scalars['String']['output'];
+  previousCodec?: Maybe<Scalars['String']['output']>;
+  previousQualityTier?: Maybe<Scalars['String']['output']>;
+  previousResolution?: Maybe<Scalars['String']['output']>;
+  previousTracks?: Maybe<Scalars['String']['output']>;
+  stream: Scalars['String']['output'];
+  timestamp: Scalars['Time']['output'];
+};
+
 export enum StreamStatus {
   Ended = 'ENDED',
   Live = 'LIVE',
@@ -367,7 +511,6 @@ export type StreamValidation = {
   __typename?: 'StreamValidation';
   error?: Maybe<Scalars['String']['output']>;
   streamKey: Scalars['String']['output'];
-  tenantId?: Maybe<Scalars['String']['output']>;
   valid: Scalars['Boolean']['output'];
 };
 
@@ -375,47 +518,41 @@ export type Subscription = {
   __typename?: 'Subscription';
   streamEvents: StreamEvent;
   systemHealth: SystemHealthEvent;
-  tenantEvents: TenantEvent;
   trackListUpdates: TrackListEvent;
+  userEvents: TenantEvent;
   viewerMetrics: ViewerMetrics;
 };
 
 
 export type SubscriptionStreamEventsArgs = {
-  streamId?: InputMaybe<Scalars['ID']['input']>;
-  tenantId?: InputMaybe<Scalars['ID']['input']>;
-};
-
-
-export type SubscriptionTenantEventsArgs = {
-  tenantId: Scalars['ID']['input'];
+  stream?: InputMaybe<Scalars['String']['input']>;
 };
 
 
 export type SubscriptionTrackListUpdatesArgs = {
-  streamId: Scalars['ID']['input'];
+  stream: Scalars['String']['input'];
 };
 
 
 export type SubscriptionViewerMetricsArgs = {
-  streamId: Scalars['ID']['input'];
+  stream: Scalars['String']['input'];
 };
 
 export type SystemHealthEvent = {
   __typename?: 'SystemHealthEvent';
-  clusterId: Scalars['ID']['output'];
+  cluster: Scalars['String']['output'];
   cpuUsage: Scalars['Float']['output'];
   diskUsage: Scalars['Float']['output'];
   healthScore: Scalars['Float']['output'];
   memoryUsage: Scalars['Float']['output'];
-  nodeId: Scalars['ID']['output'];
+  node: Scalars['String']['output'];
   status: NodeStatus;
   timestamp: Scalars['Time']['output'];
 };
 
 export type Tenant = {
   __typename?: 'Tenant';
-  clusterId?: Maybe<Scalars['String']['output']>;
+  cluster?: Maybe<Scalars['String']['output']>;
   createdAt: Scalars['Time']['output'];
   id: Scalars['ID']['output'];
   name: Scalars['String']['output'];
@@ -437,8 +574,7 @@ export type TimeRangeInput = {
 
 export type TrackListEvent = {
   __typename?: 'TrackListEvent';
-  streamId: Scalars['ID']['output'];
-  tenantId: Scalars['ID']['output'];
+  stream: Scalars['String']['output'];
   timestamp: Scalars['Time']['output'];
   trackCount: Scalars['Int']['output'];
   trackList: Scalars['String']['output'];
@@ -461,7 +597,6 @@ export type UsageRecord = {
   id: Scalars['ID']['output'];
   quantity: Scalars['Float']['output'];
   resourceType: Scalars['String']['output'];
-  tenantId: Scalars['String']['output'];
   timestamp: Scalars['Time']['output'];
   unit: Scalars['String']['output'];
 };
@@ -473,7 +608,6 @@ export type User = {
   id: Scalars['ID']['output'];
   name?: Maybe<Scalars['String']['output']>;
   role: Scalars['String']['output'];
-  tenantId: Scalars['String']['output'];
 };
 
 export type ViewerMetric = {
@@ -489,9 +623,199 @@ export type ViewerMetrics = {
   connectionQuality?: Maybe<Scalars['Float']['output']>;
   currentViewers: Scalars['Int']['output'];
   peakViewers: Scalars['Int']['output'];
-  streamId: Scalars['ID']['output'];
+  stream: Scalars['String']['output'];
   timestamp: Scalars['Time']['output'];
 };
+
+/**
+ * A Directive provides a way to describe alternate runtime execution and type validation behavior in a GraphQL document.
+ *
+ * In some cases, you need to provide options to alter GraphQL's execution behavior in ways field arguments will not suffice, such as conditionally including or skipping a field. Directives provide this by describing additional information to the executor.
+ */
+export type __Directive = {
+  __typename?: '__Directive';
+  name: Scalars['String']['output'];
+  description?: Maybe<Scalars['String']['output']>;
+  isRepeatable: Scalars['Boolean']['output'];
+  locations: Array<__DirectiveLocation>;
+  args: Array<__InputValue>;
+};
+
+
+/**
+ * A Directive provides a way to describe alternate runtime execution and type validation behavior in a GraphQL document.
+ *
+ * In some cases, you need to provide options to alter GraphQL's execution behavior in ways field arguments will not suffice, such as conditionally including or skipping a field. Directives provide this by describing additional information to the executor.
+ */
+export type __DirectiveArgsArgs = {
+  includeDeprecated?: InputMaybe<Scalars['Boolean']['input']>;
+};
+
+/** A Directive can be adjacent to many parts of the GraphQL language, a __DirectiveLocation describes one such possible adjacencies. */
+export enum __DirectiveLocation {
+  /** Location adjacent to a query operation. */
+  Query = 'QUERY',
+  /** Location adjacent to a mutation operation. */
+  Mutation = 'MUTATION',
+  /** Location adjacent to a subscription operation. */
+  Subscription = 'SUBSCRIPTION',
+  /** Location adjacent to a field. */
+  Field = 'FIELD',
+  /** Location adjacent to a fragment definition. */
+  FragmentDefinition = 'FRAGMENT_DEFINITION',
+  /** Location adjacent to a fragment spread. */
+  FragmentSpread = 'FRAGMENT_SPREAD',
+  /** Location adjacent to an inline fragment. */
+  InlineFragment = 'INLINE_FRAGMENT',
+  /** Location adjacent to a variable definition. */
+  VariableDefinition = 'VARIABLE_DEFINITION',
+  /** Location adjacent to a schema definition. */
+  Schema = 'SCHEMA',
+  /** Location adjacent to a scalar definition. */
+  Scalar = 'SCALAR',
+  /** Location adjacent to an object type definition. */
+  Object = 'OBJECT',
+  /** Location adjacent to a field definition. */
+  FieldDefinition = 'FIELD_DEFINITION',
+  /** Location adjacent to an argument definition. */
+  ArgumentDefinition = 'ARGUMENT_DEFINITION',
+  /** Location adjacent to an interface definition. */
+  Interface = 'INTERFACE',
+  /** Location adjacent to a union definition. */
+  Union = 'UNION',
+  /** Location adjacent to an enum definition. */
+  Enum = 'ENUM',
+  /** Location adjacent to an enum value definition. */
+  EnumValue = 'ENUM_VALUE',
+  /** Location adjacent to an input object type definition. */
+  InputObject = 'INPUT_OBJECT',
+  /** Location adjacent to an input object field definition. */
+  InputFieldDefinition = 'INPUT_FIELD_DEFINITION'
+}
+
+/** One possible value for a given Enum. Enum values are unique values, not a placeholder for a string or numeric value. However an Enum value is returned in a JSON response as a string. */
+export type __EnumValue = {
+  __typename?: '__EnumValue';
+  name: Scalars['String']['output'];
+  description?: Maybe<Scalars['String']['output']>;
+  isDeprecated: Scalars['Boolean']['output'];
+  deprecationReason?: Maybe<Scalars['String']['output']>;
+};
+
+/** Object and Interface types are described by a list of Fields, each of which has a name, potentially a list of arguments, and a return type. */
+export type __Field = {
+  __typename?: '__Field';
+  name: Scalars['String']['output'];
+  description?: Maybe<Scalars['String']['output']>;
+  args: Array<__InputValue>;
+  type: __Type;
+  isDeprecated: Scalars['Boolean']['output'];
+  deprecationReason?: Maybe<Scalars['String']['output']>;
+};
+
+
+/** Object and Interface types are described by a list of Fields, each of which has a name, potentially a list of arguments, and a return type. */
+export type __FieldArgsArgs = {
+  includeDeprecated?: InputMaybe<Scalars['Boolean']['input']>;
+};
+
+/** Arguments provided to Fields or Directives and the input fields of an InputObject are represented as Input Values which describe their type and optionally a default value. */
+export type __InputValue = {
+  __typename?: '__InputValue';
+  name: Scalars['String']['output'];
+  description?: Maybe<Scalars['String']['output']>;
+  type: __Type;
+  /** A GraphQL-formatted string representing the default value for this input value. */
+  defaultValue?: Maybe<Scalars['String']['output']>;
+  isDeprecated: Scalars['Boolean']['output'];
+  deprecationReason?: Maybe<Scalars['String']['output']>;
+};
+
+/** A GraphQL Schema defines the capabilities of a GraphQL server. It exposes all available types and directives on the server, as well as the entry points for query, mutation, and subscription operations. */
+export type __Schema = {
+  __typename?: '__Schema';
+  description?: Maybe<Scalars['String']['output']>;
+  /** A list of all types supported by this server. */
+  types: Array<__Type>;
+  /** The type that query operations will be rooted at. */
+  queryType: __Type;
+  /** If this server supports mutation, the type that mutation operations will be rooted at. */
+  mutationType?: Maybe<__Type>;
+  /** If this server support subscription, the type that subscription operations will be rooted at. */
+  subscriptionType?: Maybe<__Type>;
+  /** A list of all directives supported by this server. */
+  directives: Array<__Directive>;
+};
+
+/**
+ * The fundamental unit of any GraphQL Schema is the type. There are many kinds of types in GraphQL as represented by the `__TypeKind` enum.
+ *
+ * Depending on the kind of a type, certain fields describe information about that type. Scalar types provide no information beyond a name, description and optional `specifiedByURL`, while Enum types provide their values. Object and Interface types provide the fields they describe. Abstract types, Union and Interface, provide the Object types possible at runtime. List and NonNull types compose other types.
+ */
+export type __Type = {
+  __typename?: '__Type';
+  kind: __TypeKind;
+  name?: Maybe<Scalars['String']['output']>;
+  description?: Maybe<Scalars['String']['output']>;
+  specifiedByURL?: Maybe<Scalars['String']['output']>;
+  fields?: Maybe<Array<__Field>>;
+  interfaces?: Maybe<Array<__Type>>;
+  possibleTypes?: Maybe<Array<__Type>>;
+  enumValues?: Maybe<Array<__EnumValue>>;
+  inputFields?: Maybe<Array<__InputValue>>;
+  ofType?: Maybe<__Type>;
+  isOneOf?: Maybe<Scalars['Boolean']['output']>;
+};
+
+
+/**
+ * The fundamental unit of any GraphQL Schema is the type. There are many kinds of types in GraphQL as represented by the `__TypeKind` enum.
+ *
+ * Depending on the kind of a type, certain fields describe information about that type. Scalar types provide no information beyond a name, description and optional `specifiedByURL`, while Enum types provide their values. Object and Interface types provide the fields they describe. Abstract types, Union and Interface, provide the Object types possible at runtime. List and NonNull types compose other types.
+ */
+export type __TypeFieldsArgs = {
+  includeDeprecated?: InputMaybe<Scalars['Boolean']['input']>;
+};
+
+
+/**
+ * The fundamental unit of any GraphQL Schema is the type. There are many kinds of types in GraphQL as represented by the `__TypeKind` enum.
+ *
+ * Depending on the kind of a type, certain fields describe information about that type. Scalar types provide no information beyond a name, description and optional `specifiedByURL`, while Enum types provide their values. Object and Interface types provide the fields they describe. Abstract types, Union and Interface, provide the Object types possible at runtime. List and NonNull types compose other types.
+ */
+export type __TypeEnumValuesArgs = {
+  includeDeprecated?: InputMaybe<Scalars['Boolean']['input']>;
+};
+
+
+/**
+ * The fundamental unit of any GraphQL Schema is the type. There are many kinds of types in GraphQL as represented by the `__TypeKind` enum.
+ *
+ * Depending on the kind of a type, certain fields describe information about that type. Scalar types provide no information beyond a name, description and optional `specifiedByURL`, while Enum types provide their values. Object and Interface types provide the fields they describe. Abstract types, Union and Interface, provide the Object types possible at runtime. List and NonNull types compose other types.
+ */
+export type __TypeInputFieldsArgs = {
+  includeDeprecated?: InputMaybe<Scalars['Boolean']['input']>;
+};
+
+/** An enum describing what kind of type a given `__Type` is. */
+export enum __TypeKind {
+  /** Indicates this type is a scalar. */
+  Scalar = 'SCALAR',
+  /** Indicates this type is an object. `fields` and `interfaces` are valid fields. */
+  Object = 'OBJECT',
+  /** Indicates this type is an interface. `fields`, `interfaces`, and `possibleTypes` are valid fields. */
+  Interface = 'INTERFACE',
+  /** Indicates this type is a union. `possibleTypes` is a valid field. */
+  Union = 'UNION',
+  /** Indicates this type is an enum. `enumValues` is a valid field. */
+  Enum = 'ENUM',
+  /** Indicates this type is an input object. `inputFields` is a valid field. */
+  InputObject = 'INPUT_OBJECT',
+  /** Indicates this type is a list. `ofType` is a valid field. */
+  List = 'LIST',
+  /** Indicates this type is a non-null. `ofType` is a valid field. */
+  NonNull = 'NON_NULL'
+}
 
 export type CreatePaymentMutationVariables = Exact<{
   input: CreatePaymentInput;
@@ -505,14 +829,14 @@ export type UpdateBillingTierMutationVariables = Exact<{
 }>;
 
 
-export type UpdateBillingTierMutation = { __typename?: 'Mutation', updateBillingTier: { __typename?: 'BillingStatus', tenantId: string, nextBillingDate: string, outstandingAmount: number, status: string, currentTier: { __typename?: 'BillingTier', id: string, name: string, price: number, currency: string, features: Array<string> } } };
+export type UpdateBillingTierMutation = { __typename?: 'Mutation', updateBillingTier: { __typename?: 'BillingStatus', nextBillingDate: string, outstandingAmount: number, status: string, currentTier: { __typename?: 'BillingTier', id: string, name: string, price: number, currency: string, features: Array<string> } } };
 
 export type CreateClipMutationVariables = Exact<{
   input: CreateClipInput;
 }>;
 
 
-export type CreateClipMutation = { __typename?: 'Mutation', createClip: { __typename?: 'Clip', id: string, streamId: string, tenantId: string, title: string, description?: string | null | undefined, startTime: number, endTime: number, duration: number, playbackId: string, status: string, createdAt: string, updatedAt: string } };
+export type CreateClipMutation = { __typename?: 'Mutation', createClip: { __typename?: 'Clip', id: string, stream: string, title: string, description?: string | null | undefined, startTime: number, endTime: number, duration: number, playbackId: string, status: string, createdAt: string, updatedAt: string } };
 
 export type CreateApiTokenMutationVariables = Exact<{
   input: CreateDeveloperTokenInput;
@@ -533,14 +857,14 @@ export type UpdateTenantMutationVariables = Exact<{
 }>;
 
 
-export type UpdateTenantMutation = { __typename?: 'Mutation', updateTenant: { __typename?: 'Tenant', id: string, name: string, settings?: any | null | undefined, clusterId?: string | null | undefined, createdAt: string } };
+export type UpdateTenantMutation = { __typename?: 'Mutation', updateTenant: { __typename?: 'Tenant', id: string, name: string, settings?: any | null | undefined, cluster?: string | null | undefined, createdAt: string } };
 
 export type CreateStreamMutationVariables = Exact<{
   input: CreateStreamInput;
 }>;
 
 
-export type CreateStreamMutation = { __typename?: 'Mutation', createStream: { __typename?: 'Stream', id: string, name: string, description?: string | null | undefined, streamKey: string, playbackId: string, status: StreamStatus, record: boolean, tenantId: string, createdAt: string, updatedAt: string } };
+export type CreateStreamMutation = { __typename?: 'Mutation', createStream: { __typename?: 'Stream', id: string, name: string, description?: string | null | undefined, streamKey: string, playbackId: string, status: StreamStatus, record: boolean, createdAt: string, updatedAt: string } };
 
 export type UpdateStreamMutationVariables = Exact<{
   id: Scalars['ID']['input'];
@@ -548,7 +872,7 @@ export type UpdateStreamMutationVariables = Exact<{
 }>;
 
 
-export type UpdateStreamMutation = { __typename?: 'Mutation', updateStream: { __typename?: 'Stream', id: string, name: string, description?: string | null | undefined, streamKey: string, playbackId: string, status: StreamStatus, record: boolean, tenantId: string, createdAt: string, updatedAt: string } };
+export type UpdateStreamMutation = { __typename?: 'Mutation', updateStream: { __typename?: 'Stream', id: string, name: string, description?: string | null | undefined, streamKey: string, playbackId: string, status: StreamStatus, record: boolean, createdAt: string, updatedAt: string } };
 
 export type DeleteStreamMutationVariables = Exact<{
   id: Scalars['ID']['input'];
@@ -562,18 +886,18 @@ export type RefreshStreamKeyMutationVariables = Exact<{
 }>;
 
 
-export type RefreshStreamKeyMutation = { __typename?: 'Mutation', refreshStreamKey: { __typename?: 'Stream', id: string, name: string, description?: string | null | undefined, streamKey: string, playbackId: string, status: StreamStatus, record: boolean, tenantId: string, createdAt: string, updatedAt: string } };
+export type RefreshStreamKeyMutation = { __typename?: 'Mutation', refreshStreamKey: { __typename?: 'Stream', id: string, name: string, description?: string | null | undefined, streamKey: string, playbackId: string, status: StreamStatus, record: boolean, createdAt: string, updatedAt: string } };
 
 export type GetStreamAnalyticsQueryVariables = Exact<{
-  streamId: Scalars['ID']['input'];
+  stream: Scalars['String']['input'];
   timeRange?: InputMaybe<TimeRangeInput>;
 }>;
 
 
-export type GetStreamAnalyticsQuery = { __typename?: 'Query', streamAnalytics?: { __typename?: 'StreamAnalytics', streamId: string, totalViews: number, totalViewTime: number, peakViewers: number, averageViewers: number, uniqueViewers: number, timeRange: { __typename?: 'TimeRange', start: string, end: string } } | null | undefined };
+export type GetStreamAnalyticsQuery = { __typename?: 'Query', streamAnalytics?: { __typename?: 'StreamAnalytics', stream: string, totalViews: number, totalViewTime: number, peakViewers: number, averageViewers: number, uniqueViewers: number, currentHealthScore?: number | null | undefined, averageHealthScore?: number | null | undefined, frameJitterMs?: number | null | undefined, keyframeStabilityMs?: number | null | undefined, currentIssues?: string | null | undefined, bufferState?: BufferState | null | undefined, packetLossPercentage?: number | null | undefined, qualityTier?: string | null | undefined, currentCodec?: string | null | undefined, currentResolution?: string | null | undefined, currentBitrate?: number | null | undefined, currentFps?: number | null | undefined, rebufferCount?: number | null | undefined, alertCount?: number | null | undefined, timeRange: { __typename?: 'TimeRange', start: string, end: string } } | null | undefined };
 
 export type GetViewerMetricsQueryVariables = Exact<{
-  streamId?: InputMaybe<Scalars['ID']['input']>;
+  stream?: InputMaybe<Scalars['String']['input']>;
   timeRange?: InputMaybe<TimeRangeInput>;
 }>;
 
@@ -592,12 +916,7 @@ export type GetUsageRecordsQueryVariables = Exact<{
 }>;
 
 
-export type GetUsageRecordsQuery = { __typename?: 'Query', usageRecords: Array<{ __typename?: 'UsageRecord', id: string, tenantId: string, resourceType: string, quantity: number, unit: string, cost: number, timestamp: string }> };
-
-export type GetMeQueryVariables = Exact<{ [key: string]: never; }>;
-
-
-export type GetMeQuery = { __typename?: 'Query', me?: { __typename?: 'User', id: string, email: string, name?: string | null | undefined, tenantId: string, role: string, createdAt: string } | null | undefined };
+export type GetUsageRecordsQuery = { __typename?: 'Query', usageRecords: Array<{ __typename?: 'UsageRecord', id: string, resourceType: string, quantity: number, unit: string, cost: number, timestamp: string }> };
 
 export type GetBillingTiersQueryVariables = Exact<{ [key: string]: never; }>;
 
@@ -607,29 +926,68 @@ export type GetBillingTiersQuery = { __typename?: 'Query', billingTiers: Array<{
 export type GetBillingStatusQueryVariables = Exact<{ [key: string]: never; }>;
 
 
-export type GetBillingStatusQuery = { __typename?: 'Query', billingStatus: { __typename?: 'BillingStatus', tenantId: string, nextBillingDate: string, outstandingAmount: number, status: string, currentTier: { __typename?: 'BillingTier', id: string, name: string, price: number, currency: string, features: Array<string> } } };
+export type GetBillingStatusQuery = { __typename?: 'Query', billingStatus: { __typename?: 'BillingStatus', nextBillingDate: string, outstandingAmount: number, status: string, currentTier: { __typename?: 'BillingTier', id: string, name: string, price: number, currency: string, features: Array<string> } } };
 
 export type GetInvoicesQueryVariables = Exact<{ [key: string]: never; }>;
 
 
-export type GetInvoicesQuery = { __typename?: 'Query', invoices: Array<{ __typename?: 'Invoice', id: string, tenantId: string, amount: number, currency: string, status: string, dueDate: string, createdAt: string, lineItems: Array<{ __typename?: 'LineItem', description: string, quantity: number, unitPrice: number, total: number }> }> };
+export type GetInvoicesQuery = { __typename?: 'Query', invoices: Array<{ __typename?: 'Invoice', id: string, amount: number, currency: string, status: string, dueDate: string, createdAt: string, lineItems: Array<{ __typename?: 'LineItem', description: string, quantity: number, unitPrice: number, total: number }> }> };
 
 export type GetInvoiceQueryVariables = Exact<{
   id: Scalars['ID']['input'];
 }>;
 
 
-export type GetInvoiceQuery = { __typename?: 'Query', invoice?: { __typename?: 'Invoice', id: string, tenantId: string, amount: number, currency: string, status: string, dueDate: string, createdAt: string, lineItems: Array<{ __typename?: 'LineItem', description: string, quantity: number, unitPrice: number, total: number }> } | null | undefined };
+export type GetInvoiceQuery = { __typename?: 'Query', invoice?: { __typename?: 'Invoice', id: string, amount: number, currency: string, status: string, dueDate: string, createdAt: string, lineItems: Array<{ __typename?: 'LineItem', description: string, quantity: number, unitPrice: number, total: number }> } | null | undefined };
 
 export type GetApiTokensQueryVariables = Exact<{ [key: string]: never; }>;
 
 
 export type GetApiTokensQuery = { __typename?: 'Query', developerTokens: Array<{ __typename?: 'DeveloperToken', id: string, name: string, permissions: string, status: string, lastUsedAt?: string | null | undefined, expiresAt?: string | null | undefined, createdAt: string }> };
 
+export type GetStreamHealthMetricsQueryVariables = Exact<{
+  stream: Scalars['String']['input'];
+  timeRange?: InputMaybe<TimeRangeInput>;
+}>;
+
+
+export type GetStreamHealthMetricsQuery = { __typename?: 'Query', streamHealthMetrics: Array<{ __typename?: 'StreamHealthMetric', timestamp: string, stream: string, nodeId: string, healthScore: number, frameJitterMs?: number | null | undefined, keyframeStabilityMs?: number | null | undefined, issuesDescription?: string | null | undefined, hasIssues: boolean, bitrate?: number | null | undefined, fps?: number | null | undefined, width?: number | null | undefined, height?: number | null | undefined, codec?: string | null | undefined, qualityTier?: string | null | undefined, packetsSent?: number | null | undefined, packetsLost?: number | null | undefined, packetLossPercentage?: number | null | undefined, bufferState: BufferState, bufferHealth?: number | null | undefined, audioChannels?: number | null | undefined, audioSampleRate?: number | null | undefined, audioCodec?: string | null | undefined, audioBitrate?: number | null | undefined }> };
+
+export type GetCurrentStreamHealthQueryVariables = Exact<{
+  stream: Scalars['String']['input'];
+}>;
+
+
+export type GetCurrentStreamHealthQuery = { __typename?: 'Query', currentStreamHealth?: { __typename?: 'StreamHealthMetric', timestamp: string, stream: string, nodeId: string, healthScore: number, frameJitterMs?: number | null | undefined, keyframeStabilityMs?: number | null | undefined, issuesDescription?: string | null | undefined, hasIssues: boolean, bufferState: BufferState, packetLossPercentage?: number | null | undefined, qualityTier?: string | null | undefined } | null | undefined };
+
+export type GetStreamQualityChangesQueryVariables = Exact<{
+  stream: Scalars['String']['input'];
+  timeRange?: InputMaybe<TimeRangeInput>;
+}>;
+
+
+export type GetStreamQualityChangesQuery = { __typename?: 'Query', streamQualityChanges: Array<{ __typename?: 'StreamQualityChange', timestamp: string, stream: string, nodeId: string, changeType: QualityChangeType, previousQualityTier?: string | null | undefined, newQualityTier?: string | null | undefined, previousResolution?: string | null | undefined, newResolution?: string | null | undefined, previousCodec?: string | null | undefined, newCodec?: string | null | undefined, previousTracks?: string | null | undefined, newTracks?: string | null | undefined }> };
+
+export type GetStreamHealthAlertsQueryVariables = Exact<{
+  stream?: InputMaybe<Scalars['String']['input']>;
+  timeRange?: InputMaybe<TimeRangeInput>;
+}>;
+
+
+export type GetStreamHealthAlertsQuery = { __typename?: 'Query', streamHealthAlerts: Array<{ __typename?: 'StreamHealthAlert', timestamp: string, stream: string, nodeId: string, alertType: AlertType, severity: AlertSeverity, healthScore?: number | null | undefined, frameJitterMs?: number | null | undefined, packetLossPercentage?: number | null | undefined, issuesDescription?: string | null | undefined, bufferState?: BufferState | null | undefined, qualityTier?: string | null | undefined }> };
+
+export type GetRebufferingEventsQueryVariables = Exact<{
+  stream: Scalars['String']['input'];
+  timeRange?: InputMaybe<TimeRangeInput>;
+}>;
+
+
+export type GetRebufferingEventsQuery = { __typename?: 'Query', rebufferingEvents: Array<{ __typename?: 'RebufferingEvent', timestamp: string, stream: string, nodeId: string, bufferState: BufferState, previousState: BufferState, rebufferStart: boolean, rebufferEnd: boolean, healthScore?: number | null | undefined, frameJitterMs?: number | null | undefined, packetLossPercentage?: number | null | undefined }> };
+
 export type GetTenantQueryVariables = Exact<{ [key: string]: never; }>;
 
 
-export type GetTenantQuery = { __typename?: 'Query', tenant?: { __typename?: 'Tenant', id: string, name: string, settings?: any | null | undefined, clusterId?: string | null | undefined, createdAt: string } | null | undefined };
+export type GetTenantQuery = { __typename?: 'Query', tenant?: { __typename?: 'Tenant', id: string, name: string, settings?: any | null | undefined, cluster?: string | null | undefined, createdAt: string } | null | undefined };
 
 export type GetClustersQueryVariables = Exact<{ [key: string]: never; }>;
 
@@ -641,78 +999,84 @@ export type GetClusterQueryVariables = Exact<{
 }>;
 
 
-export type GetClusterQuery = { __typename?: 'Query', cluster?: { __typename?: 'Cluster', id: string, name: string, region: string, status: NodeStatus, createdAt: string, nodes: Array<{ __typename?: 'Node', id: string, name: string, clusterId: string, type: string, status: NodeStatus, region: string, ipAddress?: string | null | undefined, lastSeen: string, createdAt: string }> } | null | undefined };
+export type GetClusterQuery = { __typename?: 'Query', cluster?: { __typename?: 'Cluster', id: string, name: string, region: string, status: NodeStatus, createdAt: string, nodes: Array<{ __typename?: 'Node', id: string, name: string, cluster: string, type: string, status: NodeStatus, region: string, ipAddress?: string | null | undefined, lastSeen: string, createdAt: string }> } | null | undefined };
 
 export type GetNodesQueryVariables = Exact<{ [key: string]: never; }>;
 
 
-export type GetNodesQuery = { __typename?: 'Query', nodes: Array<{ __typename?: 'Node', id: string, name: string, clusterId: string, type: string, status: NodeStatus, region: string, ipAddress?: string | null | undefined, lastSeen: string, createdAt: string }> };
+export type GetNodesQuery = { __typename?: 'Query', nodes: Array<{ __typename?: 'Node', id: string, name: string, cluster: string, type: string, status: NodeStatus, region: string, ipAddress?: string | null | undefined, lastSeen: string, createdAt: string }> };
 
 export type GetNodeQueryVariables = Exact<{
   id: Scalars['ID']['input'];
 }>;
 
 
-export type GetNodeQuery = { __typename?: 'Query', node?: { __typename?: 'Node', id: string, name: string, clusterId: string, type: string, status: NodeStatus, region: string, ipAddress?: string | null | undefined, lastSeen: string, createdAt: string } | null | undefined };
+export type GetNodeQuery = { __typename?: 'Query', node?: { __typename?: 'Node', id: string, name: string, cluster: string, type: string, status: NodeStatus, region: string, ipAddress?: string | null | undefined, lastSeen: string, createdAt: string } | null | undefined };
 
-export type StreamInfoFragment = { __typename?: 'Stream', id: string, name: string, description?: string | null | undefined, streamKey: string, playbackId: string, status: StreamStatus, record: boolean, tenantId: string, createdAt: string, updatedAt: string };
+export type IntrospectSchemaQueryVariables = Exact<{ [key: string]: never; }>;
+
+
+export type IntrospectSchemaQuery = { __typename?: 'Query', __schema: { __typename?: '__Schema', queryType: { __typename?: '__Type', name?: string | null | undefined, fields?: Array<{ __typename?: '__Field', name: string, description?: string | null | undefined, type: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined }, args: Array<{ __typename?: '__InputValue', name: string, description?: string | null | undefined, defaultValue?: string | null | undefined, type: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } }> }> | null | undefined }, mutationType?: { __typename?: '__Type', name?: string | null | undefined, fields?: Array<{ __typename?: '__Field', name: string, description?: string | null | undefined, type: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined }, args: Array<{ __typename?: '__InputValue', name: string, description?: string | null | undefined, defaultValue?: string | null | undefined, type: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } }> }> | null | undefined } | null | undefined, subscriptionType?: { __typename?: '__Type', name?: string | null | undefined, fields?: Array<{ __typename?: '__Field', name: string, description?: string | null | undefined, type: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined }, args: Array<{ __typename?: '__InputValue', name: string, description?: string | null | undefined, defaultValue?: string | null | undefined, type: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } }> }> | null | undefined } | null | undefined, types: Array<{ __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, description?: string | null | undefined, fields?: Array<{ __typename?: '__Field', name: string, description?: string | null | undefined, isDeprecated: boolean, deprecationReason?: string | null | undefined, args: Array<{ __typename?: '__InputValue', name: string, description?: string | null | undefined, defaultValue?: string | null | undefined, type: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } }>, type: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } }> | null | undefined, inputFields?: Array<{ __typename?: '__InputValue', name: string, description?: string | null | undefined, defaultValue?: string | null | undefined, type: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } }> | null | undefined, interfaces?: Array<{ __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined }> | null | undefined, enumValues?: Array<{ __typename?: '__EnumValue', name: string, description?: string | null | undefined, isDeprecated: boolean, deprecationReason?: string | null | undefined }> | null | undefined, possibleTypes?: Array<{ __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined }> | null | undefined }> } };
+
+export type FullTypeFragment = { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, description?: string | null | undefined, fields?: Array<{ __typename?: '__Field', name: string, description?: string | null | undefined, isDeprecated: boolean, deprecationReason?: string | null | undefined, args: Array<{ __typename?: '__InputValue', name: string, description?: string | null | undefined, defaultValue?: string | null | undefined, type: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } }>, type: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } }> | null | undefined, inputFields?: Array<{ __typename?: '__InputValue', name: string, description?: string | null | undefined, defaultValue?: string | null | undefined, type: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } }> | null | undefined, interfaces?: Array<{ __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined }> | null | undefined, enumValues?: Array<{ __typename?: '__EnumValue', name: string, description?: string | null | undefined, isDeprecated: boolean, deprecationReason?: string | null | undefined }> | null | undefined, possibleTypes?: Array<{ __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined }> | null | undefined };
+
+export type InputValueFragment = { __typename?: '__InputValue', name: string, description?: string | null | undefined, defaultValue?: string | null | undefined, type: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } };
+
+export type TypeRefFragment = { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined, ofType?: { __typename?: '__Type', kind: __TypeKind, name?: string | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined } | null | undefined };
+
+export type GetRootTypesQueryVariables = Exact<{ [key: string]: never; }>;
+
+
+export type GetRootTypesQuery = { __typename?: 'Query', __schema: { __typename?: '__Schema', queryType: { __typename?: '__Type', name?: string | null | undefined, fields?: Array<{ __typename?: '__Field', name: string, description?: string | null | undefined }> | null | undefined }, mutationType?: { __typename?: '__Type', name?: string | null | undefined, fields?: Array<{ __typename?: '__Field', name: string, description?: string | null | undefined }> | null | undefined } | null | undefined, subscriptionType?: { __typename?: '__Type', name?: string | null | undefined, fields?: Array<{ __typename?: '__Field', name: string, description?: string | null | undefined }> | null | undefined } | null | undefined } };
+
+export type StreamInfoFragment = { __typename?: 'Stream', id: string, name: string, description?: string | null | undefined, streamKey: string, playbackId: string, status: StreamStatus, record: boolean, createdAt: string, updatedAt: string };
 
 export type GetStreamsQueryVariables = Exact<{ [key: string]: never; }>;
 
 
-export type GetStreamsQuery = { __typename?: 'Query', streams: Array<{ __typename?: 'Stream', id: string, name: string, description?: string | null | undefined, streamKey: string, playbackId: string, status: StreamStatus, record: boolean, tenantId: string, createdAt: string, updatedAt: string }> };
+export type GetStreamsQuery = { __typename?: 'Query', streams: Array<{ __typename?: 'Stream', id: string, name: string, description?: string | null | undefined, streamKey: string, playbackId: string, status: StreamStatus, record: boolean, createdAt: string, updatedAt: string }> };
 
 export type GetStreamQueryVariables = Exact<{
   id: Scalars['ID']['input'];
 }>;
 
 
-export type GetStreamQuery = { __typename?: 'Query', stream?: { __typename?: 'Stream', id: string, name: string, description?: string | null | undefined, streamKey: string, playbackId: string, status: StreamStatus, record: boolean, tenantId: string, createdAt: string, updatedAt: string } | null | undefined };
+export type GetStreamQuery = { __typename?: 'Query', stream?: { __typename?: 'Stream', id: string, name: string, description?: string | null | undefined, streamKey: string, playbackId: string, status: StreamStatus, record: boolean, createdAt: string, updatedAt: string } | null | undefined };
 
 export type ValidateStreamKeyQueryVariables = Exact<{
   streamKey: Scalars['String']['input'];
 }>;
 
 
-export type ValidateStreamKeyQuery = { __typename?: 'Query', validateStreamKey: { __typename?: 'StreamValidation', valid: boolean, streamKey: string, error?: string | null | undefined, tenantId?: string | null | undefined } };
-
-export type GetStreamEmbedQueryVariables = Exact<{
-  id: Scalars['ID']['input'];
-}>;
-
-
-export type GetStreamEmbedQuery = { __typename?: 'Query', streamEmbed: { __typename?: 'StreamEmbed', streamId: string, embedCode: string, iframeUrl: string, width: number, height: number } };
+export type ValidateStreamKeyQuery = { __typename?: 'Query', validateStreamKey: { __typename?: 'StreamValidation', valid: boolean, streamKey: string, error?: string | null | undefined } };
 
 export type StreamEventsSubscriptionVariables = Exact<{
-  streamId?: InputMaybe<Scalars['ID']['input']>;
-  tenantId?: InputMaybe<Scalars['ID']['input']>;
+  stream?: InputMaybe<Scalars['String']['input']>;
 }>;
 
 
-export type StreamEventsSubscription = { __typename?: 'Subscription', streamEvents: { __typename?: 'StreamEvent', type: StreamEventType, streamId: string, tenantId: string, status: StreamStatus, timestamp: string, nodeId?: string | null | undefined, details?: any | null | undefined } };
+export type StreamEventsSubscription = { __typename?: 'Subscription', streamEvents: { __typename?: 'StreamEvent', type: StreamEventType, stream: string, status: StreamStatus, timestamp: string, details?: string | null | undefined } };
 
 export type ViewerMetricsStreamSubscriptionVariables = Exact<{
-  streamId: Scalars['ID']['input'];
+  stream: Scalars['String']['input'];
 }>;
 
 
-export type ViewerMetricsStreamSubscription = { __typename?: 'Subscription', viewerMetrics: { __typename?: 'ViewerMetrics', streamId: string, currentViewers: number, peakViewers: number, bandwidth: number, connectionQuality?: number | null | undefined, bufferHealth?: number | null | undefined, timestamp: string } };
+export type ViewerMetricsStreamSubscription = { __typename?: 'Subscription', viewerMetrics: { __typename?: 'ViewerMetrics', stream: string, currentViewers: number, peakViewers: number, bandwidth: number, connectionQuality?: number | null | undefined, bufferHealth?: number | null | undefined, timestamp: string } };
 
 export type TrackListUpdatesSubscriptionVariables = Exact<{
-  streamId: Scalars['ID']['input'];
+  stream: Scalars['String']['input'];
 }>;
 
 
-export type TrackListUpdatesSubscription = { __typename?: 'Subscription', trackListUpdates: { __typename?: 'TrackListEvent', streamId: string, tenantId: string, trackList: string, trackCount: number, timestamp: string } };
+export type TrackListUpdatesSubscription = { __typename?: 'Subscription', trackListUpdates: { __typename?: 'TrackListEvent', stream: string, trackList: string, trackCount: number, timestamp: string } };
 
-export type TenantEventsSubscriptionVariables = Exact<{
-  tenantId: Scalars['ID']['input'];
-}>;
+export type TenantEventsSubscriptionVariables = Exact<{ [key: string]: never; }>;
 
 
-export type TenantEventsSubscription = { __typename?: 'Subscription', tenantEvents: { __typename?: 'StreamEvent', type: StreamEventType, streamId: string, tenantId: string, status: StreamStatus, timestamp: string, nodeId?: string | null | undefined, details?: any | null | undefined } | { __typename?: 'TrackListEvent', streamId: string, tenantId: string, trackList: string, trackCount: number, timestamp: string } | { __typename?: 'ViewerMetrics', streamId: string, currentViewers: number, peakViewers: number, bandwidth: number, connectionQuality?: number | null | undefined, bufferHealth?: number | null | undefined, timestamp: string } };
+export type TenantEventsSubscription = { __typename?: 'Subscription', userEvents: { __typename?: 'StreamEvent', type: StreamEventType, stream: string, status: StreamStatus, timestamp: string, details?: string | null | undefined } | { __typename?: 'TrackListEvent', stream: string, trackList: string, trackCount: number, timestamp: string } | { __typename?: 'ViewerMetrics', stream: string, currentViewers: number, peakViewers: number, bandwidth: number, connectionQuality?: number | null | undefined, bufferHealth?: number | null | undefined, timestamp: string } };
 
 export type SystemHealthSubscriptionVariables = Exact<{ [key: string]: never; }>;
 
 
-export type SystemHealthSubscription = { __typename?: 'Subscription', systemHealth: { __typename?: 'SystemHealthEvent', nodeId: string, clusterId: string, status: NodeStatus, cpuUsage: number, memoryUsage: number, diskUsage: number, healthScore: number, timestamp: string } };
+export type SystemHealthSubscription = { __typename?: 'Subscription', systemHealth: { __typename?: 'SystemHealthEvent', node: string, cluster: string, status: NodeStatus, cpuUsage: number, memoryUsage: number, diskUsage: number, healthScore: number, timestamp: string } };

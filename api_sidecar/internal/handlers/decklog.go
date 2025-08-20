@@ -269,12 +269,12 @@ func (dc *DecklogClient) sendBatchGRPC(events []models.DecklogEvent) error {
 				},
 			}
 		case pb.EventType_EVENT_TYPE_CLIENT_LIFECYCLE:
-			// Handle both regular client lifecycle events and live-bandwidth events
-			if event.EventType == "live-bandwidth" {
-				// For live-bandwidth events, use StreamMetricsData
+			// Handle both regular client lifecycle events and bandwidth-threshold events
+			if event.EventType == "bandwidth-threshold" {
+				// For bandwidth-threshold events, use StreamMetricsData
 				eventDataItem.EventData = &pb.EventData_StreamMetricsData{
 					StreamMetricsData: &pb.StreamMetricsData{
-						BandwidthBps: getUint64FromData(event.Data, "bandwidth_bps"),
+						BandwidthBps: getUint64FromData(event.Data, "current_bytes_per_sec"),
 						ViewerCount:  getUint32FromData(event.Data, "viewer_count"),
 					},
 				}
@@ -295,28 +295,52 @@ func (dc *DecklogClient) sendBatchGRPC(events []models.DecklogEvent) error {
 				},
 			}
 		case pb.EventType_EVENT_TYPE_STREAM_BUFFER:
-			// Map buffer states according to MistServer documentation:
-			// FULL: stream has become playable in all protocols
-			// EMPTY: stream is shutting down
-			// DRY: problem detected with incoming media data
-			// RECOVER: previously DRY stream has recovered
-			state := pb.StreamLifecycleData_STATE_UNSPECIFIED
-			if bufferState := getStringFromData(event.Data, "buffer_state"); bufferState != "" {
-				switch bufferState {
-				case "FULL":
-					state = pb.StreamLifecycleData_STATE_LIVE
-				case "EMPTY":
-					state = pb.StreamLifecycleData_STATE_ENDED
-				case "DRY":
-					state = pb.StreamLifecycleData_STATE_OFFLINE
-				case "RECOVER":
-					state = pb.StreamLifecycleData_STATE_LIVE
+			// Use StreamMetricsData for rich health information from STREAM_BUFFER parsing
+			streamMetrics := &pb.StreamMetricsData{
+				ViewerCount: getUint32FromData(event.Data, "viewer_count"),
+			}
+
+			// Extract packet loss if available
+			if packetsSent := getUint64FromData(event.Data, "packets_sent"); packetsSent > 0 {
+				if packetsLost := getUint64FromData(event.Data, "packets_lost"); packetsLost > 0 {
+					packetLossPercent := float32(packetsLost) / float32(packetsSent) * 100.0
+					streamMetrics.PacketLoss = &packetLossPercent
 				}
 			}
+
+			// Extract primary track quality metrics if available
+			if tracks, ok := event.Data["tracks"].([]map[string]interface{}); ok && len(tracks) > 0 {
+				primaryTrack := tracks[0]
+				if bitrate, ok := primaryTrack["bitrate"].(int); ok {
+					bitrateKbps := uint32(bitrate)
+					streamMetrics.BitrateKbps = &bitrateKbps
+				}
+				if width, ok := primaryTrack["width"].(int); ok {
+					if height, ok := primaryTrack["height"].(int); ok {
+						resolution := fmt.Sprintf("%dx%d", width, height)
+						streamMetrics.Resolution = &resolution
+					}
+				}
+				if fps, ok := primaryTrack["fps"].(float64); ok {
+					fpsUint := uint32(fps)
+					streamMetrics.Fps = &fpsUint
+				}
+			}
+
+			// Extract bandwidth from bandwidth data if available
+			if bandwidth := getUint64FromData(event.Data, "current_bytes_per_sec"); bandwidth > 0 {
+				streamMetrics.BandwidthBps = bandwidth
+			}
+
+			eventDataItem.EventData = &pb.EventData_StreamMetricsData{
+				StreamMetricsData: streamMetrics,
+			}
+		case pb.EventType_EVENT_TYPE_STREAM_END:
+			// Handle STREAM_END events with aggregate metrics for billing
 			eventDataItem.EventData = &pb.EventData_StreamLifecycleData{
 				StreamLifecycleData: &pb.StreamLifecycleData{
-					State:  state,
-					Reason: getOptionalStringFromData(event.Data, "buffer_state"),
+					State:  pb.StreamLifecycleData_STATE_ENDED,
+					Reason: getOptionalStringFromData(event.Data, "source"),
 				},
 			}
 		default:
@@ -411,7 +435,7 @@ func mapEventTypeToProto(eventType string) pb.EventType {
 		return pb.EventType_EVENT_TYPE_STREAM_BUFFER
 	case "stream-end":
 		return pb.EventType_EVENT_TYPE_STREAM_END
-	case "live-bandwidth":
+	case "bandwidth-threshold":
 		return pb.EventType_EVENT_TYPE_CLIENT_LIFECYCLE
 	default:
 		return pb.EventType_EVENT_TYPE_UNSPECIFIED

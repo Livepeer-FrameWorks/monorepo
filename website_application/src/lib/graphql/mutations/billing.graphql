@@ -12,7 +12,6 @@ mutation CreatePayment($input: CreatePaymentInput!) {
 
 mutation UpdateBillingTier($tierId: ID!) {
   updateBillingTier(tierId: $tierId) {
-    tenantId
     currentTier {
       id
       name

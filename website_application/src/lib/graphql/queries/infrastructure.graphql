@@ -4,7 +4,7 @@ query GetTenant {
     id
     name
     settings
-    clusterId
+    cluster
     createdAt
   }
 }
@@ -39,7 +39,7 @@ query GetCluster($id: ID!) {
     nodes {
       id
       name
-      clusterId
+      cluster
       type
       status
       region
@@ -54,7 +54,7 @@ query GetNodes {
   nodes {
     id
     name
-    clusterId
+    cluster
     type
     status
     region
@@ -68,7 +68,7 @@ query GetNode($id: ID!) {
   node(id: $id) {
     id
     name
-    clusterId
+    cluster
     type
     status
     region

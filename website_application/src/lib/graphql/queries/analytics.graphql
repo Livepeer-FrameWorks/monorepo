@@ -1,7 +1,7 @@
 # Analytics queries
-query GetStreamAnalytics($streamId: ID!, $timeRange: TimeRangeInput) {
-  streamAnalytics(streamId: $streamId, timeRange: $timeRange) {
-    streamId
+query GetStreamAnalytics($stream: String!, $timeRange: TimeRangeInput) {
+  streamAnalytics(stream: $stream, timeRange: $timeRange) {
+    stream
     totalViews
     totalViewTime
     peakViewers
@@ -11,11 +11,26 @@ query GetStreamAnalytics($streamId: ID!, $timeRange: TimeRangeInput) {
       start
       end
     }
+    # New health metrics
+    currentHealthScore
+    averageHealthScore
+    frameJitterMs
+    keyframeStabilityMs
+    currentIssues
+    bufferState
+    packetLossPercentage
+    qualityTier
+    currentCodec
+    currentResolution
+    currentBitrate
+    currentFps
+    rebufferCount
+    alertCount
   }
 }
 
-query GetViewerMetrics($streamId: ID, $timeRange: TimeRangeInput) {
-  viewerMetrics(streamId: $streamId, timeRange: $timeRange) {
+query GetViewerMetrics($stream: String, $timeRange: TimeRangeInput) {
+  viewerMetrics(stream: $stream, timeRange: $timeRange) {
     timestamp
     viewerCount
   }
@@ -37,7 +52,6 @@ query GetPlatformOverview($timeRange: TimeRangeInput) {
 query GetUsageRecords($timeRange: TimeRangeInput) {
   usageRecords(timeRange: $timeRange) {
     id
-    tenantId
     resourceType
     quantity
     unit

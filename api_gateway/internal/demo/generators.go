@@ -404,3 +404,150 @@ func GenerateSystemHealthEvents() []*model.SystemHealthEvent {
 		},
 	}
 }
+
+// GenerateStreamHealthMetrics creates demo stream health metrics
+func GenerateStreamHealthMetrics() []*model.StreamHealthMetric {
+	now := time.Now()
+	return []*model.StreamHealthMetric{
+		{
+			Timestamp:            now.Add(-5 * time.Minute),
+			Stream:               "demo_live_stream_001",
+			NodeID:               "node_demo_us_west_01",
+			HealthScore:          0.95,
+			FrameJitterMs:        func() *float64 { f := 12.5; return &f }(),
+			KeyframeStabilityMs:  func() *float64 { f := 2000.0; return &f }(),
+			IssuesDescription:    func() *string { s := "Stream performing well"; return &s }(),
+			HasIssues:            false,
+			Bitrate:              func() *int { b := 2500000; return &b }(),
+			Fps:                  func() *float64 { f := 30.0; return &f }(),
+			Width:                func() *int { w := 1920; return &w }(),
+			Height:               func() *int { h := 1080; return &h }(),
+			Codec:                func() *string { c := "H264"; return &c }(),
+			QualityTier:          func() *string { q := "1080p30"; return &q }(),
+			PacketsSent:          func() *int { p := 15420; return &p }(),
+			PacketsLost:          func() *int { p := 12; return &p }(),
+			PacketLossPercentage: func() *float64 { p := 0.08; return &p }(),
+			BufferState:          model.BufferStateFull,
+			BufferHealth:         func() *float64 { b := 0.98; return &b }(),
+			AudioChannels:        func() *int { a := 2; return &a }(),
+			AudioSampleRate:      func() *int { a := 44100; return &a }(),
+			AudioCodec:           func() *string { a := "AAC"; return &a }(),
+			AudioBitrate:         func() *int { a := 128; return &a }(),
+		},
+		{
+			Timestamp:            now.Add(-2 * time.Minute),
+			Stream:               "demo_live_stream_001",
+			NodeID:               "node_demo_us_west_01",
+			HealthScore:          0.87,
+			FrameJitterMs:        func() *float64 { f := 25.3; return &f }(),
+			KeyframeStabilityMs:  func() *float64 { f := 2100.0; return &f }(),
+			IssuesDescription:    func() *string { s := "Minor jitter detected"; return &s }(),
+			HasIssues:            true,
+			Bitrate:              func() *int { b := 2400000; return &b }(),
+			Fps:                  func() *float64 { f := 29.8; return &f }(),
+			Width:                func() *int { w := 1920; return &w }(),
+			Height:               func() *int { h := 1080; return &h }(),
+			Codec:                func() *string { c := "H264"; return &c }(),
+			QualityTier:          func() *string { q := "1080p30"; return &q }(),
+			PacketsSent:          func() *int { p := 15890; return &p }(),
+			PacketsLost:          func() *int { p := 45; return &p }(),
+			PacketLossPercentage: func() *float64 { p := 0.28; return &p }(),
+			BufferState:          model.BufferStateEmpty,
+			BufferHealth:         func() *float64 { b := 0.82; return &b }(),
+			AudioChannels:        func() *int { a := 2; return &a }(),
+			AudioSampleRate:      func() *int { a := 44100; return &a }(),
+			AudioCodec:           func() *string { a := "AAC"; return &a }(),
+			AudioBitrate:         func() *int { a := 128; return &a }(),
+		},
+	}
+}
+
+// GenerateStreamQualityChanges creates demo stream quality changes
+func GenerateStreamQualityChanges() []*model.StreamQualityChange {
+	now := time.Now()
+	return []*model.StreamQualityChange{
+		{
+			Timestamp:           now.Add(-10 * time.Minute),
+			Stream:              "demo_live_stream_001",
+			NodeID:              "node_demo_us_west_01",
+			ChangeType:          model.QualityChangeTypeResolutionChange,
+			PreviousResolution:  func() *string { r := "720p30"; return &r }(),
+			NewResolution:       func() *string { r := "1080p30"; return &r }(),
+			PreviousQualityTier: func() *string { q := "HD"; return &q }(),
+			NewQualityTier:      func() *string { q := "Full HD"; return &q }(),
+		},
+		{
+			Timestamp:      now.Add(-5 * time.Minute),
+			Stream:         "demo_live_stream_001",
+			NodeID:         "node_demo_us_west_01",
+			ChangeType:     model.QualityChangeTypeTrackUpdate,
+			PreviousTracks: func() *string { t := "Video: H264 720p30"; return &t }(),
+			NewTracks:      func() *string { t := "Video: H264 1080p30, Audio: AAC 128k"; return &t }(),
+			NewQualityTier: func() *string { q := "Full HD with Audio"; return &q }(),
+		},
+	}
+}
+
+// GenerateStreamHealthAlerts creates demo stream health alerts
+func GenerateStreamHealthAlerts() []*model.StreamHealthAlert {
+	now := time.Now()
+	return []*model.StreamHealthAlert{
+		{
+			Timestamp:            now.Add(-3 * time.Minute),
+			Stream:               "demo_live_stream_001",
+			NodeID:               "node_demo_us_west_01",
+			AlertType:            model.AlertTypeHighJitter,
+			Severity:             model.AlertSeverityMedium,
+			HealthScore:          func() *float64 { h := 0.75; return &h }(),
+			FrameJitterMs:        func() *float64 { f := 45.2; return &f }(),
+			PacketLossPercentage: func() *float64 { p := 0.15; return &p }(),
+			IssuesDescription:    func() *string { i := "High frame jitter detected"; return &i }(),
+			BufferState:          func() *model.BufferState { b := model.BufferStateEmpty; return &b }(),
+			QualityTier:          func() *string { q := "1080p30"; return &q }(),
+		},
+		{
+			Timestamp:            now.Add(-1 * time.Minute),
+			Stream:               "demo_live_stream_001",
+			NodeID:               "node_demo_us_west_01",
+			AlertType:            model.AlertTypePacketLoss,
+			Severity:             model.AlertSeverityHigh,
+			HealthScore:          func() *float64 { h := 0.68; return &h }(),
+			FrameJitterMs:        func() *float64 { f := 52.8; return &f }(),
+			PacketLossPercentage: func() *float64 { p := 1.2; return &p }(),
+			IssuesDescription:    func() *string { i := "Significant packet loss detected"; return &i }(),
+			BufferState:          func() *model.BufferState { b := model.BufferStateDry; return &b }(),
+			QualityTier:          func() *string { q := "1080p30"; return &q }(),
+		},
+	}
+}
+
+// GenerateRebufferingEvents creates demo rebuffering events
+func GenerateRebufferingEvents() []*model.RebufferingEvent {
+	now := time.Now()
+	return []*model.RebufferingEvent{
+		{
+			Timestamp:            now.Add(-8 * time.Minute),
+			Stream:               "demo_live_stream_001",
+			NodeID:               "node_demo_us_west_01",
+			BufferState:          model.BufferStateDry,
+			PreviousState:        model.BufferStateFull,
+			RebufferStart:        true,
+			RebufferEnd:          false,
+			HealthScore:          func() *float64 { h := 0.65; return &h }(),
+			FrameJitterMs:        func() *float64 { f := 58.3; return &f }(),
+			PacketLossPercentage: func() *float64 { p := 2.1; return &p }(),
+		},
+		{
+			Timestamp:            now.Add(-6 * time.Minute),
+			Stream:               "demo_live_stream_001",
+			NodeID:               "node_demo_us_west_01",
+			BufferState:          model.BufferStateRecover,
+			PreviousState:        model.BufferStateDry,
+			RebufferStart:        false,
+			RebufferEnd:          true,
+			HealthScore:          func() *float64 { h := 0.78; return &h }(),
+			FrameJitterMs:        func() *float64 { f := 35.2; return &f }(),
+			PacketLossPercentage: func() *float64 { p := 0.8; return &p }(),
+		},
+	}
+}

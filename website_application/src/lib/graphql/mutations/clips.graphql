@@ -2,8 +2,7 @@
 mutation CreateClip($input: CreateClipInput!) {
   createClip(input: $input) {
     id
-    streamId
-    tenantId
+    stream
     title
     description
     startTime

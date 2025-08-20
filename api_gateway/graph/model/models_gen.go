@@ -107,6 +107,19 @@ type PlatformOverview struct {
 type Query struct {
 }
 
+type RebufferingEvent struct {
+	Timestamp            time.Time   `json:"timestamp"`
+	Stream               string      `json:"stream"`
+	NodeID               string      `json:"nodeId"`
+	BufferState          BufferState `json:"bufferState"`
+	PreviousState        BufferState `json:"previousState"`
+	RebufferStart        bool        `json:"rebufferStart"`
+	RebufferEnd          bool        `json:"rebufferEnd"`
+	HealthScore          *float64    `json:"healthScore,omitempty"`
+	FrameJitterMs        *float64    `json:"frameJitterMs,omitempty"`
+	PacketLossPercentage *float64    `json:"packetLossPercentage,omitempty"`
+}
+
 type StreamEmbed struct {
 	Stream    string `json:"stream"`
 	EmbedCode string `json:"embedCode"`
@@ -124,6 +137,61 @@ type StreamEvent struct {
 }
 
 func (StreamEvent) IsTenantEvent() {}
+
+type StreamHealthAlert struct {
+	Timestamp            time.Time     `json:"timestamp"`
+	Stream               string        `json:"stream"`
+	NodeID               string        `json:"nodeId"`
+	AlertType            AlertType     `json:"alertType"`
+	Severity             AlertSeverity `json:"severity"`
+	HealthScore          *float64      `json:"healthScore,omitempty"`
+	FrameJitterMs        *float64      `json:"frameJitterMs,omitempty"`
+	PacketLossPercentage *float64      `json:"packetLossPercentage,omitempty"`
+	IssuesDescription    *string       `json:"issuesDescription,omitempty"`
+	BufferState          *BufferState  `json:"bufferState,omitempty"`
+	QualityTier          *string       `json:"qualityTier,omitempty"`
+}
+
+type StreamHealthMetric struct {
+	Timestamp            time.Time   `json:"timestamp"`
+	Stream               string      `json:"stream"`
+	NodeID               string      `json:"nodeId"`
+	HealthScore          float64     `json:"healthScore"`
+	FrameJitterMs        *float64    `json:"frameJitterMs,omitempty"`
+	KeyframeStabilityMs  *float64    `json:"keyframeStabilityMs,omitempty"`
+	IssuesDescription    *string     `json:"issuesDescription,omitempty"`
+	HasIssues            bool        `json:"hasIssues"`
+	Bitrate              *int        `json:"bitrate,omitempty"`
+	Fps                  *float64    `json:"fps,omitempty"`
+	Width                *int        `json:"width,omitempty"`
+	Height               *int        `json:"height,omitempty"`
+	Codec                *string     `json:"codec,omitempty"`
+	QualityTier          *string     `json:"qualityTier,omitempty"`
+	PacketsSent          *int        `json:"packetsSent,omitempty"`
+	PacketsLost          *int        `json:"packetsLost,omitempty"`
+	PacketLossPercentage *float64    `json:"packetLossPercentage,omitempty"`
+	BufferState          BufferState `json:"bufferState"`
+	BufferHealth         *float64    `json:"bufferHealth,omitempty"`
+	AudioChannels        *int        `json:"audioChannels,omitempty"`
+	AudioSampleRate      *int        `json:"audioSampleRate,omitempty"`
+	AudioCodec           *string     `json:"audioCodec,omitempty"`
+	AudioBitrate         *int        `json:"audioBitrate,omitempty"`
+}
+
+type StreamQualityChange struct {
+	Timestamp           time.Time         `json:"timestamp"`
+	Stream              string            `json:"stream"`
+	NodeID              string            `json:"nodeId"`
+	ChangeType          QualityChangeType `json:"changeType"`
+	PreviousQualityTier *string           `json:"previousQualityTier,omitempty"`
+	NewQualityTier      *string           `json:"newQualityTier,omitempty"`
+	PreviousResolution  *string           `json:"previousResolution,omitempty"`
+	NewResolution       *string           `json:"newResolution,omitempty"`
+	PreviousCodec       *string           `json:"previousCodec,omitempty"`
+	NewCodec            *string           `json:"newCodec,omitempty"`
+	PreviousTracks      *string           `json:"previousTracks,omitempty"`
+	NewTracks           *string           `json:"newTracks,omitempty"`
+}
 
 type StreamValidation struct {
 	Valid     bool    `json:"valid"`
@@ -191,6 +259,185 @@ type ViewerMetrics struct {
 }
 
 func (ViewerMetrics) IsTenantEvent() {}
+
+type AlertSeverity string
+
+const (
+	AlertSeverityLow      AlertSeverity = "LOW"
+	AlertSeverityMedium   AlertSeverity = "MEDIUM"
+	AlertSeverityHigh     AlertSeverity = "HIGH"
+	AlertSeverityCritical AlertSeverity = "CRITICAL"
+)
+
+var AllAlertSeverity = []AlertSeverity{
+	AlertSeverityLow,
+	AlertSeverityMedium,
+	AlertSeverityHigh,
+	AlertSeverityCritical,
+}
+
+func (e AlertSeverity) IsValid() bool {
+	switch e {
+	case AlertSeverityLow, AlertSeverityMedium, AlertSeverityHigh, AlertSeverityCritical:
+		return true
+	}
+	return false
+}
+
+func (e AlertSeverity) String() string {
+	return string(e)
+}
+
+func (e *AlertSeverity) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = AlertSeverity(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid AlertSeverity", str)
+	}
+	return nil
+}
+
+func (e AlertSeverity) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *AlertSeverity) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e AlertSeverity) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type AlertType string
+
+const (
+	AlertTypeHighJitter          AlertType = "HIGH_JITTER"
+	AlertTypeKeyframeInstability AlertType = "KEYFRAME_INSTABILITY"
+	AlertTypePacketLoss          AlertType = "PACKET_LOSS"
+	AlertTypeRebuffering         AlertType = "REBUFFERING"
+	AlertTypeQualityDegradation  AlertType = "QUALITY_DEGRADATION"
+)
+
+var AllAlertType = []AlertType{
+	AlertTypeHighJitter,
+	AlertTypeKeyframeInstability,
+	AlertTypePacketLoss,
+	AlertTypeRebuffering,
+	AlertTypeQualityDegradation,
+}
+
+func (e AlertType) IsValid() bool {
+	switch e {
+	case AlertTypeHighJitter, AlertTypeKeyframeInstability, AlertTypePacketLoss, AlertTypeRebuffering, AlertTypeQualityDegradation:
+		return true
+	}
+	return false
+}
+
+func (e AlertType) String() string {
+	return string(e)
+}
+
+func (e *AlertType) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = AlertType(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid AlertType", str)
+	}
+	return nil
+}
+
+func (e AlertType) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *AlertType) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e AlertType) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type BufferState string
+
+const (
+	BufferStateFull    BufferState = "FULL"
+	BufferStateEmpty   BufferState = "EMPTY"
+	BufferStateDry     BufferState = "DRY"
+	BufferStateRecover BufferState = "RECOVER"
+)
+
+var AllBufferState = []BufferState{
+	BufferStateFull,
+	BufferStateEmpty,
+	BufferStateDry,
+	BufferStateRecover,
+}
+
+func (e BufferState) IsValid() bool {
+	switch e {
+	case BufferStateFull, BufferStateEmpty, BufferStateDry, BufferStateRecover:
+		return true
+	}
+	return false
+}
+
+func (e BufferState) String() string {
+	return string(e)
+}
+
+func (e *BufferState) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = BufferState(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid BufferState", str)
+	}
+	return nil
+}
+
+func (e BufferState) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *BufferState) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e BufferState) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
 
 type NodeStatus string
 
@@ -301,6 +548,69 @@ func (e *PaymentMethod) UnmarshalJSON(b []byte) error {
 }
 
 func (e PaymentMethod) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type QualityChangeType string
+
+const (
+	QualityChangeTypeCodecChange      QualityChangeType = "CODEC_CHANGE"
+	QualityChangeTypeResolutionChange QualityChangeType = "RESOLUTION_CHANGE"
+	QualityChangeTypeBitrateChange    QualityChangeType = "BITRATE_CHANGE"
+	QualityChangeTypeTrackAdded       QualityChangeType = "TRACK_ADDED"
+	QualityChangeTypeTrackRemoved     QualityChangeType = "TRACK_REMOVED"
+	QualityChangeTypeTrackUpdate      QualityChangeType = "TRACK_UPDATE"
+)
+
+var AllQualityChangeType = []QualityChangeType{
+	QualityChangeTypeCodecChange,
+	QualityChangeTypeResolutionChange,
+	QualityChangeTypeBitrateChange,
+	QualityChangeTypeTrackAdded,
+	QualityChangeTypeTrackRemoved,
+	QualityChangeTypeTrackUpdate,
+}
+
+func (e QualityChangeType) IsValid() bool {
+	switch e {
+	case QualityChangeTypeCodecChange, QualityChangeTypeResolutionChange, QualityChangeTypeBitrateChange, QualityChangeTypeTrackAdded, QualityChangeTypeTrackRemoved, QualityChangeTypeTrackUpdate:
+		return true
+	}
+	return false
+}
+
+func (e QualityChangeType) String() string {
+	return string(e)
+}
+
+func (e *QualityChangeType) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = QualityChangeType(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid QualityChangeType", str)
+	}
+	return nil
+}
+
+func (e QualityChangeType) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *QualityChangeType) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e QualityChangeType) MarshalJSON() ([]byte, error) {
 	var buf bytes.Buffer
 	e.MarshalGQL(&buf)
 	return buf.Bytes(), nil

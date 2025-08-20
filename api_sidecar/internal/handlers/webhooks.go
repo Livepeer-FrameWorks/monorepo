@@ -1,7 +1,9 @@
 package handlers
 
 import (
+	"encoding/json"
 	"io"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -260,6 +262,9 @@ func HandleStreamBuffer(c *gin.Context) {
 	streamName := params[0]
 	bufferState := params[1] // FULL, EMPTY, DRY, RECOVER
 	var streamDetails string
+	var parsedDetails map[string]interface{}
+	var healthMetrics map[string]interface{}
+
 	if len(params) >= 3 && bufferState != "EMPTY" {
 		streamDetails = params[2] // JSON object with stream details
 		logger.WithFields(logging.Fields{
@@ -267,6 +272,21 @@ func HandleStreamBuffer(c *gin.Context) {
 			"buffer_state":   bufferState,
 			"stream_details": streamDetails,
 		}).Debug("STREAM_BUFFER stream details JSON")
+
+		// Parse the stream details JSON to extract health metrics
+		if err := json.Unmarshal([]byte(streamDetails), &parsedDetails); err != nil {
+			logger.WithFields(logging.Fields{
+				"error":       err,
+				"stream_name": streamName,
+				"raw_details": streamDetails,
+			}).Error("Failed to parse STREAM_BUFFER JSON details")
+		} else {
+			healthMetrics = extractStreamHealthMetrics(parsedDetails)
+			logger.WithFields(logging.Fields{
+				"stream_name":    streamName,
+				"health_metrics": healthMetrics,
+			}).Debug("Extracted health metrics from STREAM_BUFFER")
+		}
 	}
 
 	logger.WithFields(logging.Fields{
@@ -334,6 +354,13 @@ func HandleStreamBuffer(c *gin.Context) {
 		periscopeEventData["stream_details"] = streamDetails
 	}
 
+	// Add parsed health metrics if available
+	if healthMetrics != nil {
+		for key, value := range healthMetrics {
+			periscopeEventData[key] = value
+		}
+	}
+
 	// Forward buffer event to Decklog for analytics
 	go ForwardEventToDecklog("stream-buffer", periscopeEventData)
 
@@ -341,7 +368,7 @@ func HandleStreamBuffer(c *gin.Context) {
 }
 
 // HandleStreamEnd handles STREAM_END webhook
-// Payload: stream name
+// Payload: stream name, downloaded bytes, uploaded bytes, total viewers, total inputs, total outputs, viewer seconds
 func HandleStreamEnd(c *gin.Context) {
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
@@ -364,9 +391,32 @@ func HandleStreamEnd(c *gin.Context) {
 
 	streamName := params[0]
 
-	logger.WithFields(logging.Fields{
-		"stream_name": streamName,
-	}).Info("Stream ended")
+	// Parse additional STREAM_END metrics if available (7 parameters total)
+	var downloadedBytes, uploadedBytes int64
+	var totalViewers, totalInputs, totalOutputs int
+	var viewerSeconds int64
+
+	if len(params) >= 7 {
+		downloadedBytes, _ = strconv.ParseInt(params[1], 10, 64)
+		uploadedBytes, _ = strconv.ParseInt(params[2], 10, 64)
+		totalViewers, _ = strconv.Atoi(params[3])
+		totalInputs, _ = strconv.Atoi(params[4])
+		totalOutputs, _ = strconv.Atoi(params[5])
+		viewerSeconds, _ = strconv.ParseInt(params[6], 10, 64)
+
+		logger.WithFields(logging.Fields{
+			"stream_name":      streamName,
+			"downloaded_bytes": downloadedBytes,
+			"uploaded_bytes":   uploadedBytes,
+			"total_viewers":    totalViewers,
+			"viewer_seconds":   viewerSeconds,
+		}).Info("Stream ended with metrics")
+	} else {
+		logger.WithFields(logging.Fields{
+			"stream_name": streamName,
+			"param_count": len(params),
+		}).Warn("STREAM_END with incomplete metrics - missing billing data")
+	}
 
 	// Extract internal name from wildcard stream
 	var internalName string
@@ -401,7 +451,7 @@ func HandleStreamEnd(c *gin.Context) {
 	})
 
 	// Forward stream end event to Decklog for analytics
-	go ForwardEventToDecklog("stream-end", map[string]interface{}{
+	streamEndData := map[string]interface{}{
 		"stream_name":   streamName,
 		"internal_name": internalName,
 		"buffer_state":  "EMPTY",
@@ -409,7 +459,19 @@ func HandleStreamEnd(c *gin.Context) {
 		"timestamp":     time.Now().Unix(),
 		"source":        "mistserver_webhook",
 		"tenant_id":     getTenantForInternalName(internalName),
-	})
+	}
+
+	// Include stream metrics if available
+	if len(params) >= 7 {
+		streamEndData["downloaded_bytes"] = downloadedBytes
+		streamEndData["uploaded_bytes"] = uploadedBytes
+		streamEndData["total_viewers"] = totalViewers
+		streamEndData["total_inputs"] = totalInputs
+		streamEndData["total_outputs"] = totalOutputs
+		streamEndData["viewer_seconds"] = viewerSeconds
+	}
+
+	go ForwardEventToDecklog("stream-end", streamEndData)
 
 	c.String(http.StatusOK, "OK")
 }
@@ -598,16 +660,30 @@ func HandleLiveTrackList(c *gin.Context) {
 	}
 
 	streamName := params[0]
-	trackList := params[1] // JSON track list
+	trackListJSON := params[1] // JSON track list
+
+	// Parse the track list JSON to extract track details
+	var parsedTracks []map[string]interface{}
+	var qualityMetrics map[string]interface{}
+	if err := json.Unmarshal([]byte(trackListJSON), &parsedTracks); err != nil {
+		logger.WithFields(logging.Fields{
+			"error":       err,
+			"stream_name": streamName,
+			"raw_json":    trackListJSON,
+		}).Error("Failed to parse LIVE_TRACK_LIST JSON")
+	} else {
+		qualityMetrics = extractTrackQualityMetrics(parsedTracks)
+		logger.WithFields(logging.Fields{
+			"stream_name":     streamName,
+			"track_count":     len(parsedTracks),
+			"quality_metrics": qualityMetrics,
+		}).Debug("Extracted quality metrics from LIVE_TRACK_LIST")
+	}
 
 	logger.WithFields(logging.Fields{
 		"stream_name": streamName,
+		"track_count": len(parsedTracks),
 	}).Info("Track list updated for stream")
-
-	logger.WithFields(logging.Fields{
-		"stream_name": streamName,
-		"track_list":  trackList,
-	}).Debug("LIVE_TRACK_LIST JSON data")
 
 	// Extract internal name from wildcard stream
 	var internalName string
@@ -624,23 +700,32 @@ func HandleLiveTrackList(c *gin.Context) {
 	// Get current node ID
 	nodeID := getCurrentNodeID()
 
-	// Forward track list update to Decklog
-	go ForwardEventToDecklog("track-list", map[string]interface{}{
+	// Forward track list update to Decklog with parsed details
+	trackEventData := map[string]interface{}{
 		"node_id":       nodeID,
 		"stream_name":   streamName,
 		"internal_name": internalName,
-		"track_list":    trackList,
+		"track_list":    trackListJSON,
 		"event_type":    "track_list_update",
 		"timestamp":     time.Now().Unix(),
 		"source":        "mistserver_webhook",
 		"tenant_id":     getTenantForInternalName(internalName),
-	})
+	}
+
+	// Add parsed quality metrics if available
+	if qualityMetrics != nil {
+		for key, value := range qualityMetrics {
+			trackEventData[key] = value
+		}
+	}
+
+	go ForwardEventToDecklog("track-list", trackEventData)
 
 	c.String(http.StatusOK, "OK")
 }
 
 // HandleLiveBandwidth handles LIVE_BANDWIDTH webhook
-// Payload: stream name, bandwidth data (JSON)
+// Payload: stream name, current bytes per second
 func HandleLiveBandwidth(c *gin.Context) {
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
@@ -660,6 +745,51 @@ func HandleLiveBandwidth(c *gin.Context) {
 		c.String(http.StatusOK, "OK")
 		return
 	}
+
+	streamName := params[0]
+	currentBytesPerSecondStr := params[1]
+	currentBytesPerSecond, err := strconv.ParseInt(currentBytesPerSecondStr, 10, 64)
+	if err != nil {
+		logger.WithFields(logging.Fields{
+			"error":       err,
+			"stream_name": streamName,
+			"bandwidth":   currentBytesPerSecondStr,
+		}).Error("Failed to parse LIVE_BANDWIDTH bytes per second")
+		c.String(http.StatusOK, "OK")
+		return
+	}
+
+	logger.WithFields(logging.Fields{
+		"stream_name":           streamName,
+		"current_bytes_per_sec": currentBytesPerSecond,
+	}).Info("Bandwidth threshold exceeded")
+
+	// Extract internal name from wildcard stream
+	var internalName string
+	if plusIndex := strings.Index(streamName, "+"); plusIndex != -1 {
+		internalName = streamName[plusIndex+1:]
+	} else {
+		logger.WithFields(logging.Fields{
+			"stream_name": streamName,
+		}).Warn("Non-wildcard stream format")
+		internalName = streamName
+	}
+
+	// Get current node ID
+	nodeID := getCurrentNodeID()
+
+	// Forward bandwidth threshold event to Decklog for analytics
+	go ForwardEventToDecklog("bandwidth-threshold", map[string]interface{}{
+		"node_id":               nodeID,
+		"stream_name":           streamName,
+		"internal_name":         internalName,
+		"current_bytes_per_sec": currentBytesPerSecond,
+		"threshold_exceeded":    true,
+		"event_type":            "bandwidth_threshold",
+		"timestamp":             time.Now().Unix(),
+		"source":                "mistserver_webhook",
+		"tenant_id":             getTenantForInternalName(internalName),
+	})
 
 	c.String(http.StatusOK, "OK")
 }
@@ -758,4 +888,248 @@ func HandleRecordingEnd(c *gin.Context) {
 	})
 
 	c.String(http.StatusOK, "OK")
+}
+
+// extractStreamHealthMetrics parses MistServer stream details JSON and extracts health metrics
+func extractStreamHealthMetrics(details map[string]interface{}) map[string]interface{} {
+	metrics := make(map[string]interface{})
+	var tracks []map[string]interface{}
+
+	// Extract issues string if present
+	if issues, ok := details["issues"].(string); ok {
+		metrics["issues_description"] = issues
+		metrics["has_issues"] = true
+	} else {
+		metrics["has_issues"] = false
+	}
+
+	// Process each track to extract codec, quality, and jitter metrics
+	for trackID, trackData := range details {
+		if trackID == "issues" {
+			continue // Skip issues field
+		}
+
+		if track, ok := trackData.(map[string]interface{}); ok {
+			trackInfo := map[string]interface{}{
+				"track_id": trackID,
+			}
+
+			// Extract basic track info
+			if codec, ok := track["codec"].(string); ok {
+				trackInfo["codec"] = codec
+			}
+			if kbits, ok := track["kbits"].(float64); ok {
+				trackInfo["bitrate"] = int(kbits)
+			}
+			if fpks, ok := track["fpks"].(float64); ok {
+				trackInfo["fps"] = fpks / 1000.0 // Convert from fpks to fps
+			}
+			if height, ok := track["height"].(float64); ok {
+				trackInfo["height"] = int(height)
+			}
+			if width, ok := track["width"].(float64); ok {
+				trackInfo["width"] = int(width)
+			}
+			if channels, ok := track["channels"].(float64); ok {
+				trackInfo["channels"] = int(channels)
+			}
+			if rate, ok := track["rate"].(float64); ok {
+				trackInfo["sample_rate"] = int(rate)
+			}
+
+			// Extract frame stability metrics from keys
+			if keys, ok := track["keys"].(map[string]interface{}); ok {
+				if frameMax, ok := keys["frame_ms_max"].(float64); ok {
+					trackInfo["frame_ms_max"] = frameMax
+				}
+				if frameMin, ok := keys["frame_ms_min"].(float64); ok {
+					trackInfo["frame_ms_min"] = frameMin
+				}
+				if framesMax, ok := keys["frames_max"].(float64); ok {
+					trackInfo["frames_max"] = int(framesMax)
+				}
+				if framesMin, ok := keys["frames_min"].(float64); ok {
+					trackInfo["frames_min"] = int(framesMin)
+				}
+				if msMax, ok := keys["ms_max"].(float64); ok {
+					trackInfo["keyframe_ms_max"] = msMax
+				}
+				if msMin, ok := keys["ms_min"].(float64); ok {
+					trackInfo["keyframe_ms_min"] = msMin
+				}
+
+				// Calculate jitter metrics
+				if frameMax, okMax := keys["frame_ms_max"].(float64); okMax {
+					if frameMin, okMin := keys["frame_ms_min"].(float64); okMin {
+						jitter := frameMax - frameMin
+						trackInfo["frame_jitter_ms"] = jitter
+					}
+				}
+
+				if msMax, okMax := keys["ms_max"].(float64); okMax {
+					if msMin, okMin := keys["ms_min"].(float64); okMin {
+						keyframeStability := msMax - msMin
+						trackInfo["keyframe_stability_ms"] = keyframeStability
+					}
+				}
+			}
+
+			tracks = append(tracks, trackInfo)
+		}
+	}
+
+	metrics["tracks"] = tracks
+	metrics["track_count"] = len(tracks)
+
+	// Calculate overall health score
+	healthScore := calculateHealthScore(metrics)
+	metrics["health_score"] = healthScore
+
+	return metrics
+}
+
+// calculateHealthScore computes a health score (0-100) based on stream metrics
+func calculateHealthScore(metrics map[string]interface{}) float64 {
+	score := 100.0
+
+	// Deduct points for issues
+	if hasIssues, ok := metrics["has_issues"].(bool); ok && hasIssues {
+		score -= 30.0 // Issues indicate serious problems
+	}
+
+	// Deduct points for high jitter
+	if tracks, ok := metrics["tracks"].([]map[string]interface{}); ok {
+		maxJitter := 0.0
+		for _, track := range tracks {
+			if jitter, ok := track["frame_jitter_ms"].(float64); ok {
+				maxJitter = math.Max(maxJitter, jitter)
+			}
+		}
+
+		// Deduct up to 40 points for jitter (0ms = 0 points, 100ms+ = 40 points)
+		if maxJitter > 0 {
+			jitterPenalty := math.Min(40.0, maxJitter*0.4)
+			score -= jitterPenalty
+		}
+	}
+
+	// Ensure score doesn't go below 0
+	return math.Max(0.0, score)
+}
+
+// extractTrackQualityMetrics parses LIVE_TRACK_LIST JSON and extracts quality metrics
+func extractTrackQualityMetrics(tracks []map[string]interface{}) map[string]interface{} {
+	metrics := make(map[string]interface{})
+	var videoTracks, audioTracks []map[string]interface{}
+
+	// Process each track in the list
+	for i, track := range tracks {
+		trackInfo := map[string]interface{}{
+			"track_index": i,
+		}
+
+		// Extract track ID if present
+		if trackID, ok := track["trackid"].(float64); ok {
+			trackInfo["track_id"] = int(trackID)
+		}
+
+		// Extract track type (video/audio)
+		trackType := ""
+		if typeVal, ok := track["type"].(string); ok {
+			trackType = typeVal
+			trackInfo["type"] = typeVal
+		}
+
+		// Extract codec
+		if codec, ok := track["codec"].(string); ok {
+			trackInfo["codec"] = codec
+		}
+
+		// Extract video-specific fields
+		if width, ok := track["width"].(float64); ok {
+			trackInfo["width"] = int(width)
+		}
+		if height, ok := track["height"].(float64); ok {
+			trackInfo["height"] = int(height)
+		}
+		if fpks, ok := track["fpks"].(float64); ok {
+			trackInfo["fps"] = fpks / 1000.0 // Convert from fpks to fps
+		}
+
+		// Extract audio-specific fields
+		if channels, ok := track["channels"].(float64); ok {
+			trackInfo["channels"] = int(channels)
+		}
+		if rate, ok := track["rate"].(float64); ok {
+			trackInfo["sample_rate"] = int(rate)
+		}
+
+		// Extract bitrate if present
+		if bps, ok := track["bps"].(float64); ok {
+			trackInfo["bitrate"] = int(bps)
+		}
+
+		// Categorize by type
+		if trackType == "video" {
+			videoTracks = append(videoTracks, trackInfo)
+		} else if trackType == "audio" {
+			audioTracks = append(audioTracks, trackInfo)
+		}
+	}
+
+	metrics["video_tracks"] = videoTracks
+	metrics["audio_tracks"] = audioTracks
+	metrics["total_tracks"] = len(tracks)
+	metrics["video_track_count"] = len(videoTracks)
+	metrics["audio_track_count"] = len(audioTracks)
+
+	// Extract primary video quality if available
+	if len(videoTracks) > 0 {
+		primaryVideo := videoTracks[0]
+		if width, ok := primaryVideo["width"].(int); ok {
+			metrics["primary_width"] = width
+		}
+		if height, ok := primaryVideo["height"].(int); ok {
+			metrics["primary_height"] = height
+
+			// Calculate quality tier
+			if height >= 1080 {
+				metrics["quality_tier"] = "1080p+"
+			} else if height >= 720 {
+				metrics["quality_tier"] = "720p"
+			} else if height >= 480 {
+				metrics["quality_tier"] = "480p"
+			} else {
+				metrics["quality_tier"] = "SD"
+			}
+		}
+		if fps, ok := primaryVideo["fps"].(float64); ok {
+			metrics["primary_fps"] = fps
+		}
+		if codec, ok := primaryVideo["codec"].(string); ok {
+			metrics["primary_video_codec"] = codec
+		}
+		if bitrate, ok := primaryVideo["bitrate"].(int); ok {
+			metrics["primary_video_bitrate"] = bitrate
+		}
+	}
+
+	// Extract primary audio info if available
+	if len(audioTracks) > 0 {
+		primaryAudio := audioTracks[0]
+		if channels, ok := primaryAudio["channels"].(int); ok {
+			metrics["primary_audio_channels"] = channels
+		}
+		if sampleRate, ok := primaryAudio["sample_rate"].(int); ok {
+			metrics["primary_audio_sample_rate"] = sampleRate
+		}
+		if codec, ok := primaryAudio["codec"].(string); ok {
+			metrics["primary_audio_codec"] = codec
+		}
+		if bitrate, ok := primaryAudio["bitrate"].(int); ok {
+			metrics["primary_audio_bitrate"] = bitrate
+		}
+	}
+
+	return metrics
 }
