@@ -33,9 +33,6 @@ func main() {
 		logger.WithError(err).Fatal("Failed to create router")
 	}
 
-	// Initialize handlers
-	handlers.Init(db, logger, router)
-
 	// Setup monitoring
 	healthChecker := monitoring.NewHealthChecker("commodore", version.Version)
 	metricsCollector := monitoring.NewMetricsCollector("commodore", version.Version, version.GitCommit)
@@ -47,17 +44,28 @@ func main() {
 		"JWT_SECRET":   config.GetEnv("JWT_SECRET", ""),
 	}))
 
-	// Create business metrics for streams and operations
-	activeStreams, operations, operationDuration := metricsCollector.CreateBusinessMetrics()
-	dbQueries, dbDuration, dbConnections := metricsCollector.CreateDatabaseMetrics()
+	// Create custom auth and stream metrics
+	metrics := &handlers.HandlerMetrics{
+		AuthOperations:   metricsCollector.NewCounter("auth_operations_total", "Authentication operations", []string{"operation", "status"}),
+		AuthDuration:     metricsCollector.NewHistogram("auth_operation_duration_seconds", "Authentication operation duration", []string{"operation"}, nil),
+		ActiveSessions:   metricsCollector.NewGauge("active_sessions_count", "Active user sessions", []string{}),
+		StreamOperations: metricsCollector.NewCounter("stream_operations_total", "Stream CRUD operations", []string{"operation", "status"}),
+	}
 
-	// TODO: Wire these metrics into handlers
-	_ = activeStreams
-	_ = operations
-	_ = operationDuration
-	_ = dbQueries
-	_ = dbDuration
-	_ = dbConnections
+	// Create database metrics
+	metrics.DBQueries, metrics.DBDuration, metrics.DBConnections = metricsCollector.CreateDatabaseMetrics()
+
+	// Convert metrics to handler format and initialize handlers
+	handlerMetrics := &handlers.HandlerMetrics{
+		AuthOperations:   metrics.AuthOperations,
+		AuthDuration:     metrics.AuthDuration,
+		ActiveSessions:   metrics.ActiveSessions,
+		StreamOperations: metrics.StreamOperations,
+		DBQueries:        metrics.DBQueries,
+		DBDuration:       metrics.DBDuration,
+		DBConnections:    metrics.DBConnections,
+	}
+	handlers.Init(db, logger, router, handlerMetrics)
 
 	// Setup router with unified monitoring
 	app := server.SetupServiceRouter(logger, "commodore", healthChecker, metricsCollector)
@@ -82,7 +90,6 @@ func main() {
 			protected.GET("/streams/:id", handlers.GetStream)
 			protected.DELETE("/streams/:id", handlers.DeleteStream)
 			protected.GET("/streams/:id/metrics", handlers.GetStreamMetrics)
-			protected.GET("/streams/:id/embed", handlers.GetStreamEmbed)
 			protected.POST("/streams/:id/refresh-key", handlers.RefreshStreamKey)
 
 			// Clipping

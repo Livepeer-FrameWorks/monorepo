@@ -17,6 +17,8 @@ import (
 
 	"frameworks/pkg/logging"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/lib/pq"
@@ -31,9 +33,21 @@ import (
 	"frameworks/pkg/models"
 )
 
+// HandlerMetrics holds the metrics for handler operations
+type HandlerMetrics struct {
+	AuthOperations   *prometheus.CounterVec
+	AuthDuration     *prometheus.HistogramVec
+	ActiveSessions   *prometheus.GaugeVec
+	StreamOperations *prometheus.CounterVec
+	DBQueries        *prometheus.CounterVec
+	DBDuration       *prometheus.HistogramVec
+	DBConnections    *prometheus.GaugeVec
+}
+
 var db *sql.DB
 var logger logging.Logger
 var router Router
+var metrics *HandlerMetrics
 
 // Rate limiting for registration
 var registrationAttempts = make(map[string][]time.Time)
@@ -47,10 +61,11 @@ var (
 	purserClient        *purserclient.Client
 )
 
-func Init(database *sql.DB, log logging.Logger, r Router) {
+func Init(database *sql.DB, log logging.Logger, r Router, m *HandlerMetrics) {
 	db = database
 	logger = log
 	router = r
+	metrics = m
 
 	quartermasterURL = os.Getenv("QUARTERMASTER_URL")
 	if quartermasterURL == "" {
@@ -94,8 +109,21 @@ func Init(database *sql.DB, log logging.Logger, r Router) {
 
 // Register handles user registration with comprehensive bot protection
 func Register(c *gin.Context) {
+	start := time.Now()
+
+	// Record metrics
+	defer func() {
+		duration := time.Since(start).Seconds()
+		if metrics != nil {
+			metrics.AuthDuration.WithLabelValues("register").Observe(duration)
+		}
+	}()
+
 	var req models.RegisterRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
+		if metrics != nil {
+			metrics.AuthOperations.WithLabelValues("register", "error").Inc()
+		}
 		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: err.Error()})
 		return
 	}
@@ -225,6 +253,10 @@ func Register(c *gin.Context) {
 		"role":      role,
 	}).Info("User registered successfully, verification email sent")
 
+	if metrics != nil {
+		metrics.AuthOperations.WithLabelValues("register", "success").Inc()
+	}
+
 	c.JSON(http.StatusOK, commodoreapi.RegisterResponse{
 		Success: true,
 		Message: "Registration successful. Please check your email to verify your account.",
@@ -233,8 +265,21 @@ func Register(c *gin.Context) {
 
 // Login handles user authentication with verification requirement
 func Login(c *gin.Context) {
+	start := time.Now()
+
+	// Record metrics
+	defer func() {
+		duration := time.Since(start).Seconds()
+		if metrics != nil {
+			metrics.AuthDuration.WithLabelValues("login").Observe(duration)
+		}
+	}()
+
 	var req models.LoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
+		if metrics != nil {
+			metrics.AuthOperations.WithLabelValues("login", "error").Inc()
+		}
 		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: err.Error()})
 		return
 	}
@@ -598,33 +643,6 @@ func GetStreamMetrics(c *gin.Context) {
 			MaxViewers:   metrics.MaxViewers,
 			UpdatedAt:    metrics.UpdatedAt,
 		},
-	})
-}
-
-// GetStreamEmbed returns embed code for a stream using playback_id
-func GetStreamEmbed(c *gin.Context) {
-	userID := c.GetString("user_id")
-	tenantID := c.GetString("tenant_id")
-	streamInternalName := c.Param("id") // Now expects internal_name instead of UUID
-
-	var playbackID string
-	err := db.QueryRow(`
-		SELECT playback_id FROM streams WHERE internal_name = $1 AND user_id = $2 AND tenant_id = $3
-	`, streamInternalName, userID, tenantID).Scan(&playbackID)
-
-	if err == sql.ErrNoRows {
-		c.JSON(http.StatusNotFound, commodoreapi.ErrorResponse{Error: "Stream not found"})
-		return
-	}
-
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Failed to fetch stream"})
-		return
-	}
-
-	// Return only the playback identifier - URL construction is Media Plane responsibility
-	c.JSON(http.StatusOK, commodoreapi.StreamEmbedResponse{
-		PlaybackID: playbackID,
 	})
 }
 
