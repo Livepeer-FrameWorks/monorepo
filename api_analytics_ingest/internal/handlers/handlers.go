@@ -93,7 +93,7 @@ func (h *AnalyticsHandler) HandleAnalyticsEvent(ydb database.PostgresConn, event
 		} else {
 			h.metrics.AnalyticsEvents.WithLabelValues(event.EventType, "processed").Inc()
 		}
-		h.metrics.BatchProcessingDuration.WithLabelValues(event.EventType).Observe(time.Since(start).Seconds())
+		h.metrics.BatchProcessingDuration.WithLabelValues().Observe(time.Since(start).Seconds())
 	}
 
 	return err

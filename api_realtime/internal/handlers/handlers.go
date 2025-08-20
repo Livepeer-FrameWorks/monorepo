@@ -134,7 +134,7 @@ func (h *SignalmanHandlers) HandleEvent(event kafka.Event) error {
 
 	// Track Kafka message processing
 	if h.metrics != nil {
-		h.metrics.KafkaMessages.WithLabelValues(event.Type, "received").Inc()
+		h.metrics.KafkaMessages.WithLabelValues(event.Type, "consume", "received").Inc()
 	}
 
 	channel := mapEventTypeToChannel(event.Type)
@@ -166,14 +166,14 @@ func (h *SignalmanHandlers) HandleEvent(event kafka.Event) error {
 
 		// Track dropped messages
 		if h.metrics != nil {
-			h.metrics.KafkaMessages.WithLabelValues(event.Type, "dropped").Inc()
+			h.metrics.KafkaMessages.WithLabelValues(event.Type, "consume", "dropped").Inc()
 		}
 	}
 
 	// Track Kafka processing duration and success
 	if h.metrics != nil {
 		h.metrics.KafkaDuration.WithLabelValues(event.Type).Observe(time.Since(start).Seconds())
-		h.metrics.KafkaMessages.WithLabelValues(event.Type, "processed").Inc()
+		h.metrics.KafkaMessages.WithLabelValues(event.Type, "consume", "processed").Inc()
 	}
 
 	h.logger.WithFields(logging.Fields{

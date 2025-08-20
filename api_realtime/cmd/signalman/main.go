@@ -33,8 +33,8 @@ func main() {
 	serviceMetrics := &metrics.Metrics{
 		HubConnections:     metricsCollector.NewGauge("websocket_hub_connections_active", "Active WebSocket hub connections", []string{"channel"}),
 		HubMessages:        metricsCollector.NewCounter("websocket_hub_messages_total", "WebSocket hub messages", []string{"channel", "direction"}),
-		EventsPublished:    metricsCollector.NewCounter("realtime_events_published_total", "Real-time events published", []string{"event_type"}),
-		MessageDeliveryLag: metricsCollector.NewHistogram("message_delivery_lag_seconds", "Message delivery latency", []string{}, nil),
+		EventsPublished:    metricsCollector.NewCounter("realtime_events_published_total", "Real-time events published", []string{"event_type", "channel"}),
+		MessageDeliveryLag: metricsCollector.NewHistogram("message_delivery_lag_seconds", "Message delivery latency", []string{"channel", "type"}, nil),
 	}
 
 	// Create Kafka metrics

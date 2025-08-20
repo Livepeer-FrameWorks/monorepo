@@ -340,13 +340,13 @@ func (s *DecklogServer) StreamEvents(stream pb.DecklogService_StreamEventsServer
 		// Track Kafka publishing
 		kafkaStart := time.Now()
 		if s.metrics != nil {
-			s.metrics.KafkaMessages.WithLabelValues("analytics_events", "publish_attempt").Inc()
+			s.metrics.KafkaMessages.WithLabelValues("analytics_events", "publish", "attempt").Inc()
 		}
 
 		if err := s.producer.PublishBatch(batchEnvelope); err != nil {
 			s.logger.WithError(err).Error("Failed to publish events to Kafka")
 			if s.metrics != nil {
-				s.metrics.KafkaMessages.WithLabelValues("analytics_events", "publish_error").Inc()
+				s.metrics.KafkaMessages.WithLabelValues("analytics_events", "publish", "error").Inc()
 				s.metrics.EventsIngested.WithLabelValues(event.Source, "kafka_error").Add(float64(len(event.Events)))
 			}
 			if err := stream.Send(&pb.EventResponse{Status: "error", Message: "failed to publish events"}); err != nil {
@@ -357,7 +357,7 @@ func (s *DecklogServer) StreamEvents(stream pb.DecklogService_StreamEventsServer
 
 		// Track successful Kafka publishing
 		if s.metrics != nil {
-			s.metrics.KafkaMessages.WithLabelValues("analytics_events", "publish_success").Inc()
+			s.metrics.KafkaMessages.WithLabelValues("analytics_events", "publish", "success").Inc()
 			s.metrics.KafkaDuration.WithLabelValues("analytics_events").Observe(time.Since(kafkaStart).Seconds())
 		}
 
@@ -446,7 +446,7 @@ func (s *DecklogServer) SendEvent(ctx context.Context, event *pb.Event) (*pb.Eve
 
 	// Track Kafka publishing
 	if s.metrics != nil {
-		s.metrics.KafkaMessages.WithLabelValues("analytics_events", "single_event").Inc()
+		s.metrics.KafkaMessages.WithLabelValues("analytics_events", "publish", "single_event").Inc()
 		s.metrics.EventsIngested.WithLabelValues("foghorn", "received").Inc()
 	}
 
