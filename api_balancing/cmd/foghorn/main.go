@@ -50,20 +50,19 @@ func main() {
 		"DATABASE_URL": config.GetEnv("DATABASE_URL", ""),
 	}))
 
-	// Create load balancer metrics
-	balancerOperations, balancerDecisions, balancerLatency := metricsCollector.CreateBusinessMetrics()
-	dbQueries, dbDuration, dbConnections := metricsCollector.CreateDatabaseMetrics()
+	// Create custom load balancing metrics
+	metrics := &handlers.FoghornMetrics{
+		RoutingDecisions:        metricsCollector.NewCounter("routing_decisions_total", "Routing decisions made", []string{"algorithm", "selected_node"}),
+		NodeSelectionDuration:   metricsCollector.NewHistogram("node_selection_duration_seconds", "Node selection latency", []string{}, nil),
+		LoadDistribution:        metricsCollector.NewGauge("load_distribution_ratio", "Load distribution ratio", []string{"node_id"}),
+		HealthScoreCalculations: metricsCollector.NewCounter("health_score_calculations_total", "Health score calculations", []string{}),
+	}
 
-	// TODO: Wire these metrics into handlers
-	_ = balancerOperations
-	_ = balancerDecisions
-	_ = balancerLatency
-	_ = dbQueries
-	_ = dbDuration
-	_ = dbConnections
+	// Create database metrics
+	metrics.DBQueries, metrics.DBDuration, metrics.DBConnections = metricsCollector.CreateDatabaseMetrics()
 
 	// Initialize handlers
-	handlers.Init(db, logger, lb)
+	handlers.Init(db, logger, lb, metrics)
 
 	// Setup router with unified monitoring
 	router := server.SetupServiceRouter(logger, "foghorn", healthChecker, metricsCollector)
