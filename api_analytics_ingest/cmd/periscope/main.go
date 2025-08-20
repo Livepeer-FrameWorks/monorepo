@@ -41,13 +41,23 @@ func main() {
 	clickhouse := database.MustConnectClickHouseNative(chConfig, logger)
 	defer clickhouse.Close()
 
-	// Initialize handlers with both databases
-	analyticsHandler := handlers.NewAnalyticsHandler(clickhouse, logger)
-	eventHandler := kafka.NewAnalyticsEventHandler(yugaDB, analyticsHandler.HandleAnalyticsEvent, logger)
-
 	// Setup monitoring
 	healthChecker := monitoring.NewHealthChecker("periscope-ingest", version.Version)
 	metricsCollector := monitoring.NewMetricsCollector("periscope-ingest", version.Version, version.GitCommit)
+
+	// Create custom analytics ingestion metrics
+	metrics := &handlers.PeriscopeMetrics{
+		AnalyticsEvents:         metricsCollector.NewCounter("analytics_events_total", "Analytics events processed", []string{"event_type", "status"}),
+		BatchProcessingDuration: metricsCollector.NewHistogram("batch_processing_duration_seconds", "Batch processing time", []string{}, nil),
+		ClickHouseInserts:       metricsCollector.NewCounter("clickhouse_inserts_total", "ClickHouse inserts", []string{"table", "status"}),
+	}
+
+	// Create Kafka metrics
+	metrics.KafkaMessages, metrics.KafkaDuration, metrics.KafkaLag = metricsCollector.CreateKafkaMetrics()
+
+	// Initialize handlers with both databases
+	analyticsHandler := handlers.NewAnalyticsHandler(clickhouse, logger, metrics)
+	eventHandler := kafka.NewAnalyticsEventHandler(yugaDB, analyticsHandler.HandleAnalyticsEvent, logger)
 
 	// We'll add health checks after we have the consumer client
 
@@ -78,18 +88,6 @@ func main() {
 		"KAFKA_BROKERS":   config.GetEnv("KAFKA_BROKERS", ""),
 		"KAFKA_GROUP_ID":  config.GetEnv("KAFKA_GROUP_ID", ""),
 	}))
-
-	// Create Kafka and business metrics
-	kafkaMessages, kafkaDuration, kafkaLag := metricsCollector.CreateKafkaMetrics()
-	businessItems, operations, operationDuration := metricsCollector.CreateBusinessMetrics()
-
-	// TODO: Wire these metrics into handlers
-	_ = kafkaMessages
-	_ = kafkaDuration
-	_ = kafkaLag
-	_ = businessItems
-	_ = operations
-	_ = operationDuration
 
 	// Start consuming
 	ctx, cancel := context.WithCancel(context.Background())

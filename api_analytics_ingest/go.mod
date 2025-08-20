@@ -2,7 +2,10 @@ module frameworks/api_analytics_ingest
 
 go 1.23.8
 
-require frameworks/pkg v0.0.0
+require (
+	frameworks/pkg v0.0.0
+	github.com/prometheus/client_golang v1.17.0
+)
 
 replace frameworks/pkg => ../pkg
 
@@ -38,7 +41,6 @@ require (
 	github.com/paulmach/orb v0.11.1 // indirect
 	github.com/pelletier/go-toml/v2 v2.0.8 // indirect
 	github.com/pierrec/lz4/v4 v4.1.22 // indirect
-	github.com/prometheus/client_golang v1.17.0 // indirect
 	github.com/prometheus/client_model v0.4.1-0.20230718164431-9a2bf3000d16 // indirect
 	github.com/prometheus/common v0.44.0 // indirect
 	github.com/prometheus/procfs v0.11.1 // indirect

@@ -5,62 +5,98 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"time"
 
 	"frameworks/pkg/database"
 	"frameworks/pkg/kafka"
 	"frameworks/pkg/logging"
+	"github.com/prometheus/client_golang/prometheus"
 )
+
+// PeriscopeMetrics holds all Prometheus metrics for Periscope Ingest
+type PeriscopeMetrics struct {
+	AnalyticsEvents         *prometheus.CounterVec
+	BatchProcessingDuration *prometheus.HistogramVec
+	ClickHouseInserts       *prometheus.CounterVec
+	KafkaMessages           *prometheus.CounterVec
+	KafkaDuration           *prometheus.HistogramVec
+	KafkaLag                *prometheus.GaugeVec
+}
 
 // AnalyticsHandler handles analytics events
 type AnalyticsHandler struct {
 	clickhouse database.ClickHouseNativeConn
 	logger     logging.Logger
+	metrics    *PeriscopeMetrics
 }
 
 // NewAnalyticsHandler creates a new analytics handler
-func NewAnalyticsHandler(clickhouse database.ClickHouseNativeConn, logger logging.Logger) *AnalyticsHandler {
+func NewAnalyticsHandler(clickhouse database.ClickHouseNativeConn, logger logging.Logger, metrics *PeriscopeMetrics) *AnalyticsHandler {
 	return &AnalyticsHandler{
 		clickhouse: clickhouse,
 		logger:     logger,
+		metrics:    metrics,
 	}
 }
 
 // HandleAnalyticsEvent processes analytics events and writes to appropriate databases
 func (h *AnalyticsHandler) HandleAnalyticsEvent(ydb database.PostgresConn, event kafka.AnalyticsEvent) error {
+	start := time.Now()
 	ctx := context.Background()
 
+	// Track analytics event received
+	if h.metrics != nil {
+		h.metrics.AnalyticsEvents.WithLabelValues(event.EventType, "received").Inc()
+	}
+
 	// Process based on event type
+	var err error
 	switch event.EventType {
 	case "stream-lifecycle":
-		return h.processStreamLifecycle(ctx, ydb, event)
+		err = h.processStreamLifecycle(ctx, ydb, event)
 	case "stream-ingest":
-		return h.processStreamIngest(ctx, event)
+		err = h.processStreamIngest(ctx, event)
 	case "user-connection":
-		return h.processUserConnection(ctx, ydb, event)
+		err = h.processUserConnection(ctx, ydb, event)
 	case "push-lifecycle":
-		return h.processPushLifecycle(ctx, event)
+		err = h.processPushLifecycle(ctx, event)
 	case "recording-lifecycle":
-		return h.processRecordingLifecycle(ctx, event)
+		err = h.processRecordingLifecycle(ctx, event)
 	case "client-lifecycle":
-		return h.processClientLifecycle(ctx, event)
+		err = h.processClientLifecycle(ctx, event)
 	case "node-lifecycle":
-		return h.processNodeLifecycle(ctx, event)
+		err = h.processNodeLifecycle(ctx, event)
 	case "stream-buffer":
-		return h.processStreamBuffer(ctx, event)
+		err = h.processStreamBuffer(ctx, event)
 	case "stream-end":
-		return h.processStreamEnd(ctx, ydb, event)
+		err = h.processStreamEnd(ctx, ydb, event)
 	case "stream-view":
-		return h.processStreamView(ctx, event)
+		err = h.processStreamView(ctx, event)
 	case "load-balancing":
-		return h.processLoadBalancing(ctx, event)
+		err = h.processLoadBalancing(ctx, event)
 	case "track-list":
-		return h.processTrackList(ctx, event)
+		err = h.processTrackList(ctx, event)
 	case "bandwidth-threshold":
-		return h.processBandwidthThreshold(ctx, event)
+		err = h.processBandwidthThreshold(ctx, event)
 	default:
 		h.logger.Warnf("Unknown event type: %s", event.EventType)
+		if h.metrics != nil {
+			h.metrics.AnalyticsEvents.WithLabelValues(event.EventType, "unknown_type").Inc()
+		}
 		return nil
 	}
+
+	// Track processing metrics
+	if h.metrics != nil {
+		if err != nil {
+			h.metrics.AnalyticsEvents.WithLabelValues(event.EventType, "error").Inc()
+		} else {
+			h.metrics.AnalyticsEvents.WithLabelValues(event.EventType, "processed").Inc()
+		}
+		h.metrics.BatchProcessingDuration.WithLabelValues(event.EventType).Observe(time.Since(start).Seconds())
+	}
+
+	return err
 }
 
 // processStreamLifecycle handles stream lifecycle events
@@ -76,12 +112,19 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, ydb datab
 	}
 
 	// Write ONLY to ClickHouse - no PostgreSQL writes for events
+	if h.metrics != nil {
+		h.metrics.ClickHouseInserts.WithLabelValues("stream_events", "attempt").Inc()
+	}
+
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO stream_events (
 			event_id, timestamp, tenant_id, internal_name, event_type, status, node_id, event_data
 		)`)
 	if err != nil {
 		h.logger.Errorf("Failed to prepare ClickHouse batch: %v", err)
+		if h.metrics != nil {
+			h.metrics.ClickHouseInserts.WithLabelValues("stream_events", "error").Inc()
+		}
 		return err
 	}
 
@@ -96,12 +139,22 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, ydb datab
 		marshalEventData(event.Data),
 	); err != nil {
 		h.logger.Errorf("Failed to append to ClickHouse batch: %v", err)
+		if h.metrics != nil {
+			h.metrics.ClickHouseInserts.WithLabelValues("stream_events", "error").Inc()
+		}
 		return err
 	}
 
 	if err := batch.Send(); err != nil {
 		h.logger.Errorf("Failed to send ClickHouse batch: %v", err)
+		if h.metrics != nil {
+			h.metrics.ClickHouseInserts.WithLabelValues("stream_events", "error").Inc()
+		}
 		return err
+	}
+
+	if h.metrics != nil {
+		h.metrics.ClickHouseInserts.WithLabelValues("stream_events", "success").Inc()
 	}
 
 	if err := h.reduceStreamLifecycle(ctx, ydb, event); err != nil {
