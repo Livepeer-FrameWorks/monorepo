@@ -157,6 +157,12 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, ydb datab
 		h.metrics.ClickHouseInserts.WithLabelValues("stream_events", "success").Inc()
 	}
 
+	// Extract health metrics if this event contains detailed stream data
+	if err := h.extractHealthMetricsFromLifecycle(ctx, event); err != nil {
+		h.logger.Errorf("Failed to extract health metrics from lifecycle event: %v", err)
+		// Don't fail the whole event processing for health metrics issues
+	}
+
 	if err := h.reduceStreamLifecycle(ctx, ydb, event); err != nil {
 		h.logger.Errorf("Failed to reduce stream lifecycle: %v", err)
 	}
@@ -250,11 +256,11 @@ func (h *AnalyticsHandler) processUserConnection(ctx context.Context, ydb databa
 		userAgent,
 		connector,
 		event.Data["node_id"],
-		// geo fields not available here
-		"",         // country_code
-		"",         // city
-		float64(0), // latitude
-		float64(0), // longitude
+		// No geo data available from USER_NEW/USER_END webhooks - leave fields empty/null
+		nil, // country_code (NULL)
+		nil, // city (NULL)
+		nil, // latitude (NULL)
+		nil, // longitude (NULL)
 		action,
 		sessionDuration,
 		bytesTransferred,
@@ -456,6 +462,10 @@ func (h *AnalyticsHandler) processLoadBalancing(ctx context.Context, event kafka
 		return err
 	}
 
+	// Load balancing events go ONLY to routing_events table
+	// They represent routing requests, NOT viewers
+	// Viewer counts come from USER_NEW/USER_END (connection_events)
+
 	h.logger.WithFields(logging.Fields{
 		"event_id":    event.EventID,
 		"stream_name": internalName,
@@ -472,16 +482,15 @@ func (h *AnalyticsHandler) processClientLifecycle(ctx context.Context, event kaf
 		return nil
 	}
 
-	// Write time-series metrics to ClickHouse
+	// Write time-series performance metrics to ClickHouse (stream_health_metrics)
 	if err := h.writeStreamMetrics(ctx, event); err != nil {
 		h.logger.WithError(err).Error("Failed to write client lifecycle metrics")
 		return err
 	}
 
-	// Write viewer_metrics sample for realtime (no geo enrichment)
-	if err := h.writeViewerMetric(ctx, event); err != nil {
-		h.logger.WithError(err).Warn("Failed to write viewer metric sample")
-	}
+	// Note: viewer_metrics are NOT created from client-lifecycle events
+	// Client-lifecycle tracks per-client performance, not viewers
+	// Viewer counts come from USER_NEW/USER_END (connection_events)
 
 	return nil
 }
@@ -623,6 +632,7 @@ func (h *AnalyticsHandler) reduceStreamLifecycle(ctx context.Context, ydb databa
 	if event.InternalName == nil {
 		return nil
 	}
+
 	status, _ := event.Data["status"].(string)
 	var startTime interface{}
 	switch status {
@@ -631,15 +641,71 @@ func (h *AnalyticsHandler) reduceStreamLifecycle(ctx context.Context, ydb databa
 	default:
 		startTime = nil
 	}
-	_, err := ydb.ExecContext(ctx, `
-                INSERT INTO stream_analytics (tenant_id, internal_name, status, session_start_time, last_updated)
-                VALUES ($1, $2, $3, $4, $5)
-                ON CONFLICT (tenant_id, internal_name) DO UPDATE SET
-                        status = EXCLUDED.status,
-                        session_start_time = COALESCE(stream_analytics.session_start_time, EXCLUDED.session_start_time),
-                        last_updated = EXCLUDED.last_updated
-        `, getTenantIDFromEvent(event), *event.InternalName, status, startTime, event.Timestamp)
-	return err
+
+	// Extract metrics from detailed stream lifecycle events (from Prometheus monitor)
+	source, _ := event.Data["source"].(string)
+	if source == "mistserver_api" {
+		// This is a detailed event with actual metrics data
+		nodeID, _ := event.Data["node_id"].(string)
+		viewers := convertToInt(event.Data["viewers"])
+		clients := convertToInt(event.Data["clients"])
+		trackCount := convertToInt(event.Data["track_count"])
+		upBytes := convertToInt64(event.Data["bandwidth_in"])
+		downBytes := convertToInt64(event.Data["bandwidth_out"])
+		packetsSent := convertToInt64(event.Data["packets_sent"])
+		packetsLost := convertToInt64(event.Data["packets_lost"])
+		inputs := convertToInt(event.Data["inputs"])
+		outputs := convertToInt(event.Data["outputs"])
+
+		// Calculate bitrate from bandwidth (convert bytes to kbps)
+		var avgBitrate float64
+		if upBytes > 0 {
+			avgBitrate = float64(upBytes*8) / 1000 // Convert bytes to kbps
+		}
+
+		_, err := ydb.ExecContext(ctx, `
+			INSERT INTO stream_analytics (
+				tenant_id, internal_name, status, session_start_time, 
+				current_viewers, total_connections, track_count,
+				bandwidth_in, bandwidth_out, upbytes, downbytes,
+				packets_sent, packets_lost, inputs, outputs,
+				avg_bitrate, primary_node_id, last_updated
+			)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+			ON CONFLICT (tenant_id, internal_name) DO UPDATE SET
+				status = EXCLUDED.status,
+				session_start_time = COALESCE(stream_analytics.session_start_time, EXCLUDED.session_start_time),
+				current_viewers = EXCLUDED.current_viewers,
+				peak_viewers = GREATEST(stream_analytics.peak_viewers, EXCLUDED.current_viewers),
+				total_connections = GREATEST(stream_analytics.total_connections, EXCLUDED.total_connections),
+				track_count = EXCLUDED.track_count,
+				bandwidth_in = EXCLUDED.bandwidth_in,
+				bandwidth_out = EXCLUDED.bandwidth_out,
+				upbytes = EXCLUDED.upbytes,
+				downbytes = EXCLUDED.downbytes,
+				packets_sent = EXCLUDED.packets_sent,
+				packets_lost = EXCLUDED.packets_lost,
+				inputs = EXCLUDED.inputs,
+				outputs = EXCLUDED.outputs,
+				avg_bitrate = EXCLUDED.avg_bitrate,
+				primary_node_id = EXCLUDED.primary_node_id,
+				last_updated = EXCLUDED.last_updated
+		`, getTenantIDFromEvent(event), *event.InternalName, status, startTime,
+			viewers, clients, trackCount, upBytes, downBytes, upBytes, downBytes,
+			packetsSent, packetsLost, inputs, outputs, avgBitrate, nodeID, event.Timestamp)
+		return err
+	} else {
+		// Basic lifecycle event without detailed metrics
+		_, err := ydb.ExecContext(ctx, `
+			INSERT INTO stream_analytics (tenant_id, internal_name, status, session_start_time, last_updated)
+			VALUES ($1, $2, $3, $4, $5)
+			ON CONFLICT (tenant_id, internal_name) DO UPDATE SET
+				status = EXCLUDED.status,
+				session_start_time = COALESCE(stream_analytics.session_start_time, EXCLUDED.session_start_time),
+				last_updated = EXCLUDED.last_updated
+		`, getTenantIDFromEvent(event), *event.InternalName, status, startTime, event.Timestamp)
+		return err
+	}
 }
 
 func (h *AnalyticsHandler) reduceUserConnection(ctx context.Context, ydb database.PostgresConn, event kafka.AnalyticsEvent) error {
@@ -1034,4 +1100,164 @@ func marshalEventData(m map[string]interface{}) string {
 	}
 	b, _ := json.Marshal(m)
 	return string(b)
+}
+
+// extractHealthMetricsFromLifecycle extracts health metrics from stream-lifecycle events
+// that contain detailed health_data and track_details from the Prometheus monitor
+func (h *AnalyticsHandler) extractHealthMetricsFromLifecycle(ctx context.Context, event kafka.AnalyticsEvent) error {
+	// Only process events from the mistserver_api source (Prometheus monitor)
+	source, hasSource := event.Data["source"].(string)
+	if !hasSource || source != "mistserver_api" {
+		return nil // Skip events that aren't from the detailed monitor
+	}
+
+	// Check if this event has health_data and track_details
+	healthData, hasHealthData := event.Data["health_data"]
+	trackDetails, hasTrackDetails := event.Data["track_details"]
+
+	if !hasHealthData && !hasTrackDetails {
+		return nil // No health data to extract
+	}
+
+	h.logger.Debugf("Extracting health metrics from lifecycle event: %s", event.EventID)
+
+	// Prepare health metrics batch
+	healthBatch, err := h.clickhouse.PrepareBatch(ctx, `
+		INSERT INTO stream_health_metrics (
+			timestamp, tenant_id, internal_name, node_id,
+			bitrate, fps, width, height, buffer_size, buffer_used,
+			buffer_health, packets_sent, packets_lost, packets_retransmitted,
+			bandwidth_in, bandwidth_out, codec, profile, track_count,
+			gop_size, buffer_state, frame_jitter_ms, keyframe_stability_ms,
+			issues_description, has_issues, health_score,
+			frame_ms_max, frame_ms_min, frames_max, frames_min,
+			keyframe_ms_max, keyframe_ms_min,
+			audio_channels, audio_sample_rate, audio_codec, audio_bitrate
+		)`)
+	if err != nil {
+		h.logger.Errorf("Failed to prepare health metrics batch: %v", err)
+		return err
+	}
+
+	// Extract basic metrics from the event data
+	bitrate := convertToInt(event.Data["bandwidth_in"])
+	nodeID := ""
+	if nid, ok := event.Data["node_id"].(string); ok {
+		nodeID = nid
+	}
+
+	// Extract metrics from track_details if available
+	var primaryTrack map[string]interface{}
+	var trackCount int
+	if trackDetails != nil {
+		if tracks, ok := trackDetails.([]interface{}); ok {
+			trackCount = len(tracks)
+			// Get primary track (first video track or first track)
+			for _, track := range tracks {
+				if trackMap, ok := track.(map[string]interface{}); ok {
+					if trackType, hasType := trackMap["type"].(string); hasType && trackType == "video" {
+						primaryTrack = trackMap
+						break
+					}
+					if primaryTrack == nil {
+						primaryTrack = trackMap // Use first track if no video track found
+					}
+				}
+			}
+		}
+	}
+
+	// Extract video metrics from primary track
+	var width, height, gopSize int
+	var fps float32
+	var codec, profile string
+	var audioChannels, audioSampleRate, audioBitrate int
+	var audioCodec string
+
+	if primaryTrack != nil {
+		width = convertToInt(primaryTrack["width"])
+		height = convertToInt(primaryTrack["height"])
+		fps = convertToFloat32(primaryTrack["fps"])
+		if c, ok := primaryTrack["codec"].(string); ok {
+			codec = c
+		}
+		if trackType, hasType := primaryTrack["type"].(string); hasType && trackType == "video" {
+			bitrate = convertToInt(primaryTrack["bitrate_kbps"]) // Use track bitrate if available
+		}
+
+		// Audio metrics (if this is an audio track or has audio info)
+		if trackType, hasType := primaryTrack["type"].(string); hasType && trackType == "audio" {
+			audioChannels = convertToInt(primaryTrack["channels"])
+			audioSampleRate = convertToInt(primaryTrack["sample_rate"])
+			audioBitrate = convertToInt(primaryTrack["bitrate_kbps"])
+			if ac, ok := primaryTrack["codec"].(string); ok {
+				audioCodec = ac
+			}
+		}
+	}
+
+	// Extract health score and buffer state
+	var healthScore float32
+	bufferState := "unknown"
+	var hasIssues int
+
+	if healthData != nil {
+		if hd, ok := healthData.(map[string]interface{}); ok {
+			healthScore = convertToFloat32(hd["health_score"])
+			if state, ok := hd["buffer_state"].(string); ok {
+				bufferState = state
+			}
+			hasIssues = convertToInt(hd["has_issues"])
+		}
+	}
+
+	if err := healthBatch.Append(
+		event.Timestamp,
+		getTenantIDFromEvent(event),
+		*event.InternalName,
+		nodeID,
+		bitrate,
+		fps,
+		width,
+		height,
+		convertToInt(event.Data["buffer_size"]),
+		convertToInt(event.Data["buffer_used"]),
+		convertToFloat32(event.Data["buffer_health"]),
+		convertToInt64(event.Data["packets_sent"]),
+		convertToInt64(event.Data["packets_lost"]),
+		convertToInt64(event.Data["packets_retransmitted"]),
+		convertToInt64(event.Data["bandwidth_in"]),
+		convertToInt64(event.Data["bandwidth_out"]),
+		codec,
+		profile,
+		trackCount,
+		gopSize,
+		bufferState,
+		convertToFloat32(event.Data["frame_jitter_ms"]),
+		convertToFloat32(event.Data["keyframe_stability_ms"]),
+		event.Data["issues_description"],
+		hasIssues,
+		healthScore,
+		convertToFloat32(event.Data["frame_ms_max"]),
+		convertToFloat32(event.Data["frame_ms_min"]),
+		convertToInt(event.Data["frames_max"]),
+		convertToInt(event.Data["frames_min"]),
+		convertToFloat32(event.Data["keyframe_ms_max"]),
+		convertToFloat32(event.Data["keyframe_ms_min"]),
+		audioChannels,
+		audioSampleRate,
+		audioCodec,
+		audioBitrate,
+	); err != nil {
+		h.logger.Errorf("Failed to append health metrics from lifecycle: %v", err)
+		return err
+	}
+
+	if err := healthBatch.Send(); err != nil {
+		h.logger.Errorf("Failed to send health metrics from lifecycle: %v", err)
+		return err
+	}
+
+	h.logger.Debugf("Successfully extracted health metrics from lifecycle event for stream: %s", *event.InternalName)
+	return nil
 }

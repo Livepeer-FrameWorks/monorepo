@@ -1,1 +1,6 @@
 # User authentication queries - handled via REST API
+# This file is kept for future GraphQL auth queries if needed
+
+query Placeholder {
+  __typename
+}

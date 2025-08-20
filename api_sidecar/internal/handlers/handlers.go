@@ -14,6 +14,7 @@ import (
 	commodoreapi "frameworks/pkg/api/commodore"
 	"frameworks/pkg/clients/commodore"
 	"frameworks/pkg/clients/foghorn"
+	"frameworks/pkg/geoip"
 	"frameworks/pkg/logging"
 	"github.com/prometheus/client_golang/prometheus"
 
@@ -38,6 +39,7 @@ var (
 	serviceToken    string
 	commodoreClient *commodore.Client
 	foghornClient   *foghorn.Client
+	geoipReader     *geoip.Reader
 )
 
 // Init initializes the handlers with logger, metrics, and service URLs and cluster metadata
@@ -82,6 +84,23 @@ func Init(log logging.Logger, m *HandlerMetrics) {
 		Logger:       logger,
 	})
 
+	// Initialize GeoIP reader
+	geoipPath := os.Getenv("GEOIP_MMDB_PATH")
+	if geoipPath != "" {
+		reader, err := geoip.NewReader(geoipPath)
+		if err != nil {
+			logger.WithFields(logging.Fields{
+				"geoip_path": geoipPath,
+				"error":      err,
+			}).Warn("Failed to initialize GeoIP reader, geo enrichment disabled")
+		} else {
+			geoipReader = reader
+			logger.WithField("geoip_path", geoipPath).Info("GeoIP reader initialized successfully")
+		}
+	} else {
+		logger.Debug("No GEOIP_MMDB_PATH provided, geo enrichment disabled")
+	}
+
 	// Initialize the Decklog client for analytics forwarding
 	InitDecklogClient()
 
@@ -93,6 +112,7 @@ func Init(log logging.Logger, m *HandlerMetrics) {
 		"cluster_id":    clusterID,
 		"foghorn_uri":   foghornURI,
 		"node_name":     nodeName,
+		"geoip_enabled": geoipReader != nil,
 	}).Info("Handlers initialized")
 }
 
@@ -513,4 +533,68 @@ func updateFoghornStreamHealth(streamName string, isHealthy bool, details map[st
 	}).Info("Updated Foghorn with stream health status")
 
 	return nil
+}
+
+// enrichEventWithGeoData adds geo information to event data using IP address
+func enrichEventWithGeoData(eventData map[string]interface{}, ipAddress string) map[string]interface{} {
+	enriched := make(map[string]interface{})
+	for k, v := range eventData {
+		enriched[k] = v
+	}
+
+	// Set geo fields to nil for consistent NULL handling initially
+	enriched["country_code"] = nil
+	enriched["city"] = nil
+	enriched["latitude"] = nil
+	enriched["longitude"] = nil
+
+	geoSource := "none"
+
+	// Try geoip lookup first if available
+	if geoipReader != nil && ipAddress != "" {
+		geoData := geoipReader.Lookup(ipAddress)
+		if geoData != nil {
+			// Add geo data to event, replacing nil values only if we have data
+			if geoData.CountryCode != "" {
+				enriched["country_code"] = geoData.CountryCode
+			}
+
+			if geoData.City != "" {
+				enriched["city"] = geoData.City
+			}
+
+			if geoData.Latitude != 0 || geoData.Longitude != 0 {
+				enriched["latitude"] = geoData.Latitude
+				enriched["longitude"] = geoData.Longitude
+			}
+
+			geoSource = "geoip"
+			logger.WithFields(logging.Fields{
+				"ip_address":   ipAddress,
+				"country_code": geoData.CountryCode,
+				"city":         geoData.City,
+				"latitude":     geoData.Latitude,
+				"longitude":    geoData.Longitude,
+				"source":       geoSource,
+			}).Debug("Enriched event with geo data")
+
+			return enriched
+		}
+	}
+
+	// Fallback to MistServer node location if available
+	if prometheusMonitor != nil && prometheusMonitor.latitude != nil && prometheusMonitor.longitude != nil {
+		enriched["latitude"] = *prometheusMonitor.latitude
+		enriched["longitude"] = *prometheusMonitor.longitude
+		geoSource = "node_fallback"
+
+		logger.WithFields(logging.Fields{
+			"ip_address": ipAddress,
+			"latitude":   *prometheusMonitor.latitude,
+			"longitude":  *prometheusMonitor.longitude,
+			"source":     geoSource,
+		}).Debug("Used node location as geo fallback")
+	}
+
+	return enriched
 }

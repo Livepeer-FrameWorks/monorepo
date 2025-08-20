@@ -14,6 +14,11 @@ type Query {
   viewerMetrics(stream: String, timeRange: TimeRangeInput): [ViewerMetric!]!
   platformOverview(timeRange: TimeRangeInput): PlatformOverview!
   
+  # Geographic Analytics
+  viewerGeographics(stream: String, timeRange: TimeRangeInput): [ViewerGeographic!]!
+  geographicDistribution(stream: String, timeRange: TimeRangeInput): GeographicDistribution!
+  loadBalancingMetrics(timeRange: TimeRangeInput): [LoadBalancingMetric!]!
+  
   # New health and quality queries
   streamHealthMetrics(stream: String!, timeRange: TimeRangeInput): [StreamHealthMetric!]!
   streamQualityChanges(stream: String!, timeRange: TimeRangeInput): [StreamQualityChange!]!
@@ -346,6 +351,11 @@ type Node {
   ipAddress: String
   lastSeen: Time!
   createdAt: Time!
+  
+  # Geographic location
+  latitude: Float
+  longitude: Float
+  location: String
 }
 
 type Clip {
@@ -504,4 +514,104 @@ type RebufferingEvent {
   # Performance at rebuffer time
   frameJitterMs: Float
   packetLossPercentage: Float
+}
+
+# ============================================================================
+# GEOGRAPHIC ANALYTICS TYPES
+# ============================================================================
+
+# Geographic data for individual viewer/connection events
+type ViewerGeographic {
+  timestamp: Time!
+  stream: String
+  nodeId: String
+  
+  # Geographic location
+  countryCode: String
+  city: String
+  latitude: Float
+  longitude: Float
+  
+  # Event details
+  viewerCount: Int
+  connectionAddr: String
+  eventType: String
+  source: String
+}
+
+# Aggregated geographic distribution analytics
+type GeographicDistribution {
+  timeRange: TimeRange!
+  stream: String
+  
+  # Top countries and cities
+  topCountries: [CountryMetric!]!
+  topCities: [CityMetric!]!
+  
+  # Geographic spread metrics
+  uniqueCountries: Int!
+  uniqueCities: Int!
+  totalViewers: Int!
+  
+  # Geographic viewer distribution over time
+  viewersByCountry: [CountryTimeSeries!]!
+}
+
+# Country-level metrics
+type CountryMetric {
+  countryCode: String!
+  viewerCount: Int!
+  percentage: Float!
+  
+  # Optional detailed city breakdown
+  cities: [CityMetric!]
+}
+
+# City-level metrics  
+type CityMetric {
+  city: String!
+  countryCode: String
+  viewerCount: Int!
+  percentage: Float!
+  latitude: Float
+  longitude: Float
+}
+
+# Time series data for countries
+type CountryTimeSeries {
+  timestamp: Time!
+  countryCode: String!
+  viewerCount: Int!
+}
+
+# Load balancing and routing metrics with geographic context
+type LoadBalancingMetric {
+  timestamp: Time!
+  stream: String!
+  
+  # Node and routing info
+  selectedNode: String!
+  nodeId: String
+  
+  # Client geographic data
+  clientIp: String
+  clientCountry: String
+  clientLatitude: Float
+  clientLongitude: Float
+  
+  # Node geographic data
+  nodeLatitude: Float
+  nodeLongitude: Float
+  
+  # Performance metrics
+  score: Int
+  status: String!
+  details: String
+  
+  # Geographic routing efficiency
+  routingDistance: Float  # Distance between client and selected node
+  
+  # Event context
+  eventType: String
+  source: String
 }

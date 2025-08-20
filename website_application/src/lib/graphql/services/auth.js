@@ -40,22 +40,38 @@ export const authService = {
   },
 
   async logout() {
-    // Clear all auth data and reset GraphQL client
+    // Clear localStorage data
+    localStorage.removeItem('token');
+    localStorage.removeItem('user');
+    
+    // Reset GraphQL client
     resetGraphQLClient();
     
     // Let the caller handle navigation
   },
 
-  // Check if user is authenticated and get current user from REST API
-  async checkAuth() {
+  // Check if user is authenticated - avoid unnecessary /me API calls
+  async checkAuth(forceValidation = false) {
     const token = localStorage.getItem('token');
+    const storedUserData = localStorage.getItem('user');
     
     if (!token) {
       return { isAuthenticated: false, user: null };
     }
 
+    // If we have cached user data and aren't forcing validation, use it
+    if (!forceValidation && storedUserData) {
+      try {
+        const user = JSON.parse(storedUserData);
+        return { isAuthenticated: true, user, token };
+      } catch (error) {
+        console.error('Failed to parse stored user data:', error);
+        // Fall through to validation if cached data is corrupted
+      }
+    }
+
     try {
-      // Validate token and get current user via REST API
+      // Only validate token with /me endpoint when necessary
       const response = await authAPI.get('/me', {
         headers: {
           Authorization: `Bearer ${token}`

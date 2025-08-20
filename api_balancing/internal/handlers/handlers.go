@@ -15,6 +15,7 @@ import (
 
 	"frameworks/api_balancing/internal/balancer"
 	"frameworks/pkg/clients/decklog"
+	"frameworks/pkg/geoip"
 	"frameworks/pkg/logging"
 
 	"github.com/gin-gonic/gin"
@@ -27,6 +28,7 @@ var (
 	lb            *balancer.LoadBalancer
 	decklogClient *decklog.Client
 	metrics       *FoghornMetrics
+	geoipReader   *geoip.Reader
 )
 
 // FoghornMetrics holds all Prometheus metrics for Foghorn
@@ -74,6 +76,23 @@ func Init(database *sql.DB, log logging.Logger, loadBalancer *balancer.LoadBalan
 		return
 	}
 	decklogClient = client
+
+	// Initialize GeoIP reader for fallback geo enrichment
+	geoipPath := os.Getenv("GEOIP_MMDB_PATH")
+	if geoipPath != "" {
+		reader, err := geoip.NewReader(geoipPath)
+		if err != nil {
+			logger.WithFields(logging.Fields{
+				"geoip_path": geoipPath,
+				"error":      err,
+			}).Warn("Failed to initialize GeoIP reader, fallback geo enrichment disabled")
+		} else {
+			geoipReader = reader
+			logger.WithField("geoip_path", geoipPath).Info("GeoIP reader initialized successfully")
+		}
+	} else {
+		logger.Debug("No GEOIP_MMDB_PATH provided, fallback geo enrichment disabled")
+	}
 }
 
 // MistServerCompatibilityHandler handles ALL MistServer requests
@@ -776,6 +795,20 @@ func postBalancingEvent(c *gin.Context, streamName, selectedNode string, score u
 	country := c.GetHeader("CF-IPCountry")
 	if country == "" {
 		country = c.GetHeader("X-Country-Code")
+	}
+
+	// If no geo headers and geoip is available, use fallback geo enrichment
+	if country == "" && geoipReader != nil && clientIP != "" {
+		if geoData := geoipReader.Lookup(clientIP); geoData != nil {
+			country = geoData.CountryCode
+			logger.WithFields(logging.Fields{
+				"client_ip":    clientIP,
+				"country_code": geoData.CountryCode,
+				"city":         geoData.City,
+				"latitude":     geoData.Latitude,
+				"longitude":    geoData.Longitude,
+			}).Debug("Used GeoIP fallback for load balancing event")
+		}
 	}
 
 	// Extract real IP from CloudFlare (overrides X-Forwarded-For if present)

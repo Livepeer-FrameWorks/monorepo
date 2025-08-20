@@ -14,6 +14,15 @@ type TenantEvent interface {
 	IsTenantEvent()
 }
 
+type CityMetric struct {
+	City        string   `json:"city"`
+	CountryCode *string  `json:"countryCode,omitempty"`
+	ViewerCount int      `json:"viewerCount"`
+	Percentage  float64  `json:"percentage"`
+	Latitude    *float64 `json:"latitude,omitempty"`
+	Longitude   *float64 `json:"longitude,omitempty"`
+}
+
 type Clip struct {
 	ID          string    `json:"id"`
 	Stream      string    `json:"stream"`
@@ -35,6 +44,19 @@ type Cluster struct {
 	Status    NodeStatus `json:"status"`
 	Nodes     []*Node    `json:"nodes"`
 	CreatedAt time.Time  `json:"createdAt"`
+}
+
+type CountryMetric struct {
+	CountryCode string        `json:"countryCode"`
+	ViewerCount int           `json:"viewerCount"`
+	Percentage  float64       `json:"percentage"`
+	Cities      []*CityMetric `json:"cities,omitempty"`
+}
+
+type CountryTimeSeries struct {
+	Timestamp   time.Time `json:"timestamp"`
+	CountryCode string    `json:"countryCode"`
+	ViewerCount int       `json:"viewerCount"`
 }
 
 type CreateClipInput struct {
@@ -74,11 +96,41 @@ type DeveloperToken struct {
 	CreatedAt   time.Time  `json:"createdAt"`
 }
 
+type GeographicDistribution struct {
+	TimeRange        *TimeRange           `json:"timeRange"`
+	Stream           *string              `json:"stream,omitempty"`
+	TopCountries     []*CountryMetric     `json:"topCountries"`
+	TopCities        []*CityMetric        `json:"topCities"`
+	UniqueCountries  int                  `json:"uniqueCountries"`
+	UniqueCities     int                  `json:"uniqueCities"`
+	TotalViewers     int                  `json:"totalViewers"`
+	ViewersByCountry []*CountryTimeSeries `json:"viewersByCountry"`
+}
+
 type LineItem struct {
 	Description string  `json:"description"`
 	Quantity    int     `json:"quantity"`
 	UnitPrice   float64 `json:"unitPrice"`
 	Total       float64 `json:"total"`
+}
+
+type LoadBalancingMetric struct {
+	Timestamp       time.Time `json:"timestamp"`
+	Stream          string    `json:"stream"`
+	SelectedNode    string    `json:"selectedNode"`
+	NodeID          *string   `json:"nodeId,omitempty"`
+	ClientIP        *string   `json:"clientIp,omitempty"`
+	ClientCountry   *string   `json:"clientCountry,omitempty"`
+	ClientLatitude  *float64  `json:"clientLatitude,omitempty"`
+	ClientLongitude *float64  `json:"clientLongitude,omitempty"`
+	NodeLatitude    *float64  `json:"nodeLatitude,omitempty"`
+	NodeLongitude   *float64  `json:"nodeLongitude,omitempty"`
+	Score           *int      `json:"score,omitempty"`
+	Status          string    `json:"status"`
+	Details         *string   `json:"details,omitempty"`
+	RoutingDistance *float64  `json:"routingDistance,omitempty"`
+	EventType       *string   `json:"eventType,omitempty"`
+	Source          *string   `json:"source,omitempty"`
 }
 
 type Mutation struct {
@@ -94,6 +146,9 @@ type Node struct {
 	IPAddress *string    `json:"ipAddress,omitempty"`
 	LastSeen  time.Time  `json:"lastSeen"`
 	CreatedAt time.Time  `json:"createdAt"`
+	Latitude  *float64   `json:"latitude,omitempty"`
+	Longitude *float64   `json:"longitude,omitempty"`
+	Location  *string    `json:"location,omitempty"`
 }
 
 type PlatformOverview struct {
@@ -233,6 +288,20 @@ type UpdateStreamInput struct {
 type UpdateTenantInput struct {
 	Name     *string `json:"name,omitempty"`
 	Settings *string `json:"settings,omitempty"`
+}
+
+type ViewerGeographic struct {
+	Timestamp      time.Time `json:"timestamp"`
+	Stream         *string   `json:"stream,omitempty"`
+	NodeID         *string   `json:"nodeId,omitempty"`
+	CountryCode    *string   `json:"countryCode,omitempty"`
+	City           *string   `json:"city,omitempty"`
+	Latitude       *float64  `json:"latitude,omitempty"`
+	Longitude      *float64  `json:"longitude,omitempty"`
+	ViewerCount    *int      `json:"viewerCount,omitempty"`
+	ConnectionAddr *string   `json:"connectionAddr,omitempty"`
+	EventType      *string   `json:"eventType,omitempty"`
+	Source         *string   `json:"source,omitempty"`
 }
 
 type ViewerMetric struct {

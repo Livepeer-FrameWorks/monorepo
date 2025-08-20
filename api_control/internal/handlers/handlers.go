@@ -2060,8 +2060,8 @@ func ResolveInternalName(c *gin.Context) {
 		return
 	}
 
-	var tenantID string
-	err := db.QueryRow(`SELECT tenant_id FROM streams WHERE internal_name = $1`, internalName).Scan(&tenantID)
+	var tenantID, userID string
+	err := db.QueryRow(`SELECT tenant_id, user_id FROM streams WHERE internal_name = $1`, internalName).Scan(&tenantID, &userID)
 	if err == sql.ErrNoRows {
 		c.JSON(http.StatusNotFound, commodoreapi.ErrorResponse{Error: "Not found"})
 		return
@@ -2074,6 +2074,8 @@ func ResolveInternalName(c *gin.Context) {
 
 	c.JSON(http.StatusOK, commodoreapi.InternalNameResponse{
 		InternalName: internalName,
+		TenantID:     tenantID,
+		UserID:       userID,
 	})
 }
 

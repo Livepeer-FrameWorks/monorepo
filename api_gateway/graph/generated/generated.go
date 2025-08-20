@@ -75,6 +75,15 @@ type ComplexityRoot struct {
 		Price       func(childComplexity int) int
 	}
 
+	CityMetric struct {
+		City        func(childComplexity int) int
+		CountryCode func(childComplexity int) int
+		Latitude    func(childComplexity int) int
+		Longitude   func(childComplexity int) int
+		Percentage  func(childComplexity int) int
+		ViewerCount func(childComplexity int) int
+	}
+
 	Clip struct {
 		CreatedAt   func(childComplexity int) int
 		Description func(childComplexity int) int
@@ -98,6 +107,19 @@ type ComplexityRoot struct {
 		Status    func(childComplexity int) int
 	}
 
+	CountryMetric struct {
+		Cities      func(childComplexity int) int
+		CountryCode func(childComplexity int) int
+		Percentage  func(childComplexity int) int
+		ViewerCount func(childComplexity int) int
+	}
+
+	CountryTimeSeries struct {
+		CountryCode func(childComplexity int) int
+		Timestamp   func(childComplexity int) int
+		ViewerCount func(childComplexity int) int
+	}
+
 	DeveloperToken struct {
 		CreatedAt   func(childComplexity int) int
 		ExpiresAt   func(childComplexity int) int
@@ -107,6 +129,17 @@ type ComplexityRoot struct {
 		Permissions func(childComplexity int) int
 		Status      func(childComplexity int) int
 		Token       func(childComplexity int) int
+	}
+
+	GeographicDistribution struct {
+		Stream           func(childComplexity int) int
+		TimeRange        func(childComplexity int) int
+		TopCities        func(childComplexity int) int
+		TopCountries     func(childComplexity int) int
+		TotalViewers     func(childComplexity int) int
+		UniqueCities     func(childComplexity int) int
+		UniqueCountries  func(childComplexity int) int
+		ViewersByCountry func(childComplexity int) int
 	}
 
 	Invoice struct {
@@ -124,6 +157,25 @@ type ComplexityRoot struct {
 		Quantity    func(childComplexity int) int
 		Total       func(childComplexity int) int
 		UnitPrice   func(childComplexity int) int
+	}
+
+	LoadBalancingMetric struct {
+		ClientCountry   func(childComplexity int) int
+		ClientIP        func(childComplexity int) int
+		ClientLatitude  func(childComplexity int) int
+		ClientLongitude func(childComplexity int) int
+		Details         func(childComplexity int) int
+		EventType       func(childComplexity int) int
+		NodeID          func(childComplexity int) int
+		NodeLatitude    func(childComplexity int) int
+		NodeLongitude   func(childComplexity int) int
+		RoutingDistance func(childComplexity int) int
+		Score           func(childComplexity int) int
+		SelectedNode    func(childComplexity int) int
+		Source          func(childComplexity int) int
+		Status          func(childComplexity int) int
+		Stream          func(childComplexity int) int
+		Timestamp       func(childComplexity int) int
 	}
 
 	Mutation struct {
@@ -145,6 +197,9 @@ type ComplexityRoot struct {
 		ID        func(childComplexity int) int
 		IPAddress func(childComplexity int) int
 		LastSeen  func(childComplexity int) int
+		Latitude  func(childComplexity int) int
+		Location  func(childComplexity int) int
+		Longitude func(childComplexity int) int
 		Name      func(childComplexity int) int
 		Region    func(childComplexity int) int
 		Status    func(childComplexity int) int
@@ -169,28 +224,31 @@ type ComplexityRoot struct {
 	}
 
 	Query struct {
-		BillingStatus        func(childComplexity int) int
-		BillingTiers         func(childComplexity int) int
-		Cluster              func(childComplexity int, id string) int
-		Clusters             func(childComplexity int) int
-		CurrentStreamHealth  func(childComplexity int, stream string) int
-		DeveloperTokens      func(childComplexity int) int
-		Invoice              func(childComplexity int, id string) int
-		Invoices             func(childComplexity int) int
-		Node                 func(childComplexity int, id string) int
-		Nodes                func(childComplexity int) int
-		PlatformOverview     func(childComplexity int, timeRange *model.TimeRangeInput) int
-		RebufferingEvents    func(childComplexity int, stream string, timeRange *model.TimeRangeInput) int
-		Stream               func(childComplexity int, id string) int
-		StreamAnalytics      func(childComplexity int, stream string, timeRange *model.TimeRangeInput) int
-		StreamHealthAlerts   func(childComplexity int, stream *string, timeRange *model.TimeRangeInput) int
-		StreamHealthMetrics  func(childComplexity int, stream string, timeRange *model.TimeRangeInput) int
-		StreamQualityChanges func(childComplexity int, stream string, timeRange *model.TimeRangeInput) int
-		Streams              func(childComplexity int) int
-		Tenant               func(childComplexity int) int
-		UsageRecords         func(childComplexity int, timeRange *model.TimeRangeInput) int
-		ValidateStreamKey    func(childComplexity int, streamKey string) int
-		ViewerMetrics        func(childComplexity int, stream *string, timeRange *model.TimeRangeInput) int
+		BillingStatus          func(childComplexity int) int
+		BillingTiers           func(childComplexity int) int
+		Cluster                func(childComplexity int, id string) int
+		Clusters               func(childComplexity int) int
+		CurrentStreamHealth    func(childComplexity int, stream string) int
+		DeveloperTokens        func(childComplexity int) int
+		GeographicDistribution func(childComplexity int, stream *string, timeRange *model.TimeRangeInput) int
+		Invoice                func(childComplexity int, id string) int
+		Invoices               func(childComplexity int) int
+		LoadBalancingMetrics   func(childComplexity int, timeRange *model.TimeRangeInput) int
+		Node                   func(childComplexity int, id string) int
+		Nodes                  func(childComplexity int) int
+		PlatformOverview       func(childComplexity int, timeRange *model.TimeRangeInput) int
+		RebufferingEvents      func(childComplexity int, stream string, timeRange *model.TimeRangeInput) int
+		Stream                 func(childComplexity int, id string) int
+		StreamAnalytics        func(childComplexity int, stream string, timeRange *model.TimeRangeInput) int
+		StreamHealthAlerts     func(childComplexity int, stream *string, timeRange *model.TimeRangeInput) int
+		StreamHealthMetrics    func(childComplexity int, stream string, timeRange *model.TimeRangeInput) int
+		StreamQualityChanges   func(childComplexity int, stream string, timeRange *model.TimeRangeInput) int
+		Streams                func(childComplexity int) int
+		Tenant                 func(childComplexity int) int
+		UsageRecords           func(childComplexity int, timeRange *model.TimeRangeInput) int
+		ValidateStreamKey      func(childComplexity int, streamKey string) int
+		ViewerGeographics      func(childComplexity int, stream *string, timeRange *model.TimeRangeInput) int
+		ViewerMetrics          func(childComplexity int, stream *string, timeRange *model.TimeRangeInput) int
 	}
 
 	RebufferingEvent struct {
@@ -367,6 +425,20 @@ type ComplexityRoot struct {
 		Role      func(childComplexity int) int
 	}
 
+	ViewerGeographic struct {
+		City           func(childComplexity int) int
+		ConnectionAddr func(childComplexity int) int
+		CountryCode    func(childComplexity int) int
+		EventType      func(childComplexity int) int
+		Latitude       func(childComplexity int) int
+		Longitude      func(childComplexity int) int
+		NodeID         func(childComplexity int) int
+		Source         func(childComplexity int) int
+		Stream         func(childComplexity int) int
+		Timestamp      func(childComplexity int) int
+		ViewerCount    func(childComplexity int) int
+	}
+
 	ViewerMetric struct {
 		Timestamp   func(childComplexity int) int
 		ViewerCount func(childComplexity int) int
@@ -421,6 +493,9 @@ type QueryResolver interface {
 	StreamAnalytics(ctx context.Context, stream string, timeRange *model.TimeRangeInput) (*models.StreamAnalytics, error)
 	ViewerMetrics(ctx context.Context, stream *string, timeRange *model.TimeRangeInput) ([]*model.ViewerMetric, error)
 	PlatformOverview(ctx context.Context, timeRange *model.TimeRangeInput) (*model.PlatformOverview, error)
+	ViewerGeographics(ctx context.Context, stream *string, timeRange *model.TimeRangeInput) ([]*model.ViewerGeographic, error)
+	GeographicDistribution(ctx context.Context, stream *string, timeRange *model.TimeRangeInput) (*model.GeographicDistribution, error)
+	LoadBalancingMetrics(ctx context.Context, timeRange *model.TimeRangeInput) ([]*model.LoadBalancingMetric, error)
 	StreamHealthMetrics(ctx context.Context, stream string, timeRange *model.TimeRangeInput) ([]*model.StreamHealthMetric, error)
 	StreamQualityChanges(ctx context.Context, stream string, timeRange *model.TimeRangeInput) ([]*model.StreamQualityChange, error)
 	StreamHealthAlerts(ctx context.Context, stream *string, timeRange *model.TimeRangeInput) ([]*model.StreamHealthAlert, error)
@@ -578,6 +653,48 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.BillingTier.Price(childComplexity), true
 
+	case "CityMetric.city":
+		if e.complexity.CityMetric.City == nil {
+			break
+		}
+
+		return e.complexity.CityMetric.City(childComplexity), true
+
+	case "CityMetric.countryCode":
+		if e.complexity.CityMetric.CountryCode == nil {
+			break
+		}
+
+		return e.complexity.CityMetric.CountryCode(childComplexity), true
+
+	case "CityMetric.latitude":
+		if e.complexity.CityMetric.Latitude == nil {
+			break
+		}
+
+		return e.complexity.CityMetric.Latitude(childComplexity), true
+
+	case "CityMetric.longitude":
+		if e.complexity.CityMetric.Longitude == nil {
+			break
+		}
+
+		return e.complexity.CityMetric.Longitude(childComplexity), true
+
+	case "CityMetric.percentage":
+		if e.complexity.CityMetric.Percentage == nil {
+			break
+		}
+
+		return e.complexity.CityMetric.Percentage(childComplexity), true
+
+	case "CityMetric.viewerCount":
+		if e.complexity.CityMetric.ViewerCount == nil {
+			break
+		}
+
+		return e.complexity.CityMetric.ViewerCount(childComplexity), true
+
 	case "Clip.createdAt":
 		if e.complexity.Clip.CreatedAt == nil {
 			break
@@ -697,6 +814,55 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.Cluster.Status(childComplexity), true
 
+	case "CountryMetric.cities":
+		if e.complexity.CountryMetric.Cities == nil {
+			break
+		}
+
+		return e.complexity.CountryMetric.Cities(childComplexity), true
+
+	case "CountryMetric.countryCode":
+		if e.complexity.CountryMetric.CountryCode == nil {
+			break
+		}
+
+		return e.complexity.CountryMetric.CountryCode(childComplexity), true
+
+	case "CountryMetric.percentage":
+		if e.complexity.CountryMetric.Percentage == nil {
+			break
+		}
+
+		return e.complexity.CountryMetric.Percentage(childComplexity), true
+
+	case "CountryMetric.viewerCount":
+		if e.complexity.CountryMetric.ViewerCount == nil {
+			break
+		}
+
+		return e.complexity.CountryMetric.ViewerCount(childComplexity), true
+
+	case "CountryTimeSeries.countryCode":
+		if e.complexity.CountryTimeSeries.CountryCode == nil {
+			break
+		}
+
+		return e.complexity.CountryTimeSeries.CountryCode(childComplexity), true
+
+	case "CountryTimeSeries.timestamp":
+		if e.complexity.CountryTimeSeries.Timestamp == nil {
+			break
+		}
+
+		return e.complexity.CountryTimeSeries.Timestamp(childComplexity), true
+
+	case "CountryTimeSeries.viewerCount":
+		if e.complexity.CountryTimeSeries.ViewerCount == nil {
+			break
+		}
+
+		return e.complexity.CountryTimeSeries.ViewerCount(childComplexity), true
+
 	case "DeveloperToken.createdAt":
 		if e.complexity.DeveloperToken.CreatedAt == nil {
 			break
@@ -752,6 +918,62 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.complexity.DeveloperToken.Token(childComplexity), true
+
+	case "GeographicDistribution.stream":
+		if e.complexity.GeographicDistribution.Stream == nil {
+			break
+		}
+
+		return e.complexity.GeographicDistribution.Stream(childComplexity), true
+
+	case "GeographicDistribution.timeRange":
+		if e.complexity.GeographicDistribution.TimeRange == nil {
+			break
+		}
+
+		return e.complexity.GeographicDistribution.TimeRange(childComplexity), true
+
+	case "GeographicDistribution.topCities":
+		if e.complexity.GeographicDistribution.TopCities == nil {
+			break
+		}
+
+		return e.complexity.GeographicDistribution.TopCities(childComplexity), true
+
+	case "GeographicDistribution.topCountries":
+		if e.complexity.GeographicDistribution.TopCountries == nil {
+			break
+		}
+
+		return e.complexity.GeographicDistribution.TopCountries(childComplexity), true
+
+	case "GeographicDistribution.totalViewers":
+		if e.complexity.GeographicDistribution.TotalViewers == nil {
+			break
+		}
+
+		return e.complexity.GeographicDistribution.TotalViewers(childComplexity), true
+
+	case "GeographicDistribution.uniqueCities":
+		if e.complexity.GeographicDistribution.UniqueCities == nil {
+			break
+		}
+
+		return e.complexity.GeographicDistribution.UniqueCities(childComplexity), true
+
+	case "GeographicDistribution.uniqueCountries":
+		if e.complexity.GeographicDistribution.UniqueCountries == nil {
+			break
+		}
+
+		return e.complexity.GeographicDistribution.UniqueCountries(childComplexity), true
+
+	case "GeographicDistribution.viewersByCountry":
+		if e.complexity.GeographicDistribution.ViewersByCountry == nil {
+			break
+		}
+
+		return e.complexity.GeographicDistribution.ViewersByCountry(childComplexity), true
 
 	case "Invoice.amount":
 		if e.complexity.Invoice.Amount == nil {
@@ -829,6 +1051,118 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.complexity.LineItem.UnitPrice(childComplexity), true
+
+	case "LoadBalancingMetric.clientCountry":
+		if e.complexity.LoadBalancingMetric.ClientCountry == nil {
+			break
+		}
+
+		return e.complexity.LoadBalancingMetric.ClientCountry(childComplexity), true
+
+	case "LoadBalancingMetric.clientIp":
+		if e.complexity.LoadBalancingMetric.ClientIP == nil {
+			break
+		}
+
+		return e.complexity.LoadBalancingMetric.ClientIP(childComplexity), true
+
+	case "LoadBalancingMetric.clientLatitude":
+		if e.complexity.LoadBalancingMetric.ClientLatitude == nil {
+			break
+		}
+
+		return e.complexity.LoadBalancingMetric.ClientLatitude(childComplexity), true
+
+	case "LoadBalancingMetric.clientLongitude":
+		if e.complexity.LoadBalancingMetric.ClientLongitude == nil {
+			break
+		}
+
+		return e.complexity.LoadBalancingMetric.ClientLongitude(childComplexity), true
+
+	case "LoadBalancingMetric.details":
+		if e.complexity.LoadBalancingMetric.Details == nil {
+			break
+		}
+
+		return e.complexity.LoadBalancingMetric.Details(childComplexity), true
+
+	case "LoadBalancingMetric.eventType":
+		if e.complexity.LoadBalancingMetric.EventType == nil {
+			break
+		}
+
+		return e.complexity.LoadBalancingMetric.EventType(childComplexity), true
+
+	case "LoadBalancingMetric.nodeId":
+		if e.complexity.LoadBalancingMetric.NodeID == nil {
+			break
+		}
+
+		return e.complexity.LoadBalancingMetric.NodeID(childComplexity), true
+
+	case "LoadBalancingMetric.nodeLatitude":
+		if e.complexity.LoadBalancingMetric.NodeLatitude == nil {
+			break
+		}
+
+		return e.complexity.LoadBalancingMetric.NodeLatitude(childComplexity), true
+
+	case "LoadBalancingMetric.nodeLongitude":
+		if e.complexity.LoadBalancingMetric.NodeLongitude == nil {
+			break
+		}
+
+		return e.complexity.LoadBalancingMetric.NodeLongitude(childComplexity), true
+
+	case "LoadBalancingMetric.routingDistance":
+		if e.complexity.LoadBalancingMetric.RoutingDistance == nil {
+			break
+		}
+
+		return e.complexity.LoadBalancingMetric.RoutingDistance(childComplexity), true
+
+	case "LoadBalancingMetric.score":
+		if e.complexity.LoadBalancingMetric.Score == nil {
+			break
+		}
+
+		return e.complexity.LoadBalancingMetric.Score(childComplexity), true
+
+	case "LoadBalancingMetric.selectedNode":
+		if e.complexity.LoadBalancingMetric.SelectedNode == nil {
+			break
+		}
+
+		return e.complexity.LoadBalancingMetric.SelectedNode(childComplexity), true
+
+	case "LoadBalancingMetric.source":
+		if e.complexity.LoadBalancingMetric.Source == nil {
+			break
+		}
+
+		return e.complexity.LoadBalancingMetric.Source(childComplexity), true
+
+	case "LoadBalancingMetric.status":
+		if e.complexity.LoadBalancingMetric.Status == nil {
+			break
+		}
+
+		return e.complexity.LoadBalancingMetric.Status(childComplexity), true
+
+	case "LoadBalancingMetric.stream":
+		if e.complexity.LoadBalancingMetric.Stream == nil {
+			break
+		}
+
+		return e.complexity.LoadBalancingMetric.Stream(childComplexity), true
+
+	case "LoadBalancingMetric.timestamp":
+		if e.complexity.LoadBalancingMetric.Timestamp == nil {
+			break
+		}
+
+		return e.complexity.LoadBalancingMetric.Timestamp(childComplexity), true
 
 	case "Mutation.createClip":
 		if e.complexity.Mutation.CreateClip == nil {
@@ -984,6 +1318,27 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.complexity.Node.LastSeen(childComplexity), true
+
+	case "Node.latitude":
+		if e.complexity.Node.Latitude == nil {
+			break
+		}
+
+		return e.complexity.Node.Latitude(childComplexity), true
+
+	case "Node.location":
+		if e.complexity.Node.Location == nil {
+			break
+		}
+
+		return e.complexity.Node.Location(childComplexity), true
+
+	case "Node.longitude":
+		if e.complexity.Node.Longitude == nil {
+			break
+		}
+
+		return e.complexity.Node.Longitude(childComplexity), true
 
 	case "Node.name":
 		if e.complexity.Node.Name == nil {
@@ -1142,6 +1497,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.Query.DeveloperTokens(childComplexity), true
 
+	case "Query.geographicDistribution":
+		if e.complexity.Query.GeographicDistribution == nil {
+			break
+		}
+
+		args, err := ec.field_Query_geographicDistribution_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.complexity.Query.GeographicDistribution(childComplexity, args["stream"].(*string), args["timeRange"].(*model.TimeRangeInput)), true
+
 	case "Query.invoice":
 		if e.complexity.Query.Invoice == nil {
 			break
@@ -1160,6 +1527,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.complexity.Query.Invoices(childComplexity), true
+
+	case "Query.loadBalancingMetrics":
+		if e.complexity.Query.LoadBalancingMetrics == nil {
+			break
+		}
+
+		args, err := ec.field_Query_loadBalancingMetrics_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.complexity.Query.LoadBalancingMetrics(childComplexity, args["timeRange"].(*model.TimeRangeInput)), true
 
 	case "Query.node":
 		if e.complexity.Query.Node == nil {
@@ -1301,6 +1680,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.complexity.Query.ValidateStreamKey(childComplexity, args["streamKey"].(string)), true
+
+	case "Query.viewerGeographics":
+		if e.complexity.Query.ViewerGeographics == nil {
+			break
+		}
+
+		args, err := ec.field_Query_viewerGeographics_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.complexity.Query.ViewerGeographics(childComplexity, args["stream"].(*string), args["timeRange"].(*model.TimeRangeInput)), true
 
 	case "Query.viewerMetrics":
 		if e.complexity.Query.ViewerMetrics == nil {
@@ -2232,6 +2623,83 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.User.Role(childComplexity), true
 
+	case "ViewerGeographic.city":
+		if e.complexity.ViewerGeographic.City == nil {
+			break
+		}
+
+		return e.complexity.ViewerGeographic.City(childComplexity), true
+
+	case "ViewerGeographic.connectionAddr":
+		if e.complexity.ViewerGeographic.ConnectionAddr == nil {
+			break
+		}
+
+		return e.complexity.ViewerGeographic.ConnectionAddr(childComplexity), true
+
+	case "ViewerGeographic.countryCode":
+		if e.complexity.ViewerGeographic.CountryCode == nil {
+			break
+		}
+
+		return e.complexity.ViewerGeographic.CountryCode(childComplexity), true
+
+	case "ViewerGeographic.eventType":
+		if e.complexity.ViewerGeographic.EventType == nil {
+			break
+		}
+
+		return e.complexity.ViewerGeographic.EventType(childComplexity), true
+
+	case "ViewerGeographic.latitude":
+		if e.complexity.ViewerGeographic.Latitude == nil {
+			break
+		}
+
+		return e.complexity.ViewerGeographic.Latitude(childComplexity), true
+
+	case "ViewerGeographic.longitude":
+		if e.complexity.ViewerGeographic.Longitude == nil {
+			break
+		}
+
+		return e.complexity.ViewerGeographic.Longitude(childComplexity), true
+
+	case "ViewerGeographic.nodeId":
+		if e.complexity.ViewerGeographic.NodeID == nil {
+			break
+		}
+
+		return e.complexity.ViewerGeographic.NodeID(childComplexity), true
+
+	case "ViewerGeographic.source":
+		if e.complexity.ViewerGeographic.Source == nil {
+			break
+		}
+
+		return e.complexity.ViewerGeographic.Source(childComplexity), true
+
+	case "ViewerGeographic.stream":
+		if e.complexity.ViewerGeographic.Stream == nil {
+			break
+		}
+
+		return e.complexity.ViewerGeographic.Stream(childComplexity), true
+
+	case "ViewerGeographic.timestamp":
+		if e.complexity.ViewerGeographic.Timestamp == nil {
+			break
+		}
+
+		return e.complexity.ViewerGeographic.Timestamp(childComplexity), true
+
+	case "ViewerGeographic.viewerCount":
+		if e.complexity.ViewerGeographic.ViewerCount == nil {
+			break
+		}
+
+		return e.complexity.ViewerGeographic.ViewerCount(childComplexity), true
+
 	case "ViewerMetric.timestamp":
 		if e.complexity.ViewerMetric.Timestamp == nil {
 			break
@@ -2446,6 +2914,11 @@ type Query {
   streamAnalytics(stream: String!, timeRange: TimeRangeInput): StreamAnalytics
   viewerMetrics(stream: String, timeRange: TimeRangeInput): [ViewerMetric!]!
   platformOverview(timeRange: TimeRangeInput): PlatformOverview!
+  
+  # Geographic Analytics
+  viewerGeographics(stream: String, timeRange: TimeRangeInput): [ViewerGeographic!]!
+  geographicDistribution(stream: String, timeRange: TimeRangeInput): GeographicDistribution!
+  loadBalancingMetrics(timeRange: TimeRangeInput): [LoadBalancingMetric!]!
   
   # New health and quality queries
   streamHealthMetrics(stream: String!, timeRange: TimeRangeInput): [StreamHealthMetric!]!
@@ -2779,6 +3252,11 @@ type Node {
   ipAddress: String
   lastSeen: Time!
   createdAt: Time!
+  
+  # Geographic location
+  latitude: Float
+  longitude: Float
+  location: String
 }
 
 type Clip {
@@ -2937,6 +3415,106 @@ type RebufferingEvent {
   # Performance at rebuffer time
   frameJitterMs: Float
   packetLossPercentage: Float
+}
+
+# ============================================================================
+# GEOGRAPHIC ANALYTICS TYPES
+# ============================================================================
+
+# Geographic data for individual viewer/connection events
+type ViewerGeographic {
+  timestamp: Time!
+  stream: String
+  nodeId: String
+  
+  # Geographic location
+  countryCode: String
+  city: String
+  latitude: Float
+  longitude: Float
+  
+  # Event details
+  viewerCount: Int
+  connectionAddr: String
+  eventType: String
+  source: String
+}
+
+# Aggregated geographic distribution analytics
+type GeographicDistribution {
+  timeRange: TimeRange!
+  stream: String
+  
+  # Top countries and cities
+  topCountries: [CountryMetric!]!
+  topCities: [CityMetric!]!
+  
+  # Geographic spread metrics
+  uniqueCountries: Int!
+  uniqueCities: Int!
+  totalViewers: Int!
+  
+  # Geographic viewer distribution over time
+  viewersByCountry: [CountryTimeSeries!]!
+}
+
+# Country-level metrics
+type CountryMetric {
+  countryCode: String!
+  viewerCount: Int!
+  percentage: Float!
+  
+  # Optional detailed city breakdown
+  cities: [CityMetric!]
+}
+
+# City-level metrics  
+type CityMetric {
+  city: String!
+  countryCode: String
+  viewerCount: Int!
+  percentage: Float!
+  latitude: Float
+  longitude: Float
+}
+
+# Time series data for countries
+type CountryTimeSeries {
+  timestamp: Time!
+  countryCode: String!
+  viewerCount: Int!
+}
+
+# Load balancing and routing metrics with geographic context
+type LoadBalancingMetric {
+  timestamp: Time!
+  stream: String!
+  
+  # Node and routing info
+  selectedNode: String!
+  nodeId: String
+  
+  # Client geographic data
+  clientIp: String
+  clientCountry: String
+  clientLatitude: Float
+  clientLongitude: Float
+  
+  # Node geographic data
+  nodeLatitude: Float
+  nodeLongitude: Float
+  
+  # Performance metrics
+  score: Int
+  status: String!
+  details: String
+  
+  # Geographic routing efficiency
+  routingDistance: Float  # Distance between client and selected node
+  
+  # Event context
+  eventType: String
+  source: String
 }`, BuiltIn: false},
 }
 var parsedSchema = gqlparser.MustLoadSchema(sources...)
@@ -3093,6 +3671,22 @@ func (ec *executionContext) field_Query_currentStreamHealth_args(ctx context.Con
 	return args, nil
 }
 
+func (ec *executionContext) field_Query_geographicDistribution_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "stream", ec.unmarshalOString2ᚖstring)
+	if err != nil {
+		return nil, err
+	}
+	args["stream"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "timeRange", ec.unmarshalOTimeRangeInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐTimeRangeInput)
+	if err != nil {
+		return nil, err
+	}
+	args["timeRange"] = arg1
+	return args, nil
+}
+
 func (ec *executionContext) field_Query_invoice_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
@@ -3101,6 +3695,17 @@ func (ec *executionContext) field_Query_invoice_args(ctx context.Context, rawArg
 		return nil, err
 	}
 	args["id"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Query_loadBalancingMetrics_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "timeRange", ec.unmarshalOTimeRangeInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐTimeRangeInput)
+	if err != nil {
+		return nil, err
+	}
+	args["timeRange"] = arg0
 	return args, nil
 }
 
@@ -3236,6 +3841,22 @@ func (ec *executionContext) field_Query_validateStreamKey_args(ctx context.Conte
 		return nil, err
 	}
 	args["streamKey"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Query_viewerGeographics_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "stream", ec.unmarshalOString2ᚖstring)
+	if err != nil {
+		return nil, err
+	}
+	args["stream"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "timeRange", ec.unmarshalOTimeRangeInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐTimeRangeInput)
+	if err != nil {
+		return nil, err
+	}
+	args["timeRange"] = arg1
 	return args, nil
 }
 
@@ -3786,6 +4407,261 @@ func (ec *executionContext) fieldContext_BillingTier_features(_ context.Context,
 		IsResolver: true,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _CityMetric_city(ctx context.Context, field graphql.CollectedField, obj *model.CityMetric) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_CityMetric_city(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.City, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_CityMetric_city(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "CityMetric",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _CityMetric_countryCode(ctx context.Context, field graphql.CollectedField, obj *model.CityMetric) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_CityMetric_countryCode(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.CountryCode, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_CityMetric_countryCode(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "CityMetric",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _CityMetric_viewerCount(ctx context.Context, field graphql.CollectedField, obj *model.CityMetric) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_CityMetric_viewerCount(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.ViewerCount, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(int)
+	fc.Result = res
+	return ec.marshalNInt2int(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_CityMetric_viewerCount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "CityMetric",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _CityMetric_percentage(ctx context.Context, field graphql.CollectedField, obj *model.CityMetric) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_CityMetric_percentage(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Percentage, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(float64)
+	fc.Result = res
+	return ec.marshalNFloat2float64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_CityMetric_percentage(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "CityMetric",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _CityMetric_latitude(ctx context.Context, field graphql.CollectedField, obj *model.CityMetric) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_CityMetric_latitude(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Latitude, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*float64)
+	fc.Result = res
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_CityMetric_latitude(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "CityMetric",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _CityMetric_longitude(ctx context.Context, field graphql.CollectedField, obj *model.CityMetric) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_CityMetric_longitude(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Longitude, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*float64)
+	fc.Result = res
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_CityMetric_longitude(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "CityMetric",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
 		},
 	}
 	return fc, nil
@@ -4505,6 +5381,12 @@ func (ec *executionContext) fieldContext_Cluster_nodes(_ context.Context, field 
 				return ec.fieldContext_Node_lastSeen(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Node_createdAt(ctx, field)
+			case "latitude":
+				return ec.fieldContext_Node_latitude(ctx, field)
+			case "longitude":
+				return ec.fieldContext_Node_longitude(ctx, field)
+			case "location":
+				return ec.fieldContext_Node_location(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Node", field.Name)
 		},
@@ -4551,6 +5433,325 @@ func (ec *executionContext) fieldContext_Cluster_createdAt(_ context.Context, fi
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type Time does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _CountryMetric_countryCode(ctx context.Context, field graphql.CollectedField, obj *model.CountryMetric) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_CountryMetric_countryCode(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.CountryCode, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_CountryMetric_countryCode(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "CountryMetric",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _CountryMetric_viewerCount(ctx context.Context, field graphql.CollectedField, obj *model.CountryMetric) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_CountryMetric_viewerCount(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.ViewerCount, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(int)
+	fc.Result = res
+	return ec.marshalNInt2int(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_CountryMetric_viewerCount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "CountryMetric",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _CountryMetric_percentage(ctx context.Context, field graphql.CollectedField, obj *model.CountryMetric) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_CountryMetric_percentage(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Percentage, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(float64)
+	fc.Result = res
+	return ec.marshalNFloat2float64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_CountryMetric_percentage(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "CountryMetric",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _CountryMetric_cities(ctx context.Context, field graphql.CollectedField, obj *model.CountryMetric) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_CountryMetric_cities(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Cities, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.([]*model.CityMetric)
+	fc.Result = res
+	return ec.marshalOCityMetric2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐCityMetricᚄ(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_CountryMetric_cities(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "CountryMetric",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "city":
+				return ec.fieldContext_CityMetric_city(ctx, field)
+			case "countryCode":
+				return ec.fieldContext_CityMetric_countryCode(ctx, field)
+			case "viewerCount":
+				return ec.fieldContext_CityMetric_viewerCount(ctx, field)
+			case "percentage":
+				return ec.fieldContext_CityMetric_percentage(ctx, field)
+			case "latitude":
+				return ec.fieldContext_CityMetric_latitude(ctx, field)
+			case "longitude":
+				return ec.fieldContext_CityMetric_longitude(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type CityMetric", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _CountryTimeSeries_timestamp(ctx context.Context, field graphql.CollectedField, obj *model.CountryTimeSeries) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_CountryTimeSeries_timestamp(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Timestamp, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(time.Time)
+	fc.Result = res
+	return ec.marshalNTime2timeᚐTime(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_CountryTimeSeries_timestamp(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "CountryTimeSeries",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Time does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _CountryTimeSeries_countryCode(ctx context.Context, field graphql.CollectedField, obj *model.CountryTimeSeries) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_CountryTimeSeries_countryCode(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.CountryCode, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_CountryTimeSeries_countryCode(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "CountryTimeSeries",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _CountryTimeSeries_viewerCount(ctx context.Context, field graphql.CollectedField, obj *model.CountryTimeSeries) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_CountryTimeSeries_viewerCount(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.ViewerCount, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(int)
+	fc.Result = res
+	return ec.marshalNInt2int(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_CountryTimeSeries_viewerCount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "CountryTimeSeries",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
 		},
 	}
 	return fc, nil
@@ -4894,6 +6095,393 @@ func (ec *executionContext) fieldContext_DeveloperToken_createdAt(_ context.Cont
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type Time does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _GeographicDistribution_timeRange(ctx context.Context, field graphql.CollectedField, obj *model.GeographicDistribution) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_GeographicDistribution_timeRange(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.TimeRange, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(*model.TimeRange)
+	fc.Result = res
+	return ec.marshalNTimeRange2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐTimeRange(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_GeographicDistribution_timeRange(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "GeographicDistribution",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "start":
+				return ec.fieldContext_TimeRange_start(ctx, field)
+			case "end":
+				return ec.fieldContext_TimeRange_end(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type TimeRange", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _GeographicDistribution_stream(ctx context.Context, field graphql.CollectedField, obj *model.GeographicDistribution) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_GeographicDistribution_stream(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Stream, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_GeographicDistribution_stream(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "GeographicDistribution",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _GeographicDistribution_topCountries(ctx context.Context, field graphql.CollectedField, obj *model.GeographicDistribution) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_GeographicDistribution_topCountries(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.TopCountries, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.([]*model.CountryMetric)
+	fc.Result = res
+	return ec.marshalNCountryMetric2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐCountryMetricᚄ(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_GeographicDistribution_topCountries(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "GeographicDistribution",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "countryCode":
+				return ec.fieldContext_CountryMetric_countryCode(ctx, field)
+			case "viewerCount":
+				return ec.fieldContext_CountryMetric_viewerCount(ctx, field)
+			case "percentage":
+				return ec.fieldContext_CountryMetric_percentage(ctx, field)
+			case "cities":
+				return ec.fieldContext_CountryMetric_cities(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type CountryMetric", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _GeographicDistribution_topCities(ctx context.Context, field graphql.CollectedField, obj *model.GeographicDistribution) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_GeographicDistribution_topCities(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.TopCities, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.([]*model.CityMetric)
+	fc.Result = res
+	return ec.marshalNCityMetric2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐCityMetricᚄ(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_GeographicDistribution_topCities(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "GeographicDistribution",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "city":
+				return ec.fieldContext_CityMetric_city(ctx, field)
+			case "countryCode":
+				return ec.fieldContext_CityMetric_countryCode(ctx, field)
+			case "viewerCount":
+				return ec.fieldContext_CityMetric_viewerCount(ctx, field)
+			case "percentage":
+				return ec.fieldContext_CityMetric_percentage(ctx, field)
+			case "latitude":
+				return ec.fieldContext_CityMetric_latitude(ctx, field)
+			case "longitude":
+				return ec.fieldContext_CityMetric_longitude(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type CityMetric", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _GeographicDistribution_uniqueCountries(ctx context.Context, field graphql.CollectedField, obj *model.GeographicDistribution) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_GeographicDistribution_uniqueCountries(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.UniqueCountries, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(int)
+	fc.Result = res
+	return ec.marshalNInt2int(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_GeographicDistribution_uniqueCountries(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "GeographicDistribution",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _GeographicDistribution_uniqueCities(ctx context.Context, field graphql.CollectedField, obj *model.GeographicDistribution) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_GeographicDistribution_uniqueCities(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.UniqueCities, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(int)
+	fc.Result = res
+	return ec.marshalNInt2int(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_GeographicDistribution_uniqueCities(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "GeographicDistribution",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _GeographicDistribution_totalViewers(ctx context.Context, field graphql.CollectedField, obj *model.GeographicDistribution) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_GeographicDistribution_totalViewers(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.TotalViewers, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(int)
+	fc.Result = res
+	return ec.marshalNInt2int(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_GeographicDistribution_totalViewers(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "GeographicDistribution",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _GeographicDistribution_viewersByCountry(ctx context.Context, field graphql.CollectedField, obj *model.GeographicDistribution) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_GeographicDistribution_viewersByCountry(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.ViewersByCountry, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.([]*model.CountryTimeSeries)
+	fc.Result = res
+	return ec.marshalNCountryTimeSeries2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐCountryTimeSeriesᚄ(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_GeographicDistribution_viewersByCountry(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "GeographicDistribution",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "timestamp":
+				return ec.fieldContext_CountryTimeSeries_timestamp(ctx, field)
+			case "countryCode":
+				return ec.fieldContext_CountryTimeSeries_countryCode(ctx, field)
+			case "viewerCount":
+				return ec.fieldContext_CountryTimeSeries_viewerCount(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type CountryTimeSeries", field.Name)
 		},
 	}
 	return fc, nil
@@ -5388,6 +6976,674 @@ func (ec *executionContext) fieldContext_LineItem_total(_ context.Context, field
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _LoadBalancingMetric_timestamp(ctx context.Context, field graphql.CollectedField, obj *model.LoadBalancingMetric) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_LoadBalancingMetric_timestamp(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Timestamp, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(time.Time)
+	fc.Result = res
+	return ec.marshalNTime2timeᚐTime(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_LoadBalancingMetric_timestamp(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "LoadBalancingMetric",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Time does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _LoadBalancingMetric_stream(ctx context.Context, field graphql.CollectedField, obj *model.LoadBalancingMetric) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_LoadBalancingMetric_stream(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Stream, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_LoadBalancingMetric_stream(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "LoadBalancingMetric",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _LoadBalancingMetric_selectedNode(ctx context.Context, field graphql.CollectedField, obj *model.LoadBalancingMetric) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_LoadBalancingMetric_selectedNode(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.SelectedNode, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_LoadBalancingMetric_selectedNode(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "LoadBalancingMetric",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _LoadBalancingMetric_nodeId(ctx context.Context, field graphql.CollectedField, obj *model.LoadBalancingMetric) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_LoadBalancingMetric_nodeId(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.NodeID, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_LoadBalancingMetric_nodeId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "LoadBalancingMetric",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _LoadBalancingMetric_clientIp(ctx context.Context, field graphql.CollectedField, obj *model.LoadBalancingMetric) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_LoadBalancingMetric_clientIp(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.ClientIP, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_LoadBalancingMetric_clientIp(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "LoadBalancingMetric",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _LoadBalancingMetric_clientCountry(ctx context.Context, field graphql.CollectedField, obj *model.LoadBalancingMetric) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_LoadBalancingMetric_clientCountry(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.ClientCountry, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_LoadBalancingMetric_clientCountry(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "LoadBalancingMetric",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _LoadBalancingMetric_clientLatitude(ctx context.Context, field graphql.CollectedField, obj *model.LoadBalancingMetric) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_LoadBalancingMetric_clientLatitude(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.ClientLatitude, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*float64)
+	fc.Result = res
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_LoadBalancingMetric_clientLatitude(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "LoadBalancingMetric",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _LoadBalancingMetric_clientLongitude(ctx context.Context, field graphql.CollectedField, obj *model.LoadBalancingMetric) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_LoadBalancingMetric_clientLongitude(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.ClientLongitude, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*float64)
+	fc.Result = res
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_LoadBalancingMetric_clientLongitude(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "LoadBalancingMetric",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _LoadBalancingMetric_nodeLatitude(ctx context.Context, field graphql.CollectedField, obj *model.LoadBalancingMetric) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_LoadBalancingMetric_nodeLatitude(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.NodeLatitude, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*float64)
+	fc.Result = res
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_LoadBalancingMetric_nodeLatitude(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "LoadBalancingMetric",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _LoadBalancingMetric_nodeLongitude(ctx context.Context, field graphql.CollectedField, obj *model.LoadBalancingMetric) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_LoadBalancingMetric_nodeLongitude(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.NodeLongitude, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*float64)
+	fc.Result = res
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_LoadBalancingMetric_nodeLongitude(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "LoadBalancingMetric",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _LoadBalancingMetric_score(ctx context.Context, field graphql.CollectedField, obj *model.LoadBalancingMetric) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_LoadBalancingMetric_score(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Score, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*int)
+	fc.Result = res
+	return ec.marshalOInt2ᚖint(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_LoadBalancingMetric_score(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "LoadBalancingMetric",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _LoadBalancingMetric_status(ctx context.Context, field graphql.CollectedField, obj *model.LoadBalancingMetric) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_LoadBalancingMetric_status(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Status, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_LoadBalancingMetric_status(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "LoadBalancingMetric",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _LoadBalancingMetric_details(ctx context.Context, field graphql.CollectedField, obj *model.LoadBalancingMetric) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_LoadBalancingMetric_details(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Details, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_LoadBalancingMetric_details(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "LoadBalancingMetric",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _LoadBalancingMetric_routingDistance(ctx context.Context, field graphql.CollectedField, obj *model.LoadBalancingMetric) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_LoadBalancingMetric_routingDistance(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.RoutingDistance, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*float64)
+	fc.Result = res
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_LoadBalancingMetric_routingDistance(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "LoadBalancingMetric",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _LoadBalancingMetric_eventType(ctx context.Context, field graphql.CollectedField, obj *model.LoadBalancingMetric) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_LoadBalancingMetric_eventType(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.EventType, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_LoadBalancingMetric_eventType(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "LoadBalancingMetric",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _LoadBalancingMetric_source(ctx context.Context, field graphql.CollectedField, obj *model.LoadBalancingMetric) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_LoadBalancingMetric_source(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Source, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_LoadBalancingMetric_source(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "LoadBalancingMetric",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
 		},
 	}
 	return fc, nil
@@ -6474,6 +8730,129 @@ func (ec *executionContext) fieldContext_Node_createdAt(_ context.Context, field
 	return fc, nil
 }
 
+func (ec *executionContext) _Node_latitude(ctx context.Context, field graphql.CollectedField, obj *model.Node) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Node_latitude(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Latitude, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*float64)
+	fc.Result = res
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Node_latitude(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Node",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Node_longitude(ctx context.Context, field graphql.CollectedField, obj *model.Node) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Node_longitude(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Longitude, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*float64)
+	fc.Result = res
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Node_longitude(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Node",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Node_location(ctx context.Context, field graphql.CollectedField, obj *model.Node) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Node_location(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Location, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Node_location(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Node",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Payment_id(ctx context.Context, field graphql.CollectedField, obj *models.Payment) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_Payment_id(ctx, field)
 	if err != nil {
@@ -7381,6 +9760,247 @@ func (ec *executionContext) fieldContext_Query_platformOverview(ctx context.Cont
 	}()
 	ctx = graphql.WithFieldContext(ctx, fc)
 	if fc.Args, err = ec.field_Query_platformOverview_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_viewerGeographics(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Query_viewerGeographics(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.Query().ViewerGeographics(rctx, fc.Args["stream"].(*string), fc.Args["timeRange"].(*model.TimeRangeInput))
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.([]*model.ViewerGeographic)
+	fc.Result = res
+	return ec.marshalNViewerGeographic2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐViewerGeographicᚄ(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Query_viewerGeographics(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "timestamp":
+				return ec.fieldContext_ViewerGeographic_timestamp(ctx, field)
+			case "stream":
+				return ec.fieldContext_ViewerGeographic_stream(ctx, field)
+			case "nodeId":
+				return ec.fieldContext_ViewerGeographic_nodeId(ctx, field)
+			case "countryCode":
+				return ec.fieldContext_ViewerGeographic_countryCode(ctx, field)
+			case "city":
+				return ec.fieldContext_ViewerGeographic_city(ctx, field)
+			case "latitude":
+				return ec.fieldContext_ViewerGeographic_latitude(ctx, field)
+			case "longitude":
+				return ec.fieldContext_ViewerGeographic_longitude(ctx, field)
+			case "viewerCount":
+				return ec.fieldContext_ViewerGeographic_viewerCount(ctx, field)
+			case "connectionAddr":
+				return ec.fieldContext_ViewerGeographic_connectionAddr(ctx, field)
+			case "eventType":
+				return ec.fieldContext_ViewerGeographic_eventType(ctx, field)
+			case "source":
+				return ec.fieldContext_ViewerGeographic_source(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type ViewerGeographic", field.Name)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_viewerGeographics_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_geographicDistribution(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Query_geographicDistribution(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.Query().GeographicDistribution(rctx, fc.Args["stream"].(*string), fc.Args["timeRange"].(*model.TimeRangeInput))
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(*model.GeographicDistribution)
+	fc.Result = res
+	return ec.marshalNGeographicDistribution2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐGeographicDistribution(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Query_geographicDistribution(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "timeRange":
+				return ec.fieldContext_GeographicDistribution_timeRange(ctx, field)
+			case "stream":
+				return ec.fieldContext_GeographicDistribution_stream(ctx, field)
+			case "topCountries":
+				return ec.fieldContext_GeographicDistribution_topCountries(ctx, field)
+			case "topCities":
+				return ec.fieldContext_GeographicDistribution_topCities(ctx, field)
+			case "uniqueCountries":
+				return ec.fieldContext_GeographicDistribution_uniqueCountries(ctx, field)
+			case "uniqueCities":
+				return ec.fieldContext_GeographicDistribution_uniqueCities(ctx, field)
+			case "totalViewers":
+				return ec.fieldContext_GeographicDistribution_totalViewers(ctx, field)
+			case "viewersByCountry":
+				return ec.fieldContext_GeographicDistribution_viewersByCountry(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type GeographicDistribution", field.Name)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_geographicDistribution_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_loadBalancingMetrics(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Query_loadBalancingMetrics(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.Query().LoadBalancingMetrics(rctx, fc.Args["timeRange"].(*model.TimeRangeInput))
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.([]*model.LoadBalancingMetric)
+	fc.Result = res
+	return ec.marshalNLoadBalancingMetric2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐLoadBalancingMetricᚄ(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Query_loadBalancingMetrics(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "timestamp":
+				return ec.fieldContext_LoadBalancingMetric_timestamp(ctx, field)
+			case "stream":
+				return ec.fieldContext_LoadBalancingMetric_stream(ctx, field)
+			case "selectedNode":
+				return ec.fieldContext_LoadBalancingMetric_selectedNode(ctx, field)
+			case "nodeId":
+				return ec.fieldContext_LoadBalancingMetric_nodeId(ctx, field)
+			case "clientIp":
+				return ec.fieldContext_LoadBalancingMetric_clientIp(ctx, field)
+			case "clientCountry":
+				return ec.fieldContext_LoadBalancingMetric_clientCountry(ctx, field)
+			case "clientLatitude":
+				return ec.fieldContext_LoadBalancingMetric_clientLatitude(ctx, field)
+			case "clientLongitude":
+				return ec.fieldContext_LoadBalancingMetric_clientLongitude(ctx, field)
+			case "nodeLatitude":
+				return ec.fieldContext_LoadBalancingMetric_nodeLatitude(ctx, field)
+			case "nodeLongitude":
+				return ec.fieldContext_LoadBalancingMetric_nodeLongitude(ctx, field)
+			case "score":
+				return ec.fieldContext_LoadBalancingMetric_score(ctx, field)
+			case "status":
+				return ec.fieldContext_LoadBalancingMetric_status(ctx, field)
+			case "details":
+				return ec.fieldContext_LoadBalancingMetric_details(ctx, field)
+			case "routingDistance":
+				return ec.fieldContext_LoadBalancingMetric_routingDistance(ctx, field)
+			case "eventType":
+				return ec.fieldContext_LoadBalancingMetric_eventType(ctx, field)
+			case "source":
+				return ec.fieldContext_LoadBalancingMetric_source(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type LoadBalancingMetric", field.Name)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_loadBalancingMetrics_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
 		ec.Error(ctx, err)
 		return fc, err
 	}
@@ -8370,6 +10990,12 @@ func (ec *executionContext) fieldContext_Query_nodes(_ context.Context, field gr
 				return ec.fieldContext_Node_lastSeen(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Node_createdAt(ctx, field)
+			case "latitude":
+				return ec.fieldContext_Node_latitude(ctx, field)
+			case "longitude":
+				return ec.fieldContext_Node_longitude(ctx, field)
+			case "location":
+				return ec.fieldContext_Node_location(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Node", field.Name)
 		},
@@ -8431,6 +11057,12 @@ func (ec *executionContext) fieldContext_Query_node(ctx context.Context, field g
 				return ec.fieldContext_Node_lastSeen(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Node_createdAt(ctx, field)
+			case "latitude":
+				return ec.fieldContext_Node_latitude(ctx, field)
+			case "longitude":
+				return ec.fieldContext_Node_longitude(ctx, field)
+			case "location":
+				return ec.fieldContext_Node_location(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Node", field.Name)
 		},
@@ -14323,6 +16955,460 @@ func (ec *executionContext) fieldContext_User_createdAt(_ context.Context, field
 	return fc, nil
 }
 
+func (ec *executionContext) _ViewerGeographic_timestamp(ctx context.Context, field graphql.CollectedField, obj *model.ViewerGeographic) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ViewerGeographic_timestamp(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Timestamp, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(time.Time)
+	fc.Result = res
+	return ec.marshalNTime2timeᚐTime(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ViewerGeographic_timestamp(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ViewerGeographic",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Time does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ViewerGeographic_stream(ctx context.Context, field graphql.CollectedField, obj *model.ViewerGeographic) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ViewerGeographic_stream(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Stream, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ViewerGeographic_stream(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ViewerGeographic",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ViewerGeographic_nodeId(ctx context.Context, field graphql.CollectedField, obj *model.ViewerGeographic) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ViewerGeographic_nodeId(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.NodeID, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ViewerGeographic_nodeId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ViewerGeographic",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ViewerGeographic_countryCode(ctx context.Context, field graphql.CollectedField, obj *model.ViewerGeographic) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ViewerGeographic_countryCode(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.CountryCode, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ViewerGeographic_countryCode(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ViewerGeographic",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ViewerGeographic_city(ctx context.Context, field graphql.CollectedField, obj *model.ViewerGeographic) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ViewerGeographic_city(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.City, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ViewerGeographic_city(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ViewerGeographic",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ViewerGeographic_latitude(ctx context.Context, field graphql.CollectedField, obj *model.ViewerGeographic) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ViewerGeographic_latitude(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Latitude, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*float64)
+	fc.Result = res
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ViewerGeographic_latitude(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ViewerGeographic",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ViewerGeographic_longitude(ctx context.Context, field graphql.CollectedField, obj *model.ViewerGeographic) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ViewerGeographic_longitude(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Longitude, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*float64)
+	fc.Result = res
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ViewerGeographic_longitude(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ViewerGeographic",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ViewerGeographic_viewerCount(ctx context.Context, field graphql.CollectedField, obj *model.ViewerGeographic) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ViewerGeographic_viewerCount(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.ViewerCount, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*int)
+	fc.Result = res
+	return ec.marshalOInt2ᚖint(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ViewerGeographic_viewerCount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ViewerGeographic",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ViewerGeographic_connectionAddr(ctx context.Context, field graphql.CollectedField, obj *model.ViewerGeographic) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ViewerGeographic_connectionAddr(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.ConnectionAddr, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ViewerGeographic_connectionAddr(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ViewerGeographic",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ViewerGeographic_eventType(ctx context.Context, field graphql.CollectedField, obj *model.ViewerGeographic) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ViewerGeographic_eventType(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.EventType, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ViewerGeographic_eventType(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ViewerGeographic",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ViewerGeographic_source(ctx context.Context, field graphql.CollectedField, obj *model.ViewerGeographic) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ViewerGeographic_source(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Source, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ViewerGeographic_source(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ViewerGeographic",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _ViewerMetric_timestamp(ctx context.Context, field graphql.CollectedField, obj *model.ViewerMetric) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_ViewerMetric_timestamp(ctx, field)
 	if err != nil {
@@ -17311,6 +20397,61 @@ func (ec *executionContext) _BillingTier(ctx context.Context, sel ast.SelectionS
 	return out
 }
 
+var cityMetricImplementors = []string{"CityMetric"}
+
+func (ec *executionContext) _CityMetric(ctx context.Context, sel ast.SelectionSet, obj *model.CityMetric) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, cityMetricImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("CityMetric")
+		case "city":
+			out.Values[i] = ec._CityMetric_city(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "countryCode":
+			out.Values[i] = ec._CityMetric_countryCode(ctx, field, obj)
+		case "viewerCount":
+			out.Values[i] = ec._CityMetric_viewerCount(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "percentage":
+			out.Values[i] = ec._CityMetric_percentage(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "latitude":
+			out.Values[i] = ec._CityMetric_latitude(ctx, field, obj)
+		case "longitude":
+			out.Values[i] = ec._CityMetric_longitude(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.processDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
 var clipImplementors = []string{"Clip"}
 
 func (ec *executionContext) _Clip(ctx context.Context, sel ast.SelectionSet, obj *model.Clip) graphql.Marshaler {
@@ -17461,6 +20602,106 @@ func (ec *executionContext) _Cluster(ctx context.Context, sel ast.SelectionSet, 
 	return out
 }
 
+var countryMetricImplementors = []string{"CountryMetric"}
+
+func (ec *executionContext) _CountryMetric(ctx context.Context, sel ast.SelectionSet, obj *model.CountryMetric) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, countryMetricImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("CountryMetric")
+		case "countryCode":
+			out.Values[i] = ec._CountryMetric_countryCode(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "viewerCount":
+			out.Values[i] = ec._CountryMetric_viewerCount(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "percentage":
+			out.Values[i] = ec._CountryMetric_percentage(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "cities":
+			out.Values[i] = ec._CountryMetric_cities(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.processDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var countryTimeSeriesImplementors = []string{"CountryTimeSeries"}
+
+func (ec *executionContext) _CountryTimeSeries(ctx context.Context, sel ast.SelectionSet, obj *model.CountryTimeSeries) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, countryTimeSeriesImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("CountryTimeSeries")
+		case "timestamp":
+			out.Values[i] = ec._CountryTimeSeries_timestamp(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "countryCode":
+			out.Values[i] = ec._CountryTimeSeries_countryCode(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "viewerCount":
+			out.Values[i] = ec._CountryTimeSeries_viewerCount(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.processDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
 var developerTokenImplementors = []string{"DeveloperToken"}
 
 func (ec *executionContext) _DeveloperToken(ctx context.Context, sel ast.SelectionSet, obj *model.DeveloperToken) graphql.Marshaler {
@@ -17500,6 +20741,77 @@ func (ec *executionContext) _DeveloperToken(ctx context.Context, sel ast.Selecti
 			out.Values[i] = ec._DeveloperToken_expiresAt(ctx, field, obj)
 		case "createdAt":
 			out.Values[i] = ec._DeveloperToken_createdAt(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.processDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var geographicDistributionImplementors = []string{"GeographicDistribution"}
+
+func (ec *executionContext) _GeographicDistribution(ctx context.Context, sel ast.SelectionSet, obj *model.GeographicDistribution) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, geographicDistributionImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("GeographicDistribution")
+		case "timeRange":
+			out.Values[i] = ec._GeographicDistribution_timeRange(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "stream":
+			out.Values[i] = ec._GeographicDistribution_stream(ctx, field, obj)
+		case "topCountries":
+			out.Values[i] = ec._GeographicDistribution_topCountries(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "topCities":
+			out.Values[i] = ec._GeographicDistribution_topCities(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "uniqueCountries":
+			out.Values[i] = ec._GeographicDistribution_uniqueCountries(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "uniqueCities":
+			out.Values[i] = ec._GeographicDistribution_uniqueCities(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "totalViewers":
+			out.Values[i] = ec._GeographicDistribution_totalViewers(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "viewersByCountry":
+			out.Values[i] = ec._GeographicDistribution_viewersByCountry(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -17657,6 +20969,84 @@ func (ec *executionContext) _LineItem(ctx context.Context, sel ast.SelectionSet,
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.processDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var loadBalancingMetricImplementors = []string{"LoadBalancingMetric"}
+
+func (ec *executionContext) _LoadBalancingMetric(ctx context.Context, sel ast.SelectionSet, obj *model.LoadBalancingMetric) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, loadBalancingMetricImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("LoadBalancingMetric")
+		case "timestamp":
+			out.Values[i] = ec._LoadBalancingMetric_timestamp(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "stream":
+			out.Values[i] = ec._LoadBalancingMetric_stream(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "selectedNode":
+			out.Values[i] = ec._LoadBalancingMetric_selectedNode(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "nodeId":
+			out.Values[i] = ec._LoadBalancingMetric_nodeId(ctx, field, obj)
+		case "clientIp":
+			out.Values[i] = ec._LoadBalancingMetric_clientIp(ctx, field, obj)
+		case "clientCountry":
+			out.Values[i] = ec._LoadBalancingMetric_clientCountry(ctx, field, obj)
+		case "clientLatitude":
+			out.Values[i] = ec._LoadBalancingMetric_clientLatitude(ctx, field, obj)
+		case "clientLongitude":
+			out.Values[i] = ec._LoadBalancingMetric_clientLongitude(ctx, field, obj)
+		case "nodeLatitude":
+			out.Values[i] = ec._LoadBalancingMetric_nodeLatitude(ctx, field, obj)
+		case "nodeLongitude":
+			out.Values[i] = ec._LoadBalancingMetric_nodeLongitude(ctx, field, obj)
+		case "score":
+			out.Values[i] = ec._LoadBalancingMetric_score(ctx, field, obj)
+		case "status":
+			out.Values[i] = ec._LoadBalancingMetric_status(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "details":
+			out.Values[i] = ec._LoadBalancingMetric_details(ctx, field, obj)
+		case "routingDistance":
+			out.Values[i] = ec._LoadBalancingMetric_routingDistance(ctx, field, obj)
+		case "eventType":
+			out.Values[i] = ec._LoadBalancingMetric_eventType(ctx, field, obj)
+		case "source":
+			out.Values[i] = ec._LoadBalancingMetric_source(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -17845,6 +21235,12 @@ func (ec *executionContext) _Node(ctx context.Context, sel ast.SelectionSet, obj
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "latitude":
+			out.Values[i] = ec._Node_latitude(ctx, field, obj)
+		case "longitude":
+			out.Values[i] = ec._Node_longitude(ctx, field, obj)
+		case "location":
+			out.Values[i] = ec._Node_location(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -18155,6 +21551,72 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 					}
 				}()
 				res = ec._Query_platformOverview(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "viewerGeographics":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_viewerGeographics(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "geographicDistribution":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_geographicDistribution(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "loadBalancingMetrics":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_loadBalancingMetrics(ctx, field)
 				if res == graphql.Null {
 					atomic.AddUint32(&fs.Invalids, 1)
 				}
@@ -20458,6 +23920,65 @@ func (ec *executionContext) _User(ctx context.Context, sel ast.SelectionSet, obj
 	return out
 }
 
+var viewerGeographicImplementors = []string{"ViewerGeographic"}
+
+func (ec *executionContext) _ViewerGeographic(ctx context.Context, sel ast.SelectionSet, obj *model.ViewerGeographic) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, viewerGeographicImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("ViewerGeographic")
+		case "timestamp":
+			out.Values[i] = ec._ViewerGeographic_timestamp(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "stream":
+			out.Values[i] = ec._ViewerGeographic_stream(ctx, field, obj)
+		case "nodeId":
+			out.Values[i] = ec._ViewerGeographic_nodeId(ctx, field, obj)
+		case "countryCode":
+			out.Values[i] = ec._ViewerGeographic_countryCode(ctx, field, obj)
+		case "city":
+			out.Values[i] = ec._ViewerGeographic_city(ctx, field, obj)
+		case "latitude":
+			out.Values[i] = ec._ViewerGeographic_latitude(ctx, field, obj)
+		case "longitude":
+			out.Values[i] = ec._ViewerGeographic_longitude(ctx, field, obj)
+		case "viewerCount":
+			out.Values[i] = ec._ViewerGeographic_viewerCount(ctx, field, obj)
+		case "connectionAddr":
+			out.Values[i] = ec._ViewerGeographic_connectionAddr(ctx, field, obj)
+		case "eventType":
+			out.Values[i] = ec._ViewerGeographic_eventType(ctx, field, obj)
+		case "source":
+			out.Values[i] = ec._ViewerGeographic_source(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.processDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
 var viewerMetricImplementors = []string{"ViewerMetric"}
 
 func (ec *executionContext) _ViewerMetric(ctx context.Context, sel ast.SelectionSet, obj *model.ViewerMetric) graphql.Marshaler {
@@ -21023,6 +24544,60 @@ func (ec *executionContext) marshalNBufferState2frameworksᚋapi_gatewayᚋgraph
 	return v
 }
 
+func (ec *executionContext) marshalNCityMetric2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐCityMetricᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.CityMetric) graphql.Marshaler {
+	ret := make(graphql.Array, len(v))
+	var wg sync.WaitGroup
+	isLen1 := len(v) == 1
+	if !isLen1 {
+		wg.Add(len(v))
+	}
+	for i := range v {
+		i := i
+		fc := &graphql.FieldContext{
+			Index:  &i,
+			Result: &v[i],
+		}
+		ctx := graphql.WithFieldContext(ctx, fc)
+		f := func(i int) {
+			defer func() {
+				if r := recover(); r != nil {
+					ec.Error(ctx, ec.Recover(ctx, r))
+					ret = nil
+				}
+			}()
+			if !isLen1 {
+				defer wg.Done()
+			}
+			ret[i] = ec.marshalNCityMetric2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐCityMetric(ctx, sel, v[i])
+		}
+		if isLen1 {
+			f(i)
+		} else {
+			go f(i)
+		}
+
+	}
+	wg.Wait()
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNCityMetric2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐCityMetric(ctx context.Context, sel ast.SelectionSet, v *model.CityMetric) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._CityMetric(ctx, sel, v)
+}
+
 func (ec *executionContext) marshalNClip2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐClip(ctx context.Context, sel ast.SelectionSet, v model.Clip) graphql.Marshaler {
 	return ec._Clip(ctx, sel, &v)
 }
@@ -21089,6 +24664,114 @@ func (ec *executionContext) marshalNCluster2ᚖframeworksᚋapi_gatewayᚋgraph�
 		return graphql.Null
 	}
 	return ec._Cluster(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNCountryMetric2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐCountryMetricᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.CountryMetric) graphql.Marshaler {
+	ret := make(graphql.Array, len(v))
+	var wg sync.WaitGroup
+	isLen1 := len(v) == 1
+	if !isLen1 {
+		wg.Add(len(v))
+	}
+	for i := range v {
+		i := i
+		fc := &graphql.FieldContext{
+			Index:  &i,
+			Result: &v[i],
+		}
+		ctx := graphql.WithFieldContext(ctx, fc)
+		f := func(i int) {
+			defer func() {
+				if r := recover(); r != nil {
+					ec.Error(ctx, ec.Recover(ctx, r))
+					ret = nil
+				}
+			}()
+			if !isLen1 {
+				defer wg.Done()
+			}
+			ret[i] = ec.marshalNCountryMetric2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐCountryMetric(ctx, sel, v[i])
+		}
+		if isLen1 {
+			f(i)
+		} else {
+			go f(i)
+		}
+
+	}
+	wg.Wait()
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNCountryMetric2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐCountryMetric(ctx context.Context, sel ast.SelectionSet, v *model.CountryMetric) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._CountryMetric(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNCountryTimeSeries2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐCountryTimeSeriesᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.CountryTimeSeries) graphql.Marshaler {
+	ret := make(graphql.Array, len(v))
+	var wg sync.WaitGroup
+	isLen1 := len(v) == 1
+	if !isLen1 {
+		wg.Add(len(v))
+	}
+	for i := range v {
+		i := i
+		fc := &graphql.FieldContext{
+			Index:  &i,
+			Result: &v[i],
+		}
+		ctx := graphql.WithFieldContext(ctx, fc)
+		f := func(i int) {
+			defer func() {
+				if r := recover(); r != nil {
+					ec.Error(ctx, ec.Recover(ctx, r))
+					ret = nil
+				}
+			}()
+			if !isLen1 {
+				defer wg.Done()
+			}
+			ret[i] = ec.marshalNCountryTimeSeries2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐCountryTimeSeries(ctx, sel, v[i])
+		}
+		if isLen1 {
+			f(i)
+		} else {
+			go f(i)
+		}
+
+	}
+	wg.Wait()
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNCountryTimeSeries2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐCountryTimeSeries(ctx context.Context, sel ast.SelectionSet, v *model.CountryTimeSeries) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._CountryTimeSeries(ctx, sel, v)
 }
 
 func (ec *executionContext) unmarshalNCreateClipInput2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐCreateClipInput(ctx context.Context, v any) (model.CreateClipInput, error) {
@@ -21183,6 +24866,20 @@ func (ec *executionContext) marshalNFloat2float64(ctx context.Context, sel ast.S
 		}
 	}
 	return graphql.WrapContextMarshaler(ctx, res)
+}
+
+func (ec *executionContext) marshalNGeographicDistribution2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐGeographicDistribution(ctx context.Context, sel ast.SelectionSet, v model.GeographicDistribution) graphql.Marshaler {
+	return ec._GeographicDistribution(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNGeographicDistribution2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐGeographicDistribution(ctx context.Context, sel ast.SelectionSet, v *model.GeographicDistribution) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._GeographicDistribution(ctx, sel, v)
 }
 
 func (ec *executionContext) unmarshalNID2string(ctx context.Context, v any) (string, error) {
@@ -21323,6 +25020,60 @@ func (ec *executionContext) marshalNLineItem2ᚖframeworksᚋapi_gatewayᚋgraph
 		return graphql.Null
 	}
 	return ec._LineItem(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNLoadBalancingMetric2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐLoadBalancingMetricᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.LoadBalancingMetric) graphql.Marshaler {
+	ret := make(graphql.Array, len(v))
+	var wg sync.WaitGroup
+	isLen1 := len(v) == 1
+	if !isLen1 {
+		wg.Add(len(v))
+	}
+	for i := range v {
+		i := i
+		fc := &graphql.FieldContext{
+			Index:  &i,
+			Result: &v[i],
+		}
+		ctx := graphql.WithFieldContext(ctx, fc)
+		f := func(i int) {
+			defer func() {
+				if r := recover(); r != nil {
+					ec.Error(ctx, ec.Recover(ctx, r))
+					ret = nil
+				}
+			}()
+			if !isLen1 {
+				defer wg.Done()
+			}
+			ret[i] = ec.marshalNLoadBalancingMetric2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐLoadBalancingMetric(ctx, sel, v[i])
+		}
+		if isLen1 {
+			f(i)
+		} else {
+			go f(i)
+		}
+
+	}
+	wg.Wait()
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNLoadBalancingMetric2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐLoadBalancingMetric(ctx context.Context, sel ast.SelectionSet, v *model.LoadBalancingMetric) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._LoadBalancingMetric(ctx, sel, v)
 }
 
 func (ec *executionContext) marshalNNode2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐNodeᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.Node) graphql.Marshaler {
@@ -21973,6 +25724,60 @@ func (ec *executionContext) marshalNUsageRecord2ᚖframeworksᚋpkgᚋmodelsᚐU
 	return ec._UsageRecord(ctx, sel, v)
 }
 
+func (ec *executionContext) marshalNViewerGeographic2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐViewerGeographicᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.ViewerGeographic) graphql.Marshaler {
+	ret := make(graphql.Array, len(v))
+	var wg sync.WaitGroup
+	isLen1 := len(v) == 1
+	if !isLen1 {
+		wg.Add(len(v))
+	}
+	for i := range v {
+		i := i
+		fc := &graphql.FieldContext{
+			Index:  &i,
+			Result: &v[i],
+		}
+		ctx := graphql.WithFieldContext(ctx, fc)
+		f := func(i int) {
+			defer func() {
+				if r := recover(); r != nil {
+					ec.Error(ctx, ec.Recover(ctx, r))
+					ret = nil
+				}
+			}()
+			if !isLen1 {
+				defer wg.Done()
+			}
+			ret[i] = ec.marshalNViewerGeographic2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐViewerGeographic(ctx, sel, v[i])
+		}
+		if isLen1 {
+			f(i)
+		} else {
+			go f(i)
+		}
+
+	}
+	wg.Wait()
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNViewerGeographic2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐViewerGeographic(ctx context.Context, sel ast.SelectionSet, v *model.ViewerGeographic) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._ViewerGeographic(ctx, sel, v)
+}
+
 func (ec *executionContext) marshalNViewerMetric2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐViewerMetricᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.ViewerMetric) graphql.Marshaler {
 	ret := make(graphql.Array, len(v))
 	var wg sync.WaitGroup
@@ -22338,6 +26143,53 @@ func (ec *executionContext) marshalOBufferState2ᚖframeworksᚋapi_gatewayᚋgr
 		return graphql.Null
 	}
 	return v
+}
+
+func (ec *executionContext) marshalOCityMetric2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐCityMetricᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.CityMetric) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	ret := make(graphql.Array, len(v))
+	var wg sync.WaitGroup
+	isLen1 := len(v) == 1
+	if !isLen1 {
+		wg.Add(len(v))
+	}
+	for i := range v {
+		i := i
+		fc := &graphql.FieldContext{
+			Index:  &i,
+			Result: &v[i],
+		}
+		ctx := graphql.WithFieldContext(ctx, fc)
+		f := func(i int) {
+			defer func() {
+				if r := recover(); r != nil {
+					ec.Error(ctx, ec.Recover(ctx, r))
+					ret = nil
+				}
+			}()
+			if !isLen1 {
+				defer wg.Done()
+			}
+			ret[i] = ec.marshalNCityMetric2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐCityMetric(ctx, sel, v[i])
+		}
+		if isLen1 {
+			f(i)
+		} else {
+			go f(i)
+		}
+
+	}
+	wg.Wait()
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
 }
 
 func (ec *executionContext) marshalOCluster2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐCluster(ctx context.Context, sel ast.SelectionSet, v *model.Cluster) graphql.Marshaler {

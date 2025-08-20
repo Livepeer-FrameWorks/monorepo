@@ -22,11 +22,18 @@ var tenantCache = struct {
 
 func getTenantForInternalName(internalName string) string {
 	if internalName == "" {
+		logger.WithField("internal_name", internalName).Debug("Empty internal name provided to getTenantForInternalName")
 		return ""
 	}
+
+	// Check cache first
 	tenantCache.mu.RLock()
 	if v, ok := tenantCache.data[internalName]; ok {
 		tenantCache.mu.RUnlock()
+		logger.WithFields(logging.Fields{
+			"internal_name": internalName,
+			"tenant_id":     v,
+		}).Debug("Found tenant ID in cache")
 		return v
 	}
 	tenantCache.mu.RUnlock()
@@ -35,25 +42,71 @@ func getTenantForInternalName(internalName string) string {
 	url := apiBaseURL + "/resolve-internal-name/" + internalName
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
+		logger.WithFields(logging.Fields{
+			"internal_name": internalName,
+			"url":           url,
+			"error":         err,
+		}).Error("Failed to create request for tenant resolution")
 		return ""
 	}
 	if serviceToken != "" {
 		req.Header.Set("Authorization", "Bearer "+serviceToken)
 	}
+
+	logger.WithFields(logging.Fields{
+		"internal_name": internalName,
+		"url":           url,
+		"has_token":     serviceToken != "",
+	}).Debug("Resolving tenant ID via Commodore")
+
 	resp, err := http.DefaultClient.Do(req)
-	if err != nil || resp.StatusCode != http.StatusOK {
+	if err != nil {
+		logger.WithFields(logging.Fields{
+			"internal_name": internalName,
+			"url":           url,
+			"error":         err,
+		}).Error("Failed to call Commodore for tenant resolution")
 		return ""
 	}
 	defer resp.Body.Close()
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
+
+	if resp.StatusCode != http.StatusOK {
+		logger.WithFields(logging.Fields{
+			"internal_name": internalName,
+			"url":           url,
+			"status_code":   resp.StatusCode,
+		}).Error("Non-200 response from Commodore for tenant resolution")
 		return ""
 	}
+
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		logger.WithFields(logging.Fields{
+			"internal_name": internalName,
+			"error":         err,
+		}).Error("Failed to read response body from Commodore")
+		return ""
+	}
+
+	logger.WithFields(logging.Fields{
+		"internal_name": internalName,
+		"response_body": string(bodyBytes),
+	}).Debug("Received response from Commodore")
+
 	tenantID := extractJSONField(bodyBytes, "tenant_id")
 	if tenantID != "" {
 		tenantCache.mu.Lock()
 		tenantCache.data[internalName] = tenantID
 		tenantCache.mu.Unlock()
+		logger.WithFields(logging.Fields{
+			"internal_name": internalName,
+			"tenant_id":     tenantID,
+		}).Info("Successfully resolved and cached tenant ID")
+	} else {
+		logger.WithFields(logging.Fields{
+			"internal_name": internalName,
+			"response_body": string(bodyBytes),
+		}).Warn("No tenant_id found in Commodore response")
 	}
 	return tenantID
 }
@@ -539,8 +592,8 @@ func HandleUserNew(c *gin.Context) {
 		internalName = streamName
 	}
 
-	// Forward analytics event to Decklog for batched processing
-	go ForwardEventToDecklog("user-connection", map[string]interface{}{
+	// Forward analytics event to Decklog for batched processing with geo enrichment
+	baseEventData := map[string]interface{}{
 		"node_id":         nodeID,
 		"stream_name":     streamName,
 		"internal_name":   internalName,
@@ -554,7 +607,11 @@ func HandleUserNew(c *gin.Context) {
 		"timestamp":       time.Now().Unix(),
 		"source":          "mistserver_webhook",
 		"tenant_id":       getTenantForInternalName(internalName),
-	})
+	}
+
+	// Enrich with geo data using connection_addr
+	enrichedEventData := enrichEventWithGeoData(baseEventData, connectionAddr)
+	go ForwardEventToDecklog("user-connection", enrichedEventData)
 
 	// Return "true" to accept the session
 	c.String(http.StatusOK, "true")
@@ -615,8 +672,8 @@ func HandleUserEnd(c *gin.Context) {
 		internalName = streamName
 	}
 
-	// Forward analytics event to Decklog for comprehensive analytics processing
-	go ForwardEventToDecklog("user-connection", map[string]interface{}{
+	// Forward analytics event to Decklog for comprehensive analytics processing with geo enrichment
+	baseEventData := map[string]interface{}{
 		"node_id":           nodeID,
 		"stream_name":       streamName,
 		"internal_name":     internalName,
@@ -636,7 +693,11 @@ func HandleUserEnd(c *gin.Context) {
 		"timestamp":         time.Now().Unix(),
 		"source":            "mistserver_webhook",
 		"tenant_id":         getTenantForInternalName(internalName),
-	})
+	}
+
+	// Enrich with geo data using connection_addr
+	enrichedEventData := enrichEventWithGeoData(baseEventData, connectionAddr)
+	go ForwardEventToDecklog("user-connection", enrichedEventData)
 
 	c.String(http.StatusOK, "OK")
 }
@@ -812,7 +873,7 @@ func HandleLiveBandwidth(c *gin.Context) {
 		"internal_name":         internalName,
 		"current_bytes_per_sec": currentBytesPerSecond,
 		"threshold_exceeded":    true,
-		"event_type":            "bandwidth_threshold",
+		"event_type":            "bandwidth-threshold",
 		"timestamp":             time.Now().Unix(),
 		"source":                "mistserver_webhook",
 		"tenant_id":             getTenantForInternalName(internalName),

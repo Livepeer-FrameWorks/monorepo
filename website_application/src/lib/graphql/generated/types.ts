@@ -56,6 +56,16 @@ export enum BufferState {
   Recover = 'RECOVER'
 }
 
+export type CityMetric = {
+  __typename?: 'CityMetric';
+  city: Scalars['String']['output'];
+  countryCode?: Maybe<Scalars['String']['output']>;
+  latitude?: Maybe<Scalars['Float']['output']>;
+  longitude?: Maybe<Scalars['Float']['output']>;
+  percentage: Scalars['Float']['output'];
+  viewerCount: Scalars['Int']['output'];
+};
+
 export type Clip = {
   __typename?: 'Clip';
   createdAt: Scalars['Time']['output'];
@@ -79,6 +89,21 @@ export type Cluster = {
   nodes: Array<Node>;
   region: Scalars['String']['output'];
   status: NodeStatus;
+};
+
+export type CountryMetric = {
+  __typename?: 'CountryMetric';
+  cities?: Maybe<Array<CityMetric>>;
+  countryCode: Scalars['String']['output'];
+  percentage: Scalars['Float']['output'];
+  viewerCount: Scalars['Int']['output'];
+};
+
+export type CountryTimeSeries = {
+  __typename?: 'CountryTimeSeries';
+  countryCode: Scalars['String']['output'];
+  timestamp: Scalars['Time']['output'];
+  viewerCount: Scalars['Int']['output'];
 };
 
 export type CreateClipInput = {
@@ -119,6 +144,18 @@ export type DeveloperToken = {
   token?: Maybe<Scalars['String']['output']>;
 };
 
+export type GeographicDistribution = {
+  __typename?: 'GeographicDistribution';
+  stream?: Maybe<Scalars['String']['output']>;
+  timeRange: TimeRange;
+  topCities: Array<CityMetric>;
+  topCountries: Array<CountryMetric>;
+  totalViewers: Scalars['Int']['output'];
+  uniqueCities: Scalars['Int']['output'];
+  uniqueCountries: Scalars['Int']['output'];
+  viewersByCountry: Array<CountryTimeSeries>;
+};
+
 export type Invoice = {
   __typename?: 'Invoice';
   amount: Scalars['Float']['output'];
@@ -136,6 +173,26 @@ export type LineItem = {
   quantity: Scalars['Int']['output'];
   total: Scalars['Float']['output'];
   unitPrice: Scalars['Float']['output'];
+};
+
+export type LoadBalancingMetric = {
+  __typename?: 'LoadBalancingMetric';
+  clientCountry?: Maybe<Scalars['String']['output']>;
+  clientIp?: Maybe<Scalars['String']['output']>;
+  clientLatitude?: Maybe<Scalars['Float']['output']>;
+  clientLongitude?: Maybe<Scalars['Float']['output']>;
+  details?: Maybe<Scalars['String']['output']>;
+  eventType?: Maybe<Scalars['String']['output']>;
+  nodeId?: Maybe<Scalars['String']['output']>;
+  nodeLatitude?: Maybe<Scalars['Float']['output']>;
+  nodeLongitude?: Maybe<Scalars['Float']['output']>;
+  routingDistance?: Maybe<Scalars['Float']['output']>;
+  score?: Maybe<Scalars['Int']['output']>;
+  selectedNode: Scalars['String']['output'];
+  source?: Maybe<Scalars['String']['output']>;
+  status: Scalars['String']['output'];
+  stream: Scalars['String']['output'];
+  timestamp: Scalars['Time']['output'];
 };
 
 export type Mutation = {
@@ -210,6 +267,9 @@ export type Node = {
   id: Scalars['ID']['output'];
   ipAddress?: Maybe<Scalars['String']['output']>;
   lastSeen: Scalars['Time']['output'];
+  latitude?: Maybe<Scalars['Float']['output']>;
+  location?: Maybe<Scalars['String']['output']>;
+  longitude?: Maybe<Scalars['Float']['output']>;
   name: Scalars['String']['output'];
   region: Scalars['String']['output'];
   status: NodeStatus;
@@ -264,8 +324,10 @@ export type Query = {
   clusters: Array<Cluster>;
   currentStreamHealth?: Maybe<StreamHealthMetric>;
   developerTokens: Array<DeveloperToken>;
+  geographicDistribution: GeographicDistribution;
   invoice?: Maybe<Invoice>;
   invoices: Array<Invoice>;
+  loadBalancingMetrics: Array<LoadBalancingMetric>;
   node?: Maybe<Node>;
   nodes: Array<Node>;
   platformOverview: PlatformOverview;
@@ -279,6 +341,7 @@ export type Query = {
   tenant?: Maybe<Tenant>;
   usageRecords: Array<UsageRecord>;
   validateStreamKey: StreamValidation;
+  viewerGeographics: Array<ViewerGeographic>;
   viewerMetrics: Array<ViewerMetric>;
 };
 
@@ -293,8 +356,19 @@ export type QueryCurrentStreamHealthArgs = {
 };
 
 
+export type QueryGeographicDistributionArgs = {
+  stream?: InputMaybe<Scalars['String']['input']>;
+  timeRange?: InputMaybe<TimeRangeInput>;
+};
+
+
 export type QueryInvoiceArgs = {
   id: Scalars['ID']['input'];
+};
+
+
+export type QueryLoadBalancingMetricsArgs = {
+  timeRange?: InputMaybe<TimeRangeInput>;
 };
 
 
@@ -350,6 +424,12 @@ export type QueryUsageRecordsArgs = {
 
 export type QueryValidateStreamKeyArgs = {
   streamKey: Scalars['String']['input'];
+};
+
+
+export type QueryViewerGeographicsArgs = {
+  stream?: InputMaybe<Scalars['String']['input']>;
+  timeRange?: InputMaybe<TimeRangeInput>;
 };
 
 
@@ -593,6 +673,21 @@ export type User = {
   id: Scalars['ID']['output'];
   name?: Maybe<Scalars['String']['output']>;
   role: Scalars['String']['output'];
+};
+
+export type ViewerGeographic = {
+  __typename?: 'ViewerGeographic';
+  city?: Maybe<Scalars['String']['output']>;
+  connectionAddr?: Maybe<Scalars['String']['output']>;
+  countryCode?: Maybe<Scalars['String']['output']>;
+  eventType?: Maybe<Scalars['String']['output']>;
+  latitude?: Maybe<Scalars['Float']['output']>;
+  longitude?: Maybe<Scalars['Float']['output']>;
+  nodeId?: Maybe<Scalars['String']['output']>;
+  source?: Maybe<Scalars['String']['output']>;
+  stream?: Maybe<Scalars['String']['output']>;
+  timestamp: Scalars['Time']['output'];
+  viewerCount?: Maybe<Scalars['Int']['output']>;
 };
 
 export type ViewerMetric = {
@@ -904,6 +999,34 @@ export type GetUsageRecordsQueryVariables = Exact<{
 
 export type GetUsageRecordsQuery = { __typename?: 'Query', usageRecords: Array<{ __typename?: 'UsageRecord', id: string, resourceType: string, quantity: number, unit: string, cost: number, timestamp: string }> };
 
+export type GetViewerGeographicsQueryVariables = Exact<{
+  stream?: InputMaybe<Scalars['String']['input']>;
+  timeRange?: InputMaybe<TimeRangeInput>;
+}>;
+
+
+export type GetViewerGeographicsQuery = { __typename?: 'Query', viewerGeographics: Array<{ __typename?: 'ViewerGeographic', timestamp: string, stream?: string | null | undefined, nodeId?: string | null | undefined, countryCode?: string | null | undefined, city?: string | null | undefined, latitude?: number | null | undefined, longitude?: number | null | undefined, viewerCount?: number | null | undefined, connectionAddr?: string | null | undefined, eventType?: string | null | undefined, source?: string | null | undefined }> };
+
+export type GetGeographicDistributionQueryVariables = Exact<{
+  stream?: InputMaybe<Scalars['String']['input']>;
+  timeRange?: InputMaybe<TimeRangeInput>;
+}>;
+
+
+export type GetGeographicDistributionQuery = { __typename?: 'Query', geographicDistribution: { __typename?: 'GeographicDistribution', stream?: string | null | undefined, uniqueCountries: number, uniqueCities: number, totalViewers: number, timeRange: { __typename?: 'TimeRange', start: string, end: string }, topCountries: Array<{ __typename?: 'CountryMetric', countryCode: string, viewerCount: number, percentage: number, cities?: Array<{ __typename?: 'CityMetric', city: string, countryCode?: string | null | undefined, viewerCount: number, percentage: number, latitude?: number | null | undefined, longitude?: number | null | undefined }> | null | undefined }>, topCities: Array<{ __typename?: 'CityMetric', city: string, countryCode?: string | null | undefined, viewerCount: number, percentage: number, latitude?: number | null | undefined, longitude?: number | null | undefined }>, viewersByCountry: Array<{ __typename?: 'CountryTimeSeries', timestamp: string, countryCode: string, viewerCount: number }> } };
+
+export type GetLoadBalancingMetricsQueryVariables = Exact<{
+  timeRange?: InputMaybe<TimeRangeInput>;
+}>;
+
+
+export type GetLoadBalancingMetricsQuery = { __typename?: 'Query', loadBalancingMetrics: Array<{ __typename?: 'LoadBalancingMetric', timestamp: string, stream: string, selectedNode: string, nodeId?: string | null | undefined, clientIp?: string | null | undefined, clientCountry?: string | null | undefined, clientLatitude?: number | null | undefined, clientLongitude?: number | null | undefined, nodeLatitude?: number | null | undefined, nodeLongitude?: number | null | undefined, score?: number | null | undefined, status: string, details?: string | null | undefined, routingDistance?: number | null | undefined, eventType?: string | null | undefined, source?: string | null | undefined }> };
+
+export type PlaceholderQueryVariables = Exact<{ [key: string]: never; }>;
+
+
+export type PlaceholderQuery = { __typename: 'Query' };
+
 export type GetBillingTiersQueryVariables = Exact<{ [key: string]: never; }>;
 
 
@@ -978,26 +1101,26 @@ export type GetTenantQuery = { __typename?: 'Query', tenant?: { __typename?: 'Te
 export type GetClustersQueryVariables = Exact<{ [key: string]: never; }>;
 
 
-export type GetClustersQuery = { __typename?: 'Query', clusters: Array<{ __typename?: 'Cluster', id: string, name: string, region: string, status: NodeStatus, createdAt: string, nodes: Array<{ __typename?: 'Node', id: string, name: string, type: string, status: NodeStatus, region: string, ipAddress?: string | null | undefined, lastSeen: string, createdAt: string }> }> };
+export type GetClustersQuery = { __typename?: 'Query', clusters: Array<{ __typename?: 'Cluster', id: string, name: string, region: string, status: NodeStatus, createdAt: string, nodes: Array<{ __typename?: 'Node', id: string, name: string, type: string, status: NodeStatus, region: string, ipAddress?: string | null | undefined, lastSeen: string, createdAt: string, latitude?: number | null | undefined, longitude?: number | null | undefined, location?: string | null | undefined }> }> };
 
 export type GetClusterQueryVariables = Exact<{
   id: Scalars['ID']['input'];
 }>;
 
 
-export type GetClusterQuery = { __typename?: 'Query', cluster?: { __typename?: 'Cluster', id: string, name: string, region: string, status: NodeStatus, createdAt: string, nodes: Array<{ __typename?: 'Node', id: string, name: string, cluster: string, type: string, status: NodeStatus, region: string, ipAddress?: string | null | undefined, lastSeen: string, createdAt: string }> } | null | undefined };
+export type GetClusterQuery = { __typename?: 'Query', cluster?: { __typename?: 'Cluster', id: string, name: string, region: string, status: NodeStatus, createdAt: string, nodes: Array<{ __typename?: 'Node', id: string, name: string, cluster: string, type: string, status: NodeStatus, region: string, ipAddress?: string | null | undefined, lastSeen: string, createdAt: string, latitude?: number | null | undefined, longitude?: number | null | undefined, location?: string | null | undefined }> } | null | undefined };
 
 export type GetNodesQueryVariables = Exact<{ [key: string]: never; }>;
 
 
-export type GetNodesQuery = { __typename?: 'Query', nodes: Array<{ __typename?: 'Node', id: string, name: string, cluster: string, type: string, status: NodeStatus, region: string, ipAddress?: string | null | undefined, lastSeen: string, createdAt: string }> };
+export type GetNodesQuery = { __typename?: 'Query', nodes: Array<{ __typename?: 'Node', id: string, name: string, cluster: string, type: string, status: NodeStatus, region: string, ipAddress?: string | null | undefined, lastSeen: string, createdAt: string, latitude?: number | null | undefined, longitude?: number | null | undefined, location?: string | null | undefined }> };
 
 export type GetNodeQueryVariables = Exact<{
   id: Scalars['ID']['input'];
 }>;
 
 
-export type GetNodeQuery = { __typename?: 'Query', node?: { __typename?: 'Node', id: string, name: string, cluster: string, type: string, status: NodeStatus, region: string, ipAddress?: string | null | undefined, lastSeen: string, createdAt: string } | null | undefined };
+export type GetNodeQuery = { __typename?: 'Query', node?: { __typename?: 'Node', id: string, name: string, cluster: string, type: string, status: NodeStatus, region: string, ipAddress?: string | null | undefined, lastSeen: string, createdAt: string, latitude?: number | null | undefined, longitude?: number | null | undefined, location?: string | null | undefined } | null | undefined };
 
 export type IntrospectSchemaQueryVariables = Exact<{ [key: string]: never; }>;
 

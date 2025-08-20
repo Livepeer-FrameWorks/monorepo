@@ -38,6 +38,7 @@ const (
 	EventType_EVENT_TYPE_TRACK_LIST          EventType = 10
 	EventType_EVENT_TYPE_STREAM_BUFFER       EventType = 11
 	EventType_EVENT_TYPE_STREAM_END          EventType = 12
+	EventType_EVENT_TYPE_BANDWIDTH_THRESHOLD EventType = 13
 )
 
 // Enum value maps for EventType.
@@ -56,6 +57,7 @@ var (
 		10: "EVENT_TYPE_TRACK_LIST",
 		11: "EVENT_TYPE_STREAM_BUFFER",
 		12: "EVENT_TYPE_STREAM_END",
+		13: "EVENT_TYPE_BANDWIDTH_THRESHOLD",
 	}
 	EventType_value = map[string]int32{
 		"EVENT_TYPE_UNSPECIFIED":         0,
@@ -71,6 +73,7 @@ var (
 		"EVENT_TYPE_TRACK_LIST":          10,
 		"EVENT_TYPE_STREAM_BUFFER":       11,
 		"EVENT_TYPE_STREAM_END":          12,
+		"EVENT_TYPE_BANDWIDTH_THRESHOLD": 13,
 	}
 )
 
@@ -313,6 +316,8 @@ type EventData struct {
 	//	*EventData_StreamMetricsData
 	//	*EventData_NodeMonitoringData
 	//	*EventData_LoadBalancingData
+	//	*EventData_BandwidthThresholdData
+	//	*EventData_ClientLifecycleData
 	EventData     isEventData_EventData `protobuf_oneof:"event_data"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -495,6 +500,24 @@ func (x *EventData) GetLoadBalancingData() *LoadBalancingData {
 	return nil
 }
 
+func (x *EventData) GetBandwidthThresholdData() *BandwidthThresholdData {
+	if x != nil {
+		if x, ok := x.EventData.(*EventData_BandwidthThresholdData); ok {
+			return x.BandwidthThresholdData
+		}
+	}
+	return nil
+}
+
+func (x *EventData) GetClientLifecycleData() *ClientLifecycleData {
+	if x != nil {
+		if x, ok := x.EventData.(*EventData_ClientLifecycleData); ok {
+			return x.ClientLifecycleData
+		}
+	}
+	return nil
+}
+
 type isEventData_EventData interface {
 	isEventData_EventData()
 }
@@ -527,6 +550,14 @@ type EventData_LoadBalancingData struct {
 	LoadBalancingData *LoadBalancingData `protobuf:"bytes,19,opt,name=load_balancing_data,json=loadBalancingData,proto3,oneof"`
 }
 
+type EventData_BandwidthThresholdData struct {
+	BandwidthThresholdData *BandwidthThresholdData `protobuf:"bytes,20,opt,name=bandwidth_threshold_data,json=bandwidthThresholdData,proto3,oneof"`
+}
+
+type EventData_ClientLifecycleData struct {
+	ClientLifecycleData *ClientLifecycleData `protobuf:"bytes,21,opt,name=client_lifecycle_data,json=clientLifecycleData,proto3,oneof"`
+}
+
 func (*EventData_StreamIngestData) isEventData_EventData() {}
 
 func (*EventData_StreamViewData) isEventData_EventData() {}
@@ -540,6 +571,10 @@ func (*EventData_StreamMetricsData) isEventData_EventData() {}
 func (*EventData_NodeMonitoringData) isEventData_EventData() {}
 
 func (*EventData_LoadBalancingData) isEventData_EventData() {}
+
+func (*EventData_BandwidthThresholdData) isEventData_EventData() {}
+
+func (*EventData_ClientLifecycleData) isEventData_EventData() {}
 
 // Stream ingest specific data
 type StreamIngestData struct {
@@ -1128,6 +1163,160 @@ func (x *LoadBalancingData) GetClientCountry() string {
 	return ""
 }
 
+// Client lifecycle specific data
+type ClientLifecycleData struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Action          string                 `protobuf:"bytes,1,opt,name=action,proto3" json:"action,omitempty"`
+	ClientIp        string                 `protobuf:"bytes,2,opt,name=client_ip,json=clientIp,proto3" json:"client_ip,omitempty"`
+	ClientCountry   *string                `protobuf:"bytes,3,opt,name=client_country,json=clientCountry,proto3,oneof" json:"client_country,omitempty"`
+	ClientCity      *string                `protobuf:"bytes,4,opt,name=client_city,json=clientCity,proto3,oneof" json:"client_city,omitempty"`
+	ClientLatitude  *float64               `protobuf:"fixed64,5,opt,name=client_latitude,json=clientLatitude,proto3,oneof" json:"client_latitude,omitempty"`
+	ClientLongitude *float64               `protobuf:"fixed64,6,opt,name=client_longitude,json=clientLongitude,proto3,oneof" json:"client_longitude,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *ClientLifecycleData) Reset() {
+	*x = ClientLifecycleData{}
+	mi := &file_decklog_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ClientLifecycleData) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ClientLifecycleData) ProtoMessage() {}
+
+func (x *ClientLifecycleData) ProtoReflect() protoreflect.Message {
+	mi := &file_decklog_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ClientLifecycleData.ProtoReflect.Descriptor instead.
+func (*ClientLifecycleData) Descriptor() ([]byte, []int) {
+	return file_decklog_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *ClientLifecycleData) GetAction() string {
+	if x != nil {
+		return x.Action
+	}
+	return ""
+}
+
+func (x *ClientLifecycleData) GetClientIp() string {
+	if x != nil {
+		return x.ClientIp
+	}
+	return ""
+}
+
+func (x *ClientLifecycleData) GetClientCountry() string {
+	if x != nil && x.ClientCountry != nil {
+		return *x.ClientCountry
+	}
+	return ""
+}
+
+func (x *ClientLifecycleData) GetClientCity() string {
+	if x != nil && x.ClientCity != nil {
+		return *x.ClientCity
+	}
+	return ""
+}
+
+func (x *ClientLifecycleData) GetClientLatitude() float64 {
+	if x != nil && x.ClientLatitude != nil {
+		return *x.ClientLatitude
+	}
+	return 0
+}
+
+func (x *ClientLifecycleData) GetClientLongitude() float64 {
+	if x != nil && x.ClientLongitude != nil {
+		return *x.ClientLongitude
+	}
+	return 0
+}
+
+// Bandwidth threshold specific data
+type BandwidthThresholdData struct {
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	CurrentBytesPerSec uint64                 `protobuf:"varint,1,opt,name=current_bytes_per_sec,json=currentBytesPerSec,proto3" json:"current_bytes_per_sec,omitempty"`
+	ThresholdExceeded  bool                   `protobuf:"varint,2,opt,name=threshold_exceeded,json=thresholdExceeded,proto3" json:"threshold_exceeded,omitempty"`
+	ThresholdValue     *uint64                `protobuf:"varint,3,opt,name=threshold_value,json=thresholdValue,proto3,oneof" json:"threshold_value,omitempty"`
+	NodeId             *string                `protobuf:"bytes,4,opt,name=node_id,json=nodeId,proto3,oneof" json:"node_id,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *BandwidthThresholdData) Reset() {
+	*x = BandwidthThresholdData{}
+	mi := &file_decklog_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BandwidthThresholdData) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BandwidthThresholdData) ProtoMessage() {}
+
+func (x *BandwidthThresholdData) ProtoReflect() protoreflect.Message {
+	mi := &file_decklog_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BandwidthThresholdData.ProtoReflect.Descriptor instead.
+func (*BandwidthThresholdData) Descriptor() ([]byte, []int) {
+	return file_decklog_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *BandwidthThresholdData) GetCurrentBytesPerSec() uint64 {
+	if x != nil {
+		return x.CurrentBytesPerSec
+	}
+	return 0
+}
+
+func (x *BandwidthThresholdData) GetThresholdExceeded() bool {
+	if x != nil {
+		return x.ThresholdExceeded
+	}
+	return false
+}
+
+func (x *BandwidthThresholdData) GetThresholdValue() uint64 {
+	if x != nil && x.ThresholdValue != nil {
+		return *x.ThresholdValue
+	}
+	return 0
+}
+
+func (x *BandwidthThresholdData) GetNodeId() string {
+	if x != nil && x.NodeId != nil {
+		return *x.NodeId
+	}
+	return ""
+}
+
 type EventResponse struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	Status         string                 `protobuf:"bytes,1,opt,name=status,proto3" json:"status,omitempty"`
@@ -1139,7 +1328,7 @@ type EventResponse struct {
 
 func (x *EventResponse) Reset() {
 	*x = EventResponse{}
-	mi := &file_decklog_proto_msgTypes[9]
+	mi := &file_decklog_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1151,7 +1340,7 @@ func (x *EventResponse) String() string {
 func (*EventResponse) ProtoMessage() {}
 
 func (x *EventResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_decklog_proto_msgTypes[9]
+	mi := &file_decklog_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1164,7 +1353,7 @@ func (x *EventResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EventResponse.ProtoReflect.Descriptor instead.
 func (*EventResponse) Descriptor() ([]byte, []int) {
-	return file_decklog_proto_rawDescGZIP(), []int{9}
+	return file_decklog_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *EventResponse) GetStatus() string {
@@ -1196,7 +1385,7 @@ type HealthRequest struct {
 
 func (x *HealthRequest) Reset() {
 	*x = HealthRequest{}
-	mi := &file_decklog_proto_msgTypes[10]
+	mi := &file_decklog_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1208,7 +1397,7 @@ func (x *HealthRequest) String() string {
 func (*HealthRequest) ProtoMessage() {}
 
 func (x *HealthRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_decklog_proto_msgTypes[10]
+	mi := &file_decklog_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1221,7 +1410,7 @@ func (x *HealthRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HealthRequest.ProtoReflect.Descriptor instead.
 func (*HealthRequest) Descriptor() ([]byte, []int) {
-	return file_decklog_proto_rawDescGZIP(), []int{10}
+	return file_decklog_proto_rawDescGZIP(), []int{12}
 }
 
 type HealthResponse struct {
@@ -1235,7 +1424,7 @@ type HealthResponse struct {
 
 func (x *HealthResponse) Reset() {
 	*x = HealthResponse{}
-	mi := &file_decklog_proto_msgTypes[11]
+	mi := &file_decklog_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1247,7 +1436,7 @@ func (x *HealthResponse) String() string {
 func (*HealthResponse) ProtoMessage() {}
 
 func (x *HealthResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_decklog_proto_msgTypes[11]
+	mi := &file_decklog_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1260,7 +1449,7 @@ func (x *HealthResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HealthResponse.ProtoReflect.Descriptor instead.
 func (*HealthResponse) Descriptor() ([]byte, []int) {
-	return file_decklog_proto_rawDescGZIP(), []int{11}
+	return file_decklog_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *HealthResponse) GetStatus() string {
@@ -1298,7 +1487,7 @@ const file_decklog_proto_rawDesc = "" +
 	"\ttimestamp\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x93\b\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xc4\t\n" +
 	"\tEventData\x12\x19\n" +
 	"\bevent_id\x18\x01 \x01(\tR\aeventId\x121\n" +
 	"\n" +
@@ -1320,7 +1509,9 @@ const file_decklog_proto_rawDesc = "" +
 	"\x14user_connection_data\x18\x10 \x01(\v2\x1b.decklog.UserConnectionDataH\x00R\x12userConnectionData\x12L\n" +
 	"\x13stream_metrics_data\x18\x11 \x01(\v2\x1a.decklog.StreamMetricsDataH\x00R\x11streamMetricsData\x12O\n" +
 	"\x14node_monitoring_data\x18\x12 \x01(\v2\x1b.decklog.NodeMonitoringDataH\x00R\x12nodeMonitoringData\x12L\n" +
-	"\x13load_balancing_data\x18\x13 \x01(\v2\x1a.decklog.LoadBalancingDataH\x00R\x11loadBalancingDataB\f\n" +
+	"\x13load_balancing_data\x18\x13 \x01(\v2\x1a.decklog.LoadBalancingDataH\x00R\x11loadBalancingData\x12[\n" +
+	"\x18bandwidth_threshold_data\x18\x14 \x01(\v2\x1f.decklog.BandwidthThresholdDataH\x00R\x16bandwidthThresholdData\x12R\n" +
+	"\x15client_lifecycle_data\x18\x15 \x01(\v2\x1c.decklog.ClientLifecycleDataH\x00R\x13clientLifecycleDataB\f\n" +
 	"\n" +
 	"event_dataB\f\n" +
 	"\n" +
@@ -1414,7 +1605,27 @@ const file_decklog_proto_rawDesc = "" +
 	"\adetails\x18\x05 \x01(\tR\adetails\x12\x14\n" +
 	"\x05score\x18\x06 \x01(\x04R\x05score\x12\x1b\n" +
 	"\tclient_ip\x18\a \x01(\tR\bclientIp\x12%\n" +
-	"\x0eclient_country\x18\b \x01(\tR\rclientCountry\"j\n" +
+	"\x0eclient_country\x18\b \x01(\tR\rclientCountry\"\xc6\x02\n" +
+	"\x13ClientLifecycleData\x12\x16\n" +
+	"\x06action\x18\x01 \x01(\tR\x06action\x12\x1b\n" +
+	"\tclient_ip\x18\x02 \x01(\tR\bclientIp\x12*\n" +
+	"\x0eclient_country\x18\x03 \x01(\tH\x00R\rclientCountry\x88\x01\x01\x12$\n" +
+	"\vclient_city\x18\x04 \x01(\tH\x01R\n" +
+	"clientCity\x88\x01\x01\x12,\n" +
+	"\x0fclient_latitude\x18\x05 \x01(\x01H\x02R\x0eclientLatitude\x88\x01\x01\x12.\n" +
+	"\x10client_longitude\x18\x06 \x01(\x01H\x03R\x0fclientLongitude\x88\x01\x01B\x11\n" +
+	"\x0f_client_countryB\x0e\n" +
+	"\f_client_cityB\x12\n" +
+	"\x10_client_latitudeB\x13\n" +
+	"\x11_client_longitude\"\xe6\x01\n" +
+	"\x16BandwidthThresholdData\x121\n" +
+	"\x15current_bytes_per_sec\x18\x01 \x01(\x04R\x12currentBytesPerSec\x12-\n" +
+	"\x12threshold_exceeded\x18\x02 \x01(\bR\x11thresholdExceeded\x12,\n" +
+	"\x0fthreshold_value\x18\x03 \x01(\x04H\x00R\x0ethresholdValue\x88\x01\x01\x12\x1c\n" +
+	"\anode_id\x18\x04 \x01(\tH\x01R\x06nodeId\x88\x01\x01B\x12\n" +
+	"\x10_threshold_valueB\n" +
+	"\n" +
+	"\b_node_id\"j\n" +
 	"\rEventResponse\x12\x16\n" +
 	"\x06status\x18\x01 \x01(\tR\x06status\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\x12'\n" +
@@ -1423,7 +1634,7 @@ const file_decklog_proto_rawDesc = "" +
 	"\x0eHealthResponse\x12\x16\n" +
 	"\x06status\x18\x01 \x01(\tR\x06status\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\tR\aversion\x128\n" +
-	"\ttimestamp\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp*\x98\x03\n" +
+	"\ttimestamp\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp*\xbc\x03\n" +
 	"\tEventType\x12\x1a\n" +
 	"\x16EVENT_TYPE_UNSPECIFIED\x10\x00\x12\x1c\n" +
 	"\x18EVENT_TYPE_STREAM_INGEST\x10\x01\x12\x1a\n" +
@@ -1438,7 +1649,8 @@ const file_decklog_proto_rawDesc = "" +
 	"\x15EVENT_TYPE_TRACK_LIST\x10\n" +
 	"\x12\x1c\n" +
 	"\x18EVENT_TYPE_STREAM_BUFFER\x10\v\x12\x19\n" +
-	"\x15EVENT_TYPE_STREAM_END\x10\f2\xc1\x01\n" +
+	"\x15EVENT_TYPE_STREAM_END\x10\f\x12\"\n" +
+	"\x1eEVENT_TYPE_BANDWIDTH_THRESHOLD\x10\r2\xc1\x01\n" +
 	"\x0eDecklogService\x12:\n" +
 	"\fStreamEvents\x12\x0e.decklog.Event\x1a\x16.decklog.EventResponse(\x010\x01\x123\n" +
 	"\tSendEvent\x12\x0e.decklog.Event\x1a\x16.decklog.EventResponse\x12>\n" +
@@ -1457,7 +1669,7 @@ func file_decklog_proto_rawDescGZIP() []byte {
 }
 
 var file_decklog_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_decklog_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
+var file_decklog_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
 var file_decklog_proto_goTypes = []any{
 	(EventType)(0),                 // 0: decklog.EventType
 	(StreamLifecycleData_State)(0), // 1: decklog.StreamLifecycleData.State
@@ -1471,18 +1683,20 @@ var file_decklog_proto_goTypes = []any{
 	(*StreamMetricsData)(nil),      // 9: decklog.StreamMetricsData
 	(*NodeMonitoringData)(nil),     // 10: decklog.NodeMonitoringData
 	(*LoadBalancingData)(nil),      // 11: decklog.LoadBalancingData
-	(*EventResponse)(nil),          // 12: decklog.EventResponse
-	(*HealthRequest)(nil),          // 13: decklog.HealthRequest
-	(*HealthResponse)(nil),         // 14: decklog.HealthResponse
-	nil,                            // 15: decklog.Event.MetadataEntry
-	(*timestamppb.Timestamp)(nil),  // 16: google.protobuf.Timestamp
+	(*ClientLifecycleData)(nil),    // 12: decklog.ClientLifecycleData
+	(*BandwidthThresholdData)(nil), // 13: decklog.BandwidthThresholdData
+	(*EventResponse)(nil),          // 14: decklog.EventResponse
+	(*HealthRequest)(nil),          // 15: decklog.HealthRequest
+	(*HealthResponse)(nil),         // 16: decklog.HealthResponse
+	nil,                            // 17: decklog.Event.MetadataEntry
+	(*timestamppb.Timestamp)(nil),  // 18: google.protobuf.Timestamp
 }
 var file_decklog_proto_depIdxs = []int32{
 	4,  // 0: decklog.Event.events:type_name -> decklog.EventData
-	15, // 1: decklog.Event.metadata:type_name -> decklog.Event.MetadataEntry
-	16, // 2: decklog.Event.timestamp:type_name -> google.protobuf.Timestamp
+	17, // 1: decklog.Event.metadata:type_name -> decklog.Event.MetadataEntry
+	18, // 2: decklog.Event.timestamp:type_name -> google.protobuf.Timestamp
 	0,  // 3: decklog.EventData.event_type:type_name -> decklog.EventType
-	16, // 4: decklog.EventData.timestamp:type_name -> google.protobuf.Timestamp
+	18, // 4: decklog.EventData.timestamp:type_name -> google.protobuf.Timestamp
 	5,  // 5: decklog.EventData.stream_ingest_data:type_name -> decklog.StreamIngestData
 	6,  // 6: decklog.EventData.stream_view_data:type_name -> decklog.StreamViewData
 	7,  // 7: decklog.EventData.stream_lifecycle_data:type_name -> decklog.StreamLifecycleData
@@ -1490,20 +1704,22 @@ var file_decklog_proto_depIdxs = []int32{
 	9,  // 9: decklog.EventData.stream_metrics_data:type_name -> decklog.StreamMetricsData
 	10, // 10: decklog.EventData.node_monitoring_data:type_name -> decklog.NodeMonitoringData
 	11, // 11: decklog.EventData.load_balancing_data:type_name -> decklog.LoadBalancingData
-	1,  // 12: decklog.StreamLifecycleData.state:type_name -> decklog.StreamLifecycleData.State
-	2,  // 13: decklog.UserConnectionData.action:type_name -> decklog.UserConnectionData.Action
-	16, // 14: decklog.HealthResponse.timestamp:type_name -> google.protobuf.Timestamp
-	3,  // 15: decklog.DecklogService.StreamEvents:input_type -> decklog.Event
-	3,  // 16: decklog.DecklogService.SendEvent:input_type -> decklog.Event
-	13, // 17: decklog.DecklogService.CheckHealth:input_type -> decklog.HealthRequest
-	12, // 18: decklog.DecklogService.StreamEvents:output_type -> decklog.EventResponse
-	12, // 19: decklog.DecklogService.SendEvent:output_type -> decklog.EventResponse
-	14, // 20: decklog.DecklogService.CheckHealth:output_type -> decklog.HealthResponse
-	18, // [18:21] is the sub-list for method output_type
-	15, // [15:18] is the sub-list for method input_type
-	15, // [15:15] is the sub-list for extension type_name
-	15, // [15:15] is the sub-list for extension extendee
-	0,  // [0:15] is the sub-list for field type_name
+	13, // 12: decklog.EventData.bandwidth_threshold_data:type_name -> decklog.BandwidthThresholdData
+	12, // 13: decklog.EventData.client_lifecycle_data:type_name -> decklog.ClientLifecycleData
+	1,  // 14: decklog.StreamLifecycleData.state:type_name -> decklog.StreamLifecycleData.State
+	2,  // 15: decklog.UserConnectionData.action:type_name -> decklog.UserConnectionData.Action
+	18, // 16: decklog.HealthResponse.timestamp:type_name -> google.protobuf.Timestamp
+	3,  // 17: decklog.DecklogService.StreamEvents:input_type -> decklog.Event
+	3,  // 18: decklog.DecklogService.SendEvent:input_type -> decklog.Event
+	15, // 19: decklog.DecklogService.CheckHealth:input_type -> decklog.HealthRequest
+	14, // 20: decklog.DecklogService.StreamEvents:output_type -> decklog.EventResponse
+	14, // 21: decklog.DecklogService.SendEvent:output_type -> decklog.EventResponse
+	16, // 22: decklog.DecklogService.CheckHealth:output_type -> decklog.HealthResponse
+	20, // [20:23] is the sub-list for method output_type
+	17, // [17:20] is the sub-list for method input_type
+	17, // [17:17] is the sub-list for extension type_name
+	17, // [17:17] is the sub-list for extension extendee
+	0,  // [0:17] is the sub-list for field type_name
 }
 
 func init() { file_decklog_proto_init() }
@@ -1519,19 +1735,23 @@ func file_decklog_proto_init() {
 		(*EventData_StreamMetricsData)(nil),
 		(*EventData_NodeMonitoringData)(nil),
 		(*EventData_LoadBalancingData)(nil),
+		(*EventData_BandwidthThresholdData)(nil),
+		(*EventData_ClientLifecycleData)(nil),
 	}
 	file_decklog_proto_msgTypes[2].OneofWrappers = []any{}
 	file_decklog_proto_msgTypes[3].OneofWrappers = []any{}
 	file_decklog_proto_msgTypes[4].OneofWrappers = []any{}
 	file_decklog_proto_msgTypes[5].OneofWrappers = []any{}
 	file_decklog_proto_msgTypes[6].OneofWrappers = []any{}
+	file_decklog_proto_msgTypes[9].OneofWrappers = []any{}
+	file_decklog_proto_msgTypes[10].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_decklog_proto_rawDesc), len(file_decklog_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   13,
+			NumMessages:   15,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -161,7 +161,7 @@ func GetStreamAnalytics(c *gin.Context) {
 				uniq(country_code) as unique_countries,
 				uniq(city) as unique_cities
 			FROM viewer_metrics
-			WHERE tenant_id = $1 AND internal_name = $2
+			WHERE tenant_id = ? AND internal_name = ?
 			AND timestamp >= NOW() - INTERVAL 24 HOUR
 		`, analytics[i].TenantID, analytics[i].InternalName).Scan(
 			&viewerMetrics.AvgViewers,
@@ -190,7 +190,7 @@ func GetStreamAnalytics(c *gin.Context) {
 				avg(bitrate) as avg_bitrate,
 				sum(packets_lost) / sum(packets_sent) as packet_loss_rate
 			FROM stream_health_metrics
-			WHERE tenant_id = $1 AND internal_name = $2
+			WHERE tenant_id = ? AND internal_name = ?
 			AND timestamp >= NOW() - INTERVAL 24 HOUR
 		`, analytics[i].TenantID, analytics[i].InternalName).Scan(
 			&healthMetrics.AvgBufferHealth,
@@ -256,14 +256,14 @@ func GetViewerMetrics(c *gin.Context) {
 			connection_quality,
 			buffer_health
 		FROM viewer_metrics
-		WHERE tenant_id = $1
-		AND timestamp BETWEEN $2 AND $3`
+		WHERE tenant_id = ?
+		AND timestamp BETWEEN ? AND ?`
 
 	args := []interface{}{tenantID, startTime, endTime}
 
 	// Only filter by stream if streamID is provided and not empty
 	if streamID != "" && streamID != "null" && streamID != "undefined" {
-		query += " AND internal_name = $4"
+		query += " AND internal_name = ?"
 		args = append(args, streamID)
 	}
 
@@ -358,8 +358,8 @@ func GetRoutingEvents(c *gin.Context) {
 			node_scores,
 			routing_metadata
 		FROM routing_events
-		WHERE tenant_id = $1
-		AND timestamp BETWEEN $2 AND $3
+		WHERE tenant_id = ?
+		AND timestamp BETWEEN ? AND ?
 		ORDER BY timestamp DESC
 	`, tenantID, startTime, endTime)
 
@@ -440,8 +440,8 @@ func GetViewerMetrics5m(c *gin.Context) {
 			avg_connection_quality,
 			avg_buffer_health
 		FROM viewer_metrics_5m
-		WHERE tenant_id = $1
-		AND timestamp_5m BETWEEN $2 AND $3
+		WHERE tenant_id = ?
+		AND timestamp_5m BETWEEN ? AND ?
 		ORDER BY timestamp_5m DESC
 	`, tenantID, startTime, endTime)
 
@@ -567,7 +567,7 @@ func GetStreamDetails(c *gin.Context) {
 			avg(bitrate) as avg_bitrate,
 			sum(packets_lost) / sum(packets_sent) as packet_loss_rate
 		FROM stream_health_metrics
-		WHERE tenant_id = $1 AND internal_name = $2
+		WHERE tenant_id = ? AND internal_name = ?
 		AND timestamp >= NOW() - INTERVAL 1 HOUR
 	`, tenantID, sa.InternalName).Scan(
 		&viewerMetrics.AvgViewers,
@@ -608,7 +608,7 @@ func GetStreamEvents(c *gin.Context) {
 	rows, err := clickhouse.QueryContext(c.Request.Context(), `
 		SELECT timestamp, event_id, event_type, status, node_id, event_data
 		FROM stream_events 
-		WHERE tenant_id = $1 AND internal_name = $2
+		WHERE tenant_id = ? AND internal_name = ?
 		ORDER BY timestamp DESC 
 		LIMIT 100
 	`, tenantID, internalName)
@@ -672,8 +672,8 @@ func GetTrackListEvents(c *gin.Context) {
 	rows, err := clickhouse.QueryContext(c.Request.Context(), `
 		SELECT timestamp, node_id, track_list, track_count
 		FROM track_list_events
-		WHERE tenant_id = $1 AND internal_name = $2
-		AND timestamp BETWEEN $3 AND $4
+		WHERE tenant_id = ? AND internal_name = ?
+		AND timestamp BETWEEN ? AND ?
 		ORDER BY timestamp DESC
 	`, tenantID, internalName, startTime, endTime)
 	if err != nil {
@@ -744,7 +744,7 @@ func GetViewerStats(c *gin.Context) {
 			country_code,
 			city
 		FROM viewer_metrics
-		WHERE tenant_id = $1 AND internal_name = $2
+		WHERE tenant_id = ? AND internal_name = ?
 		AND timestamp >= NOW() - INTERVAL 24 HOUR
 		ORDER BY timestamp DESC
 	`, tenantID, internalName)
@@ -793,7 +793,7 @@ func GetViewerStats(c *gin.Context) {
 			groupArray((country_code, viewer_count)) as country_counts,
 			groupArray((country_code, city, viewer_count)) as city_counts
 		FROM viewer_metrics
-		WHERE tenant_id = $1 AND internal_name = $2
+		WHERE tenant_id = ? AND internal_name = ?
 		AND timestamp >= NOW() - INTERVAL 1 HOUR
 		GROUP BY tenant_id, internal_name
 	`, tenantID, internalName).Scan(
@@ -877,10 +877,10 @@ func GetPlatformOverview(c *gin.Context) {
 	err = clickhouse.QueryRowContext(c.Request.Context(), `
 		SELECT 
 			uniq(user_id) as total_users,
-			uniqIf(user_id, timestamp >= $2) as active_users
+			uniq(user_id) as active_users
 		FROM connection_events 
-		WHERE tenant_id = $1 
-		AND timestamp BETWEEN $2 AND $3
+		WHERE tenant_id = ? 
+		AND timestamp BETWEEN ? AND ?
 	`, tenantID, startParsed, endParsed).Scan(&metrics.TotalUsers, &metrics.ActiveUsers)
 
 	if err != nil && err != database.ErrNoRows {
@@ -921,11 +921,11 @@ func GetPlatformOverview(c *gin.Context) {
 		SELECT 
 			COALESCE(sum(viewer_count), 0) as total_viewers,
 			COALESCE(avg(viewer_count), 0) as average_viewers,
-			(SELECT COALESCE(max(bandwidth_out) / (1024*1024), 0) FROM stream_health_metrics WHERE tenant_id = $1 AND timestamp BETWEEN $2 AND $3) as peak_bandwidth_mbps
+			(SELECT COALESCE(max(bandwidth_out) / (1024*1024), 0) FROM stream_health_metrics WHERE tenant_id = ? AND timestamp BETWEEN ? AND ?) as peak_bandwidth_mbps
 		FROM viewer_metrics 
-		WHERE tenant_id = $1 
-		AND timestamp BETWEEN $2 AND $3
-	`, tenantID, startParsed, endParsed).Scan(
+		WHERE tenant_id = ? 
+		AND timestamp BETWEEN ? AND ?
+	`, tenantID, startParsed, endParsed, tenantID, startParsed, endParsed).Scan(
 		&timeseriesMetrics.TotalViewers,
 		&timeseriesMetrics.AverageViewers,
 		&timeseriesMetrics.PeakBandwidth,
@@ -1024,7 +1024,7 @@ func GetRealtimeStreams(c *gin.Context) {
 				avg(connection_quality) as connection_quality,
 				uniq(country_code) as unique_countries
 			FROM viewer_metrics
-			WHERE tenant_id = $1 AND internal_name = $2
+			WHERE tenant_id = ? AND internal_name = ?
 			AND timestamp >= NOW() - INTERVAL 5 MINUTE
 		`, tenantID, internalName).Scan(
 			&metrics.ViewerTrend,
@@ -1072,7 +1072,7 @@ func GetRealtimeViewers(c *gin.Context) {
 	err := clickhouse.QueryRowContext(c.Request.Context(), `
 		SELECT sum(viewer_count)
 		FROM viewer_metrics
-		WHERE tenant_id = $1
+		WHERE tenant_id = ?
 		AND timestamp >= NOW() - INTERVAL 5 MINUTE
 	`, tenantID).Scan(&totalViewers)
 
@@ -1091,7 +1091,7 @@ func GetRealtimeViewers(c *gin.Context) {
 			uniq(country_code) as unique_countries,
 			uniq(city) as unique_cities
 		FROM viewer_metrics
-		WHERE tenant_id = $1
+		WHERE tenant_id = ?
 		AND timestamp >= NOW() - INTERVAL 5 MINUTE
 		GROUP BY internal_name
 		ORDER BY avg_viewers DESC
@@ -1144,7 +1144,7 @@ func GetRealtimeEvents(c *gin.Context) {
 	rows, err := clickhouse.QueryContext(c.Request.Context(), `
 		SELECT timestamp, internal_name, event_type, status, node_id, event_data
 		FROM stream_events
-		WHERE tenant_id = $1 AND timestamp >= NOW() - INTERVAL 1 HOUR
+		WHERE tenant_id = ? AND timestamp >= NOW() - INTERVAL 1 HOUR
 		ORDER BY timestamp DESC
 		LIMIT 200
 	`, tenantID)
@@ -1181,7 +1181,7 @@ func GetRealtimeEvents(c *gin.Context) {
 			country_code,
 			city
 		FROM viewer_metrics
-		WHERE tenant_id = $1
+		WHERE tenant_id = ?
 		AND timestamp >= NOW() - INTERVAL 1 HOUR
 		ORDER BY timestamp DESC
 		LIMIT 50
@@ -1243,8 +1243,21 @@ func GetConnectionEvents(c *gin.Context) {
 	}
 
 	// Parse time range from query params
-	startTime := c.DefaultQuery("start_time", time.Now().Add(-24*time.Hour).Format(time.RFC3339))
-	endTime := c.DefaultQuery("end_time", time.Now().Format(time.RFC3339))
+	startTimeStr := c.DefaultQuery("start_time", time.Now().Add(-24*time.Hour).Format(time.RFC3339))
+	endTimeStr := c.DefaultQuery("end_time", time.Now().Format(time.RFC3339))
+
+	// Parse time strings into time.Time objects for ClickHouse
+	startTime, err := time.Parse(time.RFC3339, startTimeStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Invalid start_time format. Use RFC3339 format."})
+		return
+	}
+
+	endTime, err := time.Parse(time.RFC3339, endTimeStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Invalid end_time format. Use RFC3339 format."})
+		return
+	}
 
 	// Query ClickHouse for connection events
 	rows, err := clickhouse.QueryContext(c.Request.Context(), `
@@ -1267,8 +1280,8 @@ func GetConnectionEvents(c *gin.Context) {
 			session_duration,
 			bytes_transferred
 		FROM connection_events
-		WHERE tenant_id = $1
-		AND timestamp BETWEEN $2 AND $3
+		WHERE tenant_id = ?
+		AND timestamp BETWEEN ? AND ?
 		ORDER BY timestamp DESC
 	`, tenantID, startTime, endTime)
 
@@ -1361,8 +1374,21 @@ func GetNodeMetrics(c *gin.Context) {
 	}
 
 	// Parse time range from query params
-	startTime := c.DefaultQuery("start_time", time.Now().Add(-24*time.Hour).Format(time.RFC3339))
-	endTime := c.DefaultQuery("end_time", time.Now().Format(time.RFC3339))
+	startTimeStr := c.DefaultQuery("start_time", time.Now().Add(-24*time.Hour).Format(time.RFC3339))
+	endTimeStr := c.DefaultQuery("end_time", time.Now().Format(time.RFC3339))
+
+	// Parse time strings into time.Time objects for ClickHouse
+	startTime, err := time.Parse(time.RFC3339, startTimeStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Invalid start_time format. Use RFC3339 format."})
+		return
+	}
+
+	endTime, err := time.Parse(time.RFC3339, endTimeStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Invalid end_time format. Use RFC3339 format."})
+		return
+	}
 
 	// Query ClickHouse for node metrics
 	rows, err := clickhouse.QueryContext(c.Request.Context(), `
@@ -1387,8 +1413,8 @@ func GetNodeMetrics(c *gin.Context) {
 			tags,
 			metadata
 		FROM node_metrics
-		WHERE tenant_id = $1
-		AND timestamp BETWEEN $2 AND $3
+		WHERE tenant_id = ?
+		AND timestamp BETWEEN ? AND ?
 		ORDER BY timestamp DESC
 	`, tenantID, startTime, endTime)
 
@@ -1504,8 +1530,8 @@ func GetNodeMetrics(c *gin.Context) {
 	response := periscope.NodeMetricsResponse{
 		Metrics:   typedMetrics,
 		Count:     len(typedMetrics),
-		StartTime: startTime,
-		EndTime:   endTime,
+		StartTime: startTime.Format(time.RFC3339),
+		EndTime:   endTime.Format(time.RFC3339),
 	}
 	c.JSON(http.StatusOK, response)
 }
@@ -1519,8 +1545,21 @@ func GetNodeMetrics1h(c *gin.Context) {
 	}
 
 	// Parse time range from query params
-	startTime := c.DefaultQuery("start_time", time.Now().Add(-24*time.Hour).Format(time.RFC3339))
-	endTime := c.DefaultQuery("end_time", time.Now().Format(time.RFC3339))
+	startTimeStr := c.DefaultQuery("start_time", time.Now().Add(-24*time.Hour).Format(time.RFC3339))
+	endTimeStr := c.DefaultQuery("end_time", time.Now().Format(time.RFC3339))
+
+	// Parse time strings into time.Time objects for ClickHouse
+	startTime, err := time.Parse(time.RFC3339, startTimeStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Invalid start_time format. Use RFC3339 format."})
+		return
+	}
+
+	endTime, err := time.Parse(time.RFC3339, endTimeStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Invalid end_time format. Use RFC3339 format."})
+		return
+	}
 
 	// Query ClickHouse materialized view
 	rows, err := clickhouse.QueryContext(c.Request.Context(), `
@@ -1536,7 +1575,7 @@ func GetNodeMetrics1h(c *gin.Context) {
 			avg_health_score,
 			was_healthy
 		FROM node_metrics_1h
-		WHERE timestamp_1h BETWEEN $1 AND $2
+		WHERE timestamp_1h BETWEEN ? AND ?
 		ORDER BY timestamp_1h DESC
 	`, startTime, endTime)
 
@@ -1605,11 +1644,25 @@ func GetStreamHealthMetrics(c *gin.Context) {
 	}
 
 	// Parse time range from query params
-	startTime := c.DefaultQuery("start_time", time.Now().Add(-24*time.Hour).Format(time.RFC3339))
-	endTime := c.DefaultQuery("end_time", time.Now().Format(time.RFC3339))
+	startTimeStr := c.DefaultQuery("start_time", time.Now().Add(-24*time.Hour).Format(time.RFC3339))
+	endTimeStr := c.DefaultQuery("end_time", time.Now().Format(time.RFC3339))
+	streamID := c.Query("stream_id")
 
-	// Query ClickHouse for stream health metrics
-	rows, err := clickhouse.QueryContext(c.Request.Context(), `
+	// Parse time strings into time.Time objects for ClickHouse
+	startTime, err := time.Parse(time.RFC3339, startTimeStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Invalid start_time format. Use RFC3339 format."})
+		return
+	}
+
+	endTime, err := time.Parse(time.RFC3339, endTimeStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Invalid end_time format. Use RFC3339 format."})
+		return
+	}
+
+	// Build query with optional stream filtering
+	query := `
 		SELECT 
 			timestamp,
 			tenant_id,
@@ -1632,15 +1685,30 @@ func GetStreamHealthMetrics(c *gin.Context) {
 			profile,
 			track_metadata
 		FROM stream_health_metrics
-		WHERE tenant_id = $1
-		AND timestamp BETWEEN $2 AND $3
-		ORDER BY timestamp DESC
-	`, tenantID, startTime, endTime)
+		WHERE tenant_id = ?
+		AND timestamp BETWEEN ? AND ?`
+
+	args := []interface{}{tenantID, startTime, endTime}
+
+	// Only filter by stream if streamID is provided and not empty
+	if streamID != "" && streamID != "null" && streamID != "undefined" {
+		query += " AND internal_name = ?"
+		args = append(args, streamID)
+	}
+
+	query += " ORDER BY timestamp DESC"
+
+	// Query ClickHouse for stream health metrics
+	rows, err := clickhouse.QueryContext(c.Request.Context(), query, args...)
 
 	if err != nil {
 		logger.WithFields(logging.Fields{
-			"tenant_id": tenantID,
-			"error":     err,
+			"tenant_id":  tenantID,
+			"stream_id":  streamID,
+			"start_time": startTime,
+			"end_time":   endTime,
+			"query":      query,
+			"error":      err,
 		}).Error("Failed to fetch stream health metrics from ClickHouse")
 		c.JSON(http.StatusInternalServerError, periscope.ErrorResponse{Error: "Failed to fetch stream health metrics"})
 		return
@@ -1734,14 +1802,27 @@ func GetStreamBufferEvents(c *gin.Context) {
 		return
 	}
 	internalName := c.Param("internal_name")
-	startTime := c.DefaultQuery("start_time", time.Now().Add(-24*time.Hour).Format(time.RFC3339))
-	endTime := c.DefaultQuery("end_time", time.Now().Format(time.RFC3339))
+	startTimeStr := c.DefaultQuery("start_time", time.Now().Add(-24*time.Hour).Format(time.RFC3339))
+	endTimeStr := c.DefaultQuery("end_time", time.Now().Format(time.RFC3339))
+
+	// Parse time strings into time.Time objects for ClickHouse
+	startTime, err := time.Parse(time.RFC3339, startTimeStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Invalid start_time format. Use RFC3339 format."})
+		return
+	}
+
+	endTime, err := time.Parse(time.RFC3339, endTimeStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Invalid end_time format. Use RFC3339 format."})
+		return
+	}
 
 	rows, err := clickhouse.QueryContext(c.Request.Context(), `
 		SELECT timestamp, event_id, status, node_id, event_data
 		FROM stream_events
-		WHERE tenant_id = $1 AND internal_name = $2 AND event_type = 'stream-buffer'
-		AND timestamp BETWEEN $3 AND $4
+		WHERE tenant_id = ? AND internal_name = ? AND event_type = 'stream-buffer'
+		AND timestamp BETWEEN ? AND ?
 		ORDER BY timestamp DESC
 	`, tenantID, internalName, startTime, endTime)
 	if err != nil {
@@ -1778,14 +1859,27 @@ func GetStreamEndEvents(c *gin.Context) {
 		return
 	}
 	internalName := c.Param("internal_name")
-	startTime := c.DefaultQuery("start_time", time.Now().Add(-24*time.Hour).Format(time.RFC3339))
-	endTime := c.DefaultQuery("end_time", time.Now().Format(time.RFC3339))
+	startTimeStr := c.DefaultQuery("start_time", time.Now().Add(-24*time.Hour).Format(time.RFC3339))
+	endTimeStr := c.DefaultQuery("end_time", time.Now().Format(time.RFC3339))
+
+	// Parse time strings into time.Time objects for ClickHouse
+	startTime, err := time.Parse(time.RFC3339, startTimeStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Invalid start_time format. Use RFC3339 format."})
+		return
+	}
+
+	endTime, err := time.Parse(time.RFC3339, endTimeStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Invalid end_time format. Use RFC3339 format."})
+		return
+	}
 
 	rows, err := clickhouse.QueryContext(c.Request.Context(), `
 		SELECT timestamp, event_id, status, node_id, event_data
 		FROM stream_events
-		WHERE tenant_id = $1 AND internal_name = $2 AND event_type = 'stream-end'
-		AND timestamp BETWEEN $3 AND $4
+		WHERE tenant_id = ? AND internal_name = ? AND event_type = 'stream-end'
+		AND timestamp BETWEEN ? AND ?
 		ORDER BY timestamp DESC
 	`, tenantID, internalName, startTime, endTime)
 	if err != nil {

@@ -92,6 +92,23 @@ Endpoints (local)
 | Planned | Parlor (api_rooms) | 18014 | Channel rooms for interactive features |
 | Planned | Deckhand (api_ticketing) | 18015 | Support ticketing |
 
+## Configuration
+
+### GeoIP Enhancement (Optional)
+
+FrameWorks supports geo enrichment of analytics events using MaxMind GeoIP databases:
+
+- **Helmsman** (api_sidecar): Enriches connection events using client IP from webhooks
+- **Foghorn** (api_balancing): Provides fallback geo data when Cloudflare/proxy headers are missing
+
+Set `GEOIP_MMDB_PATH` environment variable to the path of your MaxMind GeoLite2 or GeoIP2 MMDB file:
+
+```bash
+export GEOIP_MMDB_PATH=/path/to/GeoLite2-City.mmdb
+```
+
+If not provided, geo enrichment is disabled and NULL values are used for geographic fields. Events with Cloudflare geo headers (CF-IPCountry, CF-IPLatitude, CF-IPLongitude) will still be processed normally.
+
 ## Docs
 - [Database](docs/DATABASE.md) — Dual-database design: PostgreSQL/YugabyteDB for state/aggregates, ClickHouse for time‑series; schemas, materialized views, TTLs, and service touch‑points.
 - [Architecture TL;DR](docs/TLDR.md) — High‑level map of planes, services, infra components, deployment tiers, data flows, Kafka topics, and local dev quickstart.

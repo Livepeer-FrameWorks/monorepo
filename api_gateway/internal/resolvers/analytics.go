@@ -420,3 +420,134 @@ func (r *Resolver) DoGetRebufferingEvents(ctx context.Context, streamId string, 
 
 	return result, nil
 }
+
+// DoGetViewerGeographics returns geographic data for individual viewer/connection events
+func (r *Resolver) DoGetViewerGeographics(ctx context.Context, stream *string, timeRange *model.TimeRangeInput) ([]*model.ViewerGeographic, error) {
+	// Check for demo mode
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Returning demo viewer geographic data")
+		return demo.GenerateViewerGeographics(), nil
+	}
+
+	// Extract tenant ID from context for data isolation
+	tenantID, ok := ctx.Value("tenant_id").(string)
+	if !ok {
+		return nil, fmt.Errorf("tenant context required")
+	}
+
+	// Convert time range to string format for Periscope client
+	var startTime, endTime string
+	if timeRange != nil {
+		startTime = timeRange.Start.Format("2006-01-02T15:04:05Z")
+		endTime = timeRange.End.Format("2006-01-02T15:04:05Z")
+	}
+
+	// Get geographic data from Periscope Query (ClickHouse connection_events and viewer_metrics)
+	var streamID string
+	if stream != nil {
+		streamID = *stream
+	}
+
+	// TODO: Add actual Periscope client call for geographic data
+	// For now, return empty slice to prevent errors
+	r.Logger.WithFields(map[string]interface{}{
+		"tenant_id": tenantID,
+		"stream":    streamID,
+		"start":     startTime,
+		"end":       endTime,
+	}).Debug("GetViewerGeographics called - TODO: implement Periscope geographic query")
+
+	return []*model.ViewerGeographic{}, nil
+}
+
+// DoGetGeographicDistribution returns aggregated geographic distribution analytics
+func (r *Resolver) DoGetGeographicDistribution(ctx context.Context, stream *string, timeRange *model.TimeRangeInput) (*model.GeographicDistribution, error) {
+	// Check for demo mode
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Returning demo geographic distribution data")
+		return demo.GenerateGeographicDistribution(), nil
+	}
+
+	// Extract tenant ID from context for data isolation
+	tenantID, ok := ctx.Value("tenant_id").(string)
+	if !ok {
+		return nil, fmt.Errorf("tenant context required")
+	}
+
+	// Convert time range to string format for Periscope client
+	var startTime, endTime string
+	if timeRange != nil {
+		startTime = timeRange.Start.Format("2006-01-02T15:04:05Z")
+		endTime = timeRange.End.Format("2006-01-02T15:04:05Z")
+	}
+
+	var streamID string
+	if stream != nil {
+		streamID = *stream
+	}
+
+	// TODO: Add actual Periscope client call for geographic distribution
+	// For now, return minimal structure to prevent errors
+	r.Logger.WithFields(map[string]interface{}{
+		"tenant_id": tenantID,
+		"stream":    streamID,
+		"start":     startTime,
+		"end":       endTime,
+	}).Debug("GetGeographicDistribution called - TODO: implement Periscope geographic aggregation query")
+
+	return &model.GeographicDistribution{
+		TimeRange: &model.TimeRange{
+			Start: func() time.Time {
+				if timeRange != nil {
+					return timeRange.Start
+				}
+				return time.Now().Add(-24 * time.Hour)
+			}(),
+			End: func() time.Time {
+				if timeRange != nil {
+					return timeRange.End
+				}
+				return time.Now()
+			}(),
+		},
+		Stream:           stream,
+		TopCountries:     []*model.CountryMetric{},
+		TopCities:        []*model.CityMetric{},
+		UniqueCountries:  0,
+		UniqueCities:     0,
+		TotalViewers:     0,
+		ViewersByCountry: []*model.CountryTimeSeries{},
+	}, nil
+}
+
+// DoGetLoadBalancingMetrics returns load balancing and routing metrics with geographic context
+func (r *Resolver) DoGetLoadBalancingMetrics(ctx context.Context, timeRange *model.TimeRangeInput) ([]*model.LoadBalancingMetric, error) {
+	// Check for demo mode
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Returning demo load balancing metrics data")
+		return demo.GenerateLoadBalancingMetrics(), nil
+	}
+
+	// Extract tenant ID from context for data isolation
+	tenantID, ok := ctx.Value("tenant_id").(string)
+	if !ok {
+		return nil, fmt.Errorf("tenant context required")
+	}
+
+	// Convert time range to string format for Periscope client
+	var startTime, endTime string
+	if timeRange != nil {
+		startTime = timeRange.Start.Format("2006-01-02T15:04:05Z")
+		endTime = timeRange.End.Format("2006-01-02T15:04:05Z")
+	}
+
+	// TODO: Add actual Periscope client call for load balancing metrics
+	// For now, return empty slice to prevent errors
+	r.Logger.WithFields(map[string]interface{}{
+		"tenant_id": tenantID,
+		"start":     startTime,
+		"end":       endTime,
+	}).Debug("GetLoadBalancingMetrics called - TODO: implement Periscope routing events query")
+
+	return []*model.LoadBalancingMetric{}, nil
+}

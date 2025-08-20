@@ -25,6 +25,9 @@ query GetClusters {
       ipAddress
       lastSeen
       createdAt
+      latitude
+      longitude
+      location
     }
   }
 }
@@ -46,6 +49,9 @@ query GetCluster($id: ID!) {
       ipAddress
       lastSeen
       createdAt
+      latitude
+      longitude
+      location
     }
   }
 }
@@ -61,6 +67,9 @@ query GetNodes {
     ipAddress
     lastSeen
     createdAt
+    latitude
+    longitude
+    location
   }
 }
 
@@ -75,5 +84,8 @@ query GetNode($id: ID!) {
     ipAddress
     lastSeen
     createdAt
+    latitude
+    longitude
+    location
   }
 }

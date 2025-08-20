@@ -59,6 +59,16 @@ export enum BufferState {
   Recover = 'RECOVER'
 }
 
+export type CityMetric = {
+  __typename?: 'CityMetric';
+  city: Scalars['String']['output'];
+  countryCode?: Maybe<Scalars['String']['output']>;
+  latitude?: Maybe<Scalars['Float']['output']>;
+  longitude?: Maybe<Scalars['Float']['output']>;
+  percentage: Scalars['Float']['output'];
+  viewerCount: Scalars['Int']['output'];
+};
+
 export type Clip = {
   __typename?: 'Clip';
   createdAt: Scalars['Time']['output'];
@@ -82,6 +92,21 @@ export type Cluster = {
   nodes: Array<Node>;
   region: Scalars['String']['output'];
   status: NodeStatus;
+};
+
+export type CountryMetric = {
+  __typename?: 'CountryMetric';
+  cities?: Maybe<Array<CityMetric>>;
+  countryCode: Scalars['String']['output'];
+  percentage: Scalars['Float']['output'];
+  viewerCount: Scalars['Int']['output'];
+};
+
+export type CountryTimeSeries = {
+  __typename?: 'CountryTimeSeries';
+  countryCode: Scalars['String']['output'];
+  timestamp: Scalars['Time']['output'];
+  viewerCount: Scalars['Int']['output'];
 };
 
 export type CreateClipInput = {
@@ -122,6 +147,18 @@ export type DeveloperToken = {
   token?: Maybe<Scalars['String']['output']>;
 };
 
+export type GeographicDistribution = {
+  __typename?: 'GeographicDistribution';
+  stream?: Maybe<Scalars['String']['output']>;
+  timeRange: TimeRange;
+  topCities: Array<CityMetric>;
+  topCountries: Array<CountryMetric>;
+  totalViewers: Scalars['Int']['output'];
+  uniqueCities: Scalars['Int']['output'];
+  uniqueCountries: Scalars['Int']['output'];
+  viewersByCountry: Array<CountryTimeSeries>;
+};
+
 export type Invoice = {
   __typename?: 'Invoice';
   amount: Scalars['Float']['output'];
@@ -139,6 +176,26 @@ export type LineItem = {
   quantity: Scalars['Int']['output'];
   total: Scalars['Float']['output'];
   unitPrice: Scalars['Float']['output'];
+};
+
+export type LoadBalancingMetric = {
+  __typename?: 'LoadBalancingMetric';
+  clientCountry?: Maybe<Scalars['String']['output']>;
+  clientIp?: Maybe<Scalars['String']['output']>;
+  clientLatitude?: Maybe<Scalars['Float']['output']>;
+  clientLongitude?: Maybe<Scalars['Float']['output']>;
+  details?: Maybe<Scalars['String']['output']>;
+  eventType?: Maybe<Scalars['String']['output']>;
+  nodeId?: Maybe<Scalars['String']['output']>;
+  nodeLatitude?: Maybe<Scalars['Float']['output']>;
+  nodeLongitude?: Maybe<Scalars['Float']['output']>;
+  routingDistance?: Maybe<Scalars['Float']['output']>;
+  score?: Maybe<Scalars['Int']['output']>;
+  selectedNode: Scalars['String']['output'];
+  source?: Maybe<Scalars['String']['output']>;
+  status: Scalars['String']['output'];
+  stream: Scalars['String']['output'];
+  timestamp: Scalars['Time']['output'];
 };
 
 export type Mutation = {
@@ -213,6 +270,9 @@ export type Node = {
   id: Scalars['ID']['output'];
   ipAddress?: Maybe<Scalars['String']['output']>;
   lastSeen: Scalars['Time']['output'];
+  latitude?: Maybe<Scalars['Float']['output']>;
+  location?: Maybe<Scalars['String']['output']>;
+  longitude?: Maybe<Scalars['Float']['output']>;
   name: Scalars['String']['output'];
   region: Scalars['String']['output'];
   status: NodeStatus;
@@ -267,8 +327,10 @@ export type Query = {
   clusters: Array<Cluster>;
   currentStreamHealth?: Maybe<StreamHealthMetric>;
   developerTokens: Array<DeveloperToken>;
+  geographicDistribution: GeographicDistribution;
   invoice?: Maybe<Invoice>;
   invoices: Array<Invoice>;
+  loadBalancingMetrics: Array<LoadBalancingMetric>;
   node?: Maybe<Node>;
   nodes: Array<Node>;
   platformOverview: PlatformOverview;
@@ -282,6 +344,7 @@ export type Query = {
   tenant?: Maybe<Tenant>;
   usageRecords: Array<UsageRecord>;
   validateStreamKey: StreamValidation;
+  viewerGeographics: Array<ViewerGeographic>;
   viewerMetrics: Array<ViewerMetric>;
 };
 
@@ -296,8 +359,19 @@ export type QueryCurrentStreamHealthArgs = {
 };
 
 
+export type QueryGeographicDistributionArgs = {
+  stream?: InputMaybe<Scalars['String']['input']>;
+  timeRange?: InputMaybe<TimeRangeInput>;
+};
+
+
 export type QueryInvoiceArgs = {
   id: Scalars['ID']['input'];
+};
+
+
+export type QueryLoadBalancingMetricsArgs = {
+  timeRange?: InputMaybe<TimeRangeInput>;
 };
 
 
@@ -353,6 +427,12 @@ export type QueryUsageRecordsArgs = {
 
 export type QueryValidateStreamKeyArgs = {
   streamKey: Scalars['String']['input'];
+};
+
+
+export type QueryViewerGeographicsArgs = {
+  stream?: InputMaybe<Scalars['String']['input']>;
+  timeRange?: InputMaybe<TimeRangeInput>;
 };
 
 
@@ -596,6 +676,21 @@ export type User = {
   id: Scalars['ID']['output'];
   name?: Maybe<Scalars['String']['output']>;
   role: Scalars['String']['output'];
+};
+
+export type ViewerGeographic = {
+  __typename?: 'ViewerGeographic';
+  city?: Maybe<Scalars['String']['output']>;
+  connectionAddr?: Maybe<Scalars['String']['output']>;
+  countryCode?: Maybe<Scalars['String']['output']>;
+  eventType?: Maybe<Scalars['String']['output']>;
+  latitude?: Maybe<Scalars['Float']['output']>;
+  longitude?: Maybe<Scalars['Float']['output']>;
+  nodeId?: Maybe<Scalars['String']['output']>;
+  source?: Maybe<Scalars['String']['output']>;
+  stream?: Maybe<Scalars['String']['output']>;
+  timestamp: Scalars['Time']['output'];
+  viewerCount?: Maybe<Scalars['Int']['output']>;
 };
 
 export type ViewerMetric = {
@@ -907,6 +1002,34 @@ export type GetUsageRecordsQueryVariables = Exact<{
 
 export type GetUsageRecordsQuery = { __typename?: 'Query', usageRecords: Array<{ __typename?: 'UsageRecord', id: string, resourceType: string, quantity: number, unit: string, cost: number, timestamp: string }> };
 
+export type GetViewerGeographicsQueryVariables = Exact<{
+  stream?: InputMaybe<Scalars['String']['input']>;
+  timeRange?: InputMaybe<TimeRangeInput>;
+}>;
+
+
+export type GetViewerGeographicsQuery = { __typename?: 'Query', viewerGeographics: Array<{ __typename?: 'ViewerGeographic', timestamp: string, stream?: string | null | undefined, nodeId?: string | null | undefined, countryCode?: string | null | undefined, city?: string | null | undefined, latitude?: number | null | undefined, longitude?: number | null | undefined, viewerCount?: number | null | undefined, connectionAddr?: string | null | undefined, eventType?: string | null | undefined, source?: string | null | undefined }> };
+
+export type GetGeographicDistributionQueryVariables = Exact<{
+  stream?: InputMaybe<Scalars['String']['input']>;
+  timeRange?: InputMaybe<TimeRangeInput>;
+}>;
+
+
+export type GetGeographicDistributionQuery = { __typename?: 'Query', geographicDistribution: { __typename?: 'GeographicDistribution', stream?: string | null | undefined, uniqueCountries: number, uniqueCities: number, totalViewers: number, timeRange: { __typename?: 'TimeRange', start: string, end: string }, topCountries: Array<{ __typename?: 'CountryMetric', countryCode: string, viewerCount: number, percentage: number, cities?: Array<{ __typename?: 'CityMetric', city: string, countryCode?: string | null | undefined, viewerCount: number, percentage: number, latitude?: number | null | undefined, longitude?: number | null | undefined }> | null | undefined }>, topCities: Array<{ __typename?: 'CityMetric', city: string, countryCode?: string | null | undefined, viewerCount: number, percentage: number, latitude?: number | null | undefined, longitude?: number | null | undefined }>, viewersByCountry: Array<{ __typename?: 'CountryTimeSeries', timestamp: string, countryCode: string, viewerCount: number }> } };
+
+export type GetLoadBalancingMetricsQueryVariables = Exact<{
+  timeRange?: InputMaybe<TimeRangeInput>;
+}>;
+
+
+export type GetLoadBalancingMetricsQuery = { __typename?: 'Query', loadBalancingMetrics: Array<{ __typename?: 'LoadBalancingMetric', timestamp: string, stream: string, selectedNode: string, nodeId?: string | null | undefined, clientIp?: string | null | undefined, clientCountry?: string | null | undefined, clientLatitude?: number | null | undefined, clientLongitude?: number | null | undefined, nodeLatitude?: number | null | undefined, nodeLongitude?: number | null | undefined, score?: number | null | undefined, status: string, details?: string | null | undefined, routingDistance?: number | null | undefined, eventType?: string | null | undefined, source?: string | null | undefined }> };
+
+export type PlaceholderQueryVariables = Exact<{ [key: string]: never; }>;
+
+
+export type PlaceholderQuery = { __typename: 'Query' };
+
 export type GetBillingTiersQueryVariables = Exact<{ [key: string]: never; }>;
 
 
@@ -981,26 +1104,26 @@ export type GetTenantQuery = { __typename?: 'Query', tenant?: { __typename?: 'Te
 export type GetClustersQueryVariables = Exact<{ [key: string]: never; }>;
 
 
-export type GetClustersQuery = { __typename?: 'Query', clusters: Array<{ __typename?: 'Cluster', id: string, name: string, region: string, status: NodeStatus, createdAt: string, nodes: Array<{ __typename?: 'Node', id: string, name: string, type: string, status: NodeStatus, region: string, ipAddress?: string | null | undefined, lastSeen: string, createdAt: string }> }> };
+export type GetClustersQuery = { __typename?: 'Query', clusters: Array<{ __typename?: 'Cluster', id: string, name: string, region: string, status: NodeStatus, createdAt: string, nodes: Array<{ __typename?: 'Node', id: string, name: string, type: string, status: NodeStatus, region: string, ipAddress?: string | null | undefined, lastSeen: string, createdAt: string, latitude?: number | null | undefined, longitude?: number | null | undefined, location?: string | null | undefined }> }> };
 
 export type GetClusterQueryVariables = Exact<{
   id: Scalars['ID']['input'];
 }>;
 
 
-export type GetClusterQuery = { __typename?: 'Query', cluster?: { __typename?: 'Cluster', id: string, name: string, region: string, status: NodeStatus, createdAt: string, nodes: Array<{ __typename?: 'Node', id: string, name: string, cluster: string, type: string, status: NodeStatus, region: string, ipAddress?: string | null | undefined, lastSeen: string, createdAt: string }> } | null | undefined };
+export type GetClusterQuery = { __typename?: 'Query', cluster?: { __typename?: 'Cluster', id: string, name: string, region: string, status: NodeStatus, createdAt: string, nodes: Array<{ __typename?: 'Node', id: string, name: string, cluster: string, type: string, status: NodeStatus, region: string, ipAddress?: string | null | undefined, lastSeen: string, createdAt: string, latitude?: number | null | undefined, longitude?: number | null | undefined, location?: string | null | undefined }> } | null | undefined };
 
 export type GetNodesQueryVariables = Exact<{ [key: string]: never; }>;
 
 
-export type GetNodesQuery = { __typename?: 'Query', nodes: Array<{ __typename?: 'Node', id: string, name: string, cluster: string, type: string, status: NodeStatus, region: string, ipAddress?: string | null | undefined, lastSeen: string, createdAt: string }> };
+export type GetNodesQuery = { __typename?: 'Query', nodes: Array<{ __typename?: 'Node', id: string, name: string, cluster: string, type: string, status: NodeStatus, region: string, ipAddress?: string | null | undefined, lastSeen: string, createdAt: string, latitude?: number | null | undefined, longitude?: number | null | undefined, location?: string | null | undefined }> };
 
 export type GetNodeQueryVariables = Exact<{
   id: Scalars['ID']['input'];
 }>;
 
 
-export type GetNodeQuery = { __typename?: 'Query', node?: { __typename?: 'Node', id: string, name: string, cluster: string, type: string, status: NodeStatus, region: string, ipAddress?: string | null | undefined, lastSeen: string, createdAt: string } | null | undefined };
+export type GetNodeQuery = { __typename?: 'Query', node?: { __typename?: 'Node', id: string, name: string, cluster: string, type: string, status: NodeStatus, region: string, ipAddress?: string | null | undefined, lastSeen: string, createdAt: string, latitude?: number | null | undefined, longitude?: number | null | undefined, location?: string | null | undefined } | null | undefined };
 
 export type IntrospectSchemaQueryVariables = Exact<{ [key: string]: never; }>;
 
@@ -1086,6 +1209,15 @@ export type BillingTierFieldPolicy = {
 	name?: FieldPolicy<any> | FieldReadFunction<any>,
 	price?: FieldPolicy<any> | FieldReadFunction<any>
 };
+export type CityMetricKeySpecifier = ('city' | 'countryCode' | 'latitude' | 'longitude' | 'percentage' | 'viewerCount' | CityMetricKeySpecifier)[];
+export type CityMetricFieldPolicy = {
+	city?: FieldPolicy<any> | FieldReadFunction<any>,
+	countryCode?: FieldPolicy<any> | FieldReadFunction<any>,
+	latitude?: FieldPolicy<any> | FieldReadFunction<any>,
+	longitude?: FieldPolicy<any> | FieldReadFunction<any>,
+	percentage?: FieldPolicy<any> | FieldReadFunction<any>,
+	viewerCount?: FieldPolicy<any> | FieldReadFunction<any>
+};
 export type ClipKeySpecifier = ('createdAt' | 'description' | 'duration' | 'endTime' | 'id' | 'playbackId' | 'startTime' | 'status' | 'stream' | 'title' | 'updatedAt' | ClipKeySpecifier)[];
 export type ClipFieldPolicy = {
 	createdAt?: FieldPolicy<any> | FieldReadFunction<any>,
@@ -1109,6 +1241,19 @@ export type ClusterFieldPolicy = {
 	region?: FieldPolicy<any> | FieldReadFunction<any>,
 	status?: FieldPolicy<any> | FieldReadFunction<any>
 };
+export type CountryMetricKeySpecifier = ('cities' | 'countryCode' | 'percentage' | 'viewerCount' | CountryMetricKeySpecifier)[];
+export type CountryMetricFieldPolicy = {
+	cities?: FieldPolicy<any> | FieldReadFunction<any>,
+	countryCode?: FieldPolicy<any> | FieldReadFunction<any>,
+	percentage?: FieldPolicy<any> | FieldReadFunction<any>,
+	viewerCount?: FieldPolicy<any> | FieldReadFunction<any>
+};
+export type CountryTimeSeriesKeySpecifier = ('countryCode' | 'timestamp' | 'viewerCount' | CountryTimeSeriesKeySpecifier)[];
+export type CountryTimeSeriesFieldPolicy = {
+	countryCode?: FieldPolicy<any> | FieldReadFunction<any>,
+	timestamp?: FieldPolicy<any> | FieldReadFunction<any>,
+	viewerCount?: FieldPolicy<any> | FieldReadFunction<any>
+};
 export type DeveloperTokenKeySpecifier = ('createdAt' | 'expiresAt' | 'id' | 'lastUsedAt' | 'name' | 'permissions' | 'status' | 'token' | DeveloperTokenKeySpecifier)[];
 export type DeveloperTokenFieldPolicy = {
 	createdAt?: FieldPolicy<any> | FieldReadFunction<any>,
@@ -1119,6 +1264,17 @@ export type DeveloperTokenFieldPolicy = {
 	permissions?: FieldPolicy<any> | FieldReadFunction<any>,
 	status?: FieldPolicy<any> | FieldReadFunction<any>,
 	token?: FieldPolicy<any> | FieldReadFunction<any>
+};
+export type GeographicDistributionKeySpecifier = ('stream' | 'timeRange' | 'topCities' | 'topCountries' | 'totalViewers' | 'uniqueCities' | 'uniqueCountries' | 'viewersByCountry' | GeographicDistributionKeySpecifier)[];
+export type GeographicDistributionFieldPolicy = {
+	stream?: FieldPolicy<any> | FieldReadFunction<any>,
+	timeRange?: FieldPolicy<any> | FieldReadFunction<any>,
+	topCities?: FieldPolicy<any> | FieldReadFunction<any>,
+	topCountries?: FieldPolicy<any> | FieldReadFunction<any>,
+	totalViewers?: FieldPolicy<any> | FieldReadFunction<any>,
+	uniqueCities?: FieldPolicy<any> | FieldReadFunction<any>,
+	uniqueCountries?: FieldPolicy<any> | FieldReadFunction<any>,
+	viewersByCountry?: FieldPolicy<any> | FieldReadFunction<any>
 };
 export type InvoiceKeySpecifier = ('amount' | 'createdAt' | 'currency' | 'dueDate' | 'id' | 'lineItems' | 'status' | InvoiceKeySpecifier)[];
 export type InvoiceFieldPolicy = {
@@ -1137,6 +1293,25 @@ export type LineItemFieldPolicy = {
 	total?: FieldPolicy<any> | FieldReadFunction<any>,
 	unitPrice?: FieldPolicy<any> | FieldReadFunction<any>
 };
+export type LoadBalancingMetricKeySpecifier = ('clientCountry' | 'clientIp' | 'clientLatitude' | 'clientLongitude' | 'details' | 'eventType' | 'nodeId' | 'nodeLatitude' | 'nodeLongitude' | 'routingDistance' | 'score' | 'selectedNode' | 'source' | 'status' | 'stream' | 'timestamp' | LoadBalancingMetricKeySpecifier)[];
+export type LoadBalancingMetricFieldPolicy = {
+	clientCountry?: FieldPolicy<any> | FieldReadFunction<any>,
+	clientIp?: FieldPolicy<any> | FieldReadFunction<any>,
+	clientLatitude?: FieldPolicy<any> | FieldReadFunction<any>,
+	clientLongitude?: FieldPolicy<any> | FieldReadFunction<any>,
+	details?: FieldPolicy<any> | FieldReadFunction<any>,
+	eventType?: FieldPolicy<any> | FieldReadFunction<any>,
+	nodeId?: FieldPolicy<any> | FieldReadFunction<any>,
+	nodeLatitude?: FieldPolicy<any> | FieldReadFunction<any>,
+	nodeLongitude?: FieldPolicy<any> | FieldReadFunction<any>,
+	routingDistance?: FieldPolicy<any> | FieldReadFunction<any>,
+	score?: FieldPolicy<any> | FieldReadFunction<any>,
+	selectedNode?: FieldPolicy<any> | FieldReadFunction<any>,
+	source?: FieldPolicy<any> | FieldReadFunction<any>,
+	status?: FieldPolicy<any> | FieldReadFunction<any>,
+	stream?: FieldPolicy<any> | FieldReadFunction<any>,
+	timestamp?: FieldPolicy<any> | FieldReadFunction<any>
+};
 export type MutationKeySpecifier = ('createClip' | 'createDeveloperToken' | 'createPayment' | 'createStream' | 'deleteStream' | 'refreshStreamKey' | 'revokeDeveloperToken' | 'updateBillingTier' | 'updateStream' | 'updateTenant' | MutationKeySpecifier)[];
 export type MutationFieldPolicy = {
 	createClip?: FieldPolicy<any> | FieldReadFunction<any>,
@@ -1150,13 +1325,16 @@ export type MutationFieldPolicy = {
 	updateStream?: FieldPolicy<any> | FieldReadFunction<any>,
 	updateTenant?: FieldPolicy<any> | FieldReadFunction<any>
 };
-export type NodeKeySpecifier = ('cluster' | 'createdAt' | 'id' | 'ipAddress' | 'lastSeen' | 'name' | 'region' | 'status' | 'type' | NodeKeySpecifier)[];
+export type NodeKeySpecifier = ('cluster' | 'createdAt' | 'id' | 'ipAddress' | 'lastSeen' | 'latitude' | 'location' | 'longitude' | 'name' | 'region' | 'status' | 'type' | NodeKeySpecifier)[];
 export type NodeFieldPolicy = {
 	cluster?: FieldPolicy<any> | FieldReadFunction<any>,
 	createdAt?: FieldPolicy<any> | FieldReadFunction<any>,
 	id?: FieldPolicy<any> | FieldReadFunction<any>,
 	ipAddress?: FieldPolicy<any> | FieldReadFunction<any>,
 	lastSeen?: FieldPolicy<any> | FieldReadFunction<any>,
+	latitude?: FieldPolicy<any> | FieldReadFunction<any>,
+	location?: FieldPolicy<any> | FieldReadFunction<any>,
+	longitude?: FieldPolicy<any> | FieldReadFunction<any>,
 	name?: FieldPolicy<any> | FieldReadFunction<any>,
 	region?: FieldPolicy<any> | FieldReadFunction<any>,
 	status?: FieldPolicy<any> | FieldReadFunction<any>,
@@ -1179,7 +1357,7 @@ export type PlatformOverviewFieldPolicy = {
 	totalUsers?: FieldPolicy<any> | FieldReadFunction<any>,
 	totalViewers?: FieldPolicy<any> | FieldReadFunction<any>
 };
-export type QueryKeySpecifier = ('billingStatus' | 'billingTiers' | 'cluster' | 'clusters' | 'currentStreamHealth' | 'developerTokens' | 'invoice' | 'invoices' | 'node' | 'nodes' | 'platformOverview' | 'rebufferingEvents' | 'stream' | 'streamAnalytics' | 'streamHealthAlerts' | 'streamHealthMetrics' | 'streamQualityChanges' | 'streams' | 'tenant' | 'usageRecords' | 'validateStreamKey' | 'viewerMetrics' | QueryKeySpecifier)[];
+export type QueryKeySpecifier = ('billingStatus' | 'billingTiers' | 'cluster' | 'clusters' | 'currentStreamHealth' | 'developerTokens' | 'geographicDistribution' | 'invoice' | 'invoices' | 'loadBalancingMetrics' | 'node' | 'nodes' | 'platformOverview' | 'rebufferingEvents' | 'stream' | 'streamAnalytics' | 'streamHealthAlerts' | 'streamHealthMetrics' | 'streamQualityChanges' | 'streams' | 'tenant' | 'usageRecords' | 'validateStreamKey' | 'viewerGeographics' | 'viewerMetrics' | QueryKeySpecifier)[];
 export type QueryFieldPolicy = {
 	billingStatus?: FieldPolicy<any> | FieldReadFunction<any>,
 	billingTiers?: FieldPolicy<any> | FieldReadFunction<any>,
@@ -1187,8 +1365,10 @@ export type QueryFieldPolicy = {
 	clusters?: FieldPolicy<any> | FieldReadFunction<any>,
 	currentStreamHealth?: FieldPolicy<any> | FieldReadFunction<any>,
 	developerTokens?: FieldPolicy<any> | FieldReadFunction<any>,
+	geographicDistribution?: FieldPolicy<any> | FieldReadFunction<any>,
 	invoice?: FieldPolicy<any> | FieldReadFunction<any>,
 	invoices?: FieldPolicy<any> | FieldReadFunction<any>,
+	loadBalancingMetrics?: FieldPolicy<any> | FieldReadFunction<any>,
 	node?: FieldPolicy<any> | FieldReadFunction<any>,
 	nodes?: FieldPolicy<any> | FieldReadFunction<any>,
 	platformOverview?: FieldPolicy<any> | FieldReadFunction<any>,
@@ -1202,6 +1382,7 @@ export type QueryFieldPolicy = {
 	tenant?: FieldPolicy<any> | FieldReadFunction<any>,
 	usageRecords?: FieldPolicy<any> | FieldReadFunction<any>,
 	validateStreamKey?: FieldPolicy<any> | FieldReadFunction<any>,
+	viewerGeographics?: FieldPolicy<any> | FieldReadFunction<any>,
 	viewerMetrics?: FieldPolicy<any> | FieldReadFunction<any>
 };
 export type RebufferingEventKeySpecifier = ('bufferState' | 'frameJitterMs' | 'healthScore' | 'nodeId' | 'packetLossPercentage' | 'previousState' | 'rebufferEnd' | 'rebufferStart' | 'stream' | 'timestamp' | RebufferingEventKeySpecifier)[];
@@ -1378,6 +1559,20 @@ export type UserFieldPolicy = {
 	name?: FieldPolicy<any> | FieldReadFunction<any>,
 	role?: FieldPolicy<any> | FieldReadFunction<any>
 };
+export type ViewerGeographicKeySpecifier = ('city' | 'connectionAddr' | 'countryCode' | 'eventType' | 'latitude' | 'longitude' | 'nodeId' | 'source' | 'stream' | 'timestamp' | 'viewerCount' | ViewerGeographicKeySpecifier)[];
+export type ViewerGeographicFieldPolicy = {
+	city?: FieldPolicy<any> | FieldReadFunction<any>,
+	connectionAddr?: FieldPolicy<any> | FieldReadFunction<any>,
+	countryCode?: FieldPolicy<any> | FieldReadFunction<any>,
+	eventType?: FieldPolicy<any> | FieldReadFunction<any>,
+	latitude?: FieldPolicy<any> | FieldReadFunction<any>,
+	longitude?: FieldPolicy<any> | FieldReadFunction<any>,
+	nodeId?: FieldPolicy<any> | FieldReadFunction<any>,
+	source?: FieldPolicy<any> | FieldReadFunction<any>,
+	stream?: FieldPolicy<any> | FieldReadFunction<any>,
+	timestamp?: FieldPolicy<any> | FieldReadFunction<any>,
+	viewerCount?: FieldPolicy<any> | FieldReadFunction<any>
+};
 export type ViewerMetricKeySpecifier = ('timestamp' | 'viewerCount' | ViewerMetricKeySpecifier)[];
 export type ViewerMetricFieldPolicy = {
 	timestamp?: FieldPolicy<any> | FieldReadFunction<any>,
@@ -1403,6 +1598,10 @@ export type StrictTypedTypePolicies = {
 		keyFields?: false | BillingTierKeySpecifier | (() => undefined | BillingTierKeySpecifier),
 		fields?: BillingTierFieldPolicy,
 	},
+	CityMetric?: Omit<TypePolicy, "fields" | "keyFields"> & {
+		keyFields?: false | CityMetricKeySpecifier | (() => undefined | CityMetricKeySpecifier),
+		fields?: CityMetricFieldPolicy,
+	},
 	Clip?: Omit<TypePolicy, "fields" | "keyFields"> & {
 		keyFields?: false | ClipKeySpecifier | (() => undefined | ClipKeySpecifier),
 		fields?: ClipFieldPolicy,
@@ -1411,9 +1610,21 @@ export type StrictTypedTypePolicies = {
 		keyFields?: false | ClusterKeySpecifier | (() => undefined | ClusterKeySpecifier),
 		fields?: ClusterFieldPolicy,
 	},
+	CountryMetric?: Omit<TypePolicy, "fields" | "keyFields"> & {
+		keyFields?: false | CountryMetricKeySpecifier | (() => undefined | CountryMetricKeySpecifier),
+		fields?: CountryMetricFieldPolicy,
+	},
+	CountryTimeSeries?: Omit<TypePolicy, "fields" | "keyFields"> & {
+		keyFields?: false | CountryTimeSeriesKeySpecifier | (() => undefined | CountryTimeSeriesKeySpecifier),
+		fields?: CountryTimeSeriesFieldPolicy,
+	},
 	DeveloperToken?: Omit<TypePolicy, "fields" | "keyFields"> & {
 		keyFields?: false | DeveloperTokenKeySpecifier | (() => undefined | DeveloperTokenKeySpecifier),
 		fields?: DeveloperTokenFieldPolicy,
+	},
+	GeographicDistribution?: Omit<TypePolicy, "fields" | "keyFields"> & {
+		keyFields?: false | GeographicDistributionKeySpecifier | (() => undefined | GeographicDistributionKeySpecifier),
+		fields?: GeographicDistributionFieldPolicy,
 	},
 	Invoice?: Omit<TypePolicy, "fields" | "keyFields"> & {
 		keyFields?: false | InvoiceKeySpecifier | (() => undefined | InvoiceKeySpecifier),
@@ -1422,6 +1633,10 @@ export type StrictTypedTypePolicies = {
 	LineItem?: Omit<TypePolicy, "fields" | "keyFields"> & {
 		keyFields?: false | LineItemKeySpecifier | (() => undefined | LineItemKeySpecifier),
 		fields?: LineItemFieldPolicy,
+	},
+	LoadBalancingMetric?: Omit<TypePolicy, "fields" | "keyFields"> & {
+		keyFields?: false | LoadBalancingMetricKeySpecifier | (() => undefined | LoadBalancingMetricKeySpecifier),
+		fields?: LoadBalancingMetricFieldPolicy,
 	},
 	Mutation?: Omit<TypePolicy, "fields" | "keyFields"> & {
 		keyFields?: false | MutationKeySpecifier | (() => undefined | MutationKeySpecifier),
@@ -1502,6 +1717,10 @@ export type StrictTypedTypePolicies = {
 	User?: Omit<TypePolicy, "fields" | "keyFields"> & {
 		keyFields?: false | UserKeySpecifier | (() => undefined | UserKeySpecifier),
 		fields?: UserFieldPolicy,
+	},
+	ViewerGeographic?: Omit<TypePolicy, "fields" | "keyFields"> & {
+		keyFields?: false | ViewerGeographicKeySpecifier | (() => undefined | ViewerGeographicKeySpecifier),
+		fields?: ViewerGeographicFieldPolicy,
 	},
 	ViewerMetric?: Omit<TypePolicy, "fields" | "keyFields"> & {
 		keyFields?: false | ViewerMetricKeySpecifier | (() => undefined | ViewerMetricKeySpecifier),
@@ -1826,6 +2045,94 @@ export const GetUsageRecordsDocument = gql`
 }
     `;
 export type GetUsageRecordsQueryResult = Apollo.QueryResult<GetUsageRecordsQuery, GetUsageRecordsQueryVariables>;
+export const GetViewerGeographicsDocument = gql`
+    query GetViewerGeographics($stream: String, $timeRange: TimeRangeInput) {
+  viewerGeographics(stream: $stream, timeRange: $timeRange) {
+    timestamp
+    stream
+    nodeId
+    countryCode
+    city
+    latitude
+    longitude
+    viewerCount
+    connectionAddr
+    eventType
+    source
+  }
+}
+    `;
+export type GetViewerGeographicsQueryResult = Apollo.QueryResult<GetViewerGeographicsQuery, GetViewerGeographicsQueryVariables>;
+export const GetGeographicDistributionDocument = gql`
+    query GetGeographicDistribution($stream: String, $timeRange: TimeRangeInput) {
+  geographicDistribution(stream: $stream, timeRange: $timeRange) {
+    timeRange {
+      start
+      end
+    }
+    stream
+    topCountries {
+      countryCode
+      viewerCount
+      percentage
+      cities {
+        city
+        countryCode
+        viewerCount
+        percentage
+        latitude
+        longitude
+      }
+    }
+    topCities {
+      city
+      countryCode
+      viewerCount
+      percentage
+      latitude
+      longitude
+    }
+    uniqueCountries
+    uniqueCities
+    totalViewers
+    viewersByCountry {
+      timestamp
+      countryCode
+      viewerCount
+    }
+  }
+}
+    `;
+export type GetGeographicDistributionQueryResult = Apollo.QueryResult<GetGeographicDistributionQuery, GetGeographicDistributionQueryVariables>;
+export const GetLoadBalancingMetricsDocument = gql`
+    query GetLoadBalancingMetrics($timeRange: TimeRangeInput) {
+  loadBalancingMetrics(timeRange: $timeRange) {
+    timestamp
+    stream
+    selectedNode
+    nodeId
+    clientIp
+    clientCountry
+    clientLatitude
+    clientLongitude
+    nodeLatitude
+    nodeLongitude
+    score
+    status
+    details
+    routingDistance
+    eventType
+    source
+  }
+}
+    `;
+export type GetLoadBalancingMetricsQueryResult = Apollo.QueryResult<GetLoadBalancingMetricsQuery, GetLoadBalancingMetricsQueryVariables>;
+export const PlaceholderDocument = gql`
+    query Placeholder {
+  __typename
+}
+    `;
+export type PlaceholderQueryResult = Apollo.QueryResult<PlaceholderQuery, PlaceholderQueryVariables>;
 export const GetBillingTiersDocument = gql`
     query GetBillingTiers {
   billingTiers {
@@ -2039,6 +2346,9 @@ export const GetClustersDocument = gql`
       ipAddress
       lastSeen
       createdAt
+      latitude
+      longitude
+      location
     }
   }
 }
@@ -2062,6 +2372,9 @@ export const GetClusterDocument = gql`
       ipAddress
       lastSeen
       createdAt
+      latitude
+      longitude
+      location
     }
   }
 }
@@ -2079,6 +2392,9 @@ export const GetNodesDocument = gql`
     ipAddress
     lastSeen
     createdAt
+    latitude
+    longitude
+    location
   }
 }
     `;
@@ -2095,6 +2411,9 @@ export const GetNodeDocument = gql`
     ipAddress
     lastSeen
     createdAt
+    latitude
+    longitude
+    location
   }
 }
     `;

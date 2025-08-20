@@ -31,6 +31,7 @@ enum EventType {
   EVENT_TYPE_TRACK_LIST = 10;
   EVENT_TYPE_STREAM_BUFFER = 11;
   EVENT_TYPE_STREAM_END = 12;
+  EVENT_TYPE_BANDWIDTH_THRESHOLD = 13;
 }
 
 message Event {
@@ -64,6 +65,8 @@ message EventData {
     StreamMetricsData stream_metrics_data = 17;
     NodeMonitoringData node_monitoring_data = 18;
     LoadBalancingData load_balancing_data = 19;
+    BandwidthThresholdData bandwidth_threshold_data = 20;
+    ClientLifecycleData client_lifecycle_data = 21;
   }
 }
 
@@ -146,6 +149,24 @@ message LoadBalancingData {
   uint64 score = 6;
   string client_ip = 7;
   string client_country = 8;
+}
+
+// Client lifecycle specific data  
+message ClientLifecycleData {
+  string action = 1;
+  string client_ip = 2;
+  optional string client_country = 3;
+  optional string client_city = 4;
+  optional double client_latitude = 5;
+  optional double client_longitude = 6;
+}
+
+// Bandwidth threshold specific data
+message BandwidthThresholdData {
+  uint64 current_bytes_per_sec = 1;
+  bool threshold_exceeded = 2;
+  optional uint64 threshold_value = 3;
+  optional string node_id = 4;
 }
 
 

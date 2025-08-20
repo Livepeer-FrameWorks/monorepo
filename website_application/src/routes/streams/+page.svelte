@@ -701,7 +701,7 @@ Stream Ingest
               <div class="border border-tokyo-night-fg-gutter rounded-lg p-4">
                 <div class="flex items-center justify-between mb-3">
                   <div class="flex items-center space-x-3">
-                    <span class="text-xl">{protocol.icon}</span>
+                    <svelte:component this={getIconComponent(protocol.icon)} class="w-5 h-5 text-tokyo-night-cyan" />
                     <div>
                       <h3
                         class="font-semibold text-tokyo-night-fg flex items-center space-x-2"
@@ -763,7 +763,7 @@ Stream Delivery
               <div class="border border-tokyo-night-fg-gutter rounded-lg p-4">
                 <div class="flex items-center justify-between mb-3">
                   <div class="flex items-center space-x-3">
-                    <span class="text-xl">{protocol.icon}</span>
+                    <svelte:component this={getIconComponent(protocol.icon)} class="w-5 h-5 text-tokyo-night-cyan" />
                     <div>
                       <h3
                         class="font-semibold text-tokyo-night-fg flex items-center space-x-2"

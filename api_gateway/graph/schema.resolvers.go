@@ -188,6 +188,21 @@ func (r *queryResolver) PlatformOverview(ctx context.Context, timeRange *model.T
 	return r.DoGetPlatformOverview(ctx, timeRange)
 }
 
+// ViewerGeographics is the resolver for the viewerGeographics field.
+func (r *queryResolver) ViewerGeographics(ctx context.Context, stream *string, timeRange *model.TimeRangeInput) ([]*model.ViewerGeographic, error) {
+	return r.DoGetViewerGeographics(ctx, stream, timeRange)
+}
+
+// GeographicDistribution is the resolver for the geographicDistribution field.
+func (r *queryResolver) GeographicDistribution(ctx context.Context, stream *string, timeRange *model.TimeRangeInput) (*model.GeographicDistribution, error) {
+	return r.DoGetGeographicDistribution(ctx, stream, timeRange)
+}
+
+// LoadBalancingMetrics is the resolver for the loadBalancingMetrics field.
+func (r *queryResolver) LoadBalancingMetrics(ctx context.Context, timeRange *model.TimeRangeInput) ([]*model.LoadBalancingMetric, error) {
+	return r.DoGetLoadBalancingMetrics(ctx, timeRange)
+}
+
 // StreamHealthMetrics is the resolver for the streamHealthMetrics field.
 func (r *queryResolver) StreamHealthMetrics(ctx context.Context, stream string, timeRange *model.TimeRangeInput) ([]*model.StreamHealthMetric, error) {
 	return r.DoGetStreamHealthMetrics(ctx, stream, timeRange)

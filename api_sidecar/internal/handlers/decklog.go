@@ -108,13 +108,34 @@ func (dc *DecklogClient) SendAnalyticsEvent(eventType string, data map[string]in
 		Data:      data,
 	}
 
+	// Add debug logging for event content
+	logger.WithFields(logging.Fields{
+		"event_type":    eventType,
+		"tenant_id":     data["tenant_id"],
+		"internal_name": data["internal_name"],
+		"data_keys":     getMapKeys(data),
+	}).Debug("Queuing analytics event to Decklog")
+
 	select {
 	case dc.eventChan <- event:
+		logger.WithFields(logging.Fields{
+			"event_type": eventType,
+		}).Debug("Successfully queued analytics event")
 	default:
 		logger.WithFields(logging.Fields{
 			"event_type": eventType,
+			"data":       data,
 		}).Warn("Decklog event channel full, dropping event")
 	}
+}
+
+// Helper function to get map keys for debugging
+func getMapKeys(m map[string]interface{}) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }
 
 // processEvents handles events from the channel and batches them
@@ -269,23 +290,21 @@ func (dc *DecklogClient) sendBatchGRPC(events []models.DecklogEvent) error {
 				},
 			}
 		case pb.EventType_EVENT_TYPE_CLIENT_LIFECYCLE:
-			// Handle both regular client lifecycle events and bandwidth-threshold events
-			if event.EventType == "bandwidth-threshold" {
-				// For bandwidth-threshold events, use StreamMetricsData
-				eventDataItem.EventData = &pb.EventData_StreamMetricsData{
-					StreamMetricsData: &pb.StreamMetricsData{
-						BandwidthBps: getUint64FromData(event.Data, "current_bytes_per_sec"),
-						ViewerCount:  getUint32FromData(event.Data, "viewer_count"),
-					},
-				}
-			} else {
-				// For regular client lifecycle events, use existing structure
-				eventDataItem.EventData = &pb.EventData_StreamMetricsData{
-					StreamMetricsData: &pb.StreamMetricsData{
-						BandwidthBps: getUint64FromData(event.Data, "bandwidth_in"),
-						ViewerCount:  getUint32FromData(event.Data, "viewer_count"),
-					},
-				}
+			// For regular client lifecycle events, use existing structure
+			eventDataItem.EventData = &pb.EventData_StreamMetricsData{
+				StreamMetricsData: &pb.StreamMetricsData{
+					BandwidthBps: getUint64FromData(event.Data, "bandwidth_in"),
+					ViewerCount:  getUint32FromData(event.Data, "viewer_count"),
+				},
+			}
+		case pb.EventType_EVENT_TYPE_BANDWIDTH_THRESHOLD:
+			// For bandwidth-threshold events, use BandwidthThresholdData
+			eventDataItem.EventData = &pb.EventData_BandwidthThresholdData{
+				BandwidthThresholdData: &pb.BandwidthThresholdData{
+					CurrentBytesPerSec: getUint64FromData(event.Data, "current_bytes_per_sec"),
+					ThresholdExceeded:  true, // Always true since this event only fires on threshold exceeded
+					NodeId:             getOptionalStringFromData(event.Data, "node_id"),
+				},
 			}
 		case pb.EventType_EVENT_TYPE_TRACK_LIST:
 			eventDataItem.EventData = &pb.EventData_StreamLifecycleData{
@@ -436,7 +455,7 @@ func mapEventTypeToProto(eventType string) pb.EventType {
 	case "stream-end":
 		return pb.EventType_EVENT_TYPE_STREAM_END
 	case "bandwidth-threshold":
-		return pb.EventType_EVENT_TYPE_CLIENT_LIFECYCLE
+		return pb.EventType_EVENT_TYPE_BANDWIDTH_THRESHOLD
 	default:
 		return pb.EventType_EVENT_TYPE_UNSPECIFIED
 	}

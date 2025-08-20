@@ -59,3 +59,80 @@ query GetUsageRecords($timeRange: TimeRangeInput) {
     timestamp
   }
 }
+
+# Geographic Analytics queries
+query GetViewerGeographics($stream: String, $timeRange: TimeRangeInput) {
+  viewerGeographics(stream: $stream, timeRange: $timeRange) {
+    timestamp
+    stream
+    nodeId
+    countryCode
+    city
+    latitude
+    longitude
+    viewerCount
+    connectionAddr
+    eventType
+    source
+  }
+}
+
+query GetGeographicDistribution($stream: String, $timeRange: TimeRangeInput) {
+  geographicDistribution(stream: $stream, timeRange: $timeRange) {
+    timeRange {
+      start
+      end
+    }
+    stream
+    topCountries {
+      countryCode
+      viewerCount
+      percentage
+      cities {
+        city
+        countryCode
+        viewerCount
+        percentage
+        latitude
+        longitude
+      }
+    }
+    topCities {
+      city
+      countryCode
+      viewerCount
+      percentage
+      latitude
+      longitude
+    }
+    uniqueCountries
+    uniqueCities
+    totalViewers
+    viewersByCountry {
+      timestamp
+      countryCode
+      viewerCount
+    }
+  }
+}
+
+query GetLoadBalancingMetrics($timeRange: TimeRangeInput) {
+  loadBalancingMetrics(timeRange: $timeRange) {
+    timestamp
+    stream
+    selectedNode
+    nodeId
+    clientIp
+    clientCountry
+    clientLatitude
+    clientLongitude
+    nodeLatitude
+    nodeLongitude
+    score
+    status
+    details
+    routingDistance
+    eventType
+    source
+  }
+}

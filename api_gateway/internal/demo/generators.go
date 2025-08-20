@@ -551,3 +551,231 @@ func GenerateRebufferingEvents() []*model.RebufferingEvent {
 		},
 	}
 }
+
+// GenerateViewerGeographics creates realistic demo viewer geographic data
+func GenerateViewerGeographics() []*model.ViewerGeographic {
+	now := time.Now()
+
+	return []*model.ViewerGeographic{
+		{
+			Timestamp:      now.Add(-30 * time.Minute),
+			Stream:         func() *string { s := "demo_live_stream_001"; return &s }(),
+			NodeID:         func() *string { s := "node_demo_us_west_01"; return &s }(),
+			CountryCode:    func() *string { s := "US"; return &s }(),
+			City:           func() *string { s := "San Francisco"; return &s }(),
+			Latitude:       func() *float64 { f := 37.7749; return &f }(),
+			Longitude:      func() *float64 { f := -122.4194; return &f }(),
+			ViewerCount:    func() *int { i := 1; return &i }(),
+			ConnectionAddr: func() *string { s := "192.168.1.100"; return &s }(),
+			EventType:      func() *string { s := "user_new"; return &s }(),
+			Source:         func() *string { s := "mistserver_webhook"; return &s }(),
+		},
+		{
+			Timestamp:      now.Add(-25 * time.Minute),
+			Stream:         func() *string { s := "demo_live_stream_001"; return &s }(),
+			NodeID:         func() *string { s := "node_demo_eu_west_01"; return &s }(),
+			CountryCode:    func() *string { s := "GB"; return &s }(),
+			City:           func() *string { s := "London"; return &s }(),
+			Latitude:       func() *float64 { f := 51.5074; return &f }(),
+			Longitude:      func() *float64 { f := -0.1278; return &f }(),
+			ViewerCount:    func() *int { i := 1; return &i }(),
+			ConnectionAddr: func() *string { s := "203.0.113.45"; return &s }(),
+			EventType:      func() *string { s := "user_new"; return &s }(),
+			Source:         func() *string { s := "mistserver_webhook"; return &s }(),
+		},
+		{
+			Timestamp:      now.Add(-20 * time.Minute),
+			Stream:         func() *string { s := "demo_live_stream_001"; return &s }(),
+			NodeID:         func() *string { s := "node_demo_ap_east_01"; return &s }(),
+			CountryCode:    func() *string { s := "JP"; return &s }(),
+			City:           func() *string { s := "Tokyo"; return &s }(),
+			Latitude:       func() *float64 { f := 35.6762; return &f }(),
+			Longitude:      func() *float64 { f := 139.6503; return &f }(),
+			ViewerCount:    func() *int { i := 1; return &i }(),
+			ConnectionAddr: func() *string { s := "198.51.100.78"; return &s }(),
+			EventType:      func() *string { s := "user_new"; return &s }(),
+			Source:         func() *string { s := "mistserver_webhook"; return &s }(),
+		},
+	}
+}
+
+// GenerateGeographicDistribution creates realistic demo geographic distribution data
+func GenerateGeographicDistribution() *model.GeographicDistribution {
+	now := time.Now()
+
+	return &model.GeographicDistribution{
+		TimeRange: &model.TimeRange{
+			Start: now.Add(-24 * time.Hour),
+			End:   now,
+		},
+		Stream:          func() *string { s := "demo_live_stream_001"; return &s }(),
+		UniqueCountries: 5,
+		UniqueCities:    8,
+		TotalViewers:    1247,
+		TopCountries: []*model.CountryMetric{
+			{
+				CountryCode: "US",
+				ViewerCount: 623,
+				Percentage:  49.9,
+				Cities: []*model.CityMetric{
+					{
+						City:        "San Francisco",
+						CountryCode: func() *string { s := "US"; return &s }(),
+						ViewerCount: 234,
+						Percentage:  18.8,
+						Latitude:    func() *float64 { f := 37.7749; return &f }(),
+						Longitude:   func() *float64 { f := -122.4194; return &f }(),
+					},
+					{
+						City:        "New York",
+						CountryCode: func() *string { s := "US"; return &s }(),
+						ViewerCount: 189,
+						Percentage:  15.2,
+						Latitude:    func() *float64 { f := 40.7128; return &f }(),
+						Longitude:   func() *float64 { f := -74.0060; return &f }(),
+					},
+				},
+			},
+			{
+				CountryCode: "GB",
+				ViewerCount: 298,
+				Percentage:  23.9,
+				Cities: []*model.CityMetric{
+					{
+						City:        "London",
+						CountryCode: func() *string { s := "GB"; return &s }(),
+						ViewerCount: 201,
+						Percentage:  16.1,
+						Latitude:    func() *float64 { f := 51.5074; return &f }(),
+						Longitude:   func() *float64 { f := -0.1278; return &f }(),
+					},
+				},
+			},
+			{
+				CountryCode: "JP",
+				ViewerCount: 187,
+				Percentage:  15.0,
+				Cities: []*model.CityMetric{
+					{
+						City:        "Tokyo",
+						CountryCode: func() *string { s := "JP"; return &s }(),
+						ViewerCount: 123,
+						Percentage:  9.9,
+						Latitude:    func() *float64 { f := 35.6762; return &f }(),
+						Longitude:   func() *float64 { f := 139.6503; return &f }(),
+					},
+				},
+			},
+		},
+		TopCities: []*model.CityMetric{
+			{
+				City:        "San Francisco",
+				CountryCode: func() *string { s := "US"; return &s }(),
+				ViewerCount: 234,
+				Percentage:  18.8,
+				Latitude:    func() *float64 { f := 37.7749; return &f }(),
+				Longitude:   func() *float64 { f := -122.4194; return &f }(),
+			},
+			{
+				City:        "London",
+				CountryCode: func() *string { s := "GB"; return &s }(),
+				ViewerCount: 201,
+				Percentage:  16.1,
+				Latitude:    func() *float64 { f := 51.5074; return &f }(),
+				Longitude:   func() *float64 { f := -0.1278; return &f }(),
+			},
+			{
+				City:        "New York",
+				CountryCode: func() *string { s := "US"; return &s }(),
+				ViewerCount: 189,
+				Percentage:  15.2,
+				Latitude:    func() *float64 { f := 40.7128; return &f }(),
+				Longitude:   func() *float64 { f := -74.0060; return &f }(),
+			},
+		},
+		ViewersByCountry: []*model.CountryTimeSeries{
+			{
+				Timestamp:   now.Add(-23 * time.Hour),
+				CountryCode: "US",
+				ViewerCount: 45,
+			},
+			{
+				Timestamp:   now.Add(-22 * time.Hour),
+				CountryCode: "US",
+				ViewerCount: 67,
+			},
+			{
+				Timestamp:   now.Add(-21 * time.Hour),
+				CountryCode: "GB",
+				ViewerCount: 23,
+			},
+			{
+				Timestamp:   now.Add(-20 * time.Hour),
+				CountryCode: "JP",
+				ViewerCount: 15,
+			},
+		},
+	}
+}
+
+// GenerateLoadBalancingMetrics creates realistic demo load balancing metrics data
+func GenerateLoadBalancingMetrics() []*model.LoadBalancingMetric {
+	now := time.Now()
+
+	return []*model.LoadBalancingMetric{
+		{
+			Timestamp:       now.Add(-30 * time.Minute),
+			Stream:          "demo_live_stream_001",
+			SelectedNode:    "node_demo_us_west_01",
+			NodeID:          func() *string { s := "node_demo_us_west_01"; return &s }(),
+			ClientIP:        func() *string { s := "192.168.1.100"; return &s }(),
+			ClientCountry:   func() *string { s := "US"; return &s }(),
+			ClientLatitude:  func() *float64 { f := 37.7749; return &f }(),
+			ClientLongitude: func() *float64 { f := -122.4194; return &f }(),
+			NodeLatitude:    func() *float64 { f := 37.4419; return &f }(),
+			NodeLongitude:   func() *float64 { f := -122.1430; return &f }(),
+			Score:           func() *int { s := 2850; return &s }(),
+			Status:          "success",
+			Details:         func() *string { s := "optimal_routing"; return &s }(),
+			RoutingDistance: func() *float64 { f := 42.3; return &f }(), // km
+			EventType:       func() *string { s := "load-balancing"; return &s }(),
+			Source:          func() *string { s := "foghorn"; return &s }(),
+		},
+		{
+			Timestamp:       now.Add(-25 * time.Minute),
+			Stream:          "demo_live_stream_001",
+			SelectedNode:    "node_demo_eu_west_01",
+			NodeID:          func() *string { s := "node_demo_eu_west_01"; return &s }(),
+			ClientIP:        func() *string { s := "203.0.113.45"; return &s }(),
+			ClientCountry:   func() *string { s := "GB"; return &s }(),
+			ClientLatitude:  func() *float64 { f := 51.5074; return &f }(),
+			ClientLongitude: func() *float64 { f := -0.1278; return &f }(),
+			NodeLatitude:    func() *float64 { f := 51.4994; return &f }(),
+			NodeLongitude:   func() *float64 { f := -0.1270; return &f }(),
+			Score:           func() *int { s := 3100; return &s }(),
+			Status:          "success",
+			Details:         func() *string { s := "regional_optimal"; return &s }(),
+			RoutingDistance: func() *float64 { f := 1.2; return &f }(), // km
+			EventType:       func() *string { s := "load-balancing"; return &s }(),
+			Source:          func() *string { s := "foghorn"; return &s }(),
+		},
+		{
+			Timestamp:       now.Add(-20 * time.Minute),
+			Stream:          "demo_live_stream_001",
+			SelectedNode:    "node_demo_ap_east_01",
+			NodeID:          func() *string { s := "node_demo_ap_east_01"; return &s }(),
+			ClientIP:        func() *string { s := "198.51.100.78"; return &s }(),
+			ClientCountry:   func() *string { s := "JP"; return &s }(),
+			ClientLatitude:  func() *float64 { f := 35.6762; return &f }(),
+			ClientLongitude: func() *float64 { f := 139.6503; return &f }(),
+			NodeLatitude:    func() *float64 { f := 35.6804; return &f }(),
+			NodeLongitude:   func() *float64 { f := 139.7690; return &f }(),
+			Score:           func() *int { s := 2950; return &s }(),
+			Status:          "success",
+			Details:         func() *string { s := "ap_regional"; return &s }(),
+			RoutingDistance: func() *float64 { f := 13.8; return &f }(), // km
+			EventType:       func() *string { s := "load-balancing"; return &s }(),
+			Source:          func() *string { s := "foghorn"; return &s }(),
+		},
+	}
+}

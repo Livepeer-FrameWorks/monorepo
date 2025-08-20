@@ -49,6 +49,8 @@ func mapProtoEventTypeToValidation(t pb.EventType) validation.EventType {
 		return validation.EventStreamBuffer
 	case pb.EventType_EVENT_TYPE_STREAM_END:
 		return validation.EventStreamEnd
+	case pb.EventType_EVENT_TYPE_BANDWIDTH_THRESHOLD:
+		return validation.EventBandwidthThreshold
 	default:
 		return validation.EventType("unknown")
 	}
@@ -194,7 +196,17 @@ func (s *DecklogServer) StreamEvents(stream pb.DecklogService_StreamEventsServer
 						data["reason"] = *eventData.StreamLifecycleData.Reason
 					}
 				case *pb.EventData_UserConnectionData:
-					data["action"] = eventData.UserConnectionData.Action.String()
+					// Convert protobuf enum to expected string values for validation
+					var actionStr string
+					switch eventData.UserConnectionData.Action {
+					case pb.UserConnectionData_ACTION_CONNECT:
+						actionStr = "connect"
+					case pb.UserConnectionData_ACTION_DISCONNECT:
+						actionStr = "disconnect"
+					default:
+						actionStr = "unknown"
+					}
+					data["action"] = actionStr
 					if eventData.UserConnectionData.DisconnectReason != nil {
 						data["disconnect_reason"] = *eventData.UserConnectionData.DisconnectReason
 					}
@@ -209,6 +221,21 @@ func (s *DecklogServer) StreamEvents(stream pb.DecklogService_StreamEventsServer
 					}
 					if eventData.StreamMetricsData.PacketLoss != nil {
 						data["packet_loss"] = *eventData.StreamMetricsData.PacketLoss
+					}
+				case *pb.EventData_ClientLifecycleData:
+					data["action"] = eventData.ClientLifecycleData.Action
+					data["client_ip"] = eventData.ClientLifecycleData.ClientIp
+					if eventData.ClientLifecycleData.ClientCountry != nil {
+						data["client_country"] = *eventData.ClientLifecycleData.ClientCountry
+					}
+					if eventData.ClientLifecycleData.ClientCity != nil {
+						data["client_city"] = *eventData.ClientLifecycleData.ClientCity
+					}
+					if eventData.ClientLifecycleData.ClientLatitude != nil {
+						data["client_latitude"] = *eventData.ClientLifecycleData.ClientLatitude
+					}
+					if eventData.ClientLifecycleData.ClientLongitude != nil {
+						data["client_longitude"] = *eventData.ClientLifecycleData.ClientLongitude
 					}
 				}
 			}

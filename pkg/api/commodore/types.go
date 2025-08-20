@@ -196,6 +196,8 @@ type EmailVerificationResponse struct {
 // Internal name resolution response
 type InternalNameResponse struct {
 	InternalName string `json:"internal_name"`
+	TenantID     string `json:"tenant_id"`
+	UserID       string `json:"user_id"`
 }
 
 // Kafka config response
