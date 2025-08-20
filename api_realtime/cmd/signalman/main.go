@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"frameworks/api_realtime/internal/handlers"
+	"frameworks/api_realtime/internal/metrics"
 	"frameworks/api_realtime/internal/websocket"
 	"frameworks/pkg/auth"
 	"frameworks/pkg/config"
@@ -28,12 +29,23 @@ func main() {
 	healthChecker := monitoring.NewHealthChecker("signalman", version.Version)
 	metricsCollector := monitoring.NewMetricsCollector("signalman", version.Version, version.GitCommit)
 
-	// Initialize WebSocket hub
-	hub := websocket.NewHub(logger)
+	// Create custom metrics
+	serviceMetrics := &metrics.Metrics{
+		HubConnections:     metricsCollector.NewGauge("websocket_hub_connections_active", "Active WebSocket hub connections", []string{"channel"}),
+		HubMessages:        metricsCollector.NewCounter("websocket_hub_messages_total", "WebSocket hub messages", []string{"channel", "direction"}),
+		EventsPublished:    metricsCollector.NewCounter("realtime_events_published_total", "Real-time events published", []string{"event_type"}),
+		MessageDeliveryLag: metricsCollector.NewHistogram("message_delivery_lag_seconds", "Message delivery latency", []string{}, nil),
+	}
+
+	// Create Kafka metrics
+	serviceMetrics.KafkaMessages, serviceMetrics.KafkaDuration, serviceMetrics.KafkaLag = metricsCollector.CreateKafkaMetrics()
+
+	// Initialize WebSocket hub with unified metrics
+	hub := websocket.NewHub(logger, serviceMetrics)
 	go hub.Run()
 
-	// Initialize handlers
-	signalmanHandlers := handlers.NewSignalmanHandlers(hub, nil, logger)
+	// Initialize handlers with unified metrics
+	signalmanHandlers := handlers.NewSignalmanHandlers(hub, nil, logger, serviceMetrics)
 
 	// Setup Kafka consumer
 	brokers := strings.Split(config.GetEnv("KAFKA_BROKERS", "localhost:9092"), ",")
@@ -50,7 +62,7 @@ func main() {
 	defer consumer.Close()
 
 	// Update handlers with consumer
-	signalmanHandlers = handlers.NewSignalmanHandlers(hub, consumer, logger)
+	signalmanHandlers = handlers.NewSignalmanHandlers(hub, consumer, logger, serviceMetrics)
 
 	// Subscribe to topics
 	if err := consumer.Subscribe(topics); err != nil {
@@ -63,18 +75,6 @@ func main() {
 		"KAFKA_BROKERS": config.GetEnv("KAFKA_BROKERS", ""),
 		"KAFKA_TOPICS":  config.GetEnv("KAFKA_TOPICS", ""),
 	}))
-
-	// Create WebSocket and messaging metrics
-	websocketConnections, messagingEvents, realtimeLatency := metricsCollector.CreateBusinessMetrics()
-	kafkaMessages, kafkaDuration, kafkaConnections := metricsCollector.CreateDatabaseMetrics()
-
-	// TODO: Wire these metrics into handlers
-	_ = websocketConnections
-	_ = messagingEvents
-	_ = realtimeLatency
-	_ = kafkaMessages
-	_ = kafkaDuration
-	_ = kafkaConnections
 
 	// Start Kafka consumer
 	ctx, cancel := context.WithCancel(context.Background())

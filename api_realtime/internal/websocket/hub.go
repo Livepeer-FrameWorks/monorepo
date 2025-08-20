@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"frameworks/api_realtime/internal/metrics"
 	"frameworks/pkg/api/signalman"
 	"frameworks/pkg/auth"
 	"frameworks/pkg/config"
@@ -23,6 +24,7 @@ type Hub struct {
 	unregister chan *Client
 	logger     logging.Logger
 	mutex      sync.RWMutex
+	metrics    *metrics.Metrics
 }
 
 // Client represents a WebSocket client connection
@@ -47,13 +49,14 @@ var upgrader = websocket.Upgrader{
 }
 
 // NewHub creates a new WebSocket hub
-func NewHub(logger logging.Logger) *Hub {
+func NewHub(logger logging.Logger, m *metrics.Metrics) *Hub {
 	return &Hub{
 		clients:    make(map[*Client]bool),
 		broadcast:  make(chan []byte, 256),
 		register:   make(chan *Client),
 		unregister: make(chan *Client),
 		logger:     logger,
+		metrics:    m,
 	}
 }
 
@@ -65,6 +68,14 @@ func (h *Hub) Run() {
 			h.mutex.Lock()
 			h.clients[client] = true
 			h.mutex.Unlock()
+
+			// Record metrics for each channel the client subscribes to
+			if h.metrics != nil {
+				for _, channel := range client.channels {
+					h.metrics.HubConnections.WithLabelValues(channel).Inc()
+				}
+			}
+
 			h.logger.WithFields(logging.Fields{
 				"client_count": len(h.clients),
 				"channels":     client.channels,
@@ -76,6 +87,13 @@ func (h *Hub) Run() {
 			if _, ok := h.clients[client]; ok {
 				delete(h.clients, client)
 				close(client.send)
+
+				// Record metrics for each channel the client was subscribed to
+				if h.metrics != nil {
+					for _, channel := range client.channels {
+						h.metrics.HubConnections.WithLabelValues(channel).Dec()
+					}
+				}
 			}
 			h.mutex.Unlock()
 			h.logger.WithFields(logging.Fields{
@@ -99,6 +117,7 @@ func (h *Hub) broadcastMessage(message []byte) {
 	h.mutex.RLock()
 	defer h.mutex.RUnlock()
 
+	messagesSent := 0
 	for client := range h.clients {
 		// Check if client is subscribed to this channel
 		subscribed := false
@@ -129,10 +148,21 @@ func (h *Hub) broadcastMessage(message []byte) {
 		// Send message to client
 		select {
 		case client.send <- message:
+			messagesSent++
+			// Track message delivery lag
+			if h.metrics != nil {
+				deliveryLag := time.Since(msg.Timestamp).Seconds()
+				h.metrics.MessageDeliveryLag.WithLabelValues(msg.Channel, msg.Type).Observe(deliveryLag)
+			}
 		default:
 			close(client.send)
 			delete(h.clients, client)
 		}
+	}
+
+	// Track hub message metrics
+	if h.metrics != nil && messagesSent > 0 {
+		h.metrics.HubMessages.WithLabelValues(msg.Channel, msg.Type).Add(float64(messagesSent))
 	}
 }
 
@@ -222,8 +252,16 @@ func (h *Hub) BroadcastEvent(eventType, channel string, data map[string]interfac
 
 	select {
 	case h.broadcast <- messageBytes:
+		// Track events published metrics
+		if h.metrics != nil {
+			h.metrics.EventsPublished.WithLabelValues(eventType, channel).Inc()
+		}
 	default:
 		h.logger.Warn("Broadcast channel full, dropping message")
+		// Track dropped events too
+		if h.metrics != nil {
+			h.metrics.EventsPublished.WithLabelValues(eventType+"_dropped", channel).Inc()
+		}
 	}
 }
 

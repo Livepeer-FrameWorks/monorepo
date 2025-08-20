@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"frameworks/api_realtime/internal/metrics"
 	"frameworks/api_realtime/internal/websocket"
 	"frameworks/pkg/api/common"
 	"frameworks/pkg/api/signalman"
@@ -20,15 +21,17 @@ type SignalmanHandlers struct {
 	consumer  kafka.ConsumerInterface
 	logger    logging.Logger
 	startTime time.Time
+	metrics   *metrics.Metrics
 }
 
 // NewSignalmanHandlers creates a new handlers instance
-func NewSignalmanHandlers(hub *websocket.Hub, consumer kafka.ConsumerInterface, logger logging.Logger) *SignalmanHandlers {
+func NewSignalmanHandlers(hub *websocket.Hub, consumer kafka.ConsumerInterface, logger logging.Logger, m *metrics.Metrics) *SignalmanHandlers {
 	return &SignalmanHandlers{
 		hub:       hub,
 		consumer:  consumer,
 		logger:    logger,
 		startTime: time.Now(),
+		metrics:   m,
 	}
 }
 
@@ -127,6 +130,13 @@ func mapEventTypeToChannel(eventType string) string {
 
 // HandleEvent processes incoming events and broadcasts them via WebSocket
 func (h *SignalmanHandlers) HandleEvent(event kafka.Event) error {
+	start := time.Now()
+
+	// Track Kafka message processing
+	if h.metrics != nil {
+		h.metrics.KafkaMessages.WithLabelValues(event.Type, "received").Inc()
+	}
+
 	channel := mapEventTypeToChannel(event.Type)
 
 	// Prefer header-provided tenant, fallback to payload data
@@ -153,6 +163,17 @@ func (h *SignalmanHandlers) HandleEvent(event kafka.Event) error {
 			"event_type": event.Type,
 			"channel":    channel,
 		}).Warn("Dropping event without tenant_id for non-system channel")
+
+		// Track dropped messages
+		if h.metrics != nil {
+			h.metrics.KafkaMessages.WithLabelValues(event.Type, "dropped").Inc()
+		}
+	}
+
+	// Track Kafka processing duration and success
+	if h.metrics != nil {
+		h.metrics.KafkaDuration.WithLabelValues(event.Type).Observe(time.Since(start).Seconds())
+		h.metrics.KafkaMessages.WithLabelValues(event.Type, "processed").Inc()
 	}
 
 	h.logger.WithFields(logging.Fields{
