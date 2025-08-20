@@ -7,7 +7,6 @@ fragment StreamInfo on Stream {
   playbackId
   status
   record
-  tenantId
   createdAt
   updatedAt
 }
@@ -29,16 +28,5 @@ query ValidateStreamKey($streamKey: String!) {
     valid
     streamKey
     error
-    tenantId
-  }
-}
-
-query GetStreamEmbed($id: ID!) {
-  streamEmbed(id: $id) {
-    streamId
-    embedCode
-    iframeUrl
-    width
-    height
   }
 }

@@ -3,8 +3,6 @@
 
 # Root Query type
 type Query {
-  # Authentication
-  me: User
 
   # Streams (from Commodore)
   streams: [Stream!]!
@@ -13,8 +11,8 @@ type Query {
   streamEmbed(id: ID!): StreamEmbed!
 
   # Analytics (from Periscope Query)
-  streamAnalytics(streamId: ID!, timeRange: TimeRangeInput): StreamAnalytics
-  viewerMetrics(streamId: ID, timeRange: TimeRangeInput): [ViewerMetric!]!
+  streamAnalytics(stream: String!, timeRange: TimeRangeInput): StreamAnalytics
+  viewerMetrics(stream: String, timeRange: TimeRangeInput): [ViewerMetric!]!
   platformOverview(timeRange: TimeRangeInput): PlatformOverview!
   
   # Billing (from Purser)  
@@ -61,19 +59,19 @@ type Mutation {
 # Root Subscription type for real-time updates
 type Subscription {
   # Stream lifecycle events
-  streamEvents(streamId: ID, tenantId: ID): StreamEvent!
+  streamEvents(stream: String): StreamEvent!
   
   # Viewer metrics updates  
-  viewerMetrics(streamId: ID!): ViewerMetrics!
+  viewerMetrics(stream: String!): ViewerMetrics!
   
   # Track list updates
-  trackListUpdates(streamId: ID!): TrackListEvent!
+  trackListUpdates(stream: String!): TrackListEvent!
   
   # System health (admin only)
   systemHealth: SystemHealthEvent!
   
-  # All events for a tenant
-  tenantEvents(tenantId: ID!): TenantEvent!
+  # All events for authenticated user
+  userEvents: TenantEvent!
 }
 
 # Input types
@@ -91,7 +89,7 @@ input UpdateStreamInput {
 }
 
 input CreateClipInput {
-  streamId: ID!
+  stream: String!
   startTime: Int!
   endTime: Int!
   title: String!
@@ -148,11 +146,9 @@ enum NodeStatus {
 # Real-time event types
 type StreamEvent {
   type: StreamEventType!
-  streamId: ID!
-  tenantId: ID!
+  stream: String!
   status: StreamStatus!
   timestamp: Time!
-  nodeId: String
   details: JSON
 }
 
@@ -165,7 +161,7 @@ enum StreamEventType {
 }
 
 type ViewerMetrics {
-  streamId: ID!
+  stream: String!
   currentViewers: Int!
   peakViewers: Int!
   bandwidth: Float!
@@ -175,16 +171,15 @@ type ViewerMetrics {
 }
 
 type TrackListEvent {
-  streamId: ID!
-  tenantId: ID!
+  stream: String!
   trackList: String!
   trackCount: Int!
   timestamp: Time!
 }
 
 type SystemHealthEvent {
-  nodeId: ID!
-  clusterId: ID!
+  node: String!
+  cluster: String!
   status: NodeStatus!
   cpuUsage: Float!
   memoryUsage: Float!
@@ -204,7 +199,6 @@ type User {
   id: ID!
   email: String!
   name: String
-  tenantId: String!
   role: String!
   createdAt: Time!
 }
@@ -214,7 +208,7 @@ type Tenant {
   id: ID!
   name: String!
   settings: JSON
-  clusterId: String
+  cluster: String
   createdAt: Time!
 }
 
@@ -226,7 +220,6 @@ type Stream {
   playbackId: String!
   status: StreamStatus!
   record: Boolean!
-  tenantId: String!
   createdAt: Time!
   updatedAt: Time!
 }
@@ -235,11 +228,10 @@ type StreamValidation {
   valid: Boolean!
   streamKey: String!
   error: String
-  tenantId: String
 }
 
 type StreamEmbed {
-  streamId: ID!
+  stream: String!
   embedCode: String!
   iframeUrl: String!
   width: Int!
@@ -247,7 +239,7 @@ type StreamEmbed {
 }
 
 type StreamAnalytics {
-  streamId: ID!
+  stream: String!
   totalViews: Int!
   totalViewTime: Float!
   peakViewers: Int!
@@ -280,7 +272,6 @@ type BillingTier {
 
 type Invoice {
   id: ID!
-  tenantId: String!
   amount: Float!
   currency: String!
   status: String!
@@ -297,7 +288,6 @@ type LineItem {
 }
 
 type BillingStatus {
-  tenantId: String!
   currentTier: BillingTier!
   nextBillingDate: Time!
   outstandingAmount: Float!
@@ -315,7 +305,6 @@ type Payment {
 
 type UsageRecord {
   id: ID!
-  tenantId: String!
   resourceType: String!
   quantity: Float!
   unit: String!
@@ -335,7 +324,7 @@ type Cluster {
 type Node {
   id: ID!
   name: String!
-  clusterId: String!
+  cluster: String!
   type: String!
   status: NodeStatus!
   region: String!
@@ -346,8 +335,7 @@ type Node {
 
 type Clip {
   id: ID!
-  streamId: String!
-  tenantId: String!
+  stream: String!
   title: String!
   description: String
   startTime: Int!

@@ -294,29 +294,21 @@ func (wm *WebSocketManager) processSystemMessages(ctx context.Context, client *s
 // convertToStreamEvent converts a Signalman message to a GraphQL StreamEvent
 func (wm *WebSocketManager) convertToStreamEvent(msg signalmanapi.Message) *model.StreamEvent {
 	streamID, _ := msg.Data["stream_id"].(string)
-	tenantID := ""
-	if msg.TenantID != nil {
-		tenantID = *msg.TenantID
-	}
-	var nodeIDPtr *string
-	if nid, ok := msg.Data["node_id"].(string); ok {
-		nodeIDPtr = &nid
-	}
 	var detailsPtr *string
 
 	switch msg.Type {
 	case signalmanapi.TypeStreamStart:
-		return &model.StreamEvent{Type: model.StreamEventTypeStreamStart, StreamID: streamID, TenantID: tenantID, Status: model.StreamStatusLive, Timestamp: msg.Timestamp, NodeID: nodeIDPtr, Details: detailsPtr}
+		return &model.StreamEvent{Type: model.StreamEventTypeStreamStart, Stream: streamID, Status: model.StreamStatusLive, Timestamp: msg.Timestamp, Details: detailsPtr}
 	case signalmanapi.TypeStreamEnd:
-		return &model.StreamEvent{Type: model.StreamEventTypeStreamEnd, StreamID: streamID, TenantID: tenantID, Status: model.StreamStatusEnded, Timestamp: msg.Timestamp, NodeID: nodeIDPtr, Details: detailsPtr}
+		return &model.StreamEvent{Type: model.StreamEventTypeStreamEnd, Stream: streamID, Status: model.StreamStatusEnded, Timestamp: msg.Timestamp, Details: detailsPtr}
 	case signalmanapi.TypeStreamError:
-		return &model.StreamEvent{Type: model.StreamEventTypeStreamError, StreamID: streamID, TenantID: tenantID, Status: model.StreamStatusOffline, Timestamp: msg.Timestamp, NodeID: nodeIDPtr, Details: detailsPtr}
+		return &model.StreamEvent{Type: model.StreamEventTypeStreamError, Stream: streamID, Status: model.StreamStatusOffline, Timestamp: msg.Timestamp, Details: detailsPtr}
 	case signalmanapi.TypeStreamBuffer:
-		return &model.StreamEvent{Type: model.StreamEventTypeBufferUpdate, StreamID: streamID, TenantID: tenantID, Status: model.StreamStatusLive, Timestamp: msg.Timestamp, NodeID: nodeIDPtr, Details: detailsPtr}
+		return &model.StreamEvent{Type: model.StreamEventTypeBufferUpdate, Stream: streamID, Status: model.StreamStatusLive, Timestamp: msg.Timestamp, Details: detailsPtr}
 	case signalmanapi.TypeTrackList:
-		return &model.StreamEvent{Type: model.StreamEventTypeTrackListUpdate, StreamID: streamID, TenantID: tenantID, Status: model.StreamStatusLive, Timestamp: msg.Timestamp, NodeID: nodeIDPtr, Details: detailsPtr}
+		return &model.StreamEvent{Type: model.StreamEventTypeTrackListUpdate, Stream: streamID, Status: model.StreamStatusLive, Timestamp: msg.Timestamp, Details: detailsPtr}
 	default:
-		return &model.StreamEvent{Type: model.StreamEventTypeStreamStart, StreamID: streamID, TenantID: tenantID, Status: model.StreamStatusLive, Timestamp: msg.Timestamp, NodeID: nodeIDPtr, Details: detailsPtr}
+		return &model.StreamEvent{Type: model.StreamEventTypeStreamStart, Stream: streamID, Status: model.StreamStatusLive, Timestamp: msg.Timestamp, Details: detailsPtr}
 	}
 }
 
@@ -347,7 +339,7 @@ func (wm *WebSocketManager) convertToViewerMetrics(msg signalmanapi.Message) *mo
 		bufferHealth = &bh
 	}
 	return &model.ViewerMetrics{
-		StreamID:          streamID,
+		Stream:            streamID,
 		CurrentViewers:    currentViewers,
 		PeakViewers:       peakViewers,
 		Bandwidth:         bandwidth,
@@ -389,8 +381,8 @@ func (wm *WebSocketManager) convertToSystemHealthEvent(msg signalmanapi.Message)
 		}
 	}
 	return &model.SystemHealthEvent{
-		NodeID:      nodeID,
-		ClusterID:   clusterID,
+		Node:        nodeID,
+		Cluster:     clusterID,
 		Status:      status,
 		CPUUsage:    cpu,
 		MemoryUsage: mem,
@@ -484,10 +476,6 @@ func (wm *WebSocketManager) convertToTrackListEvent(msg signalmanapi.Message) *m
 	}
 
 	streamID, _ := msg.Data["stream_id"].(string)
-	tenantID := ""
-	if msg.TenantID != nil {
-		tenantID = *msg.TenantID
-	}
 
 	trackList := ""
 	if tl, ok := msg.Data["track_list"].(string); ok {
@@ -500,8 +488,7 @@ func (wm *WebSocketManager) convertToTrackListEvent(msg signalmanapi.Message) *m
 	}
 
 	return &model.TrackListEvent{
-		StreamID:   streamID,
-		TenantID:   tenantID,
+		Stream:     streamID,
 		TrackList:  trackList,
 		TrackCount: trackCount,
 		Timestamp:  msg.Timestamp,

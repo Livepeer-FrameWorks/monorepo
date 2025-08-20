@@ -36,7 +36,7 @@ func GetStreamAnalytics(c *gin.Context) {
 	}
 
 	// Parse optional query parameters
-	streamID := c.Query("stream_id")
+	streamInternalName := c.Query("stream_id") // Note: still using "stream_id" param for backward compatibility
 	startTime := c.DefaultQuery("start_time", time.Now().Add(-24*time.Hour).Format(time.RFC3339))
 	endTime := c.DefaultQuery("end_time", time.Now().Format(time.RFC3339))
 
@@ -88,10 +88,10 @@ func GetStreamAnalytics(c *gin.Context) {
 
 	args := []interface{}{tenantID, startParsed, endParsed}
 
-	// Only filter by stream if streamID is provided and not empty
-	if streamID != "" && streamID != "null" && streamID != "undefined" {
+	// Only filter by stream if streamInternalName is provided and not empty
+	if streamInternalName != "" && streamInternalName != "null" && streamInternalName != "undefined" {
 		query += " AND sa.internal_name = $4"
-		args = append(args, streamID)
+		args = append(args, streamInternalName)
 	}
 
 	query += " ORDER BY sa.last_updated DESC"

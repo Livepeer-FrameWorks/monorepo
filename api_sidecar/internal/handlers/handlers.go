@@ -244,9 +244,7 @@ func HandlePushRewrite(c *gin.Context) {
 
 	// Forward analytics event to Decklog for batched processing
 	go ForwardEventToDecklog("stream-ingest", map[string]interface{}{
-		"tenant_id":     validation.TenantID,
 		"stream_key":    streamKey,
-		"user_id":       validation.UserID,
 		"internal_name": validation.InternalName,
 		"hostname":      hostname,
 		"push_url":      pushURL,

@@ -64,7 +64,6 @@ type ComplexityRoot struct {
 		NextBillingDate   func(childComplexity int) int
 		OutstandingAmount func(childComplexity int) int
 		Status            func(childComplexity int) int
-		TenantID          func(childComplexity int) int
 	}
 
 	BillingTier struct {
@@ -85,8 +84,7 @@ type ComplexityRoot struct {
 		PlaybackID  func(childComplexity int) int
 		StartTime   func(childComplexity int) int
 		Status      func(childComplexity int) int
-		StreamID    func(childComplexity int) int
-		TenantID    func(childComplexity int) int
+		Stream      func(childComplexity int) int
 		Title       func(childComplexity int) int
 		UpdatedAt   func(childComplexity int) int
 	}
@@ -119,7 +117,6 @@ type ComplexityRoot struct {
 		ID        func(childComplexity int) int
 		LineItems func(childComplexity int) int
 		Status    func(childComplexity int) int
-		TenantID  func(childComplexity int) int
 	}
 
 	LineItem struct {
@@ -143,7 +140,7 @@ type ComplexityRoot struct {
 	}
 
 	Node struct {
-		ClusterID func(childComplexity int) int
+		Cluster   func(childComplexity int) int
 		CreatedAt func(childComplexity int) int
 		ID        func(childComplexity int) int
 		IPAddress func(childComplexity int) int
@@ -179,18 +176,17 @@ type ComplexityRoot struct {
 		DeveloperTokens   func(childComplexity int) int
 		Invoice           func(childComplexity int, id string) int
 		Invoices          func(childComplexity int) int
-		Me                func(childComplexity int) int
 		Node              func(childComplexity int, id string) int
 		Nodes             func(childComplexity int) int
 		PlatformOverview  func(childComplexity int, timeRange *model.TimeRangeInput) int
 		Stream            func(childComplexity int, id string) int
-		StreamAnalytics   func(childComplexity int, streamID string, timeRange *model.TimeRangeInput) int
+		StreamAnalytics   func(childComplexity int, stream string, timeRange *model.TimeRangeInput) int
 		StreamEmbed       func(childComplexity int, id string) int
 		Streams           func(childComplexity int) int
 		Tenant            func(childComplexity int) int
 		UsageRecords      func(childComplexity int, timeRange *model.TimeRangeInput) int
 		ValidateStreamKey func(childComplexity int, streamKey string) int
-		ViewerMetrics     func(childComplexity int, streamID *string, timeRange *model.TimeRangeInput) int
+		ViewerMetrics     func(childComplexity int, stream *string, timeRange *model.TimeRangeInput) int
 	}
 
 	Stream struct {
@@ -202,14 +198,13 @@ type ComplexityRoot struct {
 		Record      func(childComplexity int) int
 		Status      func(childComplexity int) int
 		StreamKey   func(childComplexity int) int
-		TenantID    func(childComplexity int) int
 		UpdatedAt   func(childComplexity int) int
 	}
 
 	StreamAnalytics struct {
 		AverageViewers func(childComplexity int) int
 		PeakViewers    func(childComplexity int) int
-		StreamID       func(childComplexity int) int
+		Stream         func(childComplexity int) int
 		TimeRange      func(childComplexity int) int
 		TotalViewTime  func(childComplexity int) int
 		TotalViews     func(childComplexity int) int
@@ -220,16 +215,14 @@ type ComplexityRoot struct {
 		EmbedCode func(childComplexity int) int
 		Height    func(childComplexity int) int
 		IframeURL func(childComplexity int) int
-		StreamID  func(childComplexity int) int
+		Stream    func(childComplexity int) int
 		Width     func(childComplexity int) int
 	}
 
 	StreamEvent struct {
 		Details   func(childComplexity int) int
-		NodeID    func(childComplexity int) int
 		Status    func(childComplexity int) int
-		StreamID  func(childComplexity int) int
-		TenantID  func(childComplexity int) int
+		Stream    func(childComplexity int) int
 		Timestamp func(childComplexity int) int
 		Type      func(childComplexity int) int
 	}
@@ -237,31 +230,30 @@ type ComplexityRoot struct {
 	StreamValidation struct {
 		Error     func(childComplexity int) int
 		StreamKey func(childComplexity int) int
-		TenantID  func(childComplexity int) int
 		Valid     func(childComplexity int) int
 	}
 
 	Subscription struct {
-		StreamEvents     func(childComplexity int, streamID *string, tenantID *string) int
+		StreamEvents     func(childComplexity int, stream *string) int
 		SystemHealth     func(childComplexity int) int
-		TenantEvents     func(childComplexity int, tenantID string) int
-		TrackListUpdates func(childComplexity int, streamID string) int
-		ViewerMetrics    func(childComplexity int, streamID string) int
+		TrackListUpdates func(childComplexity int, stream string) int
+		UserEvents       func(childComplexity int) int
+		ViewerMetrics    func(childComplexity int, stream string) int
 	}
 
 	SystemHealthEvent struct {
 		CPUUsage    func(childComplexity int) int
-		ClusterID   func(childComplexity int) int
+		Cluster     func(childComplexity int) int
 		DiskUsage   func(childComplexity int) int
 		HealthScore func(childComplexity int) int
 		MemoryUsage func(childComplexity int) int
-		NodeID      func(childComplexity int) int
+		Node        func(childComplexity int) int
 		Status      func(childComplexity int) int
 		Timestamp   func(childComplexity int) int
 	}
 
 	Tenant struct {
-		ClusterID func(childComplexity int) int
+		Cluster   func(childComplexity int) int
 		CreatedAt func(childComplexity int) int
 		ID        func(childComplexity int) int
 		Name      func(childComplexity int) int
@@ -274,8 +266,7 @@ type ComplexityRoot struct {
 	}
 
 	TrackListEvent struct {
-		StreamID   func(childComplexity int) int
-		TenantID   func(childComplexity int) int
+		Stream     func(childComplexity int) int
 		Timestamp  func(childComplexity int) int
 		TrackCount func(childComplexity int) int
 		TrackList  func(childComplexity int) int
@@ -286,7 +277,6 @@ type ComplexityRoot struct {
 		ID           func(childComplexity int) int
 		Quantity     func(childComplexity int) int
 		ResourceType func(childComplexity int) int
-		TenantID     func(childComplexity int) int
 		Timestamp    func(childComplexity int) int
 		Unit         func(childComplexity int) int
 	}
@@ -297,7 +287,6 @@ type ComplexityRoot struct {
 		ID        func(childComplexity int) int
 		Name      func(childComplexity int) int
 		Role      func(childComplexity int) int
-		TenantID  func(childComplexity int) int
 	}
 
 	ViewerMetric struct {
@@ -311,7 +300,7 @@ type ComplexityRoot struct {
 		ConnectionQuality func(childComplexity int) int
 		CurrentViewers    func(childComplexity int) int
 		PeakViewers       func(childComplexity int) int
-		StreamID          func(childComplexity int) int
+		Stream            func(childComplexity int) int
 		Timestamp         func(childComplexity int) int
 	}
 }
@@ -347,13 +336,12 @@ type PaymentResolver interface {
 	Method(ctx context.Context, obj *models.Payment) (model.PaymentMethod, error)
 }
 type QueryResolver interface {
-	Me(ctx context.Context) (*models.User, error)
 	Streams(ctx context.Context) ([]*models.Stream, error)
 	Stream(ctx context.Context, id string) (*models.Stream, error)
 	ValidateStreamKey(ctx context.Context, streamKey string) (*model.StreamValidation, error)
 	StreamEmbed(ctx context.Context, id string) (*model.StreamEmbed, error)
-	StreamAnalytics(ctx context.Context, streamID string, timeRange *model.TimeRangeInput) (*models.StreamAnalytics, error)
-	ViewerMetrics(ctx context.Context, streamID *string, timeRange *model.TimeRangeInput) ([]*model.ViewerMetric, error)
+	StreamAnalytics(ctx context.Context, stream string, timeRange *model.TimeRangeInput) (*models.StreamAnalytics, error)
+	ViewerMetrics(ctx context.Context, stream *string, timeRange *model.TimeRangeInput) ([]*model.ViewerMetric, error)
 	PlatformOverview(ctx context.Context, timeRange *model.TimeRangeInput) (*model.PlatformOverview, error)
 	BillingTiers(ctx context.Context) ([]*models.BillingTier, error)
 	Invoices(ctx context.Context) ([]*models.Invoice, error)
@@ -374,6 +362,7 @@ type StreamResolver interface {
 	Record(ctx context.Context, obj *models.Stream) (bool, error)
 }
 type StreamAnalyticsResolver interface {
+	Stream(ctx context.Context, obj *models.StreamAnalytics) (string, error)
 	TotalViews(ctx context.Context, obj *models.StreamAnalytics) (int, error)
 	TotalViewTime(ctx context.Context, obj *models.StreamAnalytics) (float64, error)
 
@@ -382,15 +371,15 @@ type StreamAnalyticsResolver interface {
 	TimeRange(ctx context.Context, obj *models.StreamAnalytics) (*model.TimeRange, error)
 }
 type SubscriptionResolver interface {
-	StreamEvents(ctx context.Context, streamID *string, tenantID *string) (<-chan *model.StreamEvent, error)
-	ViewerMetrics(ctx context.Context, streamID string) (<-chan *model.ViewerMetrics, error)
-	TrackListUpdates(ctx context.Context, streamID string) (<-chan *model.TrackListEvent, error)
+	StreamEvents(ctx context.Context, stream *string) (<-chan *model.StreamEvent, error)
+	ViewerMetrics(ctx context.Context, stream string) (<-chan *model.ViewerMetrics, error)
+	TrackListUpdates(ctx context.Context, stream string) (<-chan *model.TrackListEvent, error)
 	SystemHealth(ctx context.Context) (<-chan *model.SystemHealthEvent, error)
-	TenantEvents(ctx context.Context, tenantID string) (<-chan model.TenantEvent, error)
+	UserEvents(ctx context.Context) (<-chan model.TenantEvent, error)
 }
 type TenantResolver interface {
 	Settings(ctx context.Context, obj *models.Tenant) (*string, error)
-	ClusterID(ctx context.Context, obj *models.Tenant) (*string, error)
+	Cluster(ctx context.Context, obj *models.Tenant) (*string, error)
 }
 type UsageRecordResolver interface {
 	ResourceType(ctx context.Context, obj *models.UsageRecord) (string, error)
@@ -449,13 +438,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.complexity.BillingStatus.Status(childComplexity), true
-
-	case "BillingStatus.tenantId":
-		if e.complexity.BillingStatus.TenantID == nil {
-			break
-		}
-
-		return e.complexity.BillingStatus.TenantID(childComplexity), true
 
 	case "BillingTier.currency":
 		if e.complexity.BillingTier.Currency == nil {
@@ -555,19 +537,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.Clip.Status(childComplexity), true
 
-	case "Clip.streamId":
-		if e.complexity.Clip.StreamID == nil {
+	case "Clip.stream":
+		if e.complexity.Clip.Stream == nil {
 			break
 		}
 
-		return e.complexity.Clip.StreamID(childComplexity), true
-
-	case "Clip.tenantId":
-		if e.complexity.Clip.TenantID == nil {
-			break
-		}
-
-		return e.complexity.Clip.TenantID(childComplexity), true
+		return e.complexity.Clip.Stream(childComplexity), true
 
 	case "Clip.title":
 		if e.complexity.Clip.Title == nil {
@@ -730,13 +705,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.Invoice.Status(childComplexity), true
 
-	case "Invoice.tenantId":
-		if e.complexity.Invoice.TenantID == nil {
-			break
-		}
-
-		return e.complexity.Invoice.TenantID(childComplexity), true
-
 	case "LineItem.description":
 		if e.complexity.LineItem.Description == nil {
 			break
@@ -885,12 +853,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.Mutation.UpdateTenant(childComplexity, args["input"].(model.UpdateTenantInput)), true
 
-	case "Node.clusterId":
-		if e.complexity.Node.ClusterID == nil {
+	case "Node.cluster":
+		if e.complexity.Node.Cluster == nil {
 			break
 		}
 
-		return e.complexity.Node.ClusterID(childComplexity), true
+		return e.complexity.Node.Cluster(childComplexity), true
 
 	case "Node.createdAt":
 		if e.complexity.Node.CreatedAt == nil {
@@ -1084,13 +1052,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.Query.Invoices(childComplexity), true
 
-	case "Query.me":
-		if e.complexity.Query.Me == nil {
-			break
-		}
-
-		return e.complexity.Query.Me(childComplexity), true
-
 	case "Query.node":
 		if e.complexity.Query.Node == nil {
 			break
@@ -1144,7 +1105,7 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 			return 0, false
 		}
 
-		return e.complexity.Query.StreamAnalytics(childComplexity, args["streamId"].(string), args["timeRange"].(*model.TimeRangeInput)), true
+		return e.complexity.Query.StreamAnalytics(childComplexity, args["stream"].(string), args["timeRange"].(*model.TimeRangeInput)), true
 
 	case "Query.streamEmbed":
 		if e.complexity.Query.StreamEmbed == nil {
@@ -1206,7 +1167,7 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 			return 0, false
 		}
 
-		return e.complexity.Query.ViewerMetrics(childComplexity, args["streamId"].(*string), args["timeRange"].(*model.TimeRangeInput)), true
+		return e.complexity.Query.ViewerMetrics(childComplexity, args["stream"].(*string), args["timeRange"].(*model.TimeRangeInput)), true
 
 	case "Stream.createdAt":
 		if e.complexity.Stream.CreatedAt == nil {
@@ -1264,13 +1225,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.Stream.StreamKey(childComplexity), true
 
-	case "Stream.tenantId":
-		if e.complexity.Stream.TenantID == nil {
-			break
-		}
-
-		return e.complexity.Stream.TenantID(childComplexity), true
-
 	case "Stream.updatedAt":
 		if e.complexity.Stream.UpdatedAt == nil {
 			break
@@ -1292,12 +1246,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.StreamAnalytics.PeakViewers(childComplexity), true
 
-	case "StreamAnalytics.streamId":
-		if e.complexity.StreamAnalytics.StreamID == nil {
+	case "StreamAnalytics.stream":
+		if e.complexity.StreamAnalytics.Stream == nil {
 			break
 		}
 
-		return e.complexity.StreamAnalytics.StreamID(childComplexity), true
+		return e.complexity.StreamAnalytics.Stream(childComplexity), true
 
 	case "StreamAnalytics.timeRange":
 		if e.complexity.StreamAnalytics.TimeRange == nil {
@@ -1348,12 +1302,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.StreamEmbed.IframeURL(childComplexity), true
 
-	case "StreamEmbed.streamId":
-		if e.complexity.StreamEmbed.StreamID == nil {
+	case "StreamEmbed.stream":
+		if e.complexity.StreamEmbed.Stream == nil {
 			break
 		}
 
-		return e.complexity.StreamEmbed.StreamID(childComplexity), true
+		return e.complexity.StreamEmbed.Stream(childComplexity), true
 
 	case "StreamEmbed.width":
 		if e.complexity.StreamEmbed.Width == nil {
@@ -1369,13 +1323,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.StreamEvent.Details(childComplexity), true
 
-	case "StreamEvent.nodeId":
-		if e.complexity.StreamEvent.NodeID == nil {
-			break
-		}
-
-		return e.complexity.StreamEvent.NodeID(childComplexity), true
-
 	case "StreamEvent.status":
 		if e.complexity.StreamEvent.Status == nil {
 			break
@@ -1383,19 +1330,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.StreamEvent.Status(childComplexity), true
 
-	case "StreamEvent.streamId":
-		if e.complexity.StreamEvent.StreamID == nil {
+	case "StreamEvent.stream":
+		if e.complexity.StreamEvent.Stream == nil {
 			break
 		}
 
-		return e.complexity.StreamEvent.StreamID(childComplexity), true
-
-	case "StreamEvent.tenantId":
-		if e.complexity.StreamEvent.TenantID == nil {
-			break
-		}
-
-		return e.complexity.StreamEvent.TenantID(childComplexity), true
+		return e.complexity.StreamEvent.Stream(childComplexity), true
 
 	case "StreamEvent.timestamp":
 		if e.complexity.StreamEvent.Timestamp == nil {
@@ -1425,13 +1365,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.StreamValidation.StreamKey(childComplexity), true
 
-	case "StreamValidation.tenantId":
-		if e.complexity.StreamValidation.TenantID == nil {
-			break
-		}
-
-		return e.complexity.StreamValidation.TenantID(childComplexity), true
-
 	case "StreamValidation.valid":
 		if e.complexity.StreamValidation.Valid == nil {
 			break
@@ -1449,7 +1382,7 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 			return 0, false
 		}
 
-		return e.complexity.Subscription.StreamEvents(childComplexity, args["streamId"].(*string), args["tenantId"].(*string)), true
+		return e.complexity.Subscription.StreamEvents(childComplexity, args["stream"].(*string)), true
 
 	case "Subscription.systemHealth":
 		if e.complexity.Subscription.SystemHealth == nil {
@@ -1457,18 +1390,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.complexity.Subscription.SystemHealth(childComplexity), true
-
-	case "Subscription.tenantEvents":
-		if e.complexity.Subscription.TenantEvents == nil {
-			break
-		}
-
-		args, err := ec.field_Subscription_tenantEvents_args(ctx, rawArgs)
-		if err != nil {
-			return 0, false
-		}
-
-		return e.complexity.Subscription.TenantEvents(childComplexity, args["tenantId"].(string)), true
 
 	case "Subscription.trackListUpdates":
 		if e.complexity.Subscription.TrackListUpdates == nil {
@@ -1480,7 +1401,14 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 			return 0, false
 		}
 
-		return e.complexity.Subscription.TrackListUpdates(childComplexity, args["streamId"].(string)), true
+		return e.complexity.Subscription.TrackListUpdates(childComplexity, args["stream"].(string)), true
+
+	case "Subscription.userEvents":
+		if e.complexity.Subscription.UserEvents == nil {
+			break
+		}
+
+		return e.complexity.Subscription.UserEvents(childComplexity), true
 
 	case "Subscription.viewerMetrics":
 		if e.complexity.Subscription.ViewerMetrics == nil {
@@ -1492,7 +1420,7 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 			return 0, false
 		}
 
-		return e.complexity.Subscription.ViewerMetrics(childComplexity, args["streamId"].(string)), true
+		return e.complexity.Subscription.ViewerMetrics(childComplexity, args["stream"].(string)), true
 
 	case "SystemHealthEvent.cpuUsage":
 		if e.complexity.SystemHealthEvent.CPUUsage == nil {
@@ -1501,12 +1429,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.SystemHealthEvent.CPUUsage(childComplexity), true
 
-	case "SystemHealthEvent.clusterId":
-		if e.complexity.SystemHealthEvent.ClusterID == nil {
+	case "SystemHealthEvent.cluster":
+		if e.complexity.SystemHealthEvent.Cluster == nil {
 			break
 		}
 
-		return e.complexity.SystemHealthEvent.ClusterID(childComplexity), true
+		return e.complexity.SystemHealthEvent.Cluster(childComplexity), true
 
 	case "SystemHealthEvent.diskUsage":
 		if e.complexity.SystemHealthEvent.DiskUsage == nil {
@@ -1529,12 +1457,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.SystemHealthEvent.MemoryUsage(childComplexity), true
 
-	case "SystemHealthEvent.nodeId":
-		if e.complexity.SystemHealthEvent.NodeID == nil {
+	case "SystemHealthEvent.node":
+		if e.complexity.SystemHealthEvent.Node == nil {
 			break
 		}
 
-		return e.complexity.SystemHealthEvent.NodeID(childComplexity), true
+		return e.complexity.SystemHealthEvent.Node(childComplexity), true
 
 	case "SystemHealthEvent.status":
 		if e.complexity.SystemHealthEvent.Status == nil {
@@ -1550,12 +1478,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.SystemHealthEvent.Timestamp(childComplexity), true
 
-	case "Tenant.clusterId":
-		if e.complexity.Tenant.ClusterID == nil {
+	case "Tenant.cluster":
+		if e.complexity.Tenant.Cluster == nil {
 			break
 		}
 
-		return e.complexity.Tenant.ClusterID(childComplexity), true
+		return e.complexity.Tenant.Cluster(childComplexity), true
 
 	case "Tenant.createdAt":
 		if e.complexity.Tenant.CreatedAt == nil {
@@ -1599,19 +1527,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.TimeRange.Start(childComplexity), true
 
-	case "TrackListEvent.streamId":
-		if e.complexity.TrackListEvent.StreamID == nil {
+	case "TrackListEvent.stream":
+		if e.complexity.TrackListEvent.Stream == nil {
 			break
 		}
 
-		return e.complexity.TrackListEvent.StreamID(childComplexity), true
-
-	case "TrackListEvent.tenantId":
-		if e.complexity.TrackListEvent.TenantID == nil {
-			break
-		}
-
-		return e.complexity.TrackListEvent.TenantID(childComplexity), true
+		return e.complexity.TrackListEvent.Stream(childComplexity), true
 
 	case "TrackListEvent.timestamp":
 		if e.complexity.TrackListEvent.Timestamp == nil {
@@ -1662,13 +1583,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.UsageRecord.ResourceType(childComplexity), true
 
-	case "UsageRecord.tenantId":
-		if e.complexity.UsageRecord.TenantID == nil {
-			break
-		}
-
-		return e.complexity.UsageRecord.TenantID(childComplexity), true
-
 	case "UsageRecord.timestamp":
 		if e.complexity.UsageRecord.Timestamp == nil {
 			break
@@ -1717,13 +1631,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.complexity.User.Role(childComplexity), true
-
-	case "User.tenantId":
-		if e.complexity.User.TenantID == nil {
-			break
-		}
-
-		return e.complexity.User.TenantID(childComplexity), true
 
 	case "ViewerMetric.timestamp":
 		if e.complexity.ViewerMetric.Timestamp == nil {
@@ -1774,12 +1681,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.ViewerMetrics.PeakViewers(childComplexity), true
 
-	case "ViewerMetrics.streamId":
-		if e.complexity.ViewerMetrics.StreamID == nil {
+	case "ViewerMetrics.stream":
+		if e.complexity.ViewerMetrics.Stream == nil {
 			break
 		}
 
-		return e.complexity.ViewerMetrics.StreamID(childComplexity), true
+		return e.complexity.ViewerMetrics.Stream(childComplexity), true
 
 	case "ViewerMetrics.timestamp":
 		if e.complexity.ViewerMetrics.Timestamp == nil {
@@ -1922,8 +1829,6 @@ var sources = []*ast.Source{
 
 # Root Query type
 type Query {
-  # Authentication
-  me: User
 
   # Streams (from Commodore)
   streams: [Stream!]!
@@ -1932,8 +1837,8 @@ type Query {
   streamEmbed(id: ID!): StreamEmbed!
 
   # Analytics (from Periscope Query)
-  streamAnalytics(streamId: ID!, timeRange: TimeRangeInput): StreamAnalytics
-  viewerMetrics(streamId: ID, timeRange: TimeRangeInput): [ViewerMetric!]!
+  streamAnalytics(stream: String!, timeRange: TimeRangeInput): StreamAnalytics
+  viewerMetrics(stream: String, timeRange: TimeRangeInput): [ViewerMetric!]!
   platformOverview(timeRange: TimeRangeInput): PlatformOverview!
   
   # Billing (from Purser)  
@@ -1980,19 +1885,19 @@ type Mutation {
 # Root Subscription type for real-time updates
 type Subscription {
   # Stream lifecycle events
-  streamEvents(streamId: ID, tenantId: ID): StreamEvent!
+  streamEvents(stream: String): StreamEvent!
   
   # Viewer metrics updates  
-  viewerMetrics(streamId: ID!): ViewerMetrics!
+  viewerMetrics(stream: String!): ViewerMetrics!
   
   # Track list updates
-  trackListUpdates(streamId: ID!): TrackListEvent!
+  trackListUpdates(stream: String!): TrackListEvent!
   
   # System health (admin only)
   systemHealth: SystemHealthEvent!
   
-  # All events for a tenant
-  tenantEvents(tenantId: ID!): TenantEvent!
+  # All events for authenticated user
+  userEvents: TenantEvent!
 }
 
 # Input types
@@ -2010,7 +1915,7 @@ input UpdateStreamInput {
 }
 
 input CreateClipInput {
-  streamId: ID!
+  stream: String!
   startTime: Int!
   endTime: Int!
   title: String!
@@ -2067,11 +1972,9 @@ enum NodeStatus {
 # Real-time event types
 type StreamEvent {
   type: StreamEventType!
-  streamId: ID!
-  tenantId: ID!
+  stream: String!
   status: StreamStatus!
   timestamp: Time!
-  nodeId: String
   details: JSON
 }
 
@@ -2084,7 +1987,7 @@ enum StreamEventType {
 }
 
 type ViewerMetrics {
-  streamId: ID!
+  stream: String!
   currentViewers: Int!
   peakViewers: Int!
   bandwidth: Float!
@@ -2094,16 +1997,15 @@ type ViewerMetrics {
 }
 
 type TrackListEvent {
-  streamId: ID!
-  tenantId: ID!
+  stream: String!
   trackList: String!
   trackCount: Int!
   timestamp: Time!
 }
 
 type SystemHealthEvent {
-  nodeId: ID!
-  clusterId: ID!
+  node: String!
+  cluster: String!
   status: NodeStatus!
   cpuUsage: Float!
   memoryUsage: Float!
@@ -2123,7 +2025,6 @@ type User {
   id: ID!
   email: String!
   name: String
-  tenantId: String!
   role: String!
   createdAt: Time!
 }
@@ -2133,7 +2034,7 @@ type Tenant {
   id: ID!
   name: String!
   settings: JSON
-  clusterId: String
+  cluster: String
   createdAt: Time!
 }
 
@@ -2145,7 +2046,6 @@ type Stream {
   playbackId: String!
   status: StreamStatus!
   record: Boolean!
-  tenantId: String!
   createdAt: Time!
   updatedAt: Time!
 }
@@ -2154,11 +2054,10 @@ type StreamValidation {
   valid: Boolean!
   streamKey: String!
   error: String
-  tenantId: String
 }
 
 type StreamEmbed {
-  streamId: ID!
+  stream: String!
   embedCode: String!
   iframeUrl: String!
   width: Int!
@@ -2166,7 +2065,7 @@ type StreamEmbed {
 }
 
 type StreamAnalytics {
-  streamId: ID!
+  stream: String!
   totalViews: Int!
   totalViewTime: Float!
   peakViewers: Int!
@@ -2199,7 +2098,6 @@ type BillingTier {
 
 type Invoice {
   id: ID!
-  tenantId: String!
   amount: Float!
   currency: String!
   status: String!
@@ -2216,7 +2114,6 @@ type LineItem {
 }
 
 type BillingStatus {
-  tenantId: String!
   currentTier: BillingTier!
   nextBillingDate: Time!
   outstandingAmount: Float!
@@ -2234,7 +2131,6 @@ type Payment {
 
 type UsageRecord {
   id: ID!
-  tenantId: String!
   resourceType: String!
   quantity: Float!
   unit: String!
@@ -2254,7 +2150,7 @@ type Cluster {
 type Node {
   id: ID!
   name: String!
-  clusterId: String!
+  cluster: String!
   type: String!
   status: NodeStatus!
   region: String!
@@ -2265,8 +2161,7 @@ type Node {
 
 type Clip {
   id: ID!
-  streamId: String!
-  tenantId: String!
+  stream: String!
   title: String!
   description: String
   startTime: Int!
@@ -2468,11 +2363,11 @@ func (ec *executionContext) field_Query_platformOverview_args(ctx context.Contex
 func (ec *executionContext) field_Query_streamAnalytics_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
-	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "streamId", ec.unmarshalNID2string)
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "stream", ec.unmarshalNString2string)
 	if err != nil {
 		return nil, err
 	}
-	args["streamId"] = arg0
+	args["stream"] = arg0
 	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "timeRange", ec.unmarshalOTimeRangeInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐTimeRangeInput)
 	if err != nil {
 		return nil, err
@@ -2528,11 +2423,11 @@ func (ec *executionContext) field_Query_validateStreamKey_args(ctx context.Conte
 func (ec *executionContext) field_Query_viewerMetrics_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
-	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "streamId", ec.unmarshalOID2ᚖstring)
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "stream", ec.unmarshalOString2ᚖstring)
 	if err != nil {
 		return nil, err
 	}
-	args["streamId"] = arg0
+	args["stream"] = arg0
 	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "timeRange", ec.unmarshalOTimeRangeInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐTimeRangeInput)
 	if err != nil {
 		return nil, err
@@ -2544,49 +2439,33 @@ func (ec *executionContext) field_Query_viewerMetrics_args(ctx context.Context, 
 func (ec *executionContext) field_Subscription_streamEvents_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
-	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "streamId", ec.unmarshalOID2ᚖstring)
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "stream", ec.unmarshalOString2ᚖstring)
 	if err != nil {
 		return nil, err
 	}
-	args["streamId"] = arg0
-	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "tenantId", ec.unmarshalOID2ᚖstring)
-	if err != nil {
-		return nil, err
-	}
-	args["tenantId"] = arg1
-	return args, nil
-}
-
-func (ec *executionContext) field_Subscription_tenantEvents_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
-	var err error
-	args := map[string]any{}
-	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "tenantId", ec.unmarshalNID2string)
-	if err != nil {
-		return nil, err
-	}
-	args["tenantId"] = arg0
+	args["stream"] = arg0
 	return args, nil
 }
 
 func (ec *executionContext) field_Subscription_trackListUpdates_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
-	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "streamId", ec.unmarshalNID2string)
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "stream", ec.unmarshalNString2string)
 	if err != nil {
 		return nil, err
 	}
-	args["streamId"] = arg0
+	args["stream"] = arg0
 	return args, nil
 }
 
 func (ec *executionContext) field_Subscription_viewerMetrics_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
-	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "streamId", ec.unmarshalNID2string)
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "stream", ec.unmarshalNString2string)
 	if err != nil {
 		return nil, err
 	}
-	args["streamId"] = arg0
+	args["stream"] = arg0
 	return args, nil
 }
 
@@ -2641,50 +2520,6 @@ func (ec *executionContext) field___Type_fields_args(ctx context.Context, rawArg
 // endregion ************************** directives.gotpl **************************
 
 // region    **************************** field.gotpl *****************************
-
-func (ec *executionContext) _BillingStatus_tenantId(ctx context.Context, field graphql.CollectedField, obj *models.BillingStatus) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_BillingStatus_tenantId(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.TenantID, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.(string)
-	fc.Result = res
-	return ec.marshalNString2string(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_BillingStatus_tenantId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "BillingStatus",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type String does not have child fields")
-		},
-	}
-	return fc, nil
-}
 
 func (ec *executionContext) _BillingStatus_currentTier(ctx context.Context, field graphql.CollectedField, obj *models.BillingStatus) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_BillingStatus_currentTier(ctx, field)
@@ -3181,8 +3016,8 @@ func (ec *executionContext) fieldContext_Clip_id(_ context.Context, field graphq
 	return fc, nil
 }
 
-func (ec *executionContext) _Clip_streamId(ctx context.Context, field graphql.CollectedField, obj *model.Clip) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_Clip_streamId(ctx, field)
+func (ec *executionContext) _Clip_stream(ctx context.Context, field graphql.CollectedField, obj *model.Clip) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Clip_stream(ctx, field)
 	if err != nil {
 		return graphql.Null
 	}
@@ -3195,7 +3030,7 @@ func (ec *executionContext) _Clip_streamId(ctx context.Context, field graphql.Co
 	}()
 	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
 		ctx = rctx // use context from middleware stack in children
-		return obj.StreamID, nil
+		return obj.Stream, nil
 	})
 	if err != nil {
 		ec.Error(ctx, err)
@@ -3212,51 +3047,7 @@ func (ec *executionContext) _Clip_streamId(ctx context.Context, field graphql.Co
 	return ec.marshalNString2string(ctx, field.Selections, res)
 }
 
-func (ec *executionContext) fieldContext_Clip_streamId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "Clip",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type String does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _Clip_tenantId(ctx context.Context, field graphql.CollectedField, obj *model.Clip) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_Clip_tenantId(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.TenantID, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.(string)
-	fc.Result = res
-	return ec.marshalNString2string(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_Clip_tenantId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+func (ec *executionContext) fieldContext_Clip_stream(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "Clip",
 		Field:      field,
@@ -3881,8 +3672,8 @@ func (ec *executionContext) fieldContext_Cluster_nodes(_ context.Context, field 
 				return ec.fieldContext_Node_id(ctx, field)
 			case "name":
 				return ec.fieldContext_Node_name(ctx, field)
-			case "clusterId":
-				return ec.fieldContext_Node_clusterId(ctx, field)
+			case "cluster":
+				return ec.fieldContext_Node_cluster(ctx, field)
 			case "type":
 				return ec.fieldContext_Node_type(ctx, field)
 			case "status":
@@ -4328,50 +4119,6 @@ func (ec *executionContext) fieldContext_Invoice_id(_ context.Context, field gra
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type ID does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _Invoice_tenantId(ctx context.Context, field graphql.CollectedField, obj *models.Invoice) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_Invoice_tenantId(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.TenantID, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.(string)
-	fc.Result = res
-	return ec.marshalNString2string(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_Invoice_tenantId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "Invoice",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type String does not have child fields")
 		},
 	}
 	return fc, nil
@@ -4880,8 +4627,6 @@ func (ec *executionContext) fieldContext_Mutation_createStream(ctx context.Conte
 				return ec.fieldContext_Stream_status(ctx, field)
 			case "record":
 				return ec.fieldContext_Stream_record(ctx, field)
-			case "tenantId":
-				return ec.fieldContext_Stream_tenantId(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -4957,8 +4702,6 @@ func (ec *executionContext) fieldContext_Mutation_updateStream(ctx context.Conte
 				return ec.fieldContext_Stream_status(ctx, field)
 			case "record":
 				return ec.fieldContext_Stream_record(ctx, field)
-			case "tenantId":
-				return ec.fieldContext_Stream_tenantId(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -5089,8 +4832,6 @@ func (ec *executionContext) fieldContext_Mutation_refreshStreamKey(ctx context.C
 				return ec.fieldContext_Stream_status(ctx, field)
 			case "record":
 				return ec.fieldContext_Stream_record(ctx, field)
-			case "tenantId":
-				return ec.fieldContext_Stream_tenantId(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -5154,10 +4895,8 @@ func (ec *executionContext) fieldContext_Mutation_createClip(ctx context.Context
 			switch field.Name {
 			case "id":
 				return ec.fieldContext_Clip_id(ctx, field)
-			case "streamId":
-				return ec.fieldContext_Clip_streamId(ctx, field)
-			case "tenantId":
-				return ec.fieldContext_Clip_tenantId(ctx, field)
+			case "stream":
+				return ec.fieldContext_Clip_stream(ctx, field)
 			case "title":
 				return ec.fieldContext_Clip_title(ctx, field)
 			case "description":
@@ -5302,8 +5041,6 @@ func (ec *executionContext) fieldContext_Mutation_updateBillingTier(ctx context.
 		IsResolver: true,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			switch field.Name {
-			case "tenantId":
-				return ec.fieldContext_BillingStatus_tenantId(ctx, field)
 			case "currentTier":
 				return ec.fieldContext_BillingStatus_currentTier(ctx, field)
 			case "nextBillingDate":
@@ -5503,8 +5240,8 @@ func (ec *executionContext) fieldContext_Mutation_updateTenant(ctx context.Conte
 				return ec.fieldContext_Tenant_name(ctx, field)
 			case "settings":
 				return ec.fieldContext_Tenant_settings(ctx, field)
-			case "clusterId":
-				return ec.fieldContext_Tenant_clusterId(ctx, field)
+			case "cluster":
+				return ec.fieldContext_Tenant_cluster(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Tenant_createdAt(ctx, field)
 			}
@@ -5613,8 +5350,8 @@ func (ec *executionContext) fieldContext_Node_name(_ context.Context, field grap
 	return fc, nil
 }
 
-func (ec *executionContext) _Node_clusterId(ctx context.Context, field graphql.CollectedField, obj *model.Node) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_Node_clusterId(ctx, field)
+func (ec *executionContext) _Node_cluster(ctx context.Context, field graphql.CollectedField, obj *model.Node) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Node_cluster(ctx, field)
 	if err != nil {
 		return graphql.Null
 	}
@@ -5627,7 +5364,7 @@ func (ec *executionContext) _Node_clusterId(ctx context.Context, field graphql.C
 	}()
 	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
 		ctx = rctx // use context from middleware stack in children
-		return obj.ClusterID, nil
+		return obj.Cluster, nil
 	})
 	if err != nil {
 		ec.Error(ctx, err)
@@ -5644,7 +5381,7 @@ func (ec *executionContext) _Node_clusterId(ctx context.Context, field graphql.C
 	return ec.marshalNString2string(ctx, field.Selections, res)
 }
 
-func (ec *executionContext) fieldContext_Node_clusterId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+func (ec *executionContext) fieldContext_Node_cluster(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "Node",
 		Field:      field,
@@ -6408,61 +6145,6 @@ func (ec *executionContext) fieldContext_PlatformOverview_timeRange(_ context.Co
 	return fc, nil
 }
 
-func (ec *executionContext) _Query_me(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_Query_me(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return ec.resolvers.Query().Me(rctx)
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		return graphql.Null
-	}
-	res := resTmp.(*models.User)
-	fc.Result = res
-	return ec.marshalOUser2ᚖframeworksᚋpkgᚋmodelsᚐUser(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_Query_me(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "Query",
-		Field:      field,
-		IsMethod:   true,
-		IsResolver: true,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			switch field.Name {
-			case "id":
-				return ec.fieldContext_User_id(ctx, field)
-			case "email":
-				return ec.fieldContext_User_email(ctx, field)
-			case "name":
-				return ec.fieldContext_User_name(ctx, field)
-			case "tenantId":
-				return ec.fieldContext_User_tenantId(ctx, field)
-			case "role":
-				return ec.fieldContext_User_role(ctx, field)
-			case "createdAt":
-				return ec.fieldContext_User_createdAt(ctx, field)
-			}
-			return nil, fmt.Errorf("no field named %q was found under type User", field.Name)
-		},
-	}
-	return fc, nil
-}
-
 func (ec *executionContext) _Query_streams(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_Query_streams(ctx, field)
 	if err != nil {
@@ -6516,8 +6198,6 @@ func (ec *executionContext) fieldContext_Query_streams(_ context.Context, field 
 				return ec.fieldContext_Stream_status(ctx, field)
 			case "record":
 				return ec.fieldContext_Stream_record(ctx, field)
-			case "tenantId":
-				return ec.fieldContext_Stream_tenantId(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -6579,8 +6259,6 @@ func (ec *executionContext) fieldContext_Query_stream(ctx context.Context, field
 				return ec.fieldContext_Stream_status(ctx, field)
 			case "record":
 				return ec.fieldContext_Stream_record(ctx, field)
-			case "tenantId":
-				return ec.fieldContext_Stream_tenantId(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -6648,8 +6326,6 @@ func (ec *executionContext) fieldContext_Query_validateStreamKey(ctx context.Con
 				return ec.fieldContext_StreamValidation_streamKey(ctx, field)
 			case "error":
 				return ec.fieldContext_StreamValidation_error(ctx, field)
-			case "tenantId":
-				return ec.fieldContext_StreamValidation_tenantId(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type StreamValidation", field.Name)
 		},
@@ -6707,8 +6383,8 @@ func (ec *executionContext) fieldContext_Query_streamEmbed(ctx context.Context, 
 		IsResolver: true,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			switch field.Name {
-			case "streamId":
-				return ec.fieldContext_StreamEmbed_streamId(ctx, field)
+			case "stream":
+				return ec.fieldContext_StreamEmbed_stream(ctx, field)
 			case "embedCode":
 				return ec.fieldContext_StreamEmbed_embedCode(ctx, field)
 			case "iframeUrl":
@@ -6749,7 +6425,7 @@ func (ec *executionContext) _Query_streamAnalytics(ctx context.Context, field gr
 	}()
 	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
 		ctx = rctx // use context from middleware stack in children
-		return ec.resolvers.Query().StreamAnalytics(rctx, fc.Args["streamId"].(string), fc.Args["timeRange"].(*model.TimeRangeInput))
+		return ec.resolvers.Query().StreamAnalytics(rctx, fc.Args["stream"].(string), fc.Args["timeRange"].(*model.TimeRangeInput))
 	})
 	if err != nil {
 		ec.Error(ctx, err)
@@ -6771,8 +6447,8 @@ func (ec *executionContext) fieldContext_Query_streamAnalytics(ctx context.Conte
 		IsResolver: true,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			switch field.Name {
-			case "streamId":
-				return ec.fieldContext_StreamAnalytics_streamId(ctx, field)
+			case "stream":
+				return ec.fieldContext_StreamAnalytics_stream(ctx, field)
 			case "totalViews":
 				return ec.fieldContext_StreamAnalytics_totalViews(ctx, field)
 			case "totalViewTime":
@@ -6817,7 +6493,7 @@ func (ec *executionContext) _Query_viewerMetrics(ctx context.Context, field grap
 	}()
 	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
 		ctx = rctx // use context from middleware stack in children
-		return ec.resolvers.Query().ViewerMetrics(rctx, fc.Args["streamId"].(*string), fc.Args["timeRange"].(*model.TimeRangeInput))
+		return ec.resolvers.Query().ViewerMetrics(rctx, fc.Args["stream"].(*string), fc.Args["timeRange"].(*model.TimeRangeInput))
 	})
 	if err != nil {
 		ec.Error(ctx, err)
@@ -7030,8 +6706,6 @@ func (ec *executionContext) fieldContext_Query_invoices(_ context.Context, field
 			switch field.Name {
 			case "id":
 				return ec.fieldContext_Invoice_id(ctx, field)
-			case "tenantId":
-				return ec.fieldContext_Invoice_tenantId(ctx, field)
 			case "amount":
 				return ec.fieldContext_Invoice_amount(ctx, field)
 			case "currency":
@@ -7089,8 +6763,6 @@ func (ec *executionContext) fieldContext_Query_invoice(ctx context.Context, fiel
 			switch field.Name {
 			case "id":
 				return ec.fieldContext_Invoice_id(ctx, field)
-			case "tenantId":
-				return ec.fieldContext_Invoice_tenantId(ctx, field)
 			case "amount":
 				return ec.fieldContext_Invoice_amount(ctx, field)
 			case "currency":
@@ -7160,8 +6832,6 @@ func (ec *executionContext) fieldContext_Query_billingStatus(_ context.Context, 
 		IsResolver: true,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			switch field.Name {
-			case "tenantId":
-				return ec.fieldContext_BillingStatus_tenantId(ctx, field)
 			case "currentTier":
 				return ec.fieldContext_BillingStatus_currentTier(ctx, field)
 			case "nextBillingDate":
@@ -7218,8 +6888,6 @@ func (ec *executionContext) fieldContext_Query_usageRecords(ctx context.Context,
 			switch field.Name {
 			case "id":
 				return ec.fieldContext_UsageRecord_id(ctx, field)
-			case "tenantId":
-				return ec.fieldContext_UsageRecord_tenantId(ctx, field)
 			case "resourceType":
 				return ec.fieldContext_UsageRecord_resourceType(ctx, field)
 			case "quantity":
@@ -7290,8 +6958,8 @@ func (ec *executionContext) fieldContext_Query_tenant(_ context.Context, field g
 				return ec.fieldContext_Tenant_name(ctx, field)
 			case "settings":
 				return ec.fieldContext_Tenant_settings(ctx, field)
-			case "clusterId":
-				return ec.fieldContext_Tenant_clusterId(ctx, field)
+			case "cluster":
+				return ec.fieldContext_Tenant_cluster(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Tenant_createdAt(ctx, field)
 			}
@@ -7468,8 +7136,8 @@ func (ec *executionContext) fieldContext_Query_nodes(_ context.Context, field gr
 				return ec.fieldContext_Node_id(ctx, field)
 			case "name":
 				return ec.fieldContext_Node_name(ctx, field)
-			case "clusterId":
-				return ec.fieldContext_Node_clusterId(ctx, field)
+			case "cluster":
+				return ec.fieldContext_Node_cluster(ctx, field)
 			case "type":
 				return ec.fieldContext_Node_type(ctx, field)
 			case "status":
@@ -7529,8 +7197,8 @@ func (ec *executionContext) fieldContext_Query_node(ctx context.Context, field g
 				return ec.fieldContext_Node_id(ctx, field)
 			case "name":
 				return ec.fieldContext_Node_name(ctx, field)
-			case "clusterId":
-				return ec.fieldContext_Node_clusterId(ctx, field)
+			case "cluster":
+				return ec.fieldContext_Node_cluster(ctx, field)
 			case "type":
 				return ec.fieldContext_Node_type(ctx, field)
 			case "status":
@@ -8059,50 +7727,6 @@ func (ec *executionContext) fieldContext_Stream_record(_ context.Context, field 
 	return fc, nil
 }
 
-func (ec *executionContext) _Stream_tenantId(ctx context.Context, field graphql.CollectedField, obj *models.Stream) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_Stream_tenantId(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.TenantID, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.(string)
-	fc.Result = res
-	return ec.marshalNString2string(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_Stream_tenantId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "Stream",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type String does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
 func (ec *executionContext) _Stream_createdAt(ctx context.Context, field graphql.CollectedField, obj *models.Stream) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_Stream_createdAt(ctx, field)
 	if err != nil {
@@ -8191,8 +7815,8 @@ func (ec *executionContext) fieldContext_Stream_updatedAt(_ context.Context, fie
 	return fc, nil
 }
 
-func (ec *executionContext) _StreamAnalytics_streamId(ctx context.Context, field graphql.CollectedField, obj *models.StreamAnalytics) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_StreamAnalytics_streamId(ctx, field)
+func (ec *executionContext) _StreamAnalytics_stream(ctx context.Context, field graphql.CollectedField, obj *models.StreamAnalytics) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamAnalytics_stream(ctx, field)
 	if err != nil {
 		return graphql.Null
 	}
@@ -8205,7 +7829,7 @@ func (ec *executionContext) _StreamAnalytics_streamId(ctx context.Context, field
 	}()
 	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
 		ctx = rctx // use context from middleware stack in children
-		return obj.StreamID, nil
+		return ec.resolvers.StreamAnalytics().Stream(rctx, obj)
 	})
 	if err != nil {
 		ec.Error(ctx, err)
@@ -8219,17 +7843,17 @@ func (ec *executionContext) _StreamAnalytics_streamId(ctx context.Context, field
 	}
 	res := resTmp.(string)
 	fc.Result = res
-	return ec.marshalNID2string(ctx, field.Selections, res)
+	return ec.marshalNString2string(ctx, field.Selections, res)
 }
 
-func (ec *executionContext) fieldContext_StreamAnalytics_streamId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+func (ec *executionContext) fieldContext_StreamAnalytics_stream(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "StreamAnalytics",
 		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
+		IsMethod:   true,
+		IsResolver: true,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type ID does not have child fields")
+			return nil, errors.New("field of type String does not have child fields")
 		},
 	}
 	return fc, nil
@@ -8505,8 +8129,8 @@ func (ec *executionContext) fieldContext_StreamAnalytics_timeRange(_ context.Con
 	return fc, nil
 }
 
-func (ec *executionContext) _StreamEmbed_streamId(ctx context.Context, field graphql.CollectedField, obj *model.StreamEmbed) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_StreamEmbed_streamId(ctx, field)
+func (ec *executionContext) _StreamEmbed_stream(ctx context.Context, field graphql.CollectedField, obj *model.StreamEmbed) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamEmbed_stream(ctx, field)
 	if err != nil {
 		return graphql.Null
 	}
@@ -8519,7 +8143,7 @@ func (ec *executionContext) _StreamEmbed_streamId(ctx context.Context, field gra
 	}()
 	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
 		ctx = rctx // use context from middleware stack in children
-		return obj.StreamID, nil
+		return obj.Stream, nil
 	})
 	if err != nil {
 		ec.Error(ctx, err)
@@ -8533,17 +8157,17 @@ func (ec *executionContext) _StreamEmbed_streamId(ctx context.Context, field gra
 	}
 	res := resTmp.(string)
 	fc.Result = res
-	return ec.marshalNID2string(ctx, field.Selections, res)
+	return ec.marshalNString2string(ctx, field.Selections, res)
 }
 
-func (ec *executionContext) fieldContext_StreamEmbed_streamId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+func (ec *executionContext) fieldContext_StreamEmbed_stream(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "StreamEmbed",
 		Field:      field,
 		IsMethod:   false,
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type ID does not have child fields")
+			return nil, errors.New("field of type String does not have child fields")
 		},
 	}
 	return fc, nil
@@ -8769,8 +8393,8 @@ func (ec *executionContext) fieldContext_StreamEvent_type(_ context.Context, fie
 	return fc, nil
 }
 
-func (ec *executionContext) _StreamEvent_streamId(ctx context.Context, field graphql.CollectedField, obj *model.StreamEvent) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_StreamEvent_streamId(ctx, field)
+func (ec *executionContext) _StreamEvent_stream(ctx context.Context, field graphql.CollectedField, obj *model.StreamEvent) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_StreamEvent_stream(ctx, field)
 	if err != nil {
 		return graphql.Null
 	}
@@ -8783,7 +8407,7 @@ func (ec *executionContext) _StreamEvent_streamId(ctx context.Context, field gra
 	}()
 	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
 		ctx = rctx // use context from middleware stack in children
-		return obj.StreamID, nil
+		return obj.Stream, nil
 	})
 	if err != nil {
 		ec.Error(ctx, err)
@@ -8797,61 +8421,17 @@ func (ec *executionContext) _StreamEvent_streamId(ctx context.Context, field gra
 	}
 	res := resTmp.(string)
 	fc.Result = res
-	return ec.marshalNID2string(ctx, field.Selections, res)
+	return ec.marshalNString2string(ctx, field.Selections, res)
 }
 
-func (ec *executionContext) fieldContext_StreamEvent_streamId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+func (ec *executionContext) fieldContext_StreamEvent_stream(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "StreamEvent",
 		Field:      field,
 		IsMethod:   false,
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type ID does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _StreamEvent_tenantId(ctx context.Context, field graphql.CollectedField, obj *model.StreamEvent) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_StreamEvent_tenantId(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.TenantID, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.(string)
-	fc.Result = res
-	return ec.marshalNID2string(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_StreamEvent_tenantId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "StreamEvent",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type ID does not have child fields")
+			return nil, errors.New("field of type String does not have child fields")
 		},
 	}
 	return fc, nil
@@ -8940,47 +8520,6 @@ func (ec *executionContext) fieldContext_StreamEvent_timestamp(_ context.Context
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type Time does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _StreamEvent_nodeId(ctx context.Context, field graphql.CollectedField, obj *model.StreamEvent) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_StreamEvent_nodeId(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.NodeID, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		return graphql.Null
-	}
-	res := resTmp.(*string)
-	fc.Result = res
-	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_StreamEvent_nodeId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "StreamEvent",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type String does not have child fields")
 		},
 	}
 	return fc, nil
@@ -9156,47 +8695,6 @@ func (ec *executionContext) fieldContext_StreamValidation_error(_ context.Contex
 	return fc, nil
 }
 
-func (ec *executionContext) _StreamValidation_tenantId(ctx context.Context, field graphql.CollectedField, obj *model.StreamValidation) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_StreamValidation_tenantId(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.TenantID, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		return graphql.Null
-	}
-	res := resTmp.(*string)
-	fc.Result = res
-	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_StreamValidation_tenantId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "StreamValidation",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type String does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
 func (ec *executionContext) _Subscription_streamEvents(ctx context.Context, field graphql.CollectedField) (ret func(ctx context.Context) graphql.Marshaler) {
 	fc, err := ec.fieldContext_Subscription_streamEvents(ctx, field)
 	if err != nil {
@@ -9211,7 +8709,7 @@ func (ec *executionContext) _Subscription_streamEvents(ctx context.Context, fiel
 	}()
 	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
 		ctx = rctx // use context from middleware stack in children
-		return ec.resolvers.Subscription().StreamEvents(rctx, fc.Args["streamId"].(*string), fc.Args["tenantId"].(*string))
+		return ec.resolvers.Subscription().StreamEvents(rctx, fc.Args["stream"].(*string))
 	})
 	if err != nil {
 		ec.Error(ctx, err)
@@ -9252,16 +8750,12 @@ func (ec *executionContext) fieldContext_Subscription_streamEvents(ctx context.C
 			switch field.Name {
 			case "type":
 				return ec.fieldContext_StreamEvent_type(ctx, field)
-			case "streamId":
-				return ec.fieldContext_StreamEvent_streamId(ctx, field)
-			case "tenantId":
-				return ec.fieldContext_StreamEvent_tenantId(ctx, field)
+			case "stream":
+				return ec.fieldContext_StreamEvent_stream(ctx, field)
 			case "status":
 				return ec.fieldContext_StreamEvent_status(ctx, field)
 			case "timestamp":
 				return ec.fieldContext_StreamEvent_timestamp(ctx, field)
-			case "nodeId":
-				return ec.fieldContext_StreamEvent_nodeId(ctx, field)
 			case "details":
 				return ec.fieldContext_StreamEvent_details(ctx, field)
 			}
@@ -9296,7 +8790,7 @@ func (ec *executionContext) _Subscription_viewerMetrics(ctx context.Context, fie
 	}()
 	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
 		ctx = rctx // use context from middleware stack in children
-		return ec.resolvers.Subscription().ViewerMetrics(rctx, fc.Args["streamId"].(string))
+		return ec.resolvers.Subscription().ViewerMetrics(rctx, fc.Args["stream"].(string))
 	})
 	if err != nil {
 		ec.Error(ctx, err)
@@ -9335,8 +8829,8 @@ func (ec *executionContext) fieldContext_Subscription_viewerMetrics(ctx context.
 		IsResolver: true,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			switch field.Name {
-			case "streamId":
-				return ec.fieldContext_ViewerMetrics_streamId(ctx, field)
+			case "stream":
+				return ec.fieldContext_ViewerMetrics_stream(ctx, field)
 			case "currentViewers":
 				return ec.fieldContext_ViewerMetrics_currentViewers(ctx, field)
 			case "peakViewers":
@@ -9381,7 +8875,7 @@ func (ec *executionContext) _Subscription_trackListUpdates(ctx context.Context, 
 	}()
 	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
 		ctx = rctx // use context from middleware stack in children
-		return ec.resolvers.Subscription().TrackListUpdates(rctx, fc.Args["streamId"].(string))
+		return ec.resolvers.Subscription().TrackListUpdates(rctx, fc.Args["stream"].(string))
 	})
 	if err != nil {
 		ec.Error(ctx, err)
@@ -9420,10 +8914,8 @@ func (ec *executionContext) fieldContext_Subscription_trackListUpdates(ctx conte
 		IsResolver: true,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			switch field.Name {
-			case "streamId":
-				return ec.fieldContext_TrackListEvent_streamId(ctx, field)
-			case "tenantId":
-				return ec.fieldContext_TrackListEvent_tenantId(ctx, field)
+			case "stream":
+				return ec.fieldContext_TrackListEvent_stream(ctx, field)
 			case "trackList":
 				return ec.fieldContext_TrackListEvent_trackList(ctx, field)
 			case "trackCount":
@@ -9501,10 +8993,10 @@ func (ec *executionContext) fieldContext_Subscription_systemHealth(_ context.Con
 		IsResolver: true,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			switch field.Name {
-			case "nodeId":
-				return ec.fieldContext_SystemHealthEvent_nodeId(ctx, field)
-			case "clusterId":
-				return ec.fieldContext_SystemHealthEvent_clusterId(ctx, field)
+			case "node":
+				return ec.fieldContext_SystemHealthEvent_node(ctx, field)
+			case "cluster":
+				return ec.fieldContext_SystemHealthEvent_cluster(ctx, field)
 			case "status":
 				return ec.fieldContext_SystemHealthEvent_status(ctx, field)
 			case "cpuUsage":
@@ -9524,8 +9016,8 @@ func (ec *executionContext) fieldContext_Subscription_systemHealth(_ context.Con
 	return fc, nil
 }
 
-func (ec *executionContext) _Subscription_tenantEvents(ctx context.Context, field graphql.CollectedField) (ret func(ctx context.Context) graphql.Marshaler) {
-	fc, err := ec.fieldContext_Subscription_tenantEvents(ctx, field)
+func (ec *executionContext) _Subscription_userEvents(ctx context.Context, field graphql.CollectedField) (ret func(ctx context.Context) graphql.Marshaler) {
+	fc, err := ec.fieldContext_Subscription_userEvents(ctx, field)
 	if err != nil {
 		return nil
 	}
@@ -9538,7 +9030,7 @@ func (ec *executionContext) _Subscription_tenantEvents(ctx context.Context, fiel
 	}()
 	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
 		ctx = rctx // use context from middleware stack in children
-		return ec.resolvers.Subscription().TenantEvents(rctx, fc.Args["tenantId"].(string))
+		return ec.resolvers.Subscription().UserEvents(rctx)
 	})
 	if err != nil {
 		ec.Error(ctx, err)
@@ -9569,7 +9061,7 @@ func (ec *executionContext) _Subscription_tenantEvents(ctx context.Context, fiel
 	}
 }
 
-func (ec *executionContext) fieldContext_Subscription_tenantEvents(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+func (ec *executionContext) fieldContext_Subscription_userEvents(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "Subscription",
 		Field:      field,
@@ -9579,22 +9071,11 @@ func (ec *executionContext) fieldContext_Subscription_tenantEvents(ctx context.C
 			return nil, errors.New("field of type TenantEvent does not have child fields")
 		},
 	}
-	defer func() {
-		if r := recover(); r != nil {
-			err = ec.Recover(ctx, r)
-			ec.Error(ctx, err)
-		}
-	}()
-	ctx = graphql.WithFieldContext(ctx, fc)
-	if fc.Args, err = ec.field_Subscription_tenantEvents_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
-		ec.Error(ctx, err)
-		return fc, err
-	}
 	return fc, nil
 }
 
-func (ec *executionContext) _SystemHealthEvent_nodeId(ctx context.Context, field graphql.CollectedField, obj *model.SystemHealthEvent) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_SystemHealthEvent_nodeId(ctx, field)
+func (ec *executionContext) _SystemHealthEvent_node(ctx context.Context, field graphql.CollectedField, obj *model.SystemHealthEvent) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_SystemHealthEvent_node(ctx, field)
 	if err != nil {
 		return graphql.Null
 	}
@@ -9607,7 +9088,7 @@ func (ec *executionContext) _SystemHealthEvent_nodeId(ctx context.Context, field
 	}()
 	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
 		ctx = rctx // use context from middleware stack in children
-		return obj.NodeID, nil
+		return obj.Node, nil
 	})
 	if err != nil {
 		ec.Error(ctx, err)
@@ -9621,24 +9102,24 @@ func (ec *executionContext) _SystemHealthEvent_nodeId(ctx context.Context, field
 	}
 	res := resTmp.(string)
 	fc.Result = res
-	return ec.marshalNID2string(ctx, field.Selections, res)
+	return ec.marshalNString2string(ctx, field.Selections, res)
 }
 
-func (ec *executionContext) fieldContext_SystemHealthEvent_nodeId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+func (ec *executionContext) fieldContext_SystemHealthEvent_node(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "SystemHealthEvent",
 		Field:      field,
 		IsMethod:   false,
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type ID does not have child fields")
+			return nil, errors.New("field of type String does not have child fields")
 		},
 	}
 	return fc, nil
 }
 
-func (ec *executionContext) _SystemHealthEvent_clusterId(ctx context.Context, field graphql.CollectedField, obj *model.SystemHealthEvent) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_SystemHealthEvent_clusterId(ctx, field)
+func (ec *executionContext) _SystemHealthEvent_cluster(ctx context.Context, field graphql.CollectedField, obj *model.SystemHealthEvent) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_SystemHealthEvent_cluster(ctx, field)
 	if err != nil {
 		return graphql.Null
 	}
@@ -9651,7 +9132,7 @@ func (ec *executionContext) _SystemHealthEvent_clusterId(ctx context.Context, fi
 	}()
 	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
 		ctx = rctx // use context from middleware stack in children
-		return obj.ClusterID, nil
+		return obj.Cluster, nil
 	})
 	if err != nil {
 		ec.Error(ctx, err)
@@ -9665,17 +9146,17 @@ func (ec *executionContext) _SystemHealthEvent_clusterId(ctx context.Context, fi
 	}
 	res := resTmp.(string)
 	fc.Result = res
-	return ec.marshalNID2string(ctx, field.Selections, res)
+	return ec.marshalNString2string(ctx, field.Selections, res)
 }
 
-func (ec *executionContext) fieldContext_SystemHealthEvent_clusterId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+func (ec *executionContext) fieldContext_SystemHealthEvent_cluster(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "SystemHealthEvent",
 		Field:      field,
 		IsMethod:   false,
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type ID does not have child fields")
+			return nil, errors.New("field of type String does not have child fields")
 		},
 	}
 	return fc, nil
@@ -10074,8 +9555,8 @@ func (ec *executionContext) fieldContext_Tenant_settings(_ context.Context, fiel
 	return fc, nil
 }
 
-func (ec *executionContext) _Tenant_clusterId(ctx context.Context, field graphql.CollectedField, obj *models.Tenant) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_Tenant_clusterId(ctx, field)
+func (ec *executionContext) _Tenant_cluster(ctx context.Context, field graphql.CollectedField, obj *models.Tenant) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Tenant_cluster(ctx, field)
 	if err != nil {
 		return graphql.Null
 	}
@@ -10088,7 +9569,7 @@ func (ec *executionContext) _Tenant_clusterId(ctx context.Context, field graphql
 	}()
 	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
 		ctx = rctx // use context from middleware stack in children
-		return ec.resolvers.Tenant().ClusterID(rctx, obj)
+		return ec.resolvers.Tenant().Cluster(rctx, obj)
 	})
 	if err != nil {
 		ec.Error(ctx, err)
@@ -10102,7 +9583,7 @@ func (ec *executionContext) _Tenant_clusterId(ctx context.Context, field graphql
 	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
 }
 
-func (ec *executionContext) fieldContext_Tenant_clusterId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+func (ec *executionContext) fieldContext_Tenant_cluster(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "Tenant",
 		Field:      field,
@@ -10247,8 +9728,8 @@ func (ec *executionContext) fieldContext_TimeRange_end(_ context.Context, field 
 	return fc, nil
 }
 
-func (ec *executionContext) _TrackListEvent_streamId(ctx context.Context, field graphql.CollectedField, obj *model.TrackListEvent) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_TrackListEvent_streamId(ctx, field)
+func (ec *executionContext) _TrackListEvent_stream(ctx context.Context, field graphql.CollectedField, obj *model.TrackListEvent) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_TrackListEvent_stream(ctx, field)
 	if err != nil {
 		return graphql.Null
 	}
@@ -10261,7 +9742,7 @@ func (ec *executionContext) _TrackListEvent_streamId(ctx context.Context, field 
 	}()
 	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
 		ctx = rctx // use context from middleware stack in children
-		return obj.StreamID, nil
+		return obj.Stream, nil
 	})
 	if err != nil {
 		ec.Error(ctx, err)
@@ -10275,61 +9756,17 @@ func (ec *executionContext) _TrackListEvent_streamId(ctx context.Context, field 
 	}
 	res := resTmp.(string)
 	fc.Result = res
-	return ec.marshalNID2string(ctx, field.Selections, res)
+	return ec.marshalNString2string(ctx, field.Selections, res)
 }
 
-func (ec *executionContext) fieldContext_TrackListEvent_streamId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+func (ec *executionContext) fieldContext_TrackListEvent_stream(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "TrackListEvent",
 		Field:      field,
 		IsMethod:   false,
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type ID does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _TrackListEvent_tenantId(ctx context.Context, field graphql.CollectedField, obj *model.TrackListEvent) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_TrackListEvent_tenantId(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.TenantID, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.(string)
-	fc.Result = res
-	return ec.marshalNID2string(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_TrackListEvent_tenantId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "TrackListEvent",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type ID does not have child fields")
+			return nil, errors.New("field of type String does not have child fields")
 		},
 	}
 	return fc, nil
@@ -10506,50 +9943,6 @@ func (ec *executionContext) fieldContext_UsageRecord_id(_ context.Context, field
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type ID does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _UsageRecord_tenantId(ctx context.Context, field graphql.CollectedField, obj *models.UsageRecord) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_UsageRecord_tenantId(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.TenantID, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.(string)
-	fc.Result = res
-	return ec.marshalNString2string(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_UsageRecord_tenantId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "UsageRecord",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type String does not have child fields")
 		},
 	}
 	return fc, nil
@@ -10904,50 +10297,6 @@ func (ec *executionContext) fieldContext_User_name(_ context.Context, field grap
 	return fc, nil
 }
 
-func (ec *executionContext) _User_tenantId(ctx context.Context, field graphql.CollectedField, obj *models.User) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_User_tenantId(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.TenantID, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.(string)
-	fc.Result = res
-	return ec.marshalNString2string(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_User_tenantId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "User",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type String does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
 func (ec *executionContext) _User_role(ctx context.Context, field graphql.CollectedField, obj *models.User) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_User_role(ctx, field)
 	if err != nil {
@@ -11124,8 +10473,8 @@ func (ec *executionContext) fieldContext_ViewerMetric_viewerCount(_ context.Cont
 	return fc, nil
 }
 
-func (ec *executionContext) _ViewerMetrics_streamId(ctx context.Context, field graphql.CollectedField, obj *model.ViewerMetrics) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_ViewerMetrics_streamId(ctx, field)
+func (ec *executionContext) _ViewerMetrics_stream(ctx context.Context, field graphql.CollectedField, obj *model.ViewerMetrics) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ViewerMetrics_stream(ctx, field)
 	if err != nil {
 		return graphql.Null
 	}
@@ -11138,7 +10487,7 @@ func (ec *executionContext) _ViewerMetrics_streamId(ctx context.Context, field g
 	}()
 	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
 		ctx = rctx // use context from middleware stack in children
-		return obj.StreamID, nil
+		return obj.Stream, nil
 	})
 	if err != nil {
 		ec.Error(ctx, err)
@@ -11152,17 +10501,17 @@ func (ec *executionContext) _ViewerMetrics_streamId(ctx context.Context, field g
 	}
 	res := resTmp.(string)
 	fc.Result = res
-	return ec.marshalNID2string(ctx, field.Selections, res)
+	return ec.marshalNString2string(ctx, field.Selections, res)
 }
 
-func (ec *executionContext) fieldContext_ViewerMetrics_streamId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+func (ec *executionContext) fieldContext_ViewerMetrics_stream(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "ViewerMetrics",
 		Field:      field,
 		IsMethod:   false,
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type ID does not have child fields")
+			return nil, errors.New("field of type String does not have child fields")
 		},
 	}
 	return fc, nil
@@ -13384,20 +12733,20 @@ func (ec *executionContext) unmarshalInputCreateClipInput(ctx context.Context, o
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"streamId", "startTime", "endTime", "title", "description"}
+	fieldsInOrder := [...]string{"stream", "startTime", "endTime", "title", "description"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
 			continue
 		}
 		switch k {
-		case "streamId":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("streamId"))
-			data, err := ec.unmarshalNID2string(ctx, v)
+		case "stream":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("stream"))
+			data, err := ec.unmarshalNString2string(ctx, v)
 			if err != nil {
 				return it, err
 			}
-			it.StreamID = data
+			it.Stream = data
 		case "startTime":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("startTime"))
 			data, err := ec.unmarshalNInt2int(ctx, v)
@@ -13725,11 +13074,6 @@ func (ec *executionContext) _BillingStatus(ctx context.Context, sel ast.Selectio
 		switch field.Name {
 		case "__typename":
 			out.Values[i] = graphql.MarshalString("BillingStatus")
-		case "tenantId":
-			out.Values[i] = ec._BillingStatus_tenantId(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				atomic.AddUint32(&out.Invalids, 1)
-			}
 		case "currentTier":
 			field := field
 
@@ -14005,13 +13349,8 @@ func (ec *executionContext) _Clip(ctx context.Context, sel ast.SelectionSet, obj
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
-		case "streamId":
-			out.Values[i] = ec._Clip_streamId(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "tenantId":
-			out.Values[i] = ec._Clip_tenantId(ctx, field, obj)
+		case "stream":
+			out.Values[i] = ec._Clip_stream(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -14222,11 +13561,6 @@ func (ec *executionContext) _Invoice(ctx context.Context, sel ast.SelectionSet, 
 			out.Values[i] = graphql.MarshalString("Invoice")
 		case "id":
 			out.Values[i] = ec._Invoice_id(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				atomic.AddUint32(&out.Invalids, 1)
-			}
-		case "tenantId":
-			out.Values[i] = ec._Invoice_tenantId(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				atomic.AddUint32(&out.Invalids, 1)
 			}
@@ -14501,8 +13835,8 @@ func (ec *executionContext) _Node(ctx context.Context, sel ast.SelectionSet, obj
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
-		case "clusterId":
-			out.Values[i] = ec._Node_clusterId(ctx, field, obj)
+		case "cluster":
+			out.Values[i] = ec._Node_cluster(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -14729,25 +14063,6 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 		switch field.Name {
 		case "__typename":
 			out.Values[i] = graphql.MarshalString("Query")
-		case "me":
-			field := field
-
-			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
-				defer func() {
-					if r := recover(); r != nil {
-						ec.Error(ctx, ec.Recover(ctx, r))
-					}
-				}()
-				res = ec._Query_me(ctx, field)
-				return res
-			}
-
-			rrm := func(ctx context.Context) graphql.Marshaler {
-				return ec.OperationContext.RootResolverMiddleware(ctx,
-					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
-			}
-
-			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
 		case "streams":
 			field := field
 
@@ -15293,11 +14608,6 @@ func (ec *executionContext) _Stream(ctx context.Context, sel ast.SelectionSet, o
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
-		case "tenantId":
-			out.Values[i] = ec._Stream_tenantId(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				atomic.AddUint32(&out.Invalids, 1)
-			}
 		case "createdAt":
 			out.Values[i] = ec._Stream_createdAt(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
@@ -15342,11 +14652,42 @@ func (ec *executionContext) _StreamAnalytics(ctx context.Context, sel ast.Select
 		switch field.Name {
 		case "__typename":
 			out.Values[i] = graphql.MarshalString("StreamAnalytics")
-		case "streamId":
-			out.Values[i] = ec._StreamAnalytics_streamId(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				atomic.AddUint32(&out.Invalids, 1)
+		case "stream":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._StreamAnalytics_stream(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
 			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		case "totalViews":
 			field := field
 
@@ -15566,8 +14907,8 @@ func (ec *executionContext) _StreamEmbed(ctx context.Context, sel ast.SelectionS
 		switch field.Name {
 		case "__typename":
 			out.Values[i] = graphql.MarshalString("StreamEmbed")
-		case "streamId":
-			out.Values[i] = ec._StreamEmbed_streamId(ctx, field, obj)
+		case "stream":
+			out.Values[i] = ec._StreamEmbed_stream(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -15630,13 +14971,8 @@ func (ec *executionContext) _StreamEvent(ctx context.Context, sel ast.SelectionS
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
-		case "streamId":
-			out.Values[i] = ec._StreamEvent_streamId(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "tenantId":
-			out.Values[i] = ec._StreamEvent_tenantId(ctx, field, obj)
+		case "stream":
+			out.Values[i] = ec._StreamEvent_stream(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -15650,8 +14986,6 @@ func (ec *executionContext) _StreamEvent(ctx context.Context, sel ast.SelectionS
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
-		case "nodeId":
-			out.Values[i] = ec._StreamEvent_nodeId(ctx, field, obj)
 		case "details":
 			out.Values[i] = ec._StreamEvent_details(ctx, field, obj)
 		default:
@@ -15700,8 +15034,6 @@ func (ec *executionContext) _StreamValidation(ctx context.Context, sel ast.Selec
 			}
 		case "error":
 			out.Values[i] = ec._StreamValidation_error(ctx, field, obj)
-		case "tenantId":
-			out.Values[i] = ec._StreamValidation_tenantId(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -15746,8 +15078,8 @@ func (ec *executionContext) _Subscription(ctx context.Context, sel ast.Selection
 		return ec._Subscription_trackListUpdates(ctx, fields[0])
 	case "systemHealth":
 		return ec._Subscription_systemHealth(ctx, fields[0])
-	case "tenantEvents":
-		return ec._Subscription_tenantEvents(ctx, fields[0])
+	case "userEvents":
+		return ec._Subscription_userEvents(ctx, fields[0])
 	default:
 		panic("unknown field " + strconv.Quote(fields[0].Name))
 	}
@@ -15764,13 +15096,13 @@ func (ec *executionContext) _SystemHealthEvent(ctx context.Context, sel ast.Sele
 		switch field.Name {
 		case "__typename":
 			out.Values[i] = graphql.MarshalString("SystemHealthEvent")
-		case "nodeId":
-			out.Values[i] = ec._SystemHealthEvent_nodeId(ctx, field, obj)
+		case "node":
+			out.Values[i] = ec._SystemHealthEvent_node(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
-		case "clusterId":
-			out.Values[i] = ec._SystemHealthEvent_clusterId(ctx, field, obj)
+		case "cluster":
+			out.Values[i] = ec._SystemHealthEvent_cluster(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -15881,7 +15213,7 @@ func (ec *executionContext) _Tenant(ctx context.Context, sel ast.SelectionSet, o
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
-		case "clusterId":
+		case "cluster":
 			field := field
 
 			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
@@ -15890,7 +15222,7 @@ func (ec *executionContext) _Tenant(ctx context.Context, sel ast.SelectionSet, o
 						ec.Error(ctx, ec.Recover(ctx, r))
 					}
 				}()
-				res = ec._Tenant_clusterId(ctx, field, obj)
+				res = ec._Tenant_cluster(ctx, field, obj)
 				return res
 			}
 
@@ -15997,13 +15329,8 @@ func (ec *executionContext) _TrackListEvent(ctx context.Context, sel ast.Selecti
 		switch field.Name {
 		case "__typename":
 			out.Values[i] = graphql.MarshalString("TrackListEvent")
-		case "streamId":
-			out.Values[i] = ec._TrackListEvent_streamId(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "tenantId":
-			out.Values[i] = ec._TrackListEvent_tenantId(ctx, field, obj)
+		case "stream":
+			out.Values[i] = ec._TrackListEvent_stream(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -16058,11 +15385,6 @@ func (ec *executionContext) _UsageRecord(ctx context.Context, sel ast.SelectionS
 			out.Values[i] = graphql.MarshalString("UsageRecord")
 		case "id":
 			out.Values[i] = ec._UsageRecord_id(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				atomic.AddUint32(&out.Invalids, 1)
-			}
-		case "tenantId":
-			out.Values[i] = ec._UsageRecord_tenantId(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				atomic.AddUint32(&out.Invalids, 1)
 			}
@@ -16323,11 +15645,6 @@ func (ec *executionContext) _User(ctx context.Context, sel ast.SelectionSet, obj
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
-		case "tenantId":
-			out.Values[i] = ec._User_tenantId(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				atomic.AddUint32(&out.Invalids, 1)
-			}
 		case "role":
 			out.Values[i] = ec._User_role(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
@@ -16416,8 +15733,8 @@ func (ec *executionContext) _ViewerMetrics(ctx context.Context, sel ast.Selectio
 		switch field.Name {
 		case "__typename":
 			out.Values[i] = graphql.MarshalString("ViewerMetrics")
-		case "streamId":
-			out.Values[i] = ec._ViewerMetrics_streamId(ctx, field, obj)
+		case "stream":
+			out.Values[i] = ec._ViewerMetrics_stream(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -18004,24 +17321,6 @@ func (ec *executionContext) marshalOFloat2ᚖfloat64(ctx context.Context, sel as
 	return graphql.WrapContextMarshaler(ctx, res)
 }
 
-func (ec *executionContext) unmarshalOID2ᚖstring(ctx context.Context, v any) (*string, error) {
-	if v == nil {
-		return nil, nil
-	}
-	res, err := graphql.UnmarshalID(v)
-	return &res, graphql.ErrorOnPath(ctx, err)
-}
-
-func (ec *executionContext) marshalOID2ᚖstring(ctx context.Context, sel ast.SelectionSet, v *string) graphql.Marshaler {
-	if v == nil {
-		return graphql.Null
-	}
-	_ = sel
-	_ = ctx
-	res := graphql.MarshalID(*v)
-	return res
-}
-
 func (ec *executionContext) unmarshalOInt2ᚖint(ctx context.Context, v any) (*int, error) {
 	if v == nil {
 		return nil, nil
@@ -18147,13 +17446,6 @@ func (ec *executionContext) unmarshalOTimeRangeInput2ᚖframeworksᚋapi_gateway
 	}
 	res, err := ec.unmarshalInputTimeRangeInput(ctx, v)
 	return &res, graphql.ErrorOnPath(ctx, err)
-}
-
-func (ec *executionContext) marshalOUser2ᚖframeworksᚋpkgᚋmodelsᚐUser(ctx context.Context, sel ast.SelectionSet, v *models.User) graphql.Marshaler {
-	if v == nil {
-		return graphql.Null
-	}
-	return ec._User(ctx, sel, v)
 }
 
 func (ec *executionContext) marshalO__EnumValue2ᚕgithubᚗcomᚋ99designsᚋgqlgenᚋgraphqlᚋintrospectionᚐEnumValueᚄ(ctx context.Context, sel ast.SelectionSet, v []introspection.EnumValue) graphql.Marshaler {

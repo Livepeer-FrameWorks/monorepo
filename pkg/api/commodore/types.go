@@ -10,7 +10,6 @@ import (
 // ValidateStreamKeyResponse represents the response from the validate stream key API
 type ValidateStreamKeyResponse struct {
 	Valid        bool   `json:"valid"`
-	StreamID     string `json:"stream_id,omitempty"`
 	UserID       string `json:"user_id,omitempty"`
 	TenantID     string `json:"tenant_id,omitempty"`
 	InternalName string `json:"internal_name,omitempty"`
@@ -98,7 +97,6 @@ type CreateClipRequest struct {
 type ClipResponse struct {
 	ID          string    `json:"id"`
 	StreamID    string    `json:"stream_id"`
-	TenantID    string    `json:"tenant_id"`
 	Title       string    `json:"title"`
 	Description string    `json:"description"`
 	StartTime   int64     `json:"start_time"`
@@ -124,13 +122,12 @@ type StreamRequest struct {
 
 // Stream creation response
 type CreateStreamResponse struct {
-	ID           string `json:"id"`
-	StreamKey    string `json:"stream_key"`
-	PlaybackID   string `json:"playback_id"`
-	InternalName string `json:"internal_name"`
-	Title        string `json:"title"`
-	Description  string `json:"description"`
-	Status       string `json:"status"`
+	ID          string `json:"id"`
+	StreamKey   string `json:"stream_key"`
+	PlaybackID  string `json:"playback_id"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	Status      string `json:"status"`
 }
 
 // Stream metrics response
@@ -204,7 +201,6 @@ type EmailVerificationResponse struct {
 // Internal name resolution response
 type InternalNameResponse struct {
 	InternalName string `json:"internal_name"`
-	TenantID     string `json:"tenant_id"`
 }
 
 // Kafka config response

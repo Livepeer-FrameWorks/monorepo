@@ -10,8 +10,8 @@ import (
 )
 
 // DoGetStreamAnalytics returns analytics for a specific stream
-func (r *Resolver) DoGetStreamAnalytics(ctx context.Context, streamID string, timeRange *model.TimeRangeInput) (*models.StreamAnalytics, error) {
-	// Extract tenant ID from context
+func (r *Resolver) DoGetStreamAnalytics(ctx context.Context, streamId string, timeRange *model.TimeRangeInput) (*models.StreamAnalytics, error) {
+	// Extract tenant ID from context for data isolation
 	tenantID, ok := ctx.Value("tenant_id").(string)
 	if !ok {
 		return nil, fmt.Errorf("tenant context required")
@@ -24,8 +24,8 @@ func (r *Resolver) DoGetStreamAnalytics(ctx context.Context, streamID string, ti
 		endTime = timeRange.End.Format("2006-01-02T15:04:05Z")
 	}
 
-	// Get analytics from Periscope Query
-	analytics, err := r.Clients.Periscope.GetStreamAnalytics(ctx, tenantID, streamID, startTime, endTime)
+	// Get analytics from Periscope Query using tenant_id from JWT context
+	analytics, err := r.Clients.Periscope.GetStreamAnalytics(ctx, tenantID, streamId, startTime, endTime)
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to get stream analytics")
 		return nil, fmt.Errorf("failed to get stream analytics: %w", err)
@@ -40,8 +40,8 @@ func (r *Resolver) DoGetStreamAnalytics(ctx context.Context, streamID string, ti
 }
 
 // DoGetViewerMetrics returns viewer metrics
-func (r *Resolver) DoGetViewerMetrics(ctx context.Context, streamID *string, timeRange *model.TimeRangeInput) ([]*model.ViewerMetric, error) {
-	// Extract tenant ID from context
+func (r *Resolver) DoGetViewerMetrics(ctx context.Context, streamId *string, timeRange *model.TimeRangeInput) ([]*model.ViewerMetric, error) {
+	// Extract tenant ID from context for data isolation
 	tenantID, ok := ctx.Value("tenant_id").(string)
 	if !ok {
 		return nil, fmt.Errorf("tenant context required")
@@ -56,11 +56,11 @@ func (r *Resolver) DoGetViewerMetrics(ctx context.Context, streamID *string, tim
 
 	// Determine stream context
 	var internalName string
-	if streamID != nil {
-		internalName = *streamID
+	if streamId != nil {
+		internalName = *streamId
 	}
 
-	// Get viewer metrics from Periscope Query
+	// Get viewer metrics from Periscope Query using tenant_id from JWT context
 	metrics, err := r.Clients.Periscope.GetViewerMetrics(ctx, tenantID, internalName, startTime, endTime)
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to get viewer metrics")

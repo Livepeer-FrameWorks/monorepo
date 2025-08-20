@@ -32,7 +32,7 @@ func TestRequestIDMiddleware(t *testing.T) {
 func TestTimeoutMiddleware(t *testing.T) {
 	r := gin.New()
 	r.Use(TimeoutMiddleware(10 * time.Millisecond))
-	
+
 	// Test handler that respects context cancellation
 	r.GET("/context-aware", func(c *gin.Context) {
 		select {

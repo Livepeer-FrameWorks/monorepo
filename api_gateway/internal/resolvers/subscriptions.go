@@ -161,3 +161,32 @@ func (r *Resolver) DoTenantEvents(ctx context.Context, tenantID string) (<-chan 
 	// Use WebSocket manager to subscribe to tenant events
 	return r.wsManager.SubscribeToTenantEvents(ctx, config, tenantID)
 }
+
+// DoUserEvents handles real-time user events via WebSocket (tenant determined from auth context)
+func (r *Resolver) DoUserEvents(ctx context.Context) (<-chan model.TenantEvent, error) {
+	r.Logger.Info("Setting up user events subscription")
+
+	// Get user from context - subscriptions require authentication
+	user, err := middleware.RequireAuth(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("authentication required for user event subscriptions: %w", err)
+	}
+
+	// Extract JWT token from context
+	jwtToken := ""
+	if token := ctx.Value("jwt_token"); token != nil {
+		if tokenStr, ok := token.(string); ok {
+			jwtToken = tokenStr
+		}
+	}
+
+	// Create connection config
+	config := ConnectionConfig{
+		UserID:   user.UserID,
+		TenantID: user.TenantID,
+		JWT:      jwtToken,
+	}
+
+	// Use WebSocket manager to subscribe to user's tenant events
+	return r.wsManager.SubscribeToTenantEvents(ctx, config, user.TenantID)
+}

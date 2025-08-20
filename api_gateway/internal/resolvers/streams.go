@@ -133,16 +133,10 @@ func (r *Resolver) DoValidateStreamKey(ctx context.Context, streamKey string) (*
 		errorPtr = &validation.Error
 	}
 
-	var tenantIDPtr *string
-	if validation.TenantID != "" {
-		tenantIDPtr = &validation.TenantID
-	}
-
 	return &model.StreamValidation{
 		Valid:     validation.Valid,
 		StreamKey: streamKey, // Use the input streamKey since response doesn't include it
 		Error:     errorPtr,
-		TenantID:  tenantIDPtr,
 	}, nil
 }
 
@@ -156,7 +150,7 @@ func (r *Resolver) DoCreateClip(ctx context.Context, input model.CreateClipInput
 
 	// Convert to Commodore request format
 	req := &commodore.CreateClipRequest{
-		StreamID:  input.StreamID,
+		StreamID:  input.Stream,
 		StartTime: int64(input.StartTime),
 		EndTime:   int64(input.EndTime),
 		Title:     input.Title,
@@ -177,8 +171,7 @@ func (r *Resolver) DoCreateClip(ctx context.Context, input model.CreateClipInput
 	// Convert to GraphQL model
 	return &model.Clip{
 		ID:          clipResp.ID,
-		StreamID:    clipResp.StreamID,
-		TenantID:    clipResp.TenantID,
+		Stream:      clipResp.StreamID,
 		Title:       clipResp.Title,
 		Description: &clipResp.Description,
 		StartTime:   int(clipResp.StartTime),

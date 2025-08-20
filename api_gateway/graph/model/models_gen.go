@@ -16,8 +16,7 @@ type TenantEvent interface {
 
 type Clip struct {
 	ID          string    `json:"id"`
-	StreamID    string    `json:"streamId"`
-	TenantID    string    `json:"tenantId"`
+	Stream      string    `json:"stream"`
 	Title       string    `json:"title"`
 	Description *string   `json:"description,omitempty"`
 	StartTime   int       `json:"startTime"`
@@ -39,7 +38,7 @@ type Cluster struct {
 }
 
 type CreateClipInput struct {
-	StreamID    string  `json:"streamId"`
+	Stream      string  `json:"stream"`
 	StartTime   int     `json:"startTime"`
 	EndTime     int     `json:"endTime"`
 	Title       string  `json:"title"`
@@ -88,7 +87,7 @@ type Mutation struct {
 type Node struct {
 	ID        string     `json:"id"`
 	Name      string     `json:"name"`
-	ClusterID string     `json:"clusterId"`
+	Cluster   string     `json:"cluster"`
 	Type      string     `json:"type"`
 	Status    NodeStatus `json:"status"`
 	Region    string     `json:"region"`
@@ -109,7 +108,7 @@ type Query struct {
 }
 
 type StreamEmbed struct {
-	StreamID  string `json:"streamId"`
+	Stream    string `json:"stream"`
 	EmbedCode string `json:"embedCode"`
 	IframeURL string `json:"iframeUrl"`
 	Width     int    `json:"width"`
@@ -118,11 +117,9 @@ type StreamEmbed struct {
 
 type StreamEvent struct {
 	Type      StreamEventType `json:"type"`
-	StreamID  string          `json:"streamId"`
-	TenantID  string          `json:"tenantId"`
+	Stream    string          `json:"stream"`
 	Status    StreamStatus    `json:"status"`
 	Timestamp time.Time       `json:"timestamp"`
-	NodeID    *string         `json:"nodeId,omitempty"`
 	Details   *string         `json:"details,omitempty"`
 }
 
@@ -132,15 +129,14 @@ type StreamValidation struct {
 	Valid     bool    `json:"valid"`
 	StreamKey string  `json:"streamKey"`
 	Error     *string `json:"error,omitempty"`
-	TenantID  *string `json:"tenantId,omitempty"`
 }
 
 type Subscription struct {
 }
 
 type SystemHealthEvent struct {
-	NodeID      string     `json:"nodeId"`
-	ClusterID   string     `json:"clusterId"`
+	Node        string     `json:"node"`
+	Cluster     string     `json:"cluster"`
 	Status      NodeStatus `json:"status"`
 	CPUUsage    float64    `json:"cpuUsage"`
 	MemoryUsage float64    `json:"memoryUsage"`
@@ -160,8 +156,7 @@ type TimeRangeInput struct {
 }
 
 type TrackListEvent struct {
-	StreamID   string    `json:"streamId"`
-	TenantID   string    `json:"tenantId"`
+	Stream     string    `json:"stream"`
 	TrackList  string    `json:"trackList"`
 	TrackCount int       `json:"trackCount"`
 	Timestamp  time.Time `json:"timestamp"`
@@ -186,7 +181,7 @@ type ViewerMetric struct {
 }
 
 type ViewerMetrics struct {
-	StreamID          string    `json:"streamId"`
+	Stream            string    `json:"stream"`
 	CurrentViewers    int       `json:"currentViewers"`
 	PeakViewers       int       `json:"peakViewers"`
 	Bandwidth         float64   `json:"bandwidth"`

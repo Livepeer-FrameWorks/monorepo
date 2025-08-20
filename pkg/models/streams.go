@@ -109,16 +109,16 @@ type ViewerSession5m struct {
 
 // Stream represents a streaming session
 type Stream struct {
-	ID                 string     `json:"id"`
-	TenantID           string     `json:"tenant_id"`
-	UserID             string     `json:"user_id"`
-	Title              string     `json:"title"`
+	ID                 string     `json:"-"`    // UUID - internal only, not exposed via API
+	TenantID           string     `json:"-"`    // Tenant ID - internal only, not exposed via API
+	UserID             string     `json:"-"`    // User ID - internal only, not exposed via API
+	Title              string     `json:"name"` // Map to GraphQL 'name' field
 	Description        string     `json:"description"`
-	InternalName       string     `json:"internal_name"`
-	StreamKey          string     `json:"stream_key"`
-	PlaybackID         string     `json:"playback_id"` // Public playback identifier
+	InternalName       string     `json:"id"` // This becomes the public ID
+	StreamKey          string     `json:"streamKey"`
+	PlaybackID         string     `json:"playbackId"` // Public playback identifier
 	IsLive             bool       `json:"is_live"`
-	IsRecording        bool       `json:"is_recording"`
+	IsRecording        bool       `json:"record"`               // Map to GraphQL 'record' field
 	IsRecordingEnabled bool       `json:"is_recording_enabled"` // Alias for IsRecording
 	IsPublic           bool       `json:"is_public"`
 	Status             string     `json:"status"` // Stream status (offline, live, terminated)
@@ -130,8 +130,8 @@ type Stream struct {
 	StartTime          *time.Time `json:"start_time,omitempty"` // Alias for StartedAt
 	EndedAt            *time.Time `json:"ended_at,omitempty"`
 	EndTime            *time.Time `json:"end_time,omitempty"` // Alias for EndedAt
-	CreatedAt          time.Time  `json:"created_at"`
-	UpdatedAt          time.Time  `json:"updated_at"`
+	CreatedAt          time.Time  `json:"createdAt"`
+	UpdatedAt          time.Time  `json:"updatedAt"`
 }
 
 // StreamKey represents a stream key for authentication

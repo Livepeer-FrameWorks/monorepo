@@ -158,11 +158,6 @@ func (r *paymentResolver) Method(ctx context.Context, obj *models.Payment) (mode
 	}
 }
 
-// Me is the resolver for the me field.
-func (r *queryResolver) Me(ctx context.Context) (*models.User, error) {
-	return r.DoGetMe(ctx)
-}
-
 // Streams is the resolver for the streams field.
 func (r *queryResolver) Streams(ctx context.Context) ([]*models.Stream, error) {
 	return r.DoGetStreams(ctx)
@@ -184,13 +179,13 @@ func (r *queryResolver) StreamEmbed(ctx context.Context, id string) (*model.Stre
 }
 
 // StreamAnalytics is the resolver for the streamAnalytics field.
-func (r *queryResolver) StreamAnalytics(ctx context.Context, streamID string, timeRange *model.TimeRangeInput) (*models.StreamAnalytics, error) {
-	return r.DoGetStreamAnalytics(ctx, streamID, timeRange)
+func (r *queryResolver) StreamAnalytics(ctx context.Context, stream string, timeRange *model.TimeRangeInput) (*models.StreamAnalytics, error) {
+	return r.DoGetStreamAnalytics(ctx, stream, timeRange)
 }
 
 // ViewerMetrics is the resolver for the viewerMetrics field.
-func (r *queryResolver) ViewerMetrics(ctx context.Context, streamID *string, timeRange *model.TimeRangeInput) ([]*model.ViewerMetric, error) {
-	return r.DoGetViewerMetrics(ctx, streamID, timeRange)
+func (r *queryResolver) ViewerMetrics(ctx context.Context, stream *string, timeRange *model.TimeRangeInput) ([]*model.ViewerMetric, error) {
+	return r.DoGetViewerMetrics(ctx, stream, timeRange)
 }
 
 // PlatformOverview is the resolver for the platformOverview field.
@@ -280,6 +275,11 @@ func (r *streamResolver) Record(ctx context.Context, obj *models.Stream) (bool, 
 	return obj.IsRecording, nil
 }
 
+// Stream is the resolver for the stream field.
+func (r *streamAnalyticsResolver) Stream(ctx context.Context, obj *models.StreamAnalytics) (string, error) {
+	panic(fmt.Errorf("not implemented: Stream - stream"))
+}
+
 // TotalViews is the resolver for the totalViews field.
 func (r *streamAnalyticsResolver) TotalViews(ctx context.Context, obj *models.StreamAnalytics) (int, error) {
 	return obj.TotalConnections, nil
@@ -310,18 +310,18 @@ func (r *streamAnalyticsResolver) TimeRange(ctx context.Context, obj *models.Str
 }
 
 // StreamEvents is the resolver for the streamEvents field.
-func (r *subscriptionResolver) StreamEvents(ctx context.Context, streamID *string, tenantID *string) (<-chan *model.StreamEvent, error) {
-	return r.Resolver.DoStreamUpdates(ctx, streamID)
+func (r *subscriptionResolver) StreamEvents(ctx context.Context, stream *string) (<-chan *model.StreamEvent, error) {
+	return r.Resolver.DoStreamUpdates(ctx, stream)
 }
 
 // ViewerMetrics is the resolver for the viewerMetrics field.
-func (r *subscriptionResolver) ViewerMetrics(ctx context.Context, streamID string) (<-chan *model.ViewerMetrics, error) {
+func (r *subscriptionResolver) ViewerMetrics(ctx context.Context, stream string) (<-chan *model.ViewerMetrics, error) {
 	return r.Resolver.DoAnalyticsUpdates(ctx)
 }
 
 // TrackListUpdates is the resolver for the trackListUpdates field.
-func (r *subscriptionResolver) TrackListUpdates(ctx context.Context, streamID string) (<-chan *model.TrackListEvent, error) {
-	return r.Resolver.DoTrackListUpdates(ctx, streamID)
+func (r *subscriptionResolver) TrackListUpdates(ctx context.Context, stream string) (<-chan *model.TrackListEvent, error) {
+	return r.Resolver.DoTrackListUpdates(ctx, stream)
 }
 
 // SystemHealth is the resolver for the systemHealth field.
@@ -329,9 +329,9 @@ func (r *subscriptionResolver) SystemHealth(ctx context.Context) (<-chan *model.
 	return r.Resolver.DoSystemUpdates(ctx)
 }
 
-// TenantEvents is the resolver for the tenantEvents field.
-func (r *subscriptionResolver) TenantEvents(ctx context.Context, tenantID string) (<-chan model.TenantEvent, error) {
-	return r.Resolver.DoTenantEvents(ctx, tenantID)
+// UserEvents is the resolver for the userEvents field.
+func (r *subscriptionResolver) UserEvents(ctx context.Context) (<-chan model.TenantEvent, error) {
+	return r.Resolver.DoUserEvents(ctx)
 }
 
 // Settings is the resolver for the settings field.
@@ -341,9 +341,9 @@ func (r *tenantResolver) Settings(ctx context.Context, obj *models.Tenant) (*str
 	return nil, nil
 }
 
-// ClusterID is the resolver for the clusterId field.
-func (r *tenantResolver) ClusterID(ctx context.Context, obj *models.Tenant) (*string, error) {
-	return obj.PrimaryClusterID, nil
+// Cluster is the resolver for the cluster field.
+func (r *tenantResolver) Cluster(ctx context.Context, obj *models.Tenant) (*string, error) {
+	panic(fmt.Errorf("not implemented: Cluster - cluster"))
 }
 
 // ResourceType is the resolver for the resourceType field.

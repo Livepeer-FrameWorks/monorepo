@@ -337,9 +337,9 @@ func GetMe(c *gin.Context) {
 
 	var user models.User
 	err := db.QueryRow(`
-		SELECT id, tenant_id, email, role, COALESCE(created_at, NOW()) as created_at, is_active 
+		SELECT id, email, role, COALESCE(created_at, NOW()) as created_at, is_active 
 		FROM users WHERE id = $1
-	`, userID).Scan(&user.ID, &user.TenantID, &user.Email, &user.Role, &user.CreatedAt, &user.IsActive)
+	`, userID).Scan(&user.ID, &user.Email, &user.Role, &user.CreatedAt, &user.IsActive)
 
 	if err != nil {
 		c.JSON(http.StatusNotFound, commodoreapi.ErrorResponse{Error: "User not found"})
@@ -349,7 +349,7 @@ func GetMe(c *gin.Context) {
 	// Get user's streams
 	tenantID := c.GetString("tenant_id")
 	rows, err := db.Query(`
-		SELECT id, stream_key, playback_id, title, status 
+		SELECT internal_name, stream_key, playback_id, title, status 
 		FROM streams WHERE user_id = $1 AND tenant_id = $2 ORDER BY created_at DESC
 	`, userID, tenantID)
 
@@ -368,8 +368,8 @@ func GetMe(c *gin.Context) {
 
 	var streams []commodoreapi.UserStreamInfo
 	for rows.Next() {
-		var streamID, streamKey, playbackID, title, status string
-		err := rows.Scan(&streamID, &streamKey, &playbackID, &title, &status)
+		var internalName, streamKey, playbackID, title, status string
+		err := rows.Scan(&internalName, &streamKey, &playbackID, &title, &status)
 		if err != nil {
 			logger.WithFields(logging.Fields{
 				"user_id": userID,
@@ -378,7 +378,7 @@ func GetMe(c *gin.Context) {
 			continue
 		}
 		streams = append(streams, commodoreapi.UserStreamInfo{
-			ID:         streamID,
+			ID:         internalName,
 			StreamKey:  streamKey,
 			PlaybackID: playbackID,
 			Title:      title,
@@ -404,7 +404,7 @@ func GetStreams(c *gin.Context) {
 	if role == "service" {
 		// Service accounts can see all streams for the tenant
 		query = `
-			SELECT id, tenant_id, user_id, stream_key, playback_id, internal_name, title, description,
+			SELECT stream_key, playback_id, internal_name, title, description,
 			       is_recording_enabled, is_public, status, start_time, end_time, created_at, updated_at
 			FROM streams 
 			WHERE tenant_id = $1
@@ -414,7 +414,7 @@ func GetStreams(c *gin.Context) {
 	} else {
 		// Regular users see only their own streams
 		query = `
-			SELECT id, tenant_id, user_id, stream_key, playback_id, internal_name, title, description,
+			SELECT stream_key, playback_id, internal_name, title, description,
 			       is_recording_enabled, is_public, status, start_time, end_time, created_at, updated_at
 			FROM streams 
 			WHERE user_id = $1 AND tenant_id = $2
@@ -442,7 +442,7 @@ func GetStreams(c *gin.Context) {
 		var stream models.Stream
 		var startTime, endTime *time.Time
 		var description *string // Handle nullable description
-		err := rows.Scan(&stream.ID, &stream.TenantID, &stream.UserID, &stream.StreamKey, &stream.PlaybackID,
+		err := rows.Scan(&stream.StreamKey, &stream.PlaybackID,
 			&stream.InternalName, &stream.Title, &description,
 			&stream.IsRecordingEnabled, &stream.IsPublic, &stream.Status,
 			&startTime, &endTime, &stream.CreatedAt, &stream.UpdatedAt)
@@ -471,6 +471,9 @@ func GetStreams(c *gin.Context) {
 			stream.EndTime = endTime
 		}
 
+		// Set public ID to internal_name
+		stream.ID = stream.InternalName
+
 		streams = append(streams, stream)
 	}
 
@@ -481,15 +484,15 @@ func GetStreams(c *gin.Context) {
 func GetStream(c *gin.Context) {
 	userID := c.GetString("user_id")
 	tenantID := c.GetString("tenant_id")
-	streamID := c.Param("id")
+	streamInternalName := c.Param("id") // Now expects internal_name instead of UUID
 
 	var stream models.Stream
 	var startTime, endTime *time.Time
 	err := db.QueryRow(`
 		SELECT id, title, description, stream_key, playback_id, internal_name, 
 		       is_recording_enabled, is_public, status, start_time, end_time, created_at
-		FROM streams WHERE id = $1 AND user_id = $2 AND tenant_id = $3
-	`, streamID, userID, tenantID).Scan(&stream.ID, &stream.Title, &stream.Description,
+		FROM streams WHERE internal_name = $1 AND user_id = $2 AND tenant_id = $3
+	`, streamInternalName, userID, tenantID).Scan(&stream.ID, &stream.Title, &stream.Description,
 		&stream.StreamKey, &stream.PlaybackID, &stream.InternalName,
 		&stream.IsRecordingEnabled, &stream.IsPublic, &stream.Status,
 		&startTime, &endTime, &stream.CreatedAt)
@@ -501,10 +504,10 @@ func GetStream(c *gin.Context) {
 
 	if err != nil {
 		logger.WithFields(logging.Fields{
-			"tenant_id": tenantID,
-			"user_id":   userID,
-			"stream_id": streamID,
-			"error":     err,
+			"tenant_id":            tenantID,
+			"user_id":              userID,
+			"stream_internal_name": streamInternalName,
+			"error":                err,
 		}).Error("Database error fetching stream")
 		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Failed to fetch stream"})
 		return
@@ -518,19 +521,23 @@ func GetStream(c *gin.Context) {
 		stream.EndTime = endTime
 	}
 
+	// Set public ID to internal_name
+	stream.ID = stream.InternalName
+
 	c.JSON(http.StatusOK, stream)
 }
 
 // GetStreamMetrics returns real-time metrics for a specific stream
 func GetStreamMetrics(c *gin.Context) {
 	userID := c.GetString("user_id")
-	streamID := c.Param("id")
+	tenantID := c.GetString("tenant_id")
+	streamInternalName := c.Param("id") // Now expects internal_name instead of UUID
 
 	// Verify user owns the stream
 	var streamExists bool
 	err := db.QueryRow(`
-		SELECT EXISTS(SELECT 1 FROM streams WHERE id = $1 AND user_id = $2)
-	`, streamID, userID).Scan(&streamExists)
+		SELECT EXISTS(SELECT 1 FROM streams WHERE internal_name = $1 AND user_id = $2 AND tenant_id = $3)
+	`, streamInternalName, userID, tenantID).Scan(&streamExists)
 
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Database error"})
@@ -556,16 +563,16 @@ func GetStreamMetrics(c *gin.Context) {
 
 	err = db.QueryRow(`
 		SELECT viewers, status, bitrate, resolution, max_viewers, updated_at
-		FROM streams WHERE id = $1
-	`, streamID).Scan(&metrics.Viewers, &metrics.Status, &metrics.Bitrate,
+		FROM streams WHERE internal_name = $1 AND user_id = $2 AND tenant_id = $3
+	`, streamInternalName, userID, tenantID).Scan(&metrics.Viewers, &metrics.Status, &metrics.Bitrate,
 		&metrics.Resolution, &metrics.MaxViewers, &metrics.UpdatedAt)
 
 	if err != nil {
 		logger.WithFields(logging.Fields{
-			"tenant_id": c.GetString("tenant_id"),
-			"user_id":   userID,
-			"stream_id": streamID,
-			"error":     err,
+			"tenant_id":            tenantID,
+			"user_id":              userID,
+			"stream_internal_name": streamInternalName,
+			"error":                err,
 		}).Error("Failed to fetch stream metrics")
 		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Failed to fetch metrics"})
 		return
@@ -597,12 +604,13 @@ func GetStreamMetrics(c *gin.Context) {
 // GetStreamEmbed returns embed code for a stream using playback_id
 func GetStreamEmbed(c *gin.Context) {
 	userID := c.GetString("user_id")
-	streamID := c.Param("id")
+	tenantID := c.GetString("tenant_id")
+	streamInternalName := c.Param("id") // Now expects internal_name instead of UUID
 
 	var playbackID string
 	err := db.QueryRow(`
-		SELECT playback_id FROM streams WHERE id = $1 AND user_id = $2
-	`, streamID, userID).Scan(&playbackID)
+		SELECT playback_id FROM streams WHERE internal_name = $1 AND user_id = $2 AND tenant_id = $3
+	`, streamInternalName, userID, tenantID).Scan(&playbackID)
 
 	if err == sql.ErrNoRows {
 		c.JSON(http.StatusNotFound, commodoreapi.ErrorResponse{Error: "Stream not found"})
@@ -668,7 +676,6 @@ func ValidateStreamKey(c *gin.Context) {
 
 	c.JSON(http.StatusOK, commodoreapi.ValidateStreamKeyResponse{
 		Valid:        true,
-		StreamID:     streamID,
 		UserID:       userID,
 		TenantID:     tenantID,
 		InternalName: internalName,
@@ -774,13 +781,12 @@ func CreateStream(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusCreated, commodoreapi.CreateStreamResponse{
-		ID:           streamID,
-		StreamKey:    streamKey,
-		PlaybackID:   playbackID,
-		InternalName: internalName,
-		Title:        req.Title,
-		Description:  req.Description,
-		Status:       "offline", // Default status for new streams
+		ID:          internalName,
+		StreamKey:   streamKey,
+		PlaybackID:  playbackID,
+		Title:       req.Title,
+		Description: req.Description,
+		Status:      "offline", // Default status for new streams
 	})
 }
 
@@ -790,12 +796,12 @@ func DeleteStream(c *gin.Context) {
 	streamID := c.Param("id")
 
 	// Verify user owns the stream and get stream details
-	var streamKey, internalName, title string
+	var streamUUID, streamKey, internalName, title string
 	err := db.QueryRow(`
-		SELECT stream_key, internal_name, title 
+		SELECT id, stream_key, internal_name, title 
 		FROM streams 
-		WHERE id = $1 AND user_id = $2
-	`, streamID, userID).Scan(&streamKey, &internalName, &title)
+		WHERE internal_name = $1 AND user_id = $2
+	`, streamID, userID).Scan(&streamUUID, &streamKey, &internalName, &title)
 
 	if err == sql.ErrNoRows {
 		c.JSON(http.StatusNotFound, commodoreapi.ErrorResponse{Error: "Stream not found or not owned by user"})
@@ -921,7 +927,7 @@ func GetUsers(c *gin.Context) {
 // GetAllStreams returns all streams (admin only)
 func GetAllStreams(c *gin.Context) {
 	rows, err := db.Query(`
-		SELECT id, tenant_id, user_id, stream_key, playback_id, internal_name, title, description,
+		SELECT internal_name, stream_key, playback_id, title, description,
 		       is_recording_enabled, is_public, status, start_time, end_time, created_at
 		FROM streams ORDER BY created_at DESC
 	`)
@@ -936,8 +942,8 @@ func GetAllStreams(c *gin.Context) {
 	for rows.Next() {
 		var stream models.Stream
 		var startTime, endTime *time.Time
-		err := rows.Scan(&stream.ID, &stream.TenantID, &stream.UserID, &stream.StreamKey, &stream.PlaybackID,
-			&stream.InternalName, &stream.Title, &stream.Description,
+		err := rows.Scan(&stream.InternalName, &stream.StreamKey, &stream.PlaybackID,
+			&stream.Title, &stream.Description,
 			&stream.IsRecordingEnabled, &stream.IsPublic, &stream.Status,
 			&startTime, &endTime, &stream.CreatedAt)
 		if err != nil {
@@ -947,6 +953,9 @@ func GetAllStreams(c *gin.Context) {
 			}).Error("Error scanning stream in admin streams list")
 			continue
 		}
+
+		// Set public ID to internal_name
+		stream.ID = stream.InternalName
 
 		// Convert nullable timestamps
 		if startTime != nil {
@@ -964,11 +973,11 @@ func GetAllStreams(c *gin.Context) {
 
 // TerminateStream terminates a stream (admin only)
 func TerminateStream(c *gin.Context) {
-	streamID := c.Param("id")
+	streamInternalName := c.Param("id") // Now expects internal_name instead of UUID
 
 	_, err := db.Exec(`
-		UPDATE streams SET status = 'terminated', end_time = NOW() WHERE id = $1
-	`, streamID)
+		UPDATE streams SET status = 'terminated', end_time = NOW() WHERE internal_name = $1
+	`, streamInternalName)
 
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Failed to terminate stream"})
@@ -981,15 +990,16 @@ func TerminateStream(c *gin.Context) {
 // RefreshStreamKey generates a new stream key for an existing stream
 func RefreshStreamKey(c *gin.Context) {
 	userID := c.GetString("user_id")
-	streamID := c.Param("id")
+	tenantID := c.GetString("tenant_id")
+	streamInternalName := c.Param("id") // Now expects internal_name instead of UUID
 
-	// Verify user owns the stream
-	var currentStreamKey, playbackID, internalName string
+	// Verify user owns the stream and get stream UUID for key updates
+	var currentStreamKey, playbackID, internalName, streamUUID string
 	err := db.QueryRow(`
-		SELECT stream_key, playback_id, internal_name 
+		SELECT stream_key, playback_id, internal_name, id 
 		FROM streams 
-		WHERE id = $1 AND user_id = $2
-	`, streamID, userID).Scan(&currentStreamKey, &playbackID, &internalName)
+		WHERE internal_name = $1 AND user_id = $2 AND tenant_id = $3
+	`, streamInternalName, userID, tenantID).Scan(&currentStreamKey, &playbackID, &internalName, &streamUUID)
 
 	if err == sql.ErrNoRows {
 		c.JSON(http.StatusNotFound, commodoreapi.ErrorResponse{Error: "Stream not found or not owned by user"})
@@ -998,9 +1008,9 @@ func RefreshStreamKey(c *gin.Context) {
 
 	if err != nil {
 		logger.WithFields(logging.Fields{
-			"user_id":   userID,
-			"stream_id": streamID,
-			"error":     err,
+			"user_id":              userID,
+			"stream_internal_name": streamInternalName,
+			"error":                err,
 		}).Error("Database error fetching stream for key refresh")
 		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Database error"})
 		return
@@ -1011,9 +1021,9 @@ func RefreshStreamKey(c *gin.Context) {
 	err = db.QueryRow(`SELECT 'sk_' || generate_random_string(28)`).Scan(&newStreamKey)
 	if err != nil {
 		logger.WithFields(logging.Fields{
-			"user_id":   userID,
-			"stream_id": streamID,
-			"error":     err,
+			"user_id":              userID,
+			"stream_internal_name": streamInternalName,
+			"error":                err,
 		}).Error("Failed to generate new stream key")
 		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Failed to generate new stream key"})
 		return
@@ -1024,13 +1034,13 @@ func RefreshStreamKey(c *gin.Context) {
 		UPDATE streams 
 		SET stream_key = $1, updated_at = NOW()
 		WHERE id = $2
-	`, newStreamKey, streamID)
+	`, newStreamKey, streamUUID)
 
 	if err != nil {
 		logger.WithFields(logging.Fields{
-			"user_id":   userID,
-			"stream_id": streamID,
-			"error":     err,
+			"user_id":              userID,
+			"stream_internal_name": streamInternalName,
+			"error":                err,
 		}).Error("Failed to update stream key")
 		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Failed to update stream key"})
 		return
@@ -1044,9 +1054,9 @@ func RefreshStreamKey(c *gin.Context) {
 	`, currentStreamKey)
 	if err != nil {
 		logger.WithFields(logging.Fields{
-			"user_id":   userID,
-			"stream_id": streamID,
-			"error":     err,
+			"user_id":              userID,
+			"stream_internal_name": streamInternalName,
+			"error":                err,
 		}).Error("Failed to deactivate old stream key")
 	}
 
@@ -1054,18 +1064,18 @@ func RefreshStreamKey(c *gin.Context) {
 	_, err = db.Exec(`
 		INSERT INTO stream_keys (stream_id, key_value, key_name, is_active)
 		VALUES ($1, $2, 'Refreshed Key', true)
-	`, streamID, newStreamKey)
+	`, streamUUID, newStreamKey)
 	if err != nil {
 		logger.WithFields(logging.Fields{
-			"user_id":   userID,
-			"stream_id": streamID,
-			"error":     err,
+			"user_id":              userID,
+			"stream_internal_name": streamInternalName,
+			"error":                err,
 		}).Error("Failed to add new stream key")
 	}
 
 	c.JSON(http.StatusOK, commodoreapi.RefreshKeyResponse{
 		Message:           "Stream key refreshed successfully",
-		StreamID:          streamID,
+		StreamID:          streamInternalName, // Return internal_name as the public stream ID
 		StreamKey:         newStreamKey,
 		PlaybackID:        playbackID,
 		OldKeyInvalidated: true,
@@ -2046,7 +2056,6 @@ func ResolveInternalName(c *gin.Context) {
 
 	c.JSON(http.StatusOK, commodoreapi.InternalNameResponse{
 		InternalName: internalName,
-		TenantID:     tenantID,
 	})
 }
 

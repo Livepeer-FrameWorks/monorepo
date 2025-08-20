@@ -1,11 +1,10 @@
 # Stream real-time subscriptions
 
 # Subscribe to stream lifecycle events
-subscription StreamEvents($streamId: ID, $tenantId: ID) {
-  streamEvents(streamId: $streamId, tenantId: $tenantId) {
+subscription StreamEvents($streamId: ID) {
+  streamEvents(streamId: $streamId) {
     type
     streamId
-    tenantId
     status
     timestamp
     nodeId
@@ -30,20 +29,18 @@ subscription ViewerMetricsStream($streamId: ID!) {
 subscription TrackListUpdates($streamId: ID!) {
   trackListUpdates(streamId: $streamId) {
     streamId
-    tenantId
     trackList
     trackCount
     timestamp
   }
 }
 
-# Subscribe to all events for current tenant
-subscription TenantEvents($tenantId: ID!) {
-  tenantEvents(tenantId: $tenantId) {
+# Subscribe to all events for current tenant (tenant determined from auth context)
+subscription TenantEvents {
+  userEvents {
     ... on StreamEvent {
       type
       streamId
-      tenantId
       status
       timestamp
       nodeId
@@ -60,7 +57,6 @@ subscription TenantEvents($tenantId: ID!) {
     }
     ... on TrackListEvent {
       streamId
-      tenantId
       trackList
       trackCount
       timestamp
