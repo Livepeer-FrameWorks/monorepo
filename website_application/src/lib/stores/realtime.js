@@ -101,7 +101,7 @@ export function subscribeToStreamMetrics(streamId) {
   try {
     const subscription = client.subscribe({
       query: ViewerMetricsStreamDocument,
-      variables: { streamId }
+      variables: { stream: streamId }
     }).subscribe({
       next: (result) => {
         if (result.data?.viewerMetrics) {

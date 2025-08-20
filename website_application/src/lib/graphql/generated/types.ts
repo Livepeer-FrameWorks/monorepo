@@ -610,6 +610,7 @@ export type ViewerMetrics = {
   peakViewers: Scalars['Int']['output'];
   stream: Scalars['String']['output'];
   timestamp: Scalars['Time']['output'];
+  viewerCount: Scalars['Int']['output'];
 };
 
 /**
@@ -1047,7 +1048,7 @@ export type ViewerMetricsStreamSubscriptionVariables = Exact<{
 }>;
 
 
-export type ViewerMetricsStreamSubscription = { __typename?: 'Subscription', viewerMetrics: { __typename?: 'ViewerMetrics', stream: string, currentViewers: number, peakViewers: number, bandwidth: number, connectionQuality?: number | null | undefined, bufferHealth?: number | null | undefined, timestamp: string } };
+export type ViewerMetricsStreamSubscription = { __typename?: 'Subscription', viewerMetrics: { __typename?: 'ViewerMetrics', stream: string, currentViewers: number, viewerCount: number, peakViewers: number, bandwidth: number, connectionQuality?: number | null | undefined, bufferHealth?: number | null | undefined, timestamp: string } };
 
 export type TrackListUpdatesSubscriptionVariables = Exact<{
   stream: Scalars['String']['input'];
@@ -1059,7 +1060,7 @@ export type TrackListUpdatesSubscription = { __typename?: 'Subscription', trackL
 export type TenantEventsSubscriptionVariables = Exact<{ [key: string]: never; }>;
 
 
-export type TenantEventsSubscription = { __typename?: 'Subscription', userEvents: { __typename?: 'StreamEvent', type: StreamEventType, stream: string, status: StreamStatus, timestamp: string, details?: string | null | undefined } | { __typename?: 'TrackListEvent', stream: string, trackList: string, trackCount: number, timestamp: string } | { __typename?: 'ViewerMetrics', stream: string, currentViewers: number, peakViewers: number, bandwidth: number, connectionQuality?: number | null | undefined, bufferHealth?: number | null | undefined, timestamp: string } };
+export type TenantEventsSubscription = { __typename?: 'Subscription', userEvents: { __typename?: 'StreamEvent', type: StreamEventType, stream: string, status: StreamStatus, timestamp: string, details?: string | null | undefined } | { __typename?: 'TrackListEvent', stream: string, trackList: string, trackCount: number, timestamp: string } | { __typename?: 'ViewerMetrics', stream: string, currentViewers: number, viewerCount: number, peakViewers: number, bandwidth: number, connectionQuality?: number | null | undefined, bufferHealth?: number | null | undefined, timestamp: string } };
 
 export type SystemHealthSubscriptionVariables = Exact<{ [key: string]: never; }>;
 

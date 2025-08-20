@@ -3,11 +3,13 @@
   import { base } from "$app/paths";
   import { auth } from "$lib/stores/auth";
   import { streamsService } from "$lib/graphql/services/streams.js";
+  import { healthService } from "$lib/graphql/services/health.js";
   import { subscribeToStreamMetrics } from "$lib/stores/realtime.js";
   import { getIngestUrls, getDeliveryUrls } from "$lib/config";
   import { toast } from "$lib/stores/toast.js";
   import LoadingCard from "$lib/components/LoadingCard.svelte";
   import EmptyState from "$lib/components/EmptyState.svelte";
+  import HealthScoreIndicator from "$lib/components/health/HealthScoreIndicator.svelte";
   import { getIconComponent } from "$lib/iconUtils.js";
 
   let isAuthenticated = false;
@@ -37,6 +39,9 @@
   // Selected stream for detailed view
   /** @type {any} */
   let selectedStream = null;
+
+  // Stream health data for all streams
+  let streamHealthData = new Map();
 
   // Real-time metrics for selected stream (from GraphQL subscriptions)
   let realTimeMetrics = {
@@ -81,11 +86,38 @@
       
       // Update auth store with latest streams
       auth.updateStreams(streams);
+      
+      // Load health data for all streams
+      await loadStreamsHealthData();
+      
+      // Auto-select first stream if available
+      if (streams.length > 0 && !selectedStream) {
+        selectedStream = streams[0];
+        startRealTimeSubscriptions();
+      }
     } catch (error) {
       console.error("Failed to load streams:", error);
     } finally {
       loading = false;
     }
+  }
+
+  // Load health data for all streams
+  async function loadStreamsHealthData() {
+    const healthPromises = streams.map(async (stream) => {
+      try {
+        const health = await healthService.getCurrentStreamHealth(stream.id);
+        if (health) {
+          streamHealthData.set(stream.id, health);
+        }
+      } catch (error) {
+        console.warn(`Failed to load health data for stream ${stream.id}:`, error);
+      }
+    });
+    
+    await Promise.allSettled(healthPromises);
+    // Trigger reactive update
+    streamHealthData = streamHealthData;
   }
 
   // Start real-time GraphQL subscriptions
@@ -448,7 +480,7 @@
               </div>
             </div>
             
-            <div class="grid grid-cols-2 gap-4 text-sm">
+            <div class="grid grid-cols-2 gap-4 text-sm mb-3">
               <div>
                 <p class="text-tokyo-night-comment">Status</p>
                 <p class="font-semibold text-tokyo-night-fg capitalize">{stream.status || 'offline'}</p>
@@ -459,7 +491,47 @@
               </div>
             </div>
 
-            <div class="mt-3 pt-3 border-t border-tokyo-night-fg-gutter">
+            <!-- Health Indicator -->
+            {#if streamHealthData.has(stream.id)}
+              {@const health = streamHealthData.get(stream.id)}
+              <div class="mb-3">
+                <div class="flex items-center justify-between">
+                  <div class="flex items-center space-x-2">
+                    <HealthScoreIndicator 
+                      healthScore={health.healthScore} 
+                      size="sm" 
+                      showLabel={false}
+                    />
+                    <span class="text-xs text-tokyo-night-comment">Health</span>
+                  </div>
+                  <a 
+                    href="{base}/streams/{stream.id}/health"
+                    class="text-xs text-tokyo-night-cyan hover:text-tokyo-night-blue transition-colors"
+                    on:click|stopPropagation
+                  >
+                    View Details
+                  </a>
+                </div>
+                {#if health.issuesDescription}
+                  <p class="text-xs text-red-400 mt-1 truncate">{health.issuesDescription}</p>
+                {/if}
+              </div>
+            {:else if stream.status === 'live'}
+              <div class="mb-3">
+                <div class="flex items-center justify-between">
+                  <span class="text-xs text-tokyo-night-comment">Loading health...</span>
+                  <a 
+                    href="{base}/streams/{stream.id}/health"
+                    class="text-xs text-tokyo-night-cyan hover:text-tokyo-night-blue transition-colors"
+                    on:click|stopPropagation
+                  >
+                    View Details
+                  </a>
+                </div>
+              </div>
+            {/if}
+
+            <div class="pt-3 border-t border-tokyo-night-fg-gutter">
               <p class="text-xs text-tokyo-night-comment truncate">
                 ID: {stream.playbackId || stream.id.slice(0, 16)}
               </p>

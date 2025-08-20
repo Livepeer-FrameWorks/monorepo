@@ -6,10 +6,16 @@ import {
 export const clipsService = {
   // Mutations
   async createClip(input) {
-    const result = await client.mutate({
-      mutation: CreateClipDocument,
-      variables: { input }
-    });
-    return result.data.createClip;
+    try {
+      const result = await client.mutate({
+        mutation: CreateClipDocument,
+        variables: { input },
+        errorPolicy: 'all'
+      });
+      return result.data?.createClip || null;
+    } catch (error) {
+      console.error('Failed to create clip:', error);
+      throw error; // Re-throw for UI error handling
+    }
   }
 };

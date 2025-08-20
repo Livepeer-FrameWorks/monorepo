@@ -8,6 +8,7 @@ import (
 	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/demo"
 	"frameworks/api_gateway/internal/middleware"
+	"frameworks/pkg/logging"
 )
 
 // DoStreamUpdates handles real-time stream updates via WebSocket
@@ -72,13 +73,24 @@ func (r *Resolver) DoStreamUpdates(ctx context.Context, streamID *string) (<-cha
 		if r.Metrics != nil {
 			r.Metrics.Operations.WithLabelValues("subscription_streams", "error").Inc()
 		}
-		return nil, err
+		r.Logger.WithError(err).WithFields(logging.Fields{
+			"user_id":   user.UserID,
+			"tenant_id": user.TenantID,
+			"stream_id": streamID,
+		}).Error("Failed to setup stream events subscription")
+		return nil, fmt.Errorf("failed to setup stream events subscription: %w", err)
 	}
+
+	r.Logger.WithFields(logging.Fields{
+		"user_id":   user.UserID,
+		"tenant_id": user.TenantID,
+		"stream_id": streamID,
+	}).Info("Successfully setup stream events subscription")
 
 	if r.Metrics != nil {
 		r.Metrics.Operations.WithLabelValues("subscription_streams", "success").Inc()
 	}
-	return ch, err
+	return ch, nil
 }
 
 // DoAnalyticsUpdates handles real-time analytics updates via WebSocket
@@ -126,7 +138,23 @@ func (r *Resolver) DoAnalyticsUpdates(ctx context.Context, streamID string) (<-c
 
 	// Use WebSocket manager to subscribe to analytics updates
 	// TODO: Update SubscribeToAnalytics to accept stream filter parameter
-	return r.wsManager.SubscribeToAnalytics(ctx, config)
+	ch, err := r.wsManager.SubscribeToAnalytics(ctx, config)
+	if err != nil {
+		r.Logger.WithError(err).WithFields(logging.Fields{
+			"user_id":   user.UserID,
+			"tenant_id": user.TenantID,
+			"stream_id": streamID,
+		}).Error("Failed to setup analytics subscription")
+		return nil, fmt.Errorf("failed to setup analytics subscription: %w", err)
+	}
+
+	r.Logger.WithFields(logging.Fields{
+		"user_id":   user.UserID,
+		"tenant_id": user.TenantID,
+		"stream_id": streamID,
+	}).Info("Successfully setup analytics subscription")
+
+	return ch, nil
 }
 
 // DoSystemUpdates handles real-time system updates via WebSocket

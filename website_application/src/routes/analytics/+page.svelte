@@ -240,7 +240,7 @@
               </div>
             </div>
             
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
               <div>
                 <div class="text-sm text-tokyo-night-comment">Total View Time</div>
                 <div class="text-lg font-semibold">{Math.round(analyticsData.totalViewTime / 3600)} hours</div>
@@ -256,6 +256,120 @@
                 </div>
               </div>
             </div>
+
+            <!-- Stream Health Metrics -->
+            {#if analyticsData.currentHealthScore !== null || analyticsData.currentCodec || analyticsData.rebufferCount !== null}
+              <div class="border-t border-tokyo-night-selection pt-6">
+                <h3 class="text-lg font-semibold text-tokyo-night-purple mb-4">Stream Health & Quality</h3>
+                
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+                  {#if analyticsData.currentHealthScore !== null}
+                    <div class="text-center">
+                      <div class="text-2xl font-bold {analyticsData.currentHealthScore >= 0.9 ? 'text-green-400' : analyticsData.currentHealthScore >= 0.7 ? 'text-yellow-400' : 'text-red-400'}">
+                        {Math.round(analyticsData.currentHealthScore * 100)}%
+                      </div>
+                      <div class="text-sm text-tokyo-night-comment">Health Score</div>
+                    </div>
+                  {/if}
+                  
+                  {#if analyticsData.rebufferCount !== null}
+                    <div class="text-center">
+                      <div class="text-2xl font-bold {analyticsData.rebufferCount > 10 ? 'text-red-400' : analyticsData.rebufferCount > 5 ? 'text-yellow-400' : 'text-green-400'}">
+                        {analyticsData.rebufferCount}
+                      </div>
+                      <div class="text-sm text-tokyo-night-comment">Rebuffers</div>
+                    </div>
+                  {/if}
+                  
+                  {#if analyticsData.alertCount !== null}
+                    <div class="text-center">
+                      <div class="text-2xl font-bold {analyticsData.alertCount > 5 ? 'text-red-400' : analyticsData.alertCount > 2 ? 'text-yellow-400' : 'text-green-400'}">
+                        {analyticsData.alertCount}
+                      </div>
+                      <div class="text-sm text-tokyo-night-comment">Health Alerts</div>
+                    </div>
+                  {/if}
+                  
+                  {#if analyticsData.packetLossPercentage !== null}
+                    <div class="text-center">
+                      <div class="text-2xl font-bold {analyticsData.packetLossPercentage > 2 ? 'text-red-400' : analyticsData.packetLossPercentage > 1 ? 'text-yellow-400' : 'text-green-400'}">
+                        {analyticsData.packetLossPercentage.toFixed(1)}%
+                      </div>
+                      <div class="text-sm text-tokyo-night-comment">Packet Loss</div>
+                    </div>
+                  {/if}
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  {#if analyticsData.currentCodec || analyticsData.currentResolution}
+                    <div>
+                      <div class="text-sm text-tokyo-night-comment">Video Quality</div>
+                      <div class="space-y-1">
+                        {#if analyticsData.currentResolution}
+                          <div class="text-sm font-mono text-tokyo-night-blue">{analyticsData.currentResolution}</div>
+                        {/if}
+                        {#if analyticsData.currentCodec}
+                          <div class="text-sm font-mono text-tokyo-night-purple">{analyticsData.currentCodec}</div>
+                        {/if}
+                        {#if analyticsData.currentBitrate}
+                          <div class="text-sm font-mono text-tokyo-night-green">{Math.round(analyticsData.currentBitrate / 1000)}k</div>
+                        {/if}
+                        {#if analyticsData.currentFps}
+                          <div class="text-sm font-mono text-tokyo-night-orange">{analyticsData.currentFps.toFixed(1)} fps</div>
+                        {/if}
+                      </div>
+                    </div>
+                  {/if}
+
+                  {#if analyticsData.frameJitterMs !== null || analyticsData.keyframeStabilityMs !== null}
+                    <div>
+                      <div class="text-sm text-tokyo-night-comment">Performance</div>
+                      <div class="space-y-1">
+                        {#if analyticsData.frameJitterMs !== null}
+                          <div class="text-sm">
+                            <span class="text-tokyo-night-fg">Jitter:</span>
+                            <span class="font-mono {analyticsData.frameJitterMs > 30 ? 'text-red-400' : 'text-green-400'}">
+                              {analyticsData.frameJitterMs.toFixed(1)}ms
+                            </span>
+                          </div>
+                        {/if}
+                        {#if analyticsData.keyframeStabilityMs !== null}
+                          <div class="text-sm">
+                            <span class="text-tokyo-night-fg">Keyframe:</span>
+                            <span class="font-mono text-tokyo-night-cyan">{analyticsData.keyframeStabilityMs.toFixed(1)}ms</span>
+                          </div>
+                        {/if}
+                        {#if analyticsData.qualityTier}
+                          <div class="text-sm">
+                            <span class="text-tokyo-night-fg">Tier:</span>
+                            <span class="font-mono text-tokyo-night-purple">{analyticsData.qualityTier}</span>
+                          </div>
+                        {/if}
+                      </div>
+                    </div>
+                  {/if}
+
+                  {#if analyticsData.bufferState || analyticsData.currentIssues}
+                    <div>
+                      <div class="text-sm text-tokyo-night-comment">Buffer & Issues</div>
+                      <div class="space-y-1">
+                        {#if analyticsData.bufferState}
+                          <div class="text-sm">
+                            <span class="text-tokyo-night-fg">Buffer:</span>
+                            <span class="font-mono {analyticsData.bufferState === 'FULL' ? 'text-green-400' : analyticsData.bufferState === 'DRY' ? 'text-red-400' : 'text-yellow-400'}">
+                              {analyticsData.bufferState}
+                            </span>
+                          </div>
+                        {/if}
+                        {#if analyticsData.currentIssues}
+                          <div class="text-sm text-red-400">{analyticsData.currentIssues}</div>
+                        {/if}
+                      </div>
+                    </div>
+                  {/if}
+                </div>
+              </div>
+            {/if}
           {:else}
             <p class="text-tokyo-night-comment">No analytics data available for this stream</p>
           {/if}

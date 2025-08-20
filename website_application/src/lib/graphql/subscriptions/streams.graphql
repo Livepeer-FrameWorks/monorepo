@@ -16,6 +16,7 @@ subscription ViewerMetricsStream($stream: String!) {
   viewerMetrics(stream: $stream) {
     stream
     currentViewers
+    viewerCount
     peakViewers
     bandwidth
     connectionQuality
@@ -47,6 +48,7 @@ subscription TenantEvents {
     ... on ViewerMetrics {
       stream
       currentViewers
+      viewerCount
       peakViewers
       bandwidth
       connectionQuality

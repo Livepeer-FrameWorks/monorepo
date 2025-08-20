@@ -308,19 +308,28 @@ func (wm *WebSocketManager) convertToStreamEvent(msg signalmanapi.Message) *mode
 	streamID, _ := msg.Data["stream_id"].(string)
 	var detailsPtr *string
 
+	// Ensure timestamp is not zero - GraphQL schema requires non-null timestamp
+	timestamp := msg.Timestamp
+	if timestamp.IsZero() {
+		timestamp = time.Now()
+		wm.logger.Warn("Received message with zero timestamp, using current time",
+			"message_type", msg.Type,
+			"stream_id", streamID)
+	}
+
 	switch msg.Type {
 	case signalmanapi.TypeStreamStart:
-		return &model.StreamEvent{Type: model.StreamEventTypeStreamStart, Stream: streamID, Status: model.StreamStatusLive, Timestamp: msg.Timestamp, Details: detailsPtr}
+		return &model.StreamEvent{Type: model.StreamEventTypeStreamStart, Stream: streamID, Status: model.StreamStatusLive, Timestamp: timestamp, Details: detailsPtr}
 	case signalmanapi.TypeStreamEnd:
-		return &model.StreamEvent{Type: model.StreamEventTypeStreamEnd, Stream: streamID, Status: model.StreamStatusEnded, Timestamp: msg.Timestamp, Details: detailsPtr}
+		return &model.StreamEvent{Type: model.StreamEventTypeStreamEnd, Stream: streamID, Status: model.StreamStatusEnded, Timestamp: timestamp, Details: detailsPtr}
 	case signalmanapi.TypeStreamError:
-		return &model.StreamEvent{Type: model.StreamEventTypeStreamError, Stream: streamID, Status: model.StreamStatusOffline, Timestamp: msg.Timestamp, Details: detailsPtr}
+		return &model.StreamEvent{Type: model.StreamEventTypeStreamError, Stream: streamID, Status: model.StreamStatusOffline, Timestamp: timestamp, Details: detailsPtr}
 	case signalmanapi.TypeStreamBuffer:
-		return &model.StreamEvent{Type: model.StreamEventTypeBufferUpdate, Stream: streamID, Status: model.StreamStatusLive, Timestamp: msg.Timestamp, Details: detailsPtr}
+		return &model.StreamEvent{Type: model.StreamEventTypeBufferUpdate, Stream: streamID, Status: model.StreamStatusLive, Timestamp: timestamp, Details: detailsPtr}
 	case signalmanapi.TypeTrackList:
-		return &model.StreamEvent{Type: model.StreamEventTypeTrackListUpdate, Stream: streamID, Status: model.StreamStatusLive, Timestamp: msg.Timestamp, Details: detailsPtr}
+		return &model.StreamEvent{Type: model.StreamEventTypeTrackListUpdate, Stream: streamID, Status: model.StreamStatusLive, Timestamp: timestamp, Details: detailsPtr}
 	default:
-		return &model.StreamEvent{Type: model.StreamEventTypeStreamStart, Stream: streamID, Status: model.StreamStatusLive, Timestamp: msg.Timestamp, Details: detailsPtr}
+		return &model.StreamEvent{Type: model.StreamEventTypeStreamStart, Stream: streamID, Status: model.StreamStatusLive, Timestamp: timestamp, Details: detailsPtr}
 	}
 }
 
@@ -350,14 +359,24 @@ func (wm *WebSocketManager) convertToViewerMetrics(msg signalmanapi.Message) *mo
 	if bh, ok := msg.Data["buffer_health"].(float64); ok {
 		bufferHealth = &bh
 	}
+
+	// Ensure timestamp is not zero - GraphQL schema requires non-null timestamp
+	timestamp := msg.Timestamp
+	if timestamp.IsZero() {
+		timestamp = time.Now()
+		wm.logger.Warn("Received viewer metrics with zero timestamp, using current time",
+			"stream_id", streamID)
+	}
+
 	return &model.ViewerMetrics{
 		Stream:            streamID,
 		CurrentViewers:    currentViewers,
+		ViewerCount:       currentViewers, // Add the viewerCount field that was added to schema
 		PeakViewers:       peakViewers,
 		Bandwidth:         bandwidth,
 		ConnectionQuality: connectionQuality,
 		BufferHealth:      bufferHealth,
-		Timestamp:         msg.Timestamp,
+		Timestamp:         timestamp,
 	}
 }
 
@@ -392,6 +411,16 @@ func (wm *WebSocketManager) convertToSystemHealthEvent(msg signalmanapi.Message)
 			status = model.NodeStatusUnhealthy
 		}
 	}
+
+	// Ensure timestamp is not zero - GraphQL schema requires non-null timestamp
+	timestamp := msg.Timestamp
+	if timestamp.IsZero() {
+		timestamp = time.Now()
+		wm.logger.Warn("Received system health event with zero timestamp, using current time",
+			"node_id", nodeID,
+			"cluster_id", clusterID)
+	}
+
 	return &model.SystemHealthEvent{
 		Node:        nodeID,
 		Cluster:     clusterID,
@@ -400,7 +429,7 @@ func (wm *WebSocketManager) convertToSystemHealthEvent(msg signalmanapi.Message)
 		MemoryUsage: mem,
 		DiskUsage:   disk,
 		HealthScore: health,
-		Timestamp:   msg.Timestamp,
+		Timestamp:   timestamp,
 	}
 }
 
@@ -499,11 +528,19 @@ func (wm *WebSocketManager) convertToTrackListEvent(msg signalmanapi.Message) *m
 		trackCount = int(tc)
 	}
 
+	// Ensure timestamp is not zero - GraphQL schema requires non-null timestamp
+	timestamp := msg.Timestamp
+	if timestamp.IsZero() {
+		timestamp = time.Now()
+		wm.logger.Warn("Received track list event with zero timestamp, using current time",
+			"stream_id", streamID)
+	}
+
 	return &model.TrackListEvent{
 		Stream:     streamID,
 		TrackList:  trackList,
 		TrackCount: trackCount,
-		Timestamp:  msg.Timestamp,
+		Timestamp:  timestamp,
 	}
 }
 

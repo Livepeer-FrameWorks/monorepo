@@ -29,21 +29,33 @@ export const streamsService = {
   },
 
   async getStream(id) {
-    const result = await client.query({
-      query: GetStreamDocument,
-      variables: { id },
-      fetchPolicy: 'cache-first'
-    });
-    return result.data.stream;
+    try {
+      const result = await client.query({
+        query: GetStreamDocument,
+        variables: { id },
+        fetchPolicy: 'cache-first',
+        errorPolicy: 'all'
+      });
+      return result.data?.stream || null;
+    } catch (error) {
+      console.error('Failed to fetch stream:', error);
+      return null;
+    }
   },
 
   async validateStreamKey(streamKey) {
-    const result = await client.query({
-      query: ValidateStreamKeyDocument,
-      variables: { streamKey },
-      fetchPolicy: 'no-cache' // Always fresh for validation
-    });
-    return result.data.validateStreamKey;
+    try {
+      const result = await client.query({
+        query: ValidateStreamKeyDocument,
+        variables: { streamKey },
+        fetchPolicy: 'no-cache', // Always fresh for validation
+        errorPolicy: 'all'
+      });
+      return result.data?.validateStreamKey || null;
+    } catch (error) {
+      console.error('Failed to validate stream key:', error);
+      return null;
+    }
   },
 
   // Mutations
@@ -90,10 +102,10 @@ export const streamsService = {
   },
 
   // Subscriptions
-  subscribeToStreamEvents(streamId, tenantId, callbacks) {
+  subscribeToStreamEvents(streamId, callbacks) {
     const observable = client.subscribe({
       query: StreamEventsDocument,
-      variables: { streamId, tenantId }
+      variables: { stream: streamId }
     });
 
     return observable.subscribe({
@@ -114,7 +126,7 @@ export const streamsService = {
   subscribeToViewerMetrics(streamId, callbacks) {
     const observable = client.subscribe({
       query: ViewerMetricsStreamDocument,
-      variables: { streamId }
+      variables: { stream: streamId }
     });
 
     return observable.subscribe({
@@ -135,7 +147,7 @@ export const streamsService = {
   subscribeToTrackListUpdates(streamId, callbacks) {
     const observable = client.subscribe({
       query: TrackListUpdatesDocument,
-      variables: { streamId }
+      variables: { stream: streamId }
     });
 
     return observable.subscribe({

@@ -8,31 +8,49 @@ import {
 export const analyticsService = {
   // Get viewer metrics for a stream over time range
   async getViewerMetrics(streamId, timeRange) {
-    const result = await client.query({
-      query: GetViewerMetricsDocument,
-      variables: { streamId, timeRange },
-      fetchPolicy: 'cache-first'
-    });
-    return result.data.viewerMetrics;
+    try {
+      const result = await client.query({
+        query: GetViewerMetricsDocument,
+        variables: { stream: streamId, timeRange },
+        fetchPolicy: 'cache-first',
+        errorPolicy: 'all'
+      });
+      return result.data?.viewerMetrics || [];
+    } catch (error) {
+      console.error('Failed to fetch viewer metrics:', error);
+      return [];
+    }
   },
 
   // Get detailed analytics for a specific stream
   async getStreamAnalytics(streamId, timeRange) {
-    const result = await client.query({
-      query: GetStreamAnalyticsDocument,
-      variables: { streamId, timeRange },
-      fetchPolicy: 'cache-first'
-    });
-    return result.data.streamAnalytics;
+    try {
+      const result = await client.query({
+        query: GetStreamAnalyticsDocument,
+        variables: { stream: streamId, timeRange },
+        fetchPolicy: 'cache-first',
+        errorPolicy: 'all'
+      });
+      return result.data?.streamAnalytics || null;
+    } catch (error) {
+      console.error('Failed to fetch stream analytics:', error);
+      return null;
+    }
   },
 
   // Get platform-wide overview metrics
   async getPlatformOverview(timeRange) {
-    const result = await client.query({
-      query: GetPlatformOverviewDocument,
-      variables: { timeRange },
-      fetchPolicy: 'cache-first'
-    });
-    return result.data.platformOverview;
+    try {
+      const result = await client.query({
+        query: GetPlatformOverviewDocument,
+        variables: { timeRange },
+        fetchPolicy: 'cache-first',
+        errorPolicy: 'all'
+      });
+      return result.data?.platformOverview || null;
+    } catch (error) {
+      console.error('Failed to fetch platform overview:', error);
+      return null;
+    }
   }
 };
