@@ -4,15 +4,16 @@ import (
 	"time"
 
 	"frameworks/pkg/api/common"
+	"frameworks/pkg/validation"
 )
 
 // Message represents a real-time message sent to clients
 type Message struct {
-	Type      string                 `json:"type"`
-	Channel   string                 `json:"channel"`
-	Data      map[string]interface{} `json:"data"`
-	Timestamp time.Time              `json:"timestamp"`
-	TenantID  *string                `json:"tenant_id,omitempty"` // For tenant-scoped messages
+	Type      string               `json:"type"`
+	Channel   string               `json:"channel"`
+	Data      validation.EventData `json:"data"`
+	Timestamp time.Time            `json:"timestamp"`
+	TenantID  *string              `json:"tenant_id,omitempty"` // For tenant-scoped messages
 }
 
 // SubscriptionMessage represents a subscription request from client
@@ -31,91 +32,27 @@ type SubscriptionConfirmation struct {
 
 // HealthResponse represents the health check response
 type HealthResponse struct {
-	Status     string                 `json:"status"`
-	Service    string                 `json:"service"`
-	Version    string                 `json:"version"`
-	Timestamp  time.Time              `json:"timestamp"`
-	Uptime     string                 `json:"uptime"`
-	Kafka      string                 `json:"kafka,omitempty"`
-	KafkaError string                 `json:"kafka_error,omitempty"`
-	WebSocket  map[string]interface{} `json:"websocket,omitempty"`
+	Status     string    `json:"status"`
+	Service    string    `json:"service"`
+	Version    string    `json:"version"`
+	Timestamp  time.Time `json:"timestamp"`
+	Uptime     string    `json:"uptime"`
+	Kafka      string    `json:"kafka,omitempty"`
+	KafkaError string    `json:"kafka_error,omitempty"`
+	WebSocket  *HubStats `json:"websocket,omitempty"`
 }
 
 // HubStats represents WebSocket hub statistics
 type HubStats struct {
+	Connections          int            `json:"connections"`
 	TotalClients         int            `json:"total_clients"`
 	ChannelSubscriptions map[string]int `json:"channel_subscriptions"`
 }
 
-// EventData represents the data payload for different event types
-type EventData map[string]interface{}
+// EventData is now provided by validation.EventData for type safety
 
-// StreamLifecycleEvent represents stream lifecycle events
-type StreamLifecycleEvent struct {
-	Type         string    `json:"type"` // "stream-start", "stream-end", "stream-error"
-	InternalName string    `json:"internal_name"`
-	TenantID     string    `json:"tenant_id"`
-	NodeID       string    `json:"node_id"`
-	Status       string    `json:"status"`
-	Timestamp    time.Time `json:"timestamp"`
-	Details      string    `json:"details,omitempty"`
-}
-
-// RealtimeTrackListEvent represents track list update events for real-time streaming
-type RealtimeTrackListEvent struct {
-	Type         string    `json:"type"` // "track-list"
-	InternalName string    `json:"internal_name"`
-	TenantID     string    `json:"tenant_id"`
-	NodeID       string    `json:"node_id"`
-	TrackList    string    `json:"track_list"`
-	TrackCount   int       `json:"track_count"`
-	Timestamp    time.Time `json:"timestamp"`
-}
-
-// StreamBufferEvent represents stream buffer events
-type StreamBufferEvent struct {
-	Type         string    `json:"type"` // "stream-buffer"
-	InternalName string    `json:"internal_name"`
-	TenantID     string    `json:"tenant_id"`
-	NodeID       string    `json:"node_id"`
-	BufferHealth float32   `json:"buffer_health"`
-	BufferSize   int       `json:"buffer_size"`
-	BufferUsed   int       `json:"buffer_used"`
-	Status       string    `json:"status"`
-	Timestamp    time.Time `json:"timestamp"`
-}
-
-// NodeLifecycleEvent represents node lifecycle events
-type NodeLifecycleEvent struct {
-	Type      string    `json:"type"` // "node-up", "node-down", "node-degraded"
-	NodeID    string    `json:"node_id"`
-	Location  string    `json:"location"`
-	Status    string    `json:"status"`
-	Timestamp time.Time `json:"timestamp"`
-	Details   string    `json:"details,omitempty"`
-}
-
-// LoadBalancingEvent represents load balancing events
-type LoadBalancingEvent struct {
-	Type       string    `json:"type"` // "load-balancing"
-	NodeID     string    `json:"node_id"`
-	StreamName string    `json:"stream_name,omitempty"`
-	Action     string    `json:"action"` // "route", "failover", "rebalance"
-	Score      float64   `json:"score"`  // Node score
-	Reason     string    `json:"reason"` // Reason for action
-	Timestamp  time.Time `json:"timestamp"`
-	TenantID   string    `json:"tenant_id,omitempty"`
-}
-
-// AnalyticsEvent represents analytics events
-type AnalyticsEvent struct {
-	Type         string                 `json:"type"`
-	InternalName string                 `json:"internal_name,omitempty"`
-	TenantID     string                 `json:"tenant_id"`
-	NodeID       string                 `json:"node_id,omitempty"`
-	Metrics      map[string]interface{} `json:"metrics"`
-	Timestamp    time.Time              `json:"timestamp"`
-}
+// Event types are now provided by the shared validation package
+// Use validation.StreamLifecyclePayload, validation.TrackListPayload, etc.
 
 // Channel constants for subscription
 const (

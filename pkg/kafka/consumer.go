@@ -73,21 +73,19 @@ func (c *Consumer) Start(ctx context.Context) error {
 				record := iter.Next()
 				records = append(records, record)
 
-				var event Event
+				var event AnalyticsEvent
 				if err := json.Unmarshal(record.Value, &event); err != nil {
 					c.logger.WithError(err).Error("failed to unmarshal event")
 					continue
 				}
 
-				// Extract headers
+				// Extract headers (overriding JSON values if headers are present)
 				for _, header := range record.Headers {
 					switch header.Key {
 					case "source":
 						event.Source = string(header.Value)
 					case "tenant_id":
 						event.TenantID = string(header.Value)
-					case "channel":
-						event.Channel = string(header.Value)
 					}
 				}
 

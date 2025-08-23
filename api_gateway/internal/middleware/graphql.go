@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 
+	"frameworks/api_gateway/internal/clients"
+	"frameworks/api_gateway/internal/loaders"
 	"frameworks/pkg/auth"
 
 	"github.com/gin-gonic/gin"
@@ -37,57 +39,72 @@ func GraphQLContextMiddleware() gin.HandlerFunc {
 
 		// Check for user information from Gin context (regular HTTP requests)
 		// or from WebSocket context (WebSocket connections)
-		var userID, tenantID, email, role interface{}
+		var userIDStr, tenantIDStr, emailStr, roleStr string
+		var authenticated bool
 
 		// First try to get from Gin context (for HTTP requests with auth middleware)
-		userID, exists := c.Get("user_id")
-		if !exists {
-			// If not in Gin context, check request context (for WebSocket connections)
-			userID = ctx.Value("user_id")
-		}
-
-		tenantID, exists = c.Get("tenant_id")
-		if !exists {
-			tenantID = ctx.Value("tenant_id")
-		}
-
-		email, exists = c.Get("email")
-		if !exists {
-			email = ctx.Value("email")
-		}
-
-		role, exists = c.Get("role")
-		if !exists {
-			role = ctx.Value("role")
-		}
-
-		// If user is authenticated, add user context for GraphQL resolvers
-		if userID != nil {
-			userIDStr, ok1 := userID.(string)
-			tenantIDStr, ok2 := tenantID.(string)
-			emailStr, ok3 := email.(string)
-			roleStr, ok4 := role.(string)
-
-			if ok1 && ok2 && ok3 && ok4 {
-				user := &UserContext{
-					UserID:   userIDStr,
-					TenantID: tenantIDStr,
-					Email:    emailStr,
-					Role:     roleStr,
+		if userIDVal, exists := c.Get("user_id"); exists {
+			if userIDStr, authenticated = userIDVal.(string); authenticated {
+				if tenantIDVal, exists := c.Get("tenant_id"); exists {
+					tenantIDStr, _ = tenantIDVal.(string)
 				}
-
-				// Add user to request context for GraphQL resolvers
-				ctx = context.WithValue(ctx, "user", user)
-
-				// Also add individual values that resolvers expect
-				ctx = context.WithValue(ctx, "user_id", userIDStr)
-				ctx = context.WithValue(ctx, "tenant_id", tenantIDStr)
-				ctx = context.WithValue(ctx, "email", emailStr)
-				ctx = context.WithValue(ctx, "role", roleStr)
+				if emailVal, exists := c.Get("email"); exists {
+					emailStr, _ = emailVal.(string)
+				}
+				if roleVal, exists := c.Get("role"); exists {
+					roleStr, _ = roleVal.(string)
+				}
 			}
 		}
 
+		// If not authenticated via Gin, check request context (for WebSocket connections)
+		if !authenticated {
+			if userIDVal := ctx.Value("user_id"); userIDVal != nil {
+				if userIDStr, authenticated = userIDVal.(string); authenticated {
+					if tenantIDVal := ctx.Value("tenant_id"); tenantIDVal != nil {
+						tenantIDStr, _ = tenantIDVal.(string)
+					}
+					if emailVal := ctx.Value("email"); emailVal != nil {
+						emailStr, _ = emailVal.(string)
+					}
+					if roleVal := ctx.Value("role"); roleVal != nil {
+						roleStr, _ = roleVal.(string)
+					}
+				}
+			}
+		}
+
+		// If user is authenticated, add user context for GraphQL resolvers
+		if authenticated && userIDStr != "" && tenantIDStr != "" && emailStr != "" && roleStr != "" {
+			user := &UserContext{
+				UserID:   userIDStr,
+				TenantID: tenantIDStr,
+				Email:    emailStr,
+				Role:     roleStr,
+			}
+
+			// Add user to request context for GraphQL resolvers
+			ctx = context.WithValue(ctx, "user", user)
+
+			// Also add individual values that resolvers expect
+			ctx = context.WithValue(ctx, "user_id", userIDStr)
+			ctx = context.WithValue(ctx, "tenant_id", tenantIDStr)
+			ctx = context.WithValue(ctx, "email", emailStr)
+			ctx = context.WithValue(ctx, "role", roleStr)
+		}
+
 		// Update the request context
+		c.Request = c.Request.WithContext(ctx)
+		c.Next()
+	}
+}
+
+// GraphQLAttachLoaders attaches per-request dataloaders to the context
+func GraphQLAttachLoaders(sc *clients.ServiceClients) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		ctx := c.Request.Context()
+		lds := loaders.New(sc)
+		ctx = context.WithValue(ctx, "loaders", lds)
 		c.Request = c.Request.WithContext(ctx)
 		c.Next()
 	}

@@ -13,19 +13,21 @@ import (
 )
 
 // DoCreateDeveloperToken creates a new developer token
-func (r *Resolver) DoCreateDeveloperToken(ctx context.Context, input model.CreateDeveloperTokenInput) (*model.DeveloperToken, error) {
+func (r *Resolver) DoCreateDeveloperToken(ctx context.Context, input model.CreateDeveloperTokenInput) (*models.APIToken, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo developer token creation")
 		// Return a demo token creation response
 		tokenValue := "dk_demo_12345678901234567890123456789012"
-		return &model.DeveloperToken{
+		now := time.Now()
+		exp := now.AddDate(0, 6, 0)
+		return &models.APIToken{
 			ID:          "demo_dev_token_001",
-			Name:        input.Name,
-			Token:       &tokenValue,
-			Permissions: "streams:read,streams:write,analytics:read",
-			Status:      "active",
-			CreatedAt:   time.Now(),
-			ExpiresAt:   func() *time.Time { t := time.Now().AddDate(0, 6, 0); return &t }(),
+			TokenName:   input.Name,
+			TokenValue:  tokenValue,
+			Permissions: []string{"streams:read", "streams:write", "analytics:read"},
+			IsActive:    true,
+			CreatedAt:   now,
+			ExpiresAt:   &exp,
 		}, nil
 	}
 
@@ -64,15 +66,15 @@ func (r *Resolver) DoCreateDeveloperToken(ctx context.Context, input model.Creat
 		return nil, fmt.Errorf("failed to create developer token: %w", err)
 	}
 
-	// Convert response to GraphQL model
-	return &model.DeveloperToken{
+	// Convert response to bound model
+	return &models.APIToken{
 		ID:          tokenResp.ID,
-		Name:        tokenResp.TokenName,
-		Token:       &tokenResp.TokenValue, // Only returned on creation
-		Permissions: strings.Join(tokenResp.Permissions, ", "),
-		Status:      "active",
-		CreatedAt:   time.Now(), // Use current time since API doesn't return this
+		TokenName:   tokenResp.TokenName,
+		TokenValue:  tokenResp.TokenValue,
+		Permissions: tokenResp.Permissions,
+		IsActive:    true,
 		ExpiresAt:   tokenResp.ExpiresAt,
+		CreatedAt:   tokenResp.CreatedAt,
 	}, nil
 }
 
@@ -100,7 +102,7 @@ func (r *Resolver) DoRevokeDeveloperToken(ctx context.Context, id string) (bool,
 }
 
 // DoGetDeveloperTokens retrieves all developer tokens for the authenticated user
-func (r *Resolver) DoGetDeveloperTokens(ctx context.Context) ([]*model.DeveloperToken, error) {
+func (r *Resolver) DoGetDeveloperTokens(ctx context.Context) ([]*models.APIToken, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo developer tokens")
 		return demo.GenerateDeveloperTokens(), nil
@@ -119,15 +121,14 @@ func (r *Resolver) DoGetDeveloperTokens(ctx context.Context) ([]*model.Developer
 		return nil, fmt.Errorf("failed to get developer tokens: %w", err)
 	}
 
-	// Convert response to GraphQL models
-	result := make([]*model.DeveloperToken, len(tokensResp.Tokens))
+	// Convert response to bound models
+	result := make([]*models.APIToken, len(tokensResp.Tokens))
 	for i, token := range tokensResp.Tokens {
-		result[i] = &model.DeveloperToken{
+		result[i] = &models.APIToken{
 			ID:          token.ID,
-			Name:        token.TokenName,
-			Token:       nil, // Never return token value in list (security)
-			Permissions: strings.Join(token.Permissions, ", "),
-			Status:      token.Status,
+			TokenName:   token.TokenName,
+			Permissions: token.Permissions,
+			IsActive:    token.Status == "active",
 			LastUsedAt:  token.LastUsedAt,
 			ExpiresAt:   token.ExpiresAt,
 			CreatedAt:   token.CreatedAt,

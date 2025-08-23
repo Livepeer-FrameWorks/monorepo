@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"frameworks/pkg/clients/decklog"
 	"frameworks/pkg/geoip"
 	"frameworks/pkg/logging"
+	"frameworks/pkg/validation"
 
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"
@@ -136,7 +138,7 @@ func MistServerCompatibilityHandler(c *gin.Context) {
 	handleStreamBalancing(c, streamName)
 }
 
-// HandleNodeUpdate receives node updates from Helmsman
+// HandleNodeUpdate receives node updates from Helmsman - TYPED VERSION
 func HandleNodeUpdate(c *gin.Context) {
 	start := time.Now()
 	if metrics != nil {
@@ -144,15 +146,15 @@ func HandleNodeUpdate(c *gin.Context) {
 	}
 
 	var update struct {
-		NodeID    string                 `json:"node_id"`
-		BaseURL   string                 `json:"base_url"`
-		IsHealthy bool                   `json:"is_healthy"`
-		Latitude  *float64               `json:"latitude"`
-		Longitude *float64               `json:"longitude"`
-		Location  string                 `json:"location"`
-		EventType string                 `json:"event_type"`
-		Timestamp int64                  `json:"timestamp"`
-		Metrics   map[string]interface{} `json:"metrics"`
+		NodeID    string                        `json:"node_id"`
+		BaseURL   string                        `json:"base_url"`
+		IsHealthy bool                          `json:"is_healthy"`
+		Latitude  *float64                      `json:"latitude"`
+		Longitude *float64                      `json:"longitude"`
+		Location  string                        `json:"location"`
+		EventType string                        `json:"event_type"`
+		Timestamp int64                         `json:"timestamp"`
+		Metrics   *validation.FoghornNodeUpdate `json:"metrics"`
 	}
 
 	if err := c.ShouldBindJSON(&update); err != nil {
@@ -164,20 +166,23 @@ func HandleNodeUpdate(c *gin.Context) {
 		return
 	}
 
-	// Convert metrics to format expected by UpdateNodeMetrics
-	nodeMetrics := map[string]interface{}{
-		"cpu":         update.Metrics["cpu"],
-		"ram_max":     update.Metrics["ram_max"],
-		"ram_current": update.Metrics["ram_current"],
-		"up_speed":    update.Metrics["up_speed"],
-		"down_speed":  update.Metrics["down_speed"],
-		"bwlimit":     update.Metrics["bwlimit"],
-		"streams":     update.Metrics["streams"],
-		"loc": map[string]interface{}{
-			"lat":  update.Latitude,
-			"lon":  update.Longitude,
-			"name": update.Location,
-		},
+	// Validate required fields
+	if update.Metrics == nil {
+		logger.Error("Node update missing metrics data")
+		if metrics != nil {
+			metrics.DBQueries.WithLabelValues("node_update", "error").Inc()
+		}
+		c.JSON(http.StatusBadRequest, gin.H{"error": "missing metrics data"})
+		return
+	}
+
+	// Enrich location data from request if not in metrics
+	if update.Latitude != nil && update.Longitude != nil {
+		update.Metrics.Location.Latitude = *update.Latitude
+		update.Metrics.Location.Longitude = *update.Longitude
+	}
+	if update.Location != "" && update.Metrics.Location.Name == "" {
+		update.Metrics.Location.Name = update.Location
 	}
 
 	// Add or update node
@@ -200,8 +205,8 @@ func HandleNodeUpdate(c *gin.Context) {
 		}
 	}
 
-	// Update node metrics
-	if err := lb.UpdateNodeMetrics(update.BaseURL, nodeMetrics); err != nil {
+	// Update node metrics using typed data
+	if err := lb.UpdateNodeMetrics(update.BaseURL, update.Metrics); err != nil {
 		logger.WithError(err).Error("Failed to update node metrics")
 		if metrics != nil {
 			metrics.DBQueries.WithLabelValues("node_update", "error").Inc()
@@ -218,7 +223,7 @@ func HandleNodeUpdate(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "updated"})
 }
 
-// HandleStreamHealth receives immediate stream health updates from Helmsman
+// HandleStreamHealth receives immediate stream health updates from Helmsman - TYPED VERSION
 func HandleStreamHealth(c *gin.Context) {
 	start := time.Now()
 	if metrics != nil {
@@ -226,12 +231,12 @@ func HandleStreamHealth(c *gin.Context) {
 	}
 
 	var update struct {
-		NodeID       string                 `json:"node_id"`
-		StreamName   string                 `json:"stream_name"`
-		InternalName string                 `json:"internal_name"`
-		IsHealthy    bool                   `json:"is_healthy"`
-		Timestamp    int64                  `json:"timestamp"`
-		Details      map[string]interface{} `json:"details"`
+		NodeID       string                          `json:"node_id"`
+		StreamName   string                          `json:"stream_name"`
+		InternalName string                          `json:"internal_name"`
+		IsHealthy    bool                            `json:"is_healthy"`
+		Timestamp    int64                           `json:"timestamp"`
+		Details      *validation.FoghornStreamHealth `json:"details,omitempty"`
 	}
 
 	if err := c.ShouldBindJSON(&update); err != nil {
@@ -254,7 +259,7 @@ func HandleStreamHealth(c *gin.Context) {
 		return
 	}
 
-	// Update stream health in the balancer
+	// Update stream health in the balancer using typed data
 	if err := lb.UpdateStreamHealth(nodeHost, update.StreamName, update.IsHealthy, update.Details); err != nil {
 		logger.WithError(err).Error("Failed to update stream health")
 		if metrics != nil {
@@ -264,9 +269,6 @@ func HandleStreamHealth(c *gin.Context) {
 		return
 	}
 
-	// Post event to Decklog
-	go postBalancingEvent(c, update.InternalName, nodeHost, 0, 0, 0, "health_update", fmt.Sprintf("Stream health: %v", update.IsHealthy))
-
 	if metrics != nil {
 		metrics.DBQueries.WithLabelValues("stream_health", "success").Inc()
 		metrics.DBDuration.WithLabelValues("stream_health").Observe(time.Since(start).Seconds())
@@ -275,14 +277,14 @@ func HandleStreamHealth(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "updated"})
 }
 
-// HandleNodeShutdown receives graceful shutdown notifications from Helmsman
+// HandleNodeShutdown receives graceful shutdown notifications from Helmsman - TYPED VERSION
 func HandleNodeShutdown(c *gin.Context) {
 	var update struct {
-		NodeID    string                 `json:"node_id"`
-		Type      string                 `json:"type"`
-		Timestamp int64                  `json:"timestamp"`
-		Reason    string                 `json:"reason"`
-		Details   map[string]interface{} `json:"details"`
+		NodeID    string                          `json:"node_id"`
+		Type      string                          `json:"type"`
+		Timestamp int64                           `json:"timestamp"`
+		Reason    string                          `json:"reason"`
+		Details   *validation.FoghornNodeShutdown `json:"details,omitempty"`
 	}
 
 	if err := c.ShouldBindJSON(&update); err != nil {
@@ -299,15 +301,12 @@ func HandleNodeShutdown(c *gin.Context) {
 		return
 	}
 
-	// Mark node as inactive and clear its streams
+	// Mark node as inactive and clear its streams using typed data
 	if err := lb.HandleNodeShutdown(nodeHost, update.Reason, update.Details); err != nil {
 		logger.WithError(err).Error("Failed to handle node shutdown")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to handle shutdown"})
 		return
 	}
-
-	// Post event to Decklog
-	go postBalancingEvent(c, "node_shutdown", nodeHost, 0, 0, 0, "shutdown", update.Reason)
 
 	c.JSON(http.StatusOK, gin.H{"status": "handled"})
 }
@@ -548,13 +547,13 @@ func handleGetSource(c *gin.Context, streamName string, query url.Values) {
 	// Get client IP for same-host detection (like C++)
 	clientIP := c.ClientIP()
 
-	bestNode, score, err := lb.GetBestNodeWithScore(c.Request.Context(), streamName, lat, lon, tagAdjust, clientIP)
+	bestNode, score, nodeLat, nodeLon, nodeName, err := lb.GetBestNodeWithScore(c.Request.Context(), streamName, lat, lon, tagAdjust, clientIP)
 	if err != nil {
 		if metrics != nil {
 			metrics.RoutingDecisions.WithLabelValues("source", "failed").Inc()
 		}
 		// Post failed event
-		go postBalancingEvent(c, streamName, "", 0, lat, lon, "failed", err.Error())
+		go postBalancingEvent(c, streamName, "", 0, lat, lon, "failed", err.Error(), 0, 0, "")
 
 		fallback := query.Get("fallback")
 		if fallback == "" {
@@ -578,7 +577,7 @@ func handleGetSource(c *gin.Context, streamName string, query url.Values) {
 			metrics.NodeSelectionDuration.WithLabelValues().Observe(time.Since(start).Seconds())
 		}
 		// Post redirect event
-		go postBalancingEvent(c, streamName, bestNode, score, lat, lon, "redirect", dtscURL)
+		go postBalancingEvent(c, streamName, bestNode, score, lat, lon, "redirect", dtscURL, nodeLat, nodeLon, nodeName)
 		c.Redirect(http.StatusFound, dtscURL)
 	} else {
 		if metrics != nil {
@@ -586,7 +585,7 @@ func handleGetSource(c *gin.Context, streamName string, query url.Values) {
 			metrics.NodeSelectionDuration.WithLabelValues().Observe(time.Since(start).Seconds())
 		}
 		// Post success event
-		go postBalancingEvent(c, streamName, bestNode, score, lat, lon, "success", "")
+		go postBalancingEvent(c, streamName, bestNode, score, lat, lon, "success", "", nodeLat, nodeLon, nodeName)
 		c.String(http.StatusOK, dtscURL)
 	}
 }
@@ -606,10 +605,10 @@ func handleFindIngest(c *gin.Context, cpuUsage string, query url.Values) {
 	}
 
 	// Find best node for ingest (empty stream name means no same-host filtering)
-	bestNode, score, err := lb.GetBestNodeWithScore(c.Request.Context(), "", lat, lon, tagAdjust, "")
+	bestNode, score, nodeLat, nodeLon, nodeName, err := lb.GetBestNodeWithScore(c.Request.Context(), "", lat, lon, tagAdjust, "")
 	if err != nil {
 		// Post failed ingest event
-		go postBalancingEvent(c, "ingest", "", 0, lat, lon, "failed", err.Error())
+		go postBalancingEvent(c, "ingest", "", 0, lat, lon, "failed", err.Error(), 0, 0, "")
 		c.String(http.StatusOK, "FULL") // C++ fallback for no ingest point
 		return
 	}
@@ -622,7 +621,7 @@ func handleFindIngest(c *gin.Context, cpuUsage string, query url.Values) {
 			if node.Host == bestNode {
 				if node.CPU+uint64(minCpu) >= 1000 {
 					// Node would be overloaded, return fallback (like C++ FAIL_MSG("No ingest point found!"))
-					go postBalancingEvent(c, "ingest", "", 0, lat, lon, "failed", "CPU overload")
+					go postBalancingEvent(c, "ingest", "", 0, lat, lon, "failed", "CPU overload", 0, 0, "")
 					c.String(http.StatusOK, "FULL") // C++ fallback for CPU overload
 					return
 				}
@@ -632,7 +631,7 @@ func handleFindIngest(c *gin.Context, cpuUsage string, query url.Values) {
 	}
 
 	// Post successful ingest event
-	go postBalancingEvent(c, "ingest", bestNode, score, lat, lon, "success", "")
+	go postBalancingEvent(c, "ingest", bestNode, score, lat, lon, "success", "", nodeLat, nodeLon, nodeName)
 	c.String(http.StatusOK, bestNode)
 }
 
@@ -734,7 +733,7 @@ func handleStreamBalancing(c *gin.Context, streamName string) {
 
 	logger.WithField("stream", streamName).Info("Balancing stream")
 
-	bestNode, err := lb.GetBestNode(c.Request.Context(), streamName, lat, lon, tagAdjust)
+	bestNode, score, nodeLat, nodeLon, nodeName, err := lb.GetBestNodeWithScore(c.Request.Context(), streamName, lat, lon, tagAdjust, "")
 	if err != nil {
 		logger.WithError(err).Error("All servers seem to be out of bandwidth!")
 		if metrics != nil {
@@ -743,7 +742,7 @@ func handleStreamBalancing(c *gin.Context, streamName string) {
 		c.String(http.StatusOK, "localhost") // fallback like C++
 
 		// Post failure event to Firehose
-		go postBalancingEvent(c, streamName, "", 0, lat, lon, "failed", err.Error())
+		go postBalancingEvent(c, streamName, "", 0, lat, lon, "failed", err.Error(), 0, 0, "")
 		return
 	}
 
@@ -764,7 +763,7 @@ func handleStreamBalancing(c *gin.Context, streamName string) {
 		}
 
 		// Post redirect event to Firehose
-		go postBalancingEvent(c, streamName, bestNode, 0, lat, lon, "redirect", redirectURL)
+		go postBalancingEvent(c, streamName, bestNode, score, lat, lon, "redirect", redirectURL, nodeLat, nodeLon, nodeName)
 		return
 	}
 
@@ -776,11 +775,11 @@ func handleStreamBalancing(c *gin.Context, streamName string) {
 	}
 
 	// Post successful balancing event to Firehose
-	go postBalancingEvent(c, streamName, bestNode, 0, lat, lon, "success", "")
+	go postBalancingEvent(c, streamName, bestNode, score, lat, lon, "success", "", nodeLat, nodeLon, nodeName)
 }
 
 // postBalancingEvent posts load balancing decisions to Decklog via gRPC
-func postBalancingEvent(c *gin.Context, streamName, selectedNode string, score uint64, lat, lon float64, status, details string) {
+func postBalancingEvent(c *gin.Context, streamName, selectedNode string, score uint64, lat, lon float64, status, details string, nodeLat, nodeLon float64, nodeName string) {
 
 	// Extract client IP (check X-Forwarded-For first, then X-Real-IP, then RemoteAddr)
 	clientIP := c.GetHeader("X-Forwarded-For")
@@ -819,12 +818,36 @@ func postBalancingEvent(c *gin.Context, streamName, selectedNode string, score u
 
 	// Determine tenant ID from headers (service-to-service calls must set X-Tenant-ID)
 	tenantID := c.GetHeader("X-Tenant-ID")
-	if tenantID == "" {
-		tenantID = "00000000-0000-0000-0000-000000000001"
+
+	// Determine NodeID for selected node if known
+	selectedNodeID := ""
+	if lb != nil {
+		if id := lb.GetNodeIDByHost(selectedNode); id != "" {
+			selectedNodeID = id
+		}
+	}
+
+	// Compute routing distance if we have both points
+	routingDistanceKm := 0.0
+	if lat != 0 && lon != 0 && nodeLat != 0 && nodeLon != 0 {
+		const toRad = math.Pi / 180.0
+		lat1 := lat * toRad
+		lon1 := lon * toRad
+		lat2 := nodeLat * toRad
+		lon2 := nodeLon * toRad
+		val := math.Sin(lat1)*math.Sin(lat2) + math.Cos(lat1)*math.Cos(lat2)*math.Cos(lon1-lon2)
+		if val > 1 {
+			val = 1
+		}
+		if val < -1 {
+			val = -1
+		}
+		angle := math.Acos(val)
+		routingDistanceKm = 6371.0 * angle
 	}
 
 	// Create Event with LoadBalancingData
-	event := decklog.NewLoadBalancingEvent(tenantID, streamName, selectedNode, clientIP, country, status, details, lat, lon, score)
+	event := decklog.NewLoadBalancingEvent(tenantID, streamName, selectedNode, selectedNodeID, clientIP, country, status, details, lat, lon, score, nodeLat, nodeLon, nodeName, routingDistanceKm)
 
 	if decklogClient == nil {
 		logger.Error("Decklog gRPC client not initialized")

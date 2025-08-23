@@ -44,3 +44,20 @@ mutation RefreshStreamKey($id: ID!) {
     updatedAt
   }
 }
+
+# Stream key management mutations
+mutation CreateStreamKey($streamId: ID!, $input: CreateStreamKeyInput!) {
+  createStreamKey(streamId: $streamId, input: $input) {
+    id
+    streamId
+    keyValue
+    keyName
+    isActive
+    lastUsedAt
+    createdAt
+  }
+}
+
+mutation DeleteStreamKey($streamId: ID!, $keyId: ID!) {
+  deleteStreamKey(streamId: $streamId, keyId: $keyId)
+}

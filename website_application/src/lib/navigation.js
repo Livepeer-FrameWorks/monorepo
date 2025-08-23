@@ -94,7 +94,7 @@ export const navigationConfig = {
         name: 'Recordings',
         href: '/recordings',
         icon: 'Film',
-        active: 'soon',
+        active: true,
         description: 'Access your stream recordings'
       }
     }

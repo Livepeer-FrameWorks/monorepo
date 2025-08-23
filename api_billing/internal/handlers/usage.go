@@ -212,16 +212,16 @@ func updateInvoiceDraft(tenantID string) error {
 	periodEnd := periodStart.AddDate(0, 1, 0).Add(-time.Second)
 
 	// Aggregate usage for current billing period
-	var totalStreamHours, totalEgressGB, totalRecordingGB float64
-	var maxViewersInPeriod, totalStreamsInPeriod int
+	var totalStreamHours, totalEgressGB, totalRecordingGB sql.NullFloat64
+	var maxViewersInPeriod, totalStreamsInPeriod sql.NullInt64
 
 	err = db.QueryRow(`
 		SELECT 
-			COALESCE(SUM(stream_hours), 0),
-			COALESCE(SUM(egress_gb), 0),
-			COALESCE(MAX(max_viewers), 0),
-			COALESCE(SUM(total_streams), 0),
-			COALESCE(SUM(recording_gb), 0)
+			SUM(stream_hours),
+			SUM(egress_gb),
+			MAX(max_viewers),
+			SUM(total_streams),
+			SUM(recording_gb)
 			FROM usage_records 
 			WHERE tenant_id = $1 
 			AND toDate(billing_month || '-01') BETWEEN $2::date AND $3::date
@@ -237,10 +237,32 @@ func updateInvoiceDraft(tenantID string) error {
 	// This would be enhanced with actual plan-based pricing
 	var totalAmount float64
 
+	// Handle nullable values and calculate pricing
+	streamHours := float64(0)
+	if totalStreamHours.Valid {
+		streamHours = totalStreamHours.Float64
+	}
+	egressGB := float64(0)
+	if totalEgressGB.Valid {
+		egressGB = totalEgressGB.Float64
+	}
+	recordingGB := float64(0)
+	if totalRecordingGB.Valid {
+		recordingGB = totalRecordingGB.Float64
+	}
+	maxViewers := int(0)
+	if maxViewersInPeriod.Valid {
+		maxViewers = int(maxViewersInPeriod.Int64)
+	}
+	totalStreams := int(0)
+	if totalStreamsInPeriod.Valid {
+		totalStreams = int(totalStreamsInPeriod.Int64)
+	}
+
 	// Example pricing: $0.10 per stream hour, $0.05 per GB egress, $0.02 per GB recording
-	totalAmount += totalStreamHours * 0.10
-	totalAmount += totalEgressGB * 0.05
-	totalAmount += totalRecordingGB * 0.02
+	totalAmount += streamHours * 0.10
+	totalAmount += egressGB * 0.05
+	totalAmount += recordingGB * 0.02
 
 	// Create or update invoice draft
 	_, err = db.Exec(`
@@ -257,8 +279,8 @@ func updateInvoiceDraft(tenantID string) error {
 			total_streams = EXCLUDED.total_streams,
 			calculated_amount = EXCLUDED.calculated_amount,
 			updated_at = NOW()
-	`, tenantID, periodStart, periodEnd, totalStreamHours, totalEgressGB,
-		totalRecordingGB, maxViewersInPeriod, totalStreamsInPeriod, totalAmount)
+	`, tenantID, periodStart, periodEnd, streamHours, egressGB,
+		recordingGB, maxViewers, totalStreams, totalAmount)
 
 	if err != nil {
 		return err
@@ -267,8 +289,8 @@ func updateInvoiceDraft(tenantID string) error {
 	logger.WithFields(logging.Fields{
 		"tenant_id":         tenantID,
 		"billing_period":    periodStart.Format("2006-01"),
-		"stream_hours":      totalStreamHours,
-		"egress_gb":         totalEgressGB,
+		"stream_hours":      streamHours,
+		"egress_gb":         egressGB,
 		"calculated_amount": totalAmount,
 	}).Debug("Updated invoice draft for tenant")
 
@@ -305,7 +327,8 @@ func GetUsageRecords(c *gin.Context) {
 		WHERE ur.tenant_id = $1
 	`
 
-	args := []interface{}{tenantID}
+	var args []interface{}
+	args = append(args, tenantID)
 	argCount := 1
 
 	if clusterID != "" {
@@ -336,19 +359,9 @@ func GetUsageRecords(c *gin.Context) {
 	}
 	defer rows.Close()
 
-	var records []map[string]interface{}
+	var records []purserapi.UsageRecord
 	for rows.Next() {
-		var record struct {
-			ID           string       `json:"id"`
-			TenantID     string       `json:"tenant_id"`
-			ClusterID    string       `json:"cluster_id"`
-			UsageType    string       `json:"usage_type"`
-			UsageValue   float64      `json:"usage_value"`
-			UsageDetails models.JSONB `json:"usage_details"`
-			BillingMonth string       `json:"billing_month"`
-			CreatedAt    time.Time    `json:"created_at"`
-			ClusterName  *string      `json:"cluster_name"`
-		}
+		var record purserapi.UsageRecord
 
 		err := rows.Scan(
 			&record.ID, &record.TenantID, &record.ClusterID, &record.UsageType,
@@ -360,27 +373,18 @@ func GetUsageRecords(c *gin.Context) {
 			continue
 		}
 
-		recordMap := map[string]interface{}{
-			"id":            record.ID,
-			"tenant_id":     record.TenantID,
-			"cluster_id":    record.ClusterID,
-			"cluster_name":  record.ClusterName,
-			"usage_type":    record.UsageType,
-			"usage_value":   record.UsageValue,
-			"usage_details": record.UsageDetails,
-			"billing_month": record.BillingMonth,
-			"created_at":    record.CreatedAt,
-		}
-		records = append(records, recordMap)
+		records = append(records, record)
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"usage_records": records,
-		"tenant_id":     tenantID,
-		"filters": map[string]interface{}{
-			"cluster_id":    clusterID,
-			"usage_type":    usageType,
-			"billing_month": billingMonth,
+	response := purserapi.UsageRecordsResponse{
+		UsageRecords: records,
+		TenantID:     tenantID,
+		Filters: purserapi.UsageFilters{
+			ClusterID:    clusterID,
+			UsageType:    usageType,
+			BillingMonth: billingMonth,
 		},
-	})
+	}
+
+	c.JSON(http.StatusOK, response)
 }

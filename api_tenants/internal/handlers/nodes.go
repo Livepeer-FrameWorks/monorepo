@@ -3,9 +3,11 @@ package handlers
 import (
 	"database/sql"
 	"encoding/json"
-	"frameworks/pkg/models"
 	"net/http"
 	"strconv"
+
+	qmapi "frameworks/pkg/api/quartermaster"
+	"frameworks/pkg/models"
 
 	"github.com/gin-gonic/gin"
 )
@@ -99,13 +101,13 @@ func GetNodes(c *gin.Context) {
 		nodes = append(nodes, node)
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"nodes": nodes,
-		"count": len(nodes),
-		"filters": gin.H{
-			"cluster_id": clusterID,
-			"node_type":  nodeType,
-			"region":     region,
+	c.JSON(http.StatusOK, qmapi.NodesResponse{
+		Nodes: nodes,
+		Count: len(nodes),
+		Filters: qmapi.NodeFilters{
+			ClusterID: clusterID,
+			NodeType:  nodeType,
+			Region:    region,
 		},
 	})
 }
@@ -163,7 +165,7 @@ func GetNode(c *gin.Context) {
 		node.Metadata = make(map[string]interface{})
 	}
 
-	c.JSON(http.StatusOK, node)
+	c.JSON(http.StatusOK, qmapi.NodeResponse{Node: node})
 }
 
 // CreateNode creates a new infrastructure node
@@ -260,7 +262,7 @@ func CreateNode(c *gin.Context) {
 	}
 
 	logger.WithField("node_id", req.NodeID).Info("Created node successfully")
-	c.JSON(http.StatusCreated, node)
+	c.JSON(http.StatusCreated, qmapi.NodeResponse{Node: node})
 }
 
 // UpdateNodeHealth updates the health status and metrics of a node
@@ -322,8 +324,8 @@ func UpdateNodeHealth(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"message": "Node health updated successfully",
-		"node_id": nodeID,
+	c.JSON(http.StatusOK, qmapi.NodeHealthUpdateResponse{
+		Message: "Node health updated successfully",
+		NodeID:  nodeID,
 	})
 }

@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	mathrand "math/rand"
 	"net/http"
@@ -31,6 +30,7 @@ import (
 	purserclient "frameworks/pkg/clients/purser"
 	qmclient "frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/models"
+	"frameworks/pkg/validation"
 )
 
 // HandlerMetrics holds the metrics for handler operations
@@ -137,7 +137,6 @@ func Register(c *gin.Context) {
 			"email": req.Email,
 		}).Warn("Registration rate limit exceeded")
 
-		// Return fake success to avoid revealing rate limiting to attackers
 		c.JSON(http.StatusOK, commodoreapi.RegisterResponse{
 			Success: true,
 			Message: "Registration successful. Please check your email to verify your account.",
@@ -154,7 +153,6 @@ func Register(c *gin.Context) {
 			"errors": botValidationErrors,
 		}).Warn("Bot protection validation failed")
 
-		// Return fake success to avoid revealing bot detection to attackers
 		c.JSON(http.StatusOK, commodoreapi.RegisterResponse{
 			Success: true,
 			Message: "Registration successful. Please check your email to verify your account.",
@@ -287,7 +285,7 @@ func Login(c *gin.Context) {
 	// Find user by email (shared tenancy)
 	var user models.User
 	err := db.QueryRow(`
-		SELECT id, tenant_id, email, password_hash, role, verified, is_active, COALESCE(created_at, NOW()) as created_at
+		SELECT id, tenant_id, email, password_hash, role, verified, is_active, created_at
 		FROM users WHERE email = $1
 	`, req.Email).Scan(&user.ID, &user.TenantID, &user.Email, &user.PasswordHash, &user.Role, &user.IsVerified, &user.IsActive, &user.CreatedAt)
 
@@ -382,7 +380,7 @@ func GetMe(c *gin.Context) {
 
 	var user models.User
 	err := db.QueryRow(`
-		SELECT id, email, role, COALESCE(created_at, NOW()) as created_at, is_active 
+		SELECT id, email, role, created_at, is_active 
 		FROM users WHERE id = $1
 	`, userID).Scan(&user.ID, &user.Email, &user.Role, &user.CreatedAt, &user.IsActive)
 
@@ -915,7 +913,7 @@ func DeleteStream(c *gin.Context) {
 // GetUsers returns all users (admin only)
 func GetUsers(c *gin.Context) {
 	rows, err := db.Query(`
-		SELECT id, email, COALESCE(created_at, NOW()) as created_at, is_active 
+		SELECT id, email, created_at, is_active 
 		FROM users ORDER BY created_at DESC
 	`)
 
@@ -1179,26 +1177,26 @@ func HandleStreamStart(c *gin.Context) {
 
 // HandleStreamStatus handles stream status updates from Helmsman
 func HandleStreamStatus(c *gin.Context) {
-	var eventData struct {
-		InternalName  string `json:"internal_name"`
-		Status        string `json:"status"`
-		BufferState   string `json:"buffer_state"`
-		StreamDetails string `json:"stream_details"`
-		EventType     string `json:"event_type"`
-		Timestamp     int64  `json:"timestamp"`
+	var req validation.StreamLifecyclePayload
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: "Invalid payload"})
+		return
 	}
 
-	if err := c.ShouldBindJSON(&eventData); err != nil {
-		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: "Invalid payload"})
+	// Validate required fields
+	if req.InternalName == "" || req.NodeID == "" {
+		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: "Missing required fields"})
 		return
 	}
 
 	// Note: Stream status is now tracked in Data Plane (Periscope)
 	// Control Plane only manages configuration, not live status
 	logger.WithFields(logging.Fields{
-		"internal_name": eventData.InternalName,
-		"status":        eventData.Status,
-		"event_type":    eventData.EventType,
+		"internal_name": req.InternalName,
+		"status":        req.Status,
+		"node_id":       req.NodeID,
+		"buffer_state":  req.BufferState,
 	}).Info("Stream lifecycle event (status now tracked in Data Plane)")
 
 	c.JSON(http.StatusOK, commodoreapi.SuccessResponse{Success: true, Message: "Event logged"})
@@ -1285,30 +1283,30 @@ func ResolvePlaybackID(c *gin.Context) {
 
 // HandlePushStatus handles push status updates from Helmsman
 func HandlePushStatus(c *gin.Context) {
-	var eventData map[string]interface{}
-	if err := c.ShouldBindJSON(&eventData); err != nil {
+	var req validation.PushLifecyclePayload
+	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: "Invalid payload"})
 		return
 	}
 
-	// Extract internal name if present
-	internalName, _ := eventData["internal_name"].(string)
-	nodeID, _ := eventData["node_id"].(string)
-	eventType, _ := eventData["event_type"].(string)
+	// Validate required fields
+	if req.InternalName == "" || req.NodeID == "" {
+		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: "Missing required fields"})
+		return
+	}
 
 	logger.WithFields(logging.Fields{
-		"node_id":       nodeID,
-		"internal_name": internalName,
-		"event_type":    eventType,
+		"node_id":       req.NodeID,
+		"internal_name": req.InternalName,
+		"push_target":   req.PushTarget,
 	}).Info("Push status event")
 
 	// Log push status event processed
-	if internalName != "" {
-		logger.WithFields(logging.Fields{
-			"internal_name": internalName,
-			"event_type":    eventType,
-		}).Info("Push status event processed")
-	}
+	logger.WithFields(logging.Fields{
+		"internal_name": req.InternalName,
+		"push_target":   req.PushTarget,
+		"push_id":       req.PushID,
+	}).Info("Push status event processed")
 
 	c.JSON(http.StatusOK, commodoreapi.SuccessResponse{Success: true})
 }
@@ -1394,7 +1392,7 @@ func GetAPITokens(c *gin.Context) {
 	userID := c.GetString("user_id")
 
 	rows, err := db.Query(`
-		SELECT id, token_name, permissions, is_active, last_used_at, expires_at, COALESCE(created_at, NOW()) as created_at
+		SELECT id, token_name, permissions, is_active, last_used_at, expires_at, created_at
 		FROM api_tokens 
 		WHERE user_id = $1 
 		ORDER BY created_at DESC
@@ -1736,37 +1734,25 @@ func validateBotProtection(req models.RegisterRequest, clientIP string) []string
 	}
 
 	// 3. Behavioral analysis
-	if req.Behavior == "" {
+	if req.Behavior.FormShownAt == 0 || req.Behavior.SubmittedAt == 0 {
 		errors = append(errors, "Missing behavioral data")
 	} else {
-		var behaviorData map[string]interface{}
-		if err := json.Unmarshal([]byte(req.Behavior), &behaviorData); err != nil {
-			errors = append(errors, "Invalid behavioral data format")
-		} else {
-			// Check timing
-			if formShownAt, ok := behaviorData["formShownAt"].(float64); ok {
-				if submittedAt, ok := behaviorData["submittedAt"].(float64); ok {
-					timeSpent := int64(submittedAt - formShownAt)
+		// Check timing
+		timeSpent := req.Behavior.SubmittedAt - req.Behavior.FormShownAt
 
-					// Too fast (less than 3 seconds)
-					if timeSpent < 3000 {
-						errors = append(errors, "Form submitted too quickly")
-					}
+		// Too fast (less than 3 seconds)
+		if timeSpent < 3000 {
+			errors = append(errors, "Form submitted too quickly")
+		}
 
-					// Too slow (more than 30 minutes)
-					if timeSpent > 30*60*1000 {
-						errors = append(errors, "Form session expired")
-					}
-				}
-			}
+		// Too slow (more than 30 minutes)
+		if timeSpent > 30*60*1000 {
+			errors = append(errors, "Form session expired")
+		}
 
-			// Check for human interactions
-			mouse, hasMousee := behaviorData["mouse"].(bool)
-			typed, hasTyped := behaviorData["typed"].(bool)
-
-			if (!hasMousee || !mouse) && (!hasTyped || !typed) {
-				errors = append(errors, "No human interaction detected")
-			}
+		// Check for human interactions
+		if !req.Behavior.Mouse && !req.Behavior.Typed {
+			errors = append(errors, "No human interaction detected")
 		}
 	}
 
@@ -1914,8 +1900,8 @@ func validateTenant(tenantID, userID string) (*models.TenantValidation, error) {
 	}
 
 	// Convert tier information to features and limits
-	features := extractFeaturesFromTier(*tierInfo.Tier, tierInfo.Subscription.CustomFeatures)
-	limits := extractLimitsFromTier(*tierInfo.Tier, tierInfo.Subscription.CustomAllocations, tierInfo.ClusterAccess)
+	features := extractFeaturesFromTier(*tierInfo.Tier, nil)                     // CustomFeatures handled in function
+	limits := extractLimitsFromTier(*tierInfo.Tier, nil, tierInfo.ClusterAccess) // CustomAllocations handled in function
 
 	validation := &models.TenantValidation{
 		IsValid:  basicValidation.Valid && basicValidation.IsActive && tierInfo.Subscription.Status == "active",
@@ -1965,34 +1951,18 @@ func callPurserTierInfo(tenantID string) (*models.TenantTierInfo, error) {
 // extractFeaturesFromTier converts tier features to TenantFeatures
 func extractFeaturesFromTier(tier models.BillingTier, customFeatures models.JSONB) models.TenantFeatures {
 	features := models.TenantFeatures{
-		IsRecordingEnabled:  getBoolFromMap(map[string]interface{}(tier.Features), "recording_enabled", false),
-		IsAnalyticsEnabled:  getBoolFromMap(map[string]interface{}(tier.Features), "analytics_enabled", true),
-		IsAPIEnabled:        getBoolFromMap(map[string]interface{}(tier.Features), "api_enabled", true),
-		IsWhiteLabelEnabled: getBoolFromMap(map[string]interface{}(tier.Features), "white_label_enabled", false),
+		IsRecordingEnabled:  tier.Features.Recording,
+		IsAnalyticsEnabled:  tier.Features.Analytics,
+		IsAPIEnabled:        tier.Features.APIAccess,
+		IsWhiteLabelEnabled: tier.Features.CustomBranding,
 	}
 
 	// Override with custom features if provided
 	if customFeatures != nil {
-		if val, exists := customFeatures["recording_enabled"]; exists {
-			if b, ok := val.(bool); ok {
-				features.IsRecordingEnabled = b
-			}
-		}
-		if val, exists := customFeatures["analytics_enabled"]; exists {
-			if b, ok := val.(bool); ok {
-				features.IsAnalyticsEnabled = b
-			}
-		}
-		if val, exists := customFeatures["api_enabled"]; exists {
-			if b, ok := val.(bool); ok {
-				features.IsAPIEnabled = b
-			}
-		}
-		if val, exists := customFeatures["white_label_enabled"]; exists {
-			if b, ok := val.(bool); ok {
-				features.IsWhiteLabelEnabled = b
-			}
-		}
+		features.IsRecordingEnabled = getBoolFromJSONB(customFeatures, "recording_enabled", features.IsRecordingEnabled)
+		features.IsAnalyticsEnabled = getBoolFromJSONB(customFeatures, "analytics_enabled", features.IsAnalyticsEnabled)
+		features.IsAPIEnabled = getBoolFromJSONB(customFeatures, "api_enabled", features.IsAPIEnabled)
+		features.IsWhiteLabelEnabled = getBoolFromJSONB(customFeatures, "white_label_enabled", features.IsWhiteLabelEnabled)
 	}
 
 	return features
@@ -2001,53 +1971,60 @@ func extractFeaturesFromTier(tier models.BillingTier, customFeatures models.JSON
 // extractLimitsFromTier converts tier allocations to TenantLimits
 func extractLimitsFromTier(tier models.BillingTier, customAllocations models.JSONB, clusterAccess []models.TenantClusterAccess) models.TenantLimits {
 	limits := models.TenantLimits{
-		MaxStreams:     getIntFromMap(map[string]interface{}(tier.ComputeAllocation), "max_streams", 5),
-		MaxStorageGB:   getIntFromMap(map[string]interface{}(tier.StorageAllocation), "max_storage_gb", 10),
-		MaxBandwidthGB: getIntFromMap(map[string]interface{}(tier.BandwidthAllocation), "max_bandwidth_gb", 100),
-		MaxUsers:       getIntFromMap(map[string]interface{}(tier.ComputeAllocation), "max_users", 10),
+		MaxStreams:     getAllocationInt(tier.ComputeAllocation, 5),
+		MaxStorageGB:   getAllocationInt(tier.StorageAllocation, 10),
+		MaxBandwidthGB: getAllocationInt(tier.BandwidthAllocation, 100),
+		MaxUsers:       5, // Default user limit
 	}
 
 	// Override with custom allocations if provided
 	if customAllocations != nil {
-		if val, exists := customAllocations["max_streams"]; exists {
-			if i, ok := val.(float64); ok {
-				limits.MaxStreams = int(i)
-			}
-		}
-		if val, exists := customAllocations["max_storage_gb"]; exists {
-			if i, ok := val.(float64); ok {
-				limits.MaxStorageGB = int(i)
-			}
-		}
-		if val, exists := customAllocations["max_bandwidth_gb"]; exists {
-			if i, ok := val.(float64); ok {
-				limits.MaxBandwidthGB = int(i)
-			}
-		}
-		if val, exists := customAllocations["max_users"]; exists {
-			if i, ok := val.(float64); ok {
-				limits.MaxUsers = int(i)
-			}
-		}
+		limits.MaxStreams = getIntFromJSONB(customAllocations, "max_streams", limits.MaxStreams)
+		limits.MaxStorageGB = getIntFromJSONB(customAllocations, "max_storage_gb", limits.MaxStorageGB)
+		limits.MaxBandwidthGB = getIntFromJSONB(customAllocations, "max_bandwidth_gb", limits.MaxBandwidthGB)
+		limits.MaxUsers = getIntFromJSONB(customAllocations, "max_users", limits.MaxUsers)
 	}
 
 	return limits
 }
 
-// Helper functions for type-safe map access
-func getBoolFromMap(m map[string]interface{}, key string, defaultVal bool) bool {
-	if val, ok := m[key].(bool); ok {
-		return val
+// Helper functions for extracting values from AllocationDetails
+func getAllocationInt(allocation models.AllocationDetails, defaultVal int) int {
+	if allocation.Limit.IsUnlimited {
+		return -1 // Use -1 to represent unlimited
+	}
+
+	if allocation.Limit.GetInt() == 0 {
+		return defaultVal
+	}
+
+	return allocation.Limit.GetInt()
+}
+
+// Helper functions for type-safe JSONB access
+func getBoolFromJSONB(jsonb models.JSONB, key string, defaultVal bool) bool {
+	if jsonb == nil {
+		return defaultVal
+	}
+	if val, exists := jsonb[key]; exists {
+		if b, ok := val.(bool); ok {
+			return b
+		}
 	}
 	return defaultVal
 }
 
-func getIntFromMap(m map[string]interface{}, key string, defaultVal int) int {
-	if val, ok := m[key].(float64); ok {
-		return int(val)
+func getIntFromJSONB(jsonb models.JSONB, key string, defaultVal int) int {
+	if jsonb == nil {
+		return defaultVal
 	}
-	if val, ok := m[key].(int); ok {
-		return val
+	if val, exists := jsonb[key]; exists {
+		if f, ok := val.(float64); ok {
+			return int(f)
+		}
+		if i, ok := val.(int); ok {
+			return i
+		}
 	}
 	return defaultVal
 }
@@ -2108,4 +2085,320 @@ func createTenantForRegistration(email string) (string, error) {
 	}).Info("Created new tenant for user registration")
 
 	return createResp.Tenant.ID, nil
+}
+
+// ============================================================================
+// STREAM KEYS MANAGEMENT
+// ============================================================================
+
+// GetStreamKeys returns all keys for a specific stream (tenant-scoped)
+func GetStreamKeys(c *gin.Context) {
+	defer func() {
+		if metrics != nil {
+			metrics.StreamOperations.WithLabelValues("get_stream_keys", "completed").Inc()
+		}
+	}()
+
+	tenantID := c.GetString("tenant_id")
+	userID := c.GetString("user_id")
+	if tenantID == "" || userID == "" {
+		c.JSON(http.StatusUnauthorized, commodoreapi.ErrorResponse{Error: "Authentication required"})
+		return
+	}
+
+	streamID := c.Param("id")
+	if streamID == "" {
+		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: "Stream ID required"})
+		return
+	}
+
+	// Verify stream ownership
+	var streamExists bool
+	err := db.QueryRow(`
+		SELECT EXISTS(SELECT 1 FROM streams WHERE id = $1 AND tenant_id = $2 AND user_id = $3)
+	`, streamID, tenantID, userID).Scan(&streamExists)
+	if err != nil {
+		logger.WithError(err).Error("Failed to verify stream ownership")
+		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Failed to verify stream ownership"})
+		return
+	}
+
+	if !streamExists {
+		c.JSON(http.StatusNotFound, commodoreapi.ErrorResponse{Error: "Stream not found"})
+		return
+	}
+
+	// Get all keys for the stream
+	rows, err := db.Query(`
+		SELECT id, tenant_id, user_id, stream_id, key_value, key_name, is_active, last_used_at, created_at, updated_at
+		FROM stream_keys
+		WHERE tenant_id = $1 AND stream_id = $2
+		ORDER BY created_at DESC
+	`, tenantID, streamID)
+	if err != nil {
+		logger.WithError(err).Error("Failed to fetch stream keys")
+		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Failed to fetch stream keys"})
+		return
+	}
+	defer rows.Close()
+
+	var keys []commodoreapi.StreamKey
+	for rows.Next() {
+		var key commodoreapi.StreamKey
+		var lastUsedAt sql.NullTime
+
+		err := rows.Scan(
+			&key.ID,
+			&key.TenantID,
+			&key.UserID,
+			&key.StreamID,
+			&key.KeyValue,
+			&key.KeyName,
+			&key.IsActive,
+			&lastUsedAt,
+			&key.CreatedAt,
+			&key.UpdatedAt,
+		)
+		if err != nil {
+			logger.WithError(err).Error("Failed to scan stream key")
+			continue
+		}
+
+		if lastUsedAt.Valid {
+			key.LastUsedAt = &lastUsedAt.Time
+		}
+
+		keys = append(keys, key)
+	}
+
+	c.JSON(http.StatusOK, commodoreapi.StreamKeysResponse{
+		StreamKeys: keys,
+		Count:      len(keys),
+	})
+}
+
+// CreateStreamKey creates a new key for a stream
+func CreateStreamKey(c *gin.Context) {
+	defer func() {
+		if metrics != nil {
+			metrics.StreamOperations.WithLabelValues("create_stream_key", "completed").Inc()
+		}
+	}()
+
+	tenantID := c.GetString("tenant_id")
+	userID := c.GetString("user_id")
+	if tenantID == "" || userID == "" {
+		c.JSON(http.StatusUnauthorized, commodoreapi.ErrorResponse{Error: "Authentication required"})
+		return
+	}
+
+	streamID := c.Param("id")
+	if streamID == "" {
+		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: "Stream ID required"})
+		return
+	}
+
+	var req commodoreapi.CreateStreamKeyRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: "Invalid request format"})
+		return
+	}
+
+	// Verify stream ownership
+	var streamExists bool
+	err := db.QueryRow(`
+		SELECT EXISTS(SELECT 1 FROM streams WHERE id = $1 AND tenant_id = $2 AND user_id = $3)
+	`, streamID, tenantID, userID).Scan(&streamExists)
+	if err != nil {
+		logger.WithError(err).Error("Failed to verify stream ownership")
+		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Failed to verify stream ownership"})
+		return
+	}
+
+	if !streamExists {
+		c.JSON(http.StatusNotFound, commodoreapi.ErrorResponse{Error: "Stream not found"})
+		return
+	}
+
+	// Generate new key
+	keyBytes := make([]byte, 16)
+	if _, err := rand.Read(keyBytes); err != nil {
+		logger.WithError(err).Error("Failed to generate stream key")
+		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Failed to generate stream key"})
+		return
+	}
+	keyValue := "sk_" + hex.EncodeToString(keyBytes)
+
+	// Insert new key
+	keyID := uuid.New().String()
+	keyName := req.KeyName
+	if keyName == "" {
+		keyName = "Key " + time.Now().Format("2006-01-02 15:04")
+	}
+
+	_, err = db.Exec(`
+		INSERT INTO stream_keys (id, tenant_id, stream_id, key_value, key_name, is_active, created_at)
+		VALUES ($1, $2, $3, $4, $5, TRUE, NOW())
+	`, keyID, tenantID, streamID, keyValue, keyName)
+	if err != nil {
+		logger.WithError(err).Error("Failed to create stream key")
+		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Failed to create stream key"})
+		return
+	}
+
+	key := commodoreapi.StreamKey{
+		ID:        keyID,
+		KeyValue:  keyValue,
+		KeyName:   keyName,
+		IsActive:  true,
+		CreatedAt: time.Now(),
+	}
+
+	c.JSON(http.StatusCreated, commodoreapi.StreamKeyResponse{
+		StreamKey: key,
+		Message:   "Stream key created successfully",
+	})
+}
+
+// DeactivateStreamKey deactivates a stream key
+func DeactivateStreamKey(c *gin.Context) {
+	tenantID := c.GetString("tenant_id")
+	userID := c.GetString("user_id")
+	if tenantID == "" || userID == "" {
+		c.JSON(http.StatusUnauthorized, commodoreapi.ErrorResponse{Error: "Authentication required"})
+		return
+	}
+
+	streamID := c.Param("id")
+	keyID := c.Param("key_id")
+	if streamID == "" || keyID == "" {
+		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: "Stream ID and Key ID required"})
+		return
+	}
+
+	// Verify ownership and deactivate key
+	result, err := db.Exec(`
+		UPDATE stream_keys SET is_active = FALSE
+		WHERE id = $1 AND stream_id = $2 AND tenant_id = $3 
+		AND EXISTS(SELECT 1 FROM streams WHERE id = $4 AND tenant_id = $5 AND user_id = $6)
+	`, keyID, streamID, tenantID, streamID, tenantID, userID)
+	if err != nil {
+		logger.WithError(err).Error("Failed to deactivate stream key")
+		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Failed to deactivate stream key"})
+		return
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		c.JSON(http.StatusNotFound, commodoreapi.ErrorResponse{Error: "Stream key not found"})
+		return
+	}
+
+	c.JSON(http.StatusOK, commodoreapi.SuccessResponse{Success: true})
+}
+
+// ============================================================================
+// RECORDINGS MANAGEMENT
+// ============================================================================
+
+// GetRecordings returns all recordings for a tenant, optionally filtered by stream
+func GetRecordings(c *gin.Context) {
+	_ = time.Now()
+	defer func() {
+		if metrics != nil {
+			metrics.StreamOperations.WithLabelValues("get_recordings", "completed").Inc()
+		}
+	}()
+
+	tenantID := c.GetString("tenant_id")
+	userID := c.GetString("user_id")
+	if tenantID == "" || userID == "" {
+		c.JSON(http.StatusUnauthorized, commodoreapi.ErrorResponse{Error: "Authentication required"})
+		return
+	}
+
+	streamID := c.Query("stream_id")
+
+	var query string
+	var args []interface{}
+
+	if streamID != "" {
+		// Get recordings for specific stream
+		query = `
+			SELECT r.id, r.stream_id, r.title, r.duration, 
+				   r.file_size_bytes, r.file_path, r.thumbnail_url, 
+				   r.status, r.created_at, r.updated_at
+			FROM recordings r
+			JOIN streams s ON r.stream_id = s.id
+			WHERE r.tenant_id = $1 AND s.user_id = $2 AND r.stream_id = $3
+			ORDER BY r.created_at DESC
+		`
+		args = []interface{}{tenantID, userID, streamID}
+	} else {
+		// Get all recordings for user
+		query = `
+			SELECT r.id, r.stream_id, r.title, r.duration, 
+				   r.file_size_bytes, r.file_path, r.thumbnail_url, 
+				   r.status, r.created_at, r.updated_at
+			FROM recordings r
+			JOIN streams s ON r.stream_id = s.id
+			WHERE r.tenant_id = $1 AND s.user_id = $2
+			ORDER BY r.created_at DESC
+		`
+		args = []interface{}{tenantID, userID}
+	}
+
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		logger.WithError(err).Error("Failed to fetch recordings")
+		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Failed to fetch recordings"})
+		return
+	}
+	defer rows.Close()
+
+	var recordings []commodoreapi.Recording
+	for rows.Next() {
+		var recording commodoreapi.Recording
+		var fileSizeBytes sql.NullInt64
+		var filePath, thumbnailURL sql.NullString
+		var duration sql.NullInt32
+
+		err := rows.Scan(
+			&recording.ID,
+			&recording.StreamID,
+			&recording.Filename,
+			&duration,
+			&fileSizeBytes,
+			&filePath,
+			&thumbnailURL,
+			&recording.Status,
+			&recording.CreatedAt,
+			&recording.UpdatedAt,
+		)
+		if err != nil {
+			logger.WithError(err).Error("Failed to scan recording")
+			continue
+		}
+
+		if duration.Valid {
+			durationInt := int(duration.Int32)
+			recording.Duration = &durationInt
+		}
+		if fileSizeBytes.Valid {
+			recording.FileSize = &fileSizeBytes.Int64
+		}
+		if filePath.Valid {
+			recording.PlaybackID = &filePath.String
+		}
+		if thumbnailURL.Valid {
+			recording.ThumbnailURL = &thumbnailURL.String
+		}
+
+		recordings = append(recordings, recording)
+	}
+
+	c.JSON(http.StatusOK, commodoreapi.RecordingsResponse{
+		Recordings: recordings,
+		Count:      len(recordings),
+	})
 }

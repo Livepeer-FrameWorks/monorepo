@@ -12,6 +12,7 @@ import (
 	"frameworks/pkg/auth"
 	"frameworks/pkg/config"
 	"frameworks/pkg/logging"
+	"frameworks/pkg/validation"
 
 	"github.com/gorilla/websocket"
 )
@@ -166,51 +167,13 @@ func (h *Hub) broadcastMessage(message []byte) {
 	}
 }
 
-// BroadcastToTenant sends a message to all clients of a specific tenant
-func (h *Hub) BroadcastToTenant(tenantID string, msgType, channel string, data map[string]interface{}) {
-	message := signalman.Message{
-		Type:      msgType,
-		Channel:   channel,
-		Data:      data,
-		Timestamp: time.Now(),
-		TenantID:  &tenantID,
-	}
-
-	messageJSON, err := json.Marshal(message)
-	if err != nil {
-		h.logger.WithError(err).Error("Failed to marshal tenant message")
-		return
-	}
-
-	h.broadcast <- messageJSON
-}
-
-// BroadcastInfrastructure sends infrastructure messages to all clients subscribed to system channel
-func (h *Hub) BroadcastInfrastructure(msgType string, data map[string]interface{}) {
-	message := signalman.Message{
-		Type:      msgType,
-		Channel:   "system",
-		Data:      data,
-		Timestamp: time.Now(),
-		TenantID:  nil, // No tenant context for infrastructure
-	}
-
-	messageJSON, err := json.Marshal(message)
-	if err != nil {
-		h.logger.WithError(err).Error("Failed to marshal infrastructure message")
-		return
-	}
-
-	h.broadcast <- messageJSON
-}
-
 // shouldReceiveMessage determines if a client should receive a message
 func (h *Hub) shouldReceiveMessage(client *Client, msg *signalman.Message) bool {
 	// Check if client is subscribed to the channel
 	for _, channel := range client.channels {
 		if channel == msg.Channel || channel == "all" {
-			// For user-specific messages, check user ID
-			if userID, exists := msg.Data["user_id"]; exists {
+			// For user-specific messages, check user ID from typed event data
+			if userID := h.extractUserIDFromEvent(msg); userID != "" {
 				if client.userID != nil && *client.userID == userID {
 					return true
 				}
@@ -221,6 +184,21 @@ func (h *Hub) shouldReceiveMessage(client *Client, msg *signalman.Message) bool 
 		}
 	}
 	return false
+}
+
+// extractUserIDFromEvent extracts user ID from typed event data
+func (h *Hub) extractUserIDFromEvent(msg *signalman.Message) string {
+	// Extract user ID from stream ingest events (these have actual user IDs)
+	if msg.Data.StreamIngest != nil {
+		return msg.Data.StreamIngest.UserID
+	}
+
+	// For connection events, use session ID as user identification
+	if msg.Data.UserConnection != nil {
+		return msg.Data.UserConnection.SessionID
+	}
+
+	return ""
 }
 
 // unregisterClient safely unregisters a client
@@ -235,38 +213,45 @@ func (h *Hub) unregisterClient(client *Client) {
 	}
 }
 
-// BroadcastEvent sends an event to all subscribed clients
-func (h *Hub) BroadcastEvent(eventType, channel string, data map[string]interface{}) {
+// BroadcastTypedToTenant sends a typed message to all clients of a specific tenant
+func (h *Hub) BroadcastTypedToTenant(tenantID string, msgType, channel string, data validation.EventData) {
 	message := signalman.Message{
-		Type:      eventType,
+		Type:      msgType,
 		Channel:   channel,
 		Data:      data,
-		Timestamp: time.Now().UTC(),
+		Timestamp: time.Now(),
+		TenantID:  &tenantID,
 	}
 
-	messageBytes, err := json.Marshal(message)
+	messageJSON, err := json.Marshal(message)
 	if err != nil {
-		h.logger.WithError(err).Error("Failed to marshal broadcast message")
+		h.logger.WithError(err).Error("Failed to marshal typed tenant message")
 		return
 	}
 
-	select {
-	case h.broadcast <- messageBytes:
-		// Track events published metrics
-		if h.metrics != nil {
-			h.metrics.EventsPublished.WithLabelValues(eventType, channel).Inc()
-		}
-	default:
-		h.logger.Warn("Broadcast channel full, dropping message")
-		// Track dropped events too
-		if h.metrics != nil {
-			h.metrics.EventsPublished.WithLabelValues(eventType+"_dropped", channel).Inc()
-		}
+	h.broadcast <- messageJSON
+}
+
+// BroadcastTypedInfrastructure sends typed infrastructure messages to all clients subscribed to system channel
+func (h *Hub) BroadcastTypedInfrastructure(msgType string, data validation.EventData) {
+	message := signalman.Message{
+		Type:      msgType,
+		Channel:   "system",
+		Data:      data,
+		Timestamp: time.Now(),
 	}
+
+	messageJSON, err := json.Marshal(message)
+	if err != nil {
+		h.logger.WithError(err).Error("Failed to marshal typed infrastructure message")
+		return
+	}
+
+	h.broadcast <- messageJSON
 }
 
 // GetStats returns hub statistics
-func (h *Hub) GetStats() map[string]interface{} {
+func (h *Hub) GetStats() *signalman.HubStats {
 	h.mutex.RLock()
 	defer h.mutex.RUnlock()
 
@@ -277,9 +262,10 @@ func (h *Hub) GetStats() map[string]interface{} {
 		}
 	}
 
-	return map[string]interface{}{
-		"total_clients":         len(h.clients),
-		"channel_subscriptions": channelStats,
+	return &signalman.HubStats{
+		Connections:          len(h.clients),
+		TotalClients:         len(h.clients),
+		ChannelSubscriptions: channelStats,
 	}
 }
 
@@ -475,21 +461,7 @@ func (c *Client) handleSubscription(msg *signalman.SubscriptionMessage) {
 	}
 }
 
-// sendMessage sends a message to the client
-func (c *Client) sendMessage(data map[string]interface{}) {
-	message, err := json.Marshal(data)
-	if err != nil {
-		c.logger.WithError(err).Error("Failed to marshal client message")
-		return
-	}
-
-	select {
-	case c.send <- message:
-	default:
-		// Channel full, disconnect client
-		close(c.send)
-	}
-}
+// sendMessage functionality replaced by sendTypedMessage for type safety
 
 // sendTypedMessage sends a typed message to the client
 func (c *Client) sendTypedMessage(data interface{}) {

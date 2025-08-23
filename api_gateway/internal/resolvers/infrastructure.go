@@ -13,6 +13,20 @@ import (
 	"frameworks/pkg/models"
 )
 
+// convertStringToNodeStatus converts a string status to NodeStatus enum
+func convertStringToNodeStatus(status string) model.NodeStatus {
+	switch status {
+	case "healthy", "online", "active":
+		return model.NodeStatusHealthy
+	case "degraded", "warning":
+		return model.NodeStatusDegraded
+	case "unhealthy", "offline", "error", "failed":
+		return model.NodeStatusUnhealthy
+	default:
+		return model.NodeStatusUnhealthy // Default to unhealthy for unknown statuses
+	}
+}
+
 // DoGetTenant returns tenant information
 func (r *Resolver) DoGetTenant(ctx context.Context) (*models.Tenant, error) {
 	if middleware.IsDemoMode(ctx) {
@@ -54,36 +68,49 @@ func (r *Resolver) DoGetTenant(ctx context.Context) (*models.Tenant, error) {
 }
 
 // DoGetClusters returns available clusters
-func (r *Resolver) DoGetClusters(ctx context.Context) ([]*model.Cluster, error) {
+func (r *Resolver) DoGetClusters(ctx context.Context) ([]*models.InfrastructureCluster, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo cluster data")
-		return []*model.Cluster{
+		return []*models.InfrastructureCluster{
 			{
-				ID:        "cluster_demo_us_west",
-				Name:      "US West (Oregon)",
-				Region:    "us-west-2",
-				Status:    "HEALTHY",
-				CreatedAt: time.Now().Add(-30 * 24 * time.Hour),
+				ID:           "cluster_demo_us_west",
+				ClusterID:    "cluster_demo_us_west",
+				ClusterName:  "US West (Oregon)",
+				ClusterType:  "us-west-2",
+				HealthStatus: "HEALTHY",
+				CreatedAt:    time.Now().Add(-30 * 24 * time.Hour),
 			},
 			{
-				ID:        "cluster_demo_eu_west",
-				Name:      "EU West (Ireland)",
-				Region:    "eu-west-1",
-				Status:    "HEALTHY",
-				CreatedAt: time.Now().Add(-45 * 24 * time.Hour),
+				ID:           "cluster_demo_eu_west",
+				ClusterID:    "cluster_demo_eu_west",
+				ClusterName:  "EU West (Ireland)",
+				ClusterType:  "eu-west-1",
+				HealthStatus: "HEALTHY",
+				CreatedAt:    time.Now().Add(-45 * 24 * time.Hour),
 			},
 		}, nil
 	}
 
 	r.Logger.Info("Getting clusters")
 
-	// TODO: Add GetClusters method to Quartermaster client
-	// For now, return empty slice
-	return []*model.Cluster{}, nil
+	// Get clusters from Quartermaster
+	clustersResp, err := r.Clients.Quartermaster.GetClusters(ctx)
+	if err != nil {
+		r.Logger.WithError(err).Error("Failed to get clusters")
+		return nil, fmt.Errorf("failed to get clusters: %w", err)
+	}
+
+	// Return pointers to underlying models
+	clusters := make([]*models.InfrastructureCluster, len(clustersResp.Clusters))
+	for i := range clustersResp.Clusters {
+		clusters[i] = &clustersResp.Clusters[i]
+	}
+
+	return clusters, nil
 }
 
 // DoGetCluster returns a specific cluster by ID
-func (r *Resolver) DoGetCluster(ctx context.Context, id string) (*model.Cluster, error) {
+func (r *Resolver) DoGetCluster(ctx context.Context, id string) (*models.InfrastructureCluster, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo cluster data for ID", id)
 		clusters, _ := r.DoGetClusters(ctx)
@@ -97,49 +124,69 @@ func (r *Resolver) DoGetCluster(ctx context.Context, id string) (*model.Cluster,
 
 	r.Logger.WithField("cluster_id", id).Info("Getting cluster")
 
-	// TODO: Add GetCluster method to Quartermaster client
-	return nil, fmt.Errorf("cluster not found")
+	// Get cluster from Quartermaster
+	clusterResp, err := r.Clients.Quartermaster.GetCluster(ctx, id)
+	if err != nil {
+		r.Logger.WithError(err).Error("Failed to get cluster")
+		return nil, fmt.Errorf("failed to get cluster: %w", err)
+	}
+
+	// Return pointer to underlying model
+	return &clusterResp.Cluster, nil
 }
 
 // DoGetNodes returns infrastructure nodes
-func (r *Resolver) DoGetNodes(ctx context.Context) ([]*model.Node, error) {
+func (r *Resolver) DoGetNodes(ctx context.Context) ([]*models.InfrastructureNode, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo node data")
-		return []*model.Node{
+		return []*models.InfrastructureNode{
 			{
-				ID:        "node_demo_us_west_01",
-				Name:      "streaming-node-01",
-				Cluster:   "cluster_demo_us_west",
-				Type:      "streaming",
-				Status:    "HEALTHY",
-				Region:    "us-west-2a",
-				IPAddress: func() *string { s := "10.0.1.15"; return &s }(),
-				LastSeen:  time.Now().Add(-2 * time.Minute),
-				CreatedAt: time.Now().Add(-30 * 24 * time.Hour),
+				ID:            "node_demo_us_west_01",
+				NodeID:        "node_demo_us_west_01",
+				ClusterID:     "cluster_demo_us_west",
+				NodeName:      "streaming-node-01",
+				NodeType:      "streaming",
+				Status:        "HEALTHY",
+				Region:        func() *string { s := "us-west-2a"; return &s }(),
+				InternalIP:    func() *string { s := "10.0.1.15"; return &s }(),
+				LastHeartbeat: func() *time.Time { t := time.Now().Add(-2 * time.Minute); return &t }(),
+				CreatedAt:     time.Now().Add(-30 * 24 * time.Hour),
 			},
 			{
-				ID:        "node_demo_us_west_02",
-				Name:      "transcoding-node-01",
-				Cluster:   "cluster_demo_us_west",
-				Type:      "transcoding",
-				Status:    "HEALTHY",
-				Region:    "us-west-2b",
-				IPAddress: func() *string { s := "10.0.2.23"; return &s }(),
-				LastSeen:  time.Now().Add(-1 * time.Minute),
-				CreatedAt: time.Now().Add(-25 * time.Hour),
+				ID:            "node_demo_us_west_02",
+				NodeID:        "node_demo_us_west_02",
+				ClusterID:     "cluster_demo_us_west",
+				NodeName:      "transcoding-node-01",
+				NodeType:      "transcoding",
+				Status:        "HEALTHY",
+				Region:        func() *string { s := "us-west-2b"; return &s }(),
+				InternalIP:    func() *string { s := "10.0.2.23"; return &s }(),
+				LastHeartbeat: func() *time.Time { t := time.Now().Add(-1 * time.Minute); return &t }(),
+				CreatedAt:     time.Now().Add(-25 * time.Hour),
 			},
 		}, nil
 	}
 
 	r.Logger.Info("Getting nodes")
 
-	// TODO: Add GetNodes method to Quartermaster client
-	// For now, return empty slice
-	return []*model.Node{}, nil
+	// Get nodes from Quartermaster
+	nodesResp, err := r.Clients.Quartermaster.GetNodes(ctx, nil)
+	if err != nil {
+		r.Logger.WithError(err).Error("Failed to get nodes")
+		return nil, fmt.Errorf("failed to get nodes: %w", err)
+	}
+
+	// Return pointers to underlying models
+	nodes := make([]*models.InfrastructureNode, len(nodesResp.Nodes))
+	for i := range nodesResp.Nodes {
+		nodes[i] = &nodesResp.Nodes[i]
+	}
+
+	return nodes, nil
 }
 
 // DoGetNode returns a specific node by ID
-func (r *Resolver) DoGetNode(ctx context.Context, id string) (*model.Node, error) {
+func (r *Resolver) DoGetNode(ctx context.Context, id string) (*models.InfrastructureNode, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo node data for ID", id)
 		nodes, _ := r.DoGetNodes(ctx)
@@ -153,8 +200,15 @@ func (r *Resolver) DoGetNode(ctx context.Context, id string) (*model.Node, error
 
 	r.Logger.WithField("node_id", id).Info("Getting node")
 
-	// TODO: Add GetNode method to Quartermaster client
-	return nil, fmt.Errorf("node not found")
+	// Get node from Quartermaster
+	nodeResp, err := r.Clients.Quartermaster.GetNode(ctx, id)
+	if err != nil {
+		r.Logger.WithError(err).Error("Failed to get node")
+		return nil, fmt.Errorf("failed to get node: %w", err)
+	}
+
+	// Return pointer to underlying model
+	return &nodeResp.Node, nil
 }
 
 // DoUpdateTenant updates tenant settings

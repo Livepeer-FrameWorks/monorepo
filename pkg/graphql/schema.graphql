@@ -17,7 +17,28 @@ type Query {
   # Geographic Analytics
   viewerGeographics(stream: String, timeRange: TimeRangeInput): [ViewerGeographic!]!
   geographicDistribution(stream: String, timeRange: TimeRangeInput): GeographicDistribution!
-  loadBalancingMetrics(timeRange: TimeRangeInput): [LoadBalancingMetric!]!
+  loadBalancingMetrics(timeRange: TimeRangeInput, pagination: PaginationInput, sortOrder: SortOrder): [LoadBalancingMetric!]!
+  
+  # Connection and Routing Analytics
+  routingEvents(stream: String, timeRange: TimeRangeInput, pagination: PaginationInput, sortOrder: SortOrder): [RoutingEvent!]!
+  connectionEvents(stream: String, timeRange: TimeRangeInput, pagination: PaginationInput, sortOrder: SortOrder): [ConnectionEvent!]!
+  
+  # Node Performance Metrics
+  nodeMetrics(nodeId: String, timeRange: TimeRangeInput): [NodeMetric!]!
+  nodeMetrics1h(timeRange: TimeRangeInput, nodeId: String): [NodeMetricHourly!]!
+  
+  # Aggregated Analytics
+  viewerMetrics5m(stream: String, timeRange: TimeRangeInput): [ViewerMetrics5m!]!
+  
+  # Infrastructure Service Monitoring
+  serviceInstances(clusterId: String, nodeId: String, status: InstanceStatus): [ServiceInstance!]!
+  
+  # Stream Management
+  streamKeys(streamId: ID!): [StreamKey!]!
+  recordings(streamId: ID): [Recording!]!
+  
+  # Tenant Resource Management
+  tenantClusterAssignments: [TenantClusterAssignment!]!
   
   # New health and quality queries
   streamHealthMetrics(stream: String!, timeRange: TimeRangeInput): [StreamHealthMetric!]!
@@ -37,7 +58,7 @@ type Query {
   tenant: Tenant
   clusters: [Cluster!]!
   cluster(id: ID!): Cluster
-  nodes: [Node!]!
+  nodes(clusterId: String, status: NodeStatus, type: String, tag: String): [Node!]!
   node(id: ID!): Node
 
   # Developer API (from Commodore)
@@ -65,6 +86,10 @@ type Mutation {
   # Developer API operations (via Commodore)
   createDeveloperToken(input: CreateDeveloperTokenInput!): DeveloperToken!
   revokeDeveloperToken(id: ID!): Boolean!
+  
+  # Stream key operations (via Commodore)
+  createStreamKey(streamId: ID!, input: CreateStreamKeyInput!): StreamKey!
+  deleteStreamKey(streamId: ID!, keyId: ID!): Boolean!
 }
 
 # Root Subscription type for real-time updates
@@ -80,9 +105,6 @@ type Subscription {
   
   # System health (admin only)
   systemHealth: SystemHealthEvent!
-  
-  # All events for authenticated user
-  userEvents: TenantEvent!
 }
 
 # Input types
@@ -108,8 +130,8 @@ input CreateClipInput {
 }
 
 input CreatePaymentInput {
-  amount: Float!
-  currency: String = "USD"
+  amount: Money!
+  currency: Currency
   method: PaymentMethod!
 }
 
@@ -124,9 +146,23 @@ input CreateDeveloperTokenInput {
   expiresIn: Int
 }
 
+input CreateStreamKeyInput {
+  name: String!
+}
+
 input TimeRangeInput {
   start: Time!
   end: Time!
+}
+
+input PaginationInput {
+  limit: Int
+  offset: Int
+}
+
+enum SortOrder {
+  ASC
+  DESC
 }
 
 type TimeRange {
@@ -139,6 +175,31 @@ enum PaymentMethod {
   CARD
   CRYPTO
   BANK_TRANSFER
+}
+
+# Added payment status enum
+enum PaymentStatus {
+  PENDING
+  CONFIRMED
+  FAILED
+}
+
+# Added invoice status enum
+enum InvoiceStatus {
+  PENDING
+  PAID
+  FAILED
+  CANCELLED
+}
+
+# Service instance lifecycle status
+enum InstanceStatus {
+  RUNNING
+  STARTING
+  STOPPING
+  STOPPED
+  ERROR
+  UNKNOWN
 }
 
 enum StreamStatus {
@@ -160,7 +221,7 @@ type StreamEvent {
   stream: String!
   status: StreamStatus!
   timestamp: Time!
-  details: String
+  details: JSON
 }
 
 enum StreamEventType {
@@ -200,11 +261,11 @@ type SystemHealthEvent {
   timestamp: Time!
 }
 
-union TenantEvent = StreamEvent | ViewerMetrics | TrackListEvent
-
 # Custom scalars
 scalar Time
 scalar JSON
+scalar Currency
+scalar Money
 
 # Core types (some will map to pkg/models types)
 type User {
@@ -234,6 +295,12 @@ type Stream {
   record: Boolean!
   createdAt: Time!
   updatedAt: Time!
+
+  # Edges
+  recordings: [Recording!]!
+  events(timeRange: TimeRangeInput, pagination: PaginationInput): [StreamEvent!]!
+  health(timeRange: TimeRangeInput): [StreamHealthMetric!]!
+  viewerMetrics5m(timeRange: TimeRangeInput): [ViewerMetrics5m!]!
 }
 
 type StreamValidation {
@@ -243,29 +310,74 @@ type StreamValidation {
 }
 
 type StreamAnalytics {
-  stream: String!
-  totalViews: Int!
-  totalViewTime: Float!
-  peakViewers: Int!
-  averageViewers: Float!
-  uniqueViewers: Int!
-  timeRange: TimeRange!
+  # Core identifiers
+  id: ID!
+  tenantId: ID!
+  streamId: ID
+  internalName: String!
   
-  # New health metrics
+  # Session timing
+  sessionStartTime: Time
+  sessionEndTime: Time
+  totalSessionDuration: Int!
+  
+  # Viewer metrics
+  currentViewers: Int!
+  peakViewers: Int!
+  totalConnections: Int!
+  
+  # Bandwidth metrics
+  bandwidthIn: Float!
+  bandwidthOut: Float!
+  totalBandwidthGb: Float!
+  upbytes: Float!
+  downbytes: Float!
+  
+  # Stream quality
+  bitrateKbps: Int
+  resolution: String
+  
+  # Network performance
+  packetsSent: Float!
+  packetsLost: Float!
+  packetsRetrans: Float!
+  firstMs: Int
+  lastMs: Int
+  
+  # Stream details
+  trackCount: Int!
+  inputs: Int!
+  outputs: Int!
+  
+  # Location
+  nodeId: String
+  nodeName: String
+  latitude: Float
+  longitude: Float
+  location: String
+  
+  # Status
+  status: String
+  lastUpdated: Time!
+  createdAt: Time!
+  
+  # Current health state (from STREAM_BUFFER events)
   currentHealthScore: Float
-  averageHealthScore: Float
-  frameJitterMs: Float
-  keyframeStabilityMs: Float
+  currentBufferState: String
   currentIssues: String
-  bufferState: BufferState
-  packetLossPercentage: Float
-  qualityTier: String
   currentCodec: String
-  currentResolution: String
-  currentBitrate: Int
   currentFps: Float
-  rebufferCount: Int
-  alertCount: Int
+  currentResolution: String
+  mistStatus: String
+  qualityTier: String
+  
+  # Enriched analytics from ClickHouse (computed)
+  avgViewers: Float
+  uniqueCountries: Int
+  uniqueCities: Int
+  avgBufferHealth: Float
+  avgBitrate: Int
+  packetLossRate: Float
 }
 
 type ViewerMetric {
@@ -292,9 +404,9 @@ type BillingTier {
 
 type Invoice {
   id: ID!
-  amount: Float!
-  currency: String!
-  status: String!
+  amount: Money!
+  currency: Currency!
+  status: InvoiceStatus!
   dueDate: Time!
   createdAt: Time!
   lineItems: [LineItem!]!
@@ -303,8 +415,8 @@ type Invoice {
 type LineItem {
   description: String!
   quantity: Int!
-  unitPrice: Float!
-  total: Float!
+  unitPrice: Money!
+  total: Money!
 }
 
 type BillingStatus {
@@ -316,10 +428,10 @@ type BillingStatus {
 
 type Payment {
   id: ID!
-  amount: Float!
-  currency: String!
+  amount: Money!
+  currency: Currency!
   method: PaymentMethod!
-  status: String!
+  status: PaymentStatus!
   createdAt: Time!
 }
 
@@ -338,6 +450,7 @@ type Cluster {
   region: String!
   status: NodeStatus!
   nodes: [Node!]!
+  serviceInstances(status: InstanceStatus, nodeId: String): [ServiceInstance!]!
   createdAt: Time!
 }
 
@@ -345,6 +458,7 @@ type Node {
   id: ID!
   name: String!
   cluster: String!
+  clusterInfo: Cluster
   type: String!
   status: NodeStatus!
   region: String!
@@ -356,6 +470,11 @@ type Node {
   latitude: Float
   longitude: Float
   location: String
+
+  # Edges
+  serviceInstances(status: InstanceStatus): [ServiceInstance!]
+  metrics(timeRange: TimeRangeInput): [NodeMetric!]
+  metrics1h(timeRange: TimeRangeInput): [NodeMetricHourly!]
 }
 
 type Clip {
@@ -457,6 +576,9 @@ type StreamHealthMetric {
   audioSampleRate: Int
   audioCodec: String
   audioBitrate: Int
+  
+  # Raw track metadata
+  trackMetadata: JSON
 }
 
 # Stream quality changes tracking
@@ -602,6 +724,7 @@ type LoadBalancingMetric {
   # Node geographic data
   nodeLatitude: Float
   nodeLongitude: Float
+  nodeName: String
   
   # Performance metrics
   score: Int
@@ -614,4 +737,208 @@ type LoadBalancingMetric {
   # Event context
   eventType: String
   source: String
+}
+
+# ============================================================================
+# CONNECTION AND ROUTING EVENT TYPES
+# ============================================================================
+
+# Routing event for load balancing decisions
+type RoutingEvent {
+  timestamp: Time!
+  streamName: String!
+  selectedNode: String!
+  status: String!
+  details: String
+  score: Int
+  
+  # Client location info
+  clientIp: String
+  clientCountry: String
+  clientLatitude: Float
+  clientLongitude: Float
+  
+  # Node location info
+  nodeLatitude: Float
+  nodeLongitude: Float
+  nodeName: String
+}
+
+# Connection event for viewer connections/disconnections
+type ConnectionEvent {
+  eventId: String!
+  timestamp: Time!
+  tenantId: String!
+  internalName: String!
+  sessionId: String!
+  connectionAddr: String!
+  connector: String!
+  nodeId: String!
+  countryCode: String
+  city: String
+  latitude: Float
+  longitude: Float
+  eventType: String! # "connect" or "disconnect"
+}
+
+# ============================================================================
+# NODE PERFORMANCE METRICS TYPES
+# ============================================================================
+
+# Node performance metrics from ClickHouse
+type NodeMetric {
+  timestamp: Time!
+  nodeId: String!
+  
+  # Resource usage
+  cpuUsage: Float!
+  memoryUsage: Float!
+  diskUsage: Float!
+  networkRx: Int!
+  networkTx: Int!
+  
+  # Health
+  healthScore: Float!
+  status: String!
+  
+  # Optional geo and metadata available from Periscope
+  latitude: Float
+  longitude: Float
+  tags: [String!]
+  metadata: JSON
+}
+
+# Hourly aggregated node metrics
+type NodeMetricHourly {
+  timestamp: Time!
+  nodeId: String!
+  avgCpu: Float!
+  peakCpu: Float!
+  avgMemory: Float!
+  peakMemory: Float!
+  totalBandwidthIn: Int!
+  totalBandwidthOut: Int!
+  avgHealthScore: Float!
+  wasHealthy: Boolean!
+}
+
+# ============================================================================
+# AGGREGATED ANALYTICS TYPES  
+# ============================================================================
+
+# 5-minute aggregated viewer metrics
+type ViewerMetrics5m {
+  timestamp: Time!
+  internalName: String!
+  nodeId: String!
+  
+  # Viewer metrics
+  peakViewers: Int!
+  avgViewers: Float!
+  
+  # Geographic distribution
+  uniqueCountries: Int!
+  uniqueCities: Int!
+  
+  # Quality metrics
+  avgConnectionQuality: Float!
+  avgBufferHealth: Float!
+}
+
+# ============================================================================
+# INFRASTRUCTURE SERVICE MONITORING TYPES
+# ============================================================================
+
+# Service instance status and health
+type ServiceInstance {
+  id: ID!
+  instanceId: String!
+  clusterId: String!
+  nodeId: String
+  serviceId: String!
+  
+  # Instance details
+  version: String
+  port: Int
+  processId: Int
+  containerId: String
+  
+  # Status tracking
+  status: InstanceStatus!
+  healthStatus: NodeStatus!
+  
+  # Timestamps
+  startedAt: Time
+  stoppedAt: Time
+  lastHealthCheck: Time
+  
+  # Resource usage
+  cpuUsagePercent: Float
+  memoryUsageMb: Int
+
+  # Edges
+  node: Node
+  cluster: Cluster
+}
+
+# ============================================================================
+# STREAM MANAGEMENT TYPES
+# ============================================================================
+
+# Stream key management
+type StreamKey {
+  id: ID!
+  streamId: ID!
+  keyValue: String!
+  keyName: String
+  isActive: Boolean!
+  lastUsedAt: Time
+  createdAt: Time!
+}
+
+# Recording management
+type Recording {
+  id: ID!
+  streamId: ID!
+  
+  # Recording metadata
+  title: String
+  duration: Int
+  fileSizeBytes: Int
+  playbackId: String
+  thumbnailUrl: String
+  startTime: Time
+  endTime: Time
+  
+  # Processing status
+  status: String!
+  
+  createdAt: Time!
+  updatedAt: Time!
+}
+
+# ============================================================================
+# TENANT RESOURCE MANAGEMENT TYPES
+# ============================================================================
+
+# Tenant cluster resource assignments
+type TenantClusterAssignment {
+  id: ID!
+  tenantId: ID!
+  clusterId: String!
+  
+  # Assignment configuration
+  deploymentTier: String
+  priority: Int!
+  isPrimary: Boolean!
+  isActive: Boolean!
+  
+  # Resource limits
+  maxStreamsOnCluster: Int
+  maxViewersOnCluster: Int
+  maxBandwidthMbpsOnCluster: Int
+  fallbackWhenFull: Boolean!
+  
+  createdAt: Time!
+  updatedAt: Time!
 }

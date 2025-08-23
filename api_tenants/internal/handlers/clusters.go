@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"net/http"
 
+	qmapi "frameworks/pkg/api/quartermaster"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/models"
 
@@ -45,7 +46,7 @@ func GetClusters(c *gin.Context) {
 		clusters = append(clusters, cluster)
 	}
 
-	c.JSON(http.StatusOK, gin.H{"clusters": clusters})
+	c.JSON(http.StatusOK, qmapi.ClustersResponse{Clusters: clusters, Count: len(clusters)})
 }
 
 // GetCluster returns a specific cluster
@@ -79,7 +80,7 @@ func GetCluster(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"cluster": cluster})
+	c.JSON(http.StatusOK, qmapi.ClusterResponse{Cluster: cluster})
 }
 
 // CreateCluster creates a new infrastructure cluster
@@ -152,7 +153,7 @@ func CreateCluster(c *gin.Context) {
 		"cluster_type": req.ClusterType,
 	}).Info("Created cluster successfully")
 
-	c.JSON(http.StatusCreated, cluster)
+	c.JSON(http.StatusCreated, qmapi.ClusterResponse{Cluster: cluster})
 }
 
 // UpdateCluster updates an existing infrastructure cluster
@@ -293,5 +294,5 @@ func UpdateCluster(c *gin.Context) {
 	}
 
 	logger.WithField("cluster_id", clusterID).Info("Updated cluster successfully")
-	c.JSON(http.StatusOK, gin.H{"message": "Cluster updated successfully"})
+	c.JSON(http.StatusOK, qmapi.SuccessResponse{Message: "Cluster updated successfully"})
 }

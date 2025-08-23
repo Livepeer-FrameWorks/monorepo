@@ -44,18 +44,29 @@ const (
 // BaseEvent is the normalized envelope for a single analytics event as received
 // by Decklog over gRPC and validated before publishing to Kafka.
 type BaseEvent struct {
-	EventID       string                 `json:"event_id" validate:"required,uuid4"`
-	EventType     EventType              `json:"event_type" validate:"required"`
-	Timestamp     time.Time              `json:"timestamp" validate:"required"`
-	Source        string                 `json:"source" validate:"required"`
-	StreamID      *string                `json:"stream_id,omitempty" validate:"omitempty,uuid4"`
-	UserID        *string                `json:"user_id,omitempty" validate:"omitempty,uuid4"`
-	PlaybackID    *string                `json:"playback_id,omitempty"`
-	InternalName  *string                `json:"internal_name,omitempty"`
-	Region        string                 `json:"region" validate:"required"`
-	NodeURL       *string                `json:"node_url,omitempty" validate:"omitempty,url"`
-	Data          map[string]interface{} `json:"data" validate:"required"`
-	SchemaVersion string                 `json:"schema_version" validate:"required"`
+	EventID       string    `json:"event_id" validate:"required,uuid4"`
+	EventType     EventType `json:"event_type" validate:"required"`
+	Timestamp     time.Time `json:"timestamp" validate:"required"`
+	Source        string    `json:"source" validate:"required"`
+	StreamID      *string   `json:"stream_id,omitempty" validate:"omitempty,uuid4"`
+	UserID        *string   `json:"user_id,omitempty" validate:"omitempty,uuid4"`
+	PlaybackID    *string   `json:"playback_id,omitempty"`
+	InternalName  *string   `json:"internal_name,omitempty"`
+	NodeURL       *string   `json:"node_url,omitempty" validate:"omitempty,url"`
+	SchemaVersion string    `json:"schema_version" validate:"required"`
+
+	// Typed event payloads - only one will be populated based on EventType
+	UserConnection     *UserConnectionPayload     `json:"user_connection,omitempty"`
+	StreamLifecycle    *StreamLifecyclePayload    `json:"stream_lifecycle,omitempty"`
+	StreamIngest       *StreamIngestPayload       `json:"stream_ingest,omitempty"`
+	StreamView         *StreamViewPayload         `json:"stream_view,omitempty"`
+	BandwidthThreshold *BandwidthThresholdPayload `json:"bandwidth_threshold,omitempty"`
+	TrackList          *TrackListPayload          `json:"track_list,omitempty"`
+	Recording          *RecordingPayload          `json:"recording,omitempty"`
+	PushLifecycle      *PushLifecyclePayload      `json:"push_lifecycle,omitempty"`
+	NodeLifecycle      *NodeLifecyclePayload      `json:"node_lifecycle,omitempty"`
+	ClientLifecycle    *ClientLifecyclePayload    `json:"client_lifecycle,omitempty"`
+	LoadBalancing      *LoadBalancingPayload      `json:"load_balancing,omitempty"`
 }
 
 // BatchedEvents matches Decklog's gRPC batch envelope. All contained events are
@@ -133,20 +144,19 @@ func (v *EventValidator) validateEventData(event BaseEvent) error {
 // validateStreamIngestEvent validates MistServer PUSH_REWRITE → Helmsman webhook
 // events. Security-sensitive: requires stream_key (used to resolve internal_name).
 func (v *EventValidator) validateStreamIngestEvent(event BaseEvent) error {
-	if event.InternalName == nil {
+	if event.StreamIngest == nil {
+		return fmt.Errorf("stream_ingest payload is required for stream-ingest events")
+	}
+	if event.InternalName == nil || *event.InternalName == "" {
 		return fmt.Errorf("internal_name is required for stream-ingest events")
 	}
-	if event.UserID == nil {
+	if event.UserID == nil || *event.UserID == "" {
 		return fmt.Errorf("user_id is required for stream-ingest events")
 	}
-
-	requiredFields := []string{"stream_key", "protocol", "push_url"}
-	for _, field := range requiredFields {
-		if _, exists := event.Data[field]; !exists {
-			return fmt.Errorf("missing required field in data: %s", field)
-		}
+	p := event.StreamIngest
+	if p.StreamKey == "" || p.Protocol == "" || p.PushURL == "" {
+		return fmt.Errorf("stream_key, protocol, and push_url are required for stream-ingest events")
 	}
-
 	return nil
 }
 
@@ -171,31 +181,8 @@ func (v *EventValidator) validateStreamLifecycleEvent(event BaseEvent) error {
 	if event.InternalName == nil {
 		return fmt.Errorf("internal_name is required for stream-lifecycle events")
 	}
-
-	// If explicit subtype provided, validate per subtype rules (webhooks only)
-	if etRaw, ok := event.Data["event_type"]; ok {
-		et, _ := etRaw.(string)
-		switch et {
-		case "stream-buffer":
-			bs, ok := event.Data["buffer_state"].(string)
-			if !ok || bs == "" {
-				return fmt.Errorf("buffer_state is required for stream-buffer events")
-			}
-			valid := map[string]bool{"FULL": true, "EMPTY": true, "DRY": true, "RECOVER": true}
-			if !valid[bs] {
-				return fmt.Errorf("invalid buffer_state: %s", bs)
-			}
-			return nil
-		case "stream-end":
-			return nil
-		default:
-			return fmt.Errorf("unknown stream-lifecycle subtype: %s", et)
-		}
-	}
-
-	// No subtype → monitor emission: require status only
-	if _, ok := event.Data["status"]; !ok {
-		return fmt.Errorf("status is required for monitor stream-lifecycle events")
+	if event.StreamLifecycle == nil {
+		return fmt.Errorf("stream_lifecycle payload is required")
 	}
 	return nil
 }
@@ -206,21 +193,12 @@ func (v *EventValidator) validateUserConnectionEvent(event BaseEvent) error {
 	if event.InternalName == nil {
 		return fmt.Errorf("internal_name is required for user-connection events")
 	}
-
-	action, exists := event.Data["action"]
-	if !exists {
-		return fmt.Errorf("missing required field in data: action")
+	if event.UserConnection == nil {
+		return fmt.Errorf("user_connection payload is required")
 	}
-
-	actionStr, ok := action.(string)
-	if !ok {
-		return fmt.Errorf("action field must be a string")
+	if event.UserConnection.Action != "connect" && event.UserConnection.Action != "disconnect" {
+		return fmt.Errorf("invalid action: %s", event.UserConnection.Action)
 	}
-
-	if actionStr != "connect" && actionStr != "disconnect" {
-		return fmt.Errorf("invalid action: %s", actionStr)
-	}
-
 	return nil
 }
 
@@ -230,11 +208,8 @@ func (v *EventValidator) validateClientLifecycleEvent(event BaseEvent) error {
 	if event.InternalName == nil {
 		return fmt.Errorf("internal_name is required for client-lifecycle events")
 	}
-	required := []string{"bandwidth_in", "bandwidth_out"}
-	for _, f := range required {
-		if _, ok := event.Data[f]; !ok {
-			return fmt.Errorf("missing required metric in data: %s", f)
-		}
+	if event.ClientLifecycle == nil {
+		return fmt.Errorf("client_lifecycle payload is required")
 	}
 	return nil
 }
@@ -258,11 +233,11 @@ func (v *EventValidator) validateRecordingLifecycleEvent(event BaseEvent) error 
 // validateNodeLifecycleEvent validates node health metrics collected by Helmsman
 // from MistServer /prometheus/json endpoint. Contains CPU, RAM, bandwidth data.
 func (v *EventValidator) validateNodeLifecycleEvent(event BaseEvent) error {
-	required := []string{"node_id", "is_healthy"}
-	for _, field := range required {
-		if _, exists := event.Data[field]; !exists {
-			return fmt.Errorf("missing required field in data: %s", field)
-		}
+	if event.NodeLifecycle == nil {
+		return fmt.Errorf("node_lifecycle payload is required")
+	}
+	if event.NodeLifecycle.NodeID == "" {
+		return fmt.Errorf("node_id is required for node-lifecycle events")
 	}
 	return nil
 }
@@ -272,7 +247,7 @@ func (v *EventValidator) validateTrackListEvent(event BaseEvent) error {
 	if event.InternalName == nil {
 		return fmt.Errorf("internal_name is required for track-list events")
 	}
-	if _, ok := event.Data["track_list"]; !ok {
+	if event.TrackList == nil || event.TrackList.TrackListJSON == "" {
 		return fmt.Errorf("track_list is required for track-list events")
 	}
 	return nil
@@ -283,31 +258,18 @@ func (v *EventValidator) validateLoadBalancingEvent(event BaseEvent) error {
 	if event.InternalName == nil {
 		return fmt.Errorf("internal_name is required for load-balancing events")
 	}
-
-	requiredFields := []string{"status", "selected_node"}
-	for _, field := range requiredFields {
-		if _, exists := event.Data[field]; !exists {
-			return fmt.Errorf("missing required field in data: %s", field)
-		}
+	if event.LoadBalancing == nil {
+		return fmt.Errorf("load_balancing payload is required")
 	}
-
-	status, exists := event.Data["status"]
-	if !exists {
-		return fmt.Errorf("missing required field in data: status")
+	if event.LoadBalancing.Status == "" || event.LoadBalancing.SelectedNode == "" {
+		return fmt.Errorf("status and selected_node are required for load-balancing events")
 	}
-	statusStr, ok := status.(string)
-	if !ok {
-		return fmt.Errorf("status field must be a string")
+	switch event.LoadBalancing.Status {
+	case "success", "redirect", "failed":
+		return nil
+	default:
+		return fmt.Errorf("invalid status: %s", event.LoadBalancing.Status)
 	}
-
-	validStatuses := []string{"success", "redirect", "failed"}
-	for _, validStatus := range validStatuses {
-		if statusStr == validStatus {
-			return nil
-		}
-	}
-
-	return fmt.Errorf("invalid status: %s", statusStr)
 }
 
 // validateStreamBufferEvent validates STREAM_BUFFER webhook events
@@ -315,15 +277,15 @@ func (v *EventValidator) validateStreamBufferEvent(event BaseEvent) error {
 	if event.InternalName == nil {
 		return fmt.Errorf("internal_name is required for stream-buffer events")
 	}
-	bs, ok := event.Data["buffer_state"].(string)
-	if !ok || bs == "" {
+	if event.StreamLifecycle == nil || event.StreamLifecycle.BufferState == "" {
 		return fmt.Errorf("buffer_state is required for stream-buffer events")
 	}
-	valid := map[string]bool{"FULL": true, "EMPTY": true, "DRY": true, "RECOVER": true}
-	if !valid[bs] {
-		return fmt.Errorf("invalid buffer_state: %s", bs)
+	switch event.StreamLifecycle.BufferState {
+	case "FULL", "EMPTY", "DRY", "RECOVER":
+		return nil
+	default:
+		return fmt.Errorf("invalid buffer_state: %s", event.StreamLifecycle.BufferState)
 	}
-	return nil
 }
 
 // validateStreamEndEvent validates STREAM_END webhook events
@@ -340,14 +302,9 @@ func (v *EventValidator) validateBandwidthThresholdEvent(event BaseEvent) error 
 	if event.InternalName == nil {
 		return fmt.Errorf("internal_name is required for bandwidth-threshold events")
 	}
-
-	requiredFields := []string{"current_bytes_per_sec", "threshold_exceeded"}
-	for _, field := range requiredFields {
-		if _, exists := event.Data[field]; !exists {
-			return fmt.Errorf("missing required field in data: %s", field)
-		}
+	if event.BandwidthThreshold == nil || !event.BandwidthThreshold.ThresholdExceeded {
+		return fmt.Errorf("bandwidth_threshold payload with threshold_exceeded=true is required")
 	}
-
 	return nil
 }
 
@@ -356,12 +313,6 @@ func (v *EventValidator) validateBandwidthThresholdEvent(event BaseEvent) error 
 func (v *EventValidator) EnrichEvent(event *BaseEvent, enrichmentData map[string]interface{}) {
 	if event.Timestamp.IsZero() {
 		event.Timestamp = time.Now().UTC()
-	}
-
-	for key, value := range enrichmentData {
-		if _, exists := event.Data[key]; !exists {
-			event.Data[key] = value
-		}
 	}
 
 	if event.SchemaVersion == "" {

@@ -37,6 +37,17 @@ type APIToken struct {
 	UpdatedAt   time.Time  `json:"updated_at"`
 }
 
+// BehaviorData represents user interaction data for bot detection
+type BehaviorData struct {
+	FormShownAt int64 `json:"formShownAt"` // Timestamp when form was shown
+	SubmittedAt int64 `json:"submittedAt"` // Timestamp when form was submitted
+	Mouse       bool  `json:"mouse"`       // Whether mouse movement was detected
+	Typed       bool  `json:"typed"`       // Whether typing was detected
+	KeyPressed  bool  `json:"keyPressed"`  // Whether key presses were detected
+	Clicked     bool  `json:"clicked"`     // Whether clicks were detected
+	Focused     bool  `json:"focused"`     // Whether focus events were detected (frontend compatibility)
+}
+
 // RegisterRequest represents the registration request
 type RegisterRequest struct {
 	Email     string `json:"email" binding:"required,email"`
@@ -44,9 +55,9 @@ type RegisterRequest struct {
 	FirstName string `json:"first_name"`
 	LastName  string `json:"last_name"`
 	// Bot protection fields
-	PhoneNumber string `json:"phone_number"` // Honeypot - must be empty
-	HumanCheck  string `json:"human_check"`  // Must be "human"
-	Behavior    string `json:"behavior"`     // JSON string with interaction data
+	PhoneNumber string       `json:"phone_number"` // Honeypot - must be empty
+	HumanCheck  string       `json:"human_check"`  // Must be "human"
+	Behavior    BehaviorData `json:"behavior"`     // Typed interaction data
 }
 
 // LoginRequest represents the login request

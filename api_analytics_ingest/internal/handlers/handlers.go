@@ -10,6 +10,8 @@ import (
 	"frameworks/pkg/database"
 	"frameworks/pkg/kafka"
 	"frameworks/pkg/logging"
+	"frameworks/pkg/validation"
+
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -39,6 +41,48 @@ func NewAnalyticsHandler(clickhouse database.ClickHouseNativeConn, logger loggin
 	}
 }
 
+// convertKafkaEventToTyped converts a kafka.AnalyticsEvent to a validation.KafkaEvent with typed data
+func (h *AnalyticsHandler) convertKafkaEventToTyped(event kafka.AnalyticsEvent) (*validation.KafkaEvent, error) {
+	// Create typed event structure
+	typedEvent := &validation.KafkaEvent{
+		ID:            event.EventID,
+		Type:          event.EventType,
+		EventID:       event.EventID,
+		EventType:     event.EventType,
+		Timestamp:     event.Timestamp,
+		Source:        event.Source,
+		SchemaVersion: "1.0",
+	}
+
+	// Event already carries typed payloads; copy through
+	switch validation.EventType(event.EventType) {
+	case validation.EventStreamIngest:
+		typedEvent.Data.StreamIngest = event.Data.StreamIngest
+	case validation.EventStreamView:
+		typedEvent.Data.StreamView = event.Data.StreamView
+	case validation.EventStreamLifecycle, validation.EventStreamBuffer, validation.EventStreamEnd:
+		typedEvent.Data.StreamLifecycle = event.Data.StreamLifecycle
+	case validation.EventUserConnection:
+		typedEvent.Data.UserConnection = event.Data.UserConnection
+	case validation.EventClientLifecycle:
+		typedEvent.Data.ClientLifecycle = event.Data.ClientLifecycle
+	case validation.EventTrackList:
+		typedEvent.Data.TrackList = event.Data.TrackList
+	case validation.EventRecordingLifecycle:
+		typedEvent.Data.Recording = event.Data.Recording
+	case validation.EventPushLifecycle:
+		typedEvent.Data.PushLifecycle = event.Data.PushLifecycle
+	case validation.EventNodeLifecycle:
+		typedEvent.Data.NodeLifecycle = event.Data.NodeLifecycle
+	case validation.EventBandwidthThreshold:
+		typedEvent.Data.BandwidthThreshold = event.Data.BandwidthThreshold
+	case validation.EventLoadBalancing:
+		typedEvent.Data.LoadBalancing = event.Data.LoadBalancing
+	}
+
+	return typedEvent, nil
+}
+
 // HandleAnalyticsEvent processes analytics events and writes to appropriate databases
 func (h *AnalyticsHandler) HandleAnalyticsEvent(ydb database.PostgresConn, event kafka.AnalyticsEvent) error {
 	start := time.Now()
@@ -49,35 +93,129 @@ func (h *AnalyticsHandler) HandleAnalyticsEvent(ydb database.PostgresConn, event
 		h.metrics.AnalyticsEvents.WithLabelValues(event.EventType, "received").Inc()
 	}
 
-	// Process based on event type
-	var err error
-	switch event.EventType {
-	case "stream-lifecycle":
-		err = h.processStreamLifecycle(ctx, ydb, event)
-	case "stream-ingest":
-		err = h.processStreamIngest(ctx, event)
-	case "user-connection":
-		err = h.processUserConnection(ctx, ydb, event)
-	case "push-lifecycle":
-		err = h.processPushLifecycle(ctx, event)
-	case "recording-lifecycle":
-		err = h.processRecordingLifecycle(ctx, event)
-	case "client-lifecycle":
-		err = h.processClientLifecycle(ctx, event)
-	case "node-lifecycle":
-		err = h.processNodeLifecycle(ctx, event)
-	case "stream-buffer":
-		err = h.processStreamBuffer(ctx, event)
-	case "stream-end":
-		err = h.processStreamEnd(ctx, ydb, event)
-	case "stream-view":
-		err = h.processStreamView(ctx, event)
-	case "load-balancing":
-		err = h.processLoadBalancing(ctx, event)
-	case "track-list":
-		err = h.processTrackList(ctx, event)
-	case "bandwidth-threshold":
-		err = h.processBandwidthThreshold(ctx, event)
+	// Convert to typed event for validation and type safety
+	typedEvent, err := h.convertKafkaEventToTyped(event)
+	if err != nil {
+		h.logger.WithError(err).WithFields(logging.Fields{
+			"event_type": event.EventType,
+			"event_id":   event.EventID,
+		}).Error("Failed to convert event to typed structure")
+
+		if h.metrics != nil {
+			h.metrics.AnalyticsEvents.WithLabelValues(event.EventType, "validation_failed").Inc()
+		}
+		return err
+	}
+	// Directly copy from AnalyticsEvent.Data
+	switch validation.EventType(event.EventType) {
+	case validation.EventStreamIngest:
+		typedEvent.Data.StreamIngest = event.Data.StreamIngest
+	case validation.EventStreamView:
+		typedEvent.Data.StreamView = event.Data.StreamView
+	case validation.EventStreamLifecycle, validation.EventStreamBuffer, validation.EventStreamEnd:
+		typedEvent.Data.StreamLifecycle = event.Data.StreamLifecycle
+	case validation.EventUserConnection:
+		typedEvent.Data.UserConnection = event.Data.UserConnection
+	case validation.EventClientLifecycle:
+		typedEvent.Data.ClientLifecycle = event.Data.ClientLifecycle
+	case validation.EventTrackList:
+		typedEvent.Data.TrackList = event.Data.TrackList
+	case validation.EventRecordingLifecycle:
+		typedEvent.Data.Recording = event.Data.Recording
+	case validation.EventPushLifecycle:
+		typedEvent.Data.PushLifecycle = event.Data.PushLifecycle
+	case validation.EventNodeLifecycle:
+		typedEvent.Data.NodeLifecycle = event.Data.NodeLifecycle
+	case validation.EventBandwidthThreshold:
+		typedEvent.Data.BandwidthThreshold = event.Data.BandwidthThreshold
+	case validation.EventLoadBalancing:
+		typedEvent.Data.LoadBalancing = event.Data.LoadBalancing
+	}
+
+	// Validate typed event against shared schema
+	v := validation.NewEventValidator()
+	be := validation.BaseEvent{
+		EventID:       event.EventID,
+		EventType:     validation.EventType(event.EventType),
+		Timestamp:     event.Timestamp,
+		Source:        event.Source,
+		StreamID:      event.StreamID,
+		UserID:        event.UserID,
+		PlaybackID:    event.PlaybackID,
+		InternalName:  event.InternalName,
+		NodeURL:       event.NodeURL,
+		SchemaVersion: event.SchemaVersion,
+	}
+	// Populate typed payloads for validator
+	switch be.EventType {
+	case validation.EventStreamIngest:
+		be.StreamIngest = typedEvent.Data.StreamIngest
+	case validation.EventStreamView:
+		be.StreamView = typedEvent.Data.StreamView
+	case validation.EventStreamLifecycle, validation.EventStreamBuffer, validation.EventStreamEnd:
+		be.StreamLifecycle = typedEvent.Data.StreamLifecycle
+	case validation.EventUserConnection:
+		be.UserConnection = typedEvent.Data.UserConnection
+	case validation.EventClientLifecycle:
+		be.ClientLifecycle = typedEvent.Data.ClientLifecycle
+	case validation.EventTrackList:
+		be.TrackList = typedEvent.Data.TrackList
+	case validation.EventRecordingLifecycle:
+		be.Recording = typedEvent.Data.Recording
+	case validation.EventPushLifecycle:
+		be.PushLifecycle = typedEvent.Data.PushLifecycle
+	case validation.EventNodeLifecycle:
+		be.NodeLifecycle = typedEvent.Data.NodeLifecycle
+	case validation.EventBandwidthThreshold:
+		be.BandwidthThreshold = typedEvent.Data.BandwidthThreshold
+	case validation.EventLoadBalancing:
+		be.LoadBalancing = typedEvent.Data.LoadBalancing
+	}
+	batch := validation.BatchedEvents{
+		BatchID:   event.EventID,
+		Source:    event.Source,
+		Timestamp: event.Timestamp,
+		Events:    []validation.BaseEvent{be},
+	}
+	if err := v.ValidateBatch(&batch); err != nil {
+		h.logger.WithError(err).WithFields(logging.Fields{
+			"event_type": event.EventType,
+			"event_id":   event.EventID,
+		}).Error("Event validation failed")
+		if h.metrics != nil {
+			h.metrics.AnalyticsEvents.WithLabelValues(event.EventType, "validation_failed").Inc()
+		}
+		return err
+	}
+
+	// Process based on event type using typed data
+	switch validation.EventType(event.EventType) {
+	case validation.EventStreamLifecycle:
+		err = h.processStreamLifecycle(ctx, ydb, typedEvent)
+	case validation.EventStreamIngest:
+		err = h.processStreamIngest(ctx, typedEvent)
+	case validation.EventUserConnection:
+		err = h.processUserConnection(ctx, ydb, typedEvent)
+	case validation.EventPushLifecycle:
+		err = h.processPushLifecycle(ctx, typedEvent)
+	case validation.EventRecordingLifecycle:
+		err = h.processRecordingLifecycle(ctx, typedEvent)
+	case validation.EventClientLifecycle:
+		err = h.processClientLifecycle(ctx, typedEvent)
+	case validation.EventNodeLifecycle:
+		err = h.processNodeLifecycle(ctx, typedEvent)
+	case validation.EventStreamBuffer:
+		err = h.processStreamBuffer(ctx, typedEvent)
+	case validation.EventStreamEnd:
+		err = h.processStreamEnd(ctx, ydb, typedEvent)
+	case validation.EventStreamView:
+		err = h.processStreamView(ctx, typedEvent)
+	case validation.EventLoadBalancing:
+		err = h.processLoadBalancing(ctx, typedEvent)
+	case validation.EventTrackList:
+		err = h.processTrackList(ctx, typedEvent)
+	case validation.EventBandwidthThreshold:
+		err = h.processBandwidthThreshold(ctx, typedEvent)
 	default:
 		h.logger.Warnf("Unknown event type: %s", event.EventType)
 		if h.metrics != nil {
@@ -100,16 +238,17 @@ func (h *AnalyticsHandler) HandleAnalyticsEvent(ydb database.PostgresConn, event
 }
 
 // processStreamLifecycle handles stream lifecycle events
-func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, ydb database.PostgresConn, event kafka.AnalyticsEvent) error {
+func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, ydb database.PostgresConn, event *validation.KafkaEvent) error {
 	h.logger.Infof("Processing stream lifecycle event: %s", event.EventID)
 
-	var internalName string
-	if event.InternalName != nil {
-		internalName = *event.InternalName
-	} else {
-		h.logger.Warnf("No internal_name provided in stream lifecycle event: %s", event.EventID)
+	// Get typed stream lifecycle payload
+	if event.Data.StreamLifecycle == nil {
+		h.logger.Warnf("No stream lifecycle data in event: %s", event.EventID)
 		return nil
 	}
+
+	streamLifecycle := event.Data.StreamLifecycle
+	internalName := streamLifecycle.InternalName
 
 	// Write ONLY to ClickHouse - no PostgreSQL writes for events
 	if h.metrics != nil {
@@ -118,7 +257,10 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, ydb datab
 
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO stream_events (
-			event_id, timestamp, tenant_id, internal_name, event_type, status, node_id, event_data
+			timestamp, event_id, tenant_id, internal_name, node_id, event_type,
+			buffer_state, downloaded_bytes, uploaded_bytes, total_viewers, total_inputs, 
+			total_outputs, viewer_seconds, health_score, has_issues, issues_description,
+			track_count, quality_tier, primary_width, primary_height, primary_fps, event_data
 		)`)
 	if err != nil {
 		h.logger.Errorf("Failed to prepare ClickHouse batch: %v", err)
@@ -129,14 +271,28 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, ydb datab
 	}
 
 	if err := batch.Append(
-		event.EventID,
 		event.Timestamp,
-		getTenantIDFromEvent(event),
+		event.EventID,
+		getTenantIDFromKafkaEvent(*event),
 		internalName,
+		streamLifecycle.NodeID,
 		"stream-lifecycle",
-		event.Data["status"],
-		event.Data["node_id"],
-		marshalEventData(event.Data),
+		streamLifecycle.BufferState,
+		streamLifecycle.DownloadedBytes,
+		streamLifecycle.UploadedBytes,
+		streamLifecycle.TotalViewers,
+		streamLifecycle.TotalInputs,
+		streamLifecycle.TotalOutputs,
+		streamLifecycle.ViewerSeconds,
+		streamLifecycle.HealthScore,
+		streamLifecycle.HasIssues,
+		streamLifecycle.IssuesDesc,
+		streamLifecycle.TrackCount,
+		streamLifecycle.QualityTier,
+		streamLifecycle.PrimaryWidth,
+		streamLifecycle.PrimaryHeight,
+		streamLifecycle.PrimaryFPS,
+		marshalTypedEventData(streamLifecycle),
 	); err != nil {
 		h.logger.Errorf("Failed to append to ClickHouse batch: %v", err)
 		if h.metrics != nil {
@@ -157,13 +313,7 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, ydb datab
 		h.metrics.ClickHouseInserts.WithLabelValues("stream_events", "success").Inc()
 	}
 
-	// Extract health metrics if this event contains detailed stream data
-	if err := h.extractHealthMetricsFromLifecycle(ctx, event); err != nil {
-		h.logger.Errorf("Failed to extract health metrics from lifecycle event: %v", err)
-		// Don't fail the whole event processing for health metrics issues
-	}
-
-	if err := h.reduceStreamLifecycle(ctx, ydb, event); err != nil {
+	if err := h.reduceStreamLifecycle(ctx, ydb, *event); err != nil {
 		h.logger.Errorf("Failed to reduce stream lifecycle: %v", err)
 	}
 
@@ -171,13 +321,22 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, ydb datab
 }
 
 // processStreamIngest handles stream ingest events
-func (h *AnalyticsHandler) processStreamIngest(ctx context.Context, event kafka.AnalyticsEvent) error {
+func (h *AnalyticsHandler) processStreamIngest(ctx context.Context, event *validation.KafkaEvent) error {
 	h.logger.Infof("Processing stream ingest event: %s", event.EventID)
 
-	// Write to ClickHouse for time-series analysis
+	// Get typed stream ingest payload
+	if event.Data.StreamIngest == nil {
+		h.logger.Warnf("No stream ingest data in event: %s", event.EventID)
+		return nil
+	}
+
+	streamIngest := event.Data.StreamIngest
+
+	// Write to ClickHouse for time-series analysis - ONLY fields that exist in ingest events
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO stream_events (
-			timestamp, event_id, tenant_id, internal_name, event_type, status, node_id, ingest_type, protocol, event_data
+			timestamp, event_id, tenant_id, internal_name, node_id, event_type,
+			stream_key, user_id, hostname, push_url, protocol, latitude, longitude, location, event_data
 		)`)
 	if err != nil {
 		h.logger.Errorf("Failed to prepare ClickHouse batch: %v", err)
@@ -187,14 +346,19 @@ func (h *AnalyticsHandler) processStreamIngest(ctx context.Context, event kafka.
 	if err := batch.Append(
 		event.Timestamp,
 		event.EventID,
-		getTenantIDFromEvent(event),
-		*event.InternalName,
+		getTenantIDFromKafkaEvent(*event),
+		streamIngest.InternalName,
+		streamIngest.NodeID,
 		"stream-ingest",
-		event.Data["status"],
-		event.Data["node_id"],
-		event.Data["ingest_type"],
-		event.Data["protocol"],
-		marshalEventData(event.Data),
+		streamIngest.StreamKey,
+		streamIngest.UserID,
+		streamIngest.Hostname,
+		streamIngest.PushURL,
+		streamIngest.Protocol, // Protocol EXISTS in ingest events!
+		streamIngest.Latitude,
+		streamIngest.Longitude,
+		streamIngest.Location,
+		marshalTypedEventData(streamIngest),
 	); err != nil {
 		h.logger.Errorf("Failed to append to ClickHouse batch: %v", err)
 		return err
@@ -209,34 +373,39 @@ func (h *AnalyticsHandler) processStreamIngest(ctx context.Context, event kafka.
 }
 
 // processUserConnection handles user connection events
-func (h *AnalyticsHandler) processUserConnection(ctx context.Context, ydb database.PostgresConn, event kafka.AnalyticsEvent) error {
+func (h *AnalyticsHandler) processUserConnection(ctx context.Context, ydb database.PostgresConn, event *validation.KafkaEvent) error {
 	h.logger.Infof("Processing user connection event: %s", event.EventID)
 
-	// Map Helmsman fields to ClickHouse schema
-	action, _ := event.Data["action"].(string) // "connect" or "disconnect"
-	connectionAddr := event.Data["connection_addr"]
-	userAgent := event.Data["user_agent"]
-	connector := event.Data["connector"]
-	sessionID := event.Data["session_id"]
+	// Get typed user connection payload
+	if event.Data.UserConnection == nil {
+		h.logger.Warnf("No user connection data in event: %s", event.EventID)
+		return nil
+	}
 
-	// Derive session_duration and bytes_transferred if provided (USER_END)
-	var sessionDuration int
-	if v, ok := event.Data["seconds_connected"]; ok {
-		sessionDuration = convertToInt(v)
+	userConn := event.Data.UserConnection
+
+	// Extract geographic data from typed payload (embedded periscope.ConnectionEvent)
+	var countryCode, city interface{}
+	var latitude, longitude interface{}
+
+	if userConn.CountryCode != "" {
+		countryCode = userConn.CountryCode
 	}
-	var bytesTransferred int64
-	if down, ok := event.Data["down_bytes"]; ok {
-		bytesTransferred += convertToInt64(down)
+	if userConn.City != "" {
+		city = userConn.City
 	}
-	if up, ok := event.Data["up_bytes"]; ok {
-		bytesTransferred += convertToInt64(up)
+	if userConn.Latitude != 0 {
+		latitude = userConn.Latitude
+	}
+	if userConn.Longitude != 0 {
+		longitude = userConn.Longitude
 	}
 
 	// Write to ClickHouse for time-series analysis
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO connection_events (
-			event_id, timestamp, tenant_id, internal_name, user_id, session_id,
-			connection_addr, user_agent, connector, node_id,
+			event_id, timestamp, tenant_id, internal_name,
+			session_id, connection_addr, connector, node_id, request_url,
 			country_code, city, latitude, longitude,
 			event_type, session_duration, bytes_transferred
 		)`)
@@ -248,22 +417,21 @@ func (h *AnalyticsHandler) processUserConnection(ctx context.Context, ydb databa
 	if err := batch.Append(
 		event.EventID,
 		event.Timestamp,
-		getTenantIDFromEvent(event),
-		*event.InternalName,
-		event.UserID, // may be nil → ClickHouse driver handles as NULL/String default
-		sessionID,
-		connectionAddr,
-		userAgent,
-		connector,
-		event.Data["node_id"],
-		// No geo data available from USER_NEW/USER_END webhooks - leave fields empty/null
-		nil, // country_code (NULL)
-		nil, // city (NULL)
-		nil, // latitude (NULL)
-		nil, // longitude (NULL)
-		action,
-		sessionDuration,
-		bytesTransferred,
+		getTenantIDFromKafkaEvent(*event),
+		userConn.InternalName,
+		userConn.SessionID,
+		userConn.ConnectionAddr,
+		userConn.Connector,
+		userConn.NodeID,
+		userConn.RequestURL,
+		// Geographic data from typed payload
+		countryCode,
+		city,
+		latitude,
+		longitude,
+		userConn.Action,
+		int(userConn.SecondsConnected),
+		int64(userConn.DownloadedBytes+userConn.UploadedBytes),
 	); err != nil {
 		h.logger.Errorf("Failed to append to ClickHouse batch: %v", err)
 		return err
@@ -274,7 +442,7 @@ func (h *AnalyticsHandler) processUserConnection(ctx context.Context, ydb databa
 		return err
 	}
 
-	if err := h.reduceUserConnection(ctx, ydb, event); err != nil {
+	if err := h.reduceUserConnection(ctx, ydb, *event); err != nil {
 		h.logger.Errorf("Failed to reduce user connection: %v", err)
 	}
 
@@ -282,31 +450,67 @@ func (h *AnalyticsHandler) processUserConnection(ctx context.Context, ydb databa
 }
 
 // processPushLifecycle handles push lifecycle events
-func (h *AnalyticsHandler) processPushLifecycle(ctx context.Context, event kafka.AnalyticsEvent) error {
+func (h *AnalyticsHandler) processPushLifecycle(ctx context.Context, event *validation.KafkaEvent) error {
 	h.logger.Infof("Processing push lifecycle event: %s", event.EventID)
 
-	// Write to ClickHouse for time-series analysis
-	batch, err := h.clickhouse.PrepareBatch(ctx, `
-		INSERT INTO stream_events (
-			timestamp, event_id, tenant_id, internal_name, event_type, status, node_id, target, protocol, event_data
-		)`)
+	// Get typed push lifecycle payload
+	if event.Data.PushLifecycle == nil {
+		h.logger.Warnf("No push lifecycle data in event: %s", event.EventID)
+		return nil
+	}
+
+	pushLifecycle := event.Data.PushLifecycle
+
+	// Write to ClickHouse for time-series analysis - ONLY fields that exist in push events
+	var batchSQL string
+	var values []interface{}
+
+	if pushLifecycle.Action == "start" {
+		// PUSH_OUT_START: only has push_target
+		batchSQL = `INSERT INTO stream_events (
+			timestamp, event_id, tenant_id, internal_name, node_id, event_type, 
+			push_target, event_data
+		)`
+		values = []interface{}{
+			event.Timestamp,
+			event.EventID,
+			getTenantIDFromKafkaEvent(*event),
+			pushLifecycle.InternalName,
+			pushLifecycle.NodeID,
+			"push-start",
+			pushLifecycle.PushTarget,
+			marshalTypedEventData(pushLifecycle),
+		}
+	} else {
+		// PUSH_END: has push_id, target URIs, status, log_messages
+		batchSQL = `INSERT INTO stream_events (
+			timestamp, event_id, tenant_id, internal_name, node_id, event_type,
+			push_id, push_target, target_uri_before, target_uri_after, push_status, log_messages, event_data
+		)`
+		values = []interface{}{
+			event.Timestamp,
+			event.EventID,
+			getTenantIDFromKafkaEvent(*event),
+			pushLifecycle.InternalName,
+			pushLifecycle.NodeID,
+			"push-end",
+			pushLifecycle.PushID,
+			pushLifecycle.PushTarget,
+			pushLifecycle.TargetURIBefore,
+			pushLifecycle.TargetURIAfter,
+			pushLifecycle.Status,
+			pushLifecycle.LogMessages,
+			marshalTypedEventData(pushLifecycle),
+		}
+	}
+
+	batch, err := h.clickhouse.PrepareBatch(ctx, batchSQL)
 	if err != nil {
 		h.logger.Errorf("Failed to prepare ClickHouse batch: %v", err)
 		return err
 	}
 
-	if err := batch.Append(
-		event.Timestamp,
-		event.EventID,
-		getTenantIDFromEvent(event),
-		*event.InternalName,
-		"push-lifecycle",
-		event.Data["status"],
-		event.Data["node_id"],
-		event.Data["target"],
-		event.Data["protocol"],
-		marshalEventData(event.Data),
-	); err != nil {
+	if err := batch.Append(values...); err != nil {
 		h.logger.Errorf("Failed to append to ClickHouse batch: %v", err)
 		return err
 	}
@@ -320,13 +524,22 @@ func (h *AnalyticsHandler) processPushLifecycle(ctx context.Context, event kafka
 }
 
 // processRecordingLifecycle handles recording lifecycle events
-func (h *AnalyticsHandler) processRecordingLifecycle(ctx context.Context, event kafka.AnalyticsEvent) error {
+func (h *AnalyticsHandler) processRecordingLifecycle(ctx context.Context, event *validation.KafkaEvent) error {
 	h.logger.Infof("Processing recording lifecycle event: %s", event.EventID)
 
-	// Write to ClickHouse for time-series analysis
+	// Get typed recording payload
+	if event.Data.Recording == nil {
+		h.logger.Warnf("No recording data in event: %s", event.EventID)
+		return nil
+	}
+
+	recording := event.Data.Recording
+
+	// Write to ClickHouse for time-series analysis - ONLY fields that exist in recording events
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO stream_events (
-			timestamp, event_id, tenant_id, internal_name, event_type, status, node_id, file_size, duration, event_data
+			timestamp, event_id, tenant_id, internal_name, node_id, event_type,
+			file_size, duration, output_file, event_data
 		)`)
 	if err != nil {
 		h.logger.Errorf("Failed to prepare ClickHouse batch: %v", err)
@@ -336,14 +549,14 @@ func (h *AnalyticsHandler) processRecordingLifecycle(ctx context.Context, event 
 	if err := batch.Append(
 		event.Timestamp,
 		event.EventID,
-		getTenantIDFromEvent(event),
-		*event.InternalName,
+		getTenantIDFromKafkaEvent(*event),
+		recording.InternalName,
+		recording.NodeID,
 		"recording-lifecycle",
-		event.Data["status"],
-		event.Data["node_id"],
-		convertToInt64(event.Data["file_size"]),
-		convertToInt(event.Data["duration"]),
-		marshalEventData(event.Data),
+		uint64(recording.BytesWritten),   // file_size = bytes_written
+		uint32(recording.SecondsWriting), // duration = seconds_writing
+		recording.FilePath,               // output_file = file_path
+		marshalTypedEventData(recording),
 	); err != nil {
 		h.logger.Errorf("Failed to append to ClickHouse batch: %v", err)
 		return err
@@ -358,13 +571,21 @@ func (h *AnalyticsHandler) processRecordingLifecycle(ctx context.Context, event 
 }
 
 // processStreamView handles stream view events
-func (h *AnalyticsHandler) processStreamView(ctx context.Context, event kafka.AnalyticsEvent) error {
+func (h *AnalyticsHandler) processStreamView(ctx context.Context, event *validation.KafkaEvent) error {
 	h.logger.Infof("Processing stream view event: %s", event.EventID)
 
-	// Write to ClickHouse for time-series analysis
+	// Get typed stream view payload
+	if event.Data.StreamView == nil {
+		h.logger.Warnf("No stream view data in event: %s", event.EventID)
+		return nil
+	}
+
+	streamView := event.Data.StreamView
+
+	// Write to ClickHouse for time-series analysis - basic stream view event
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO stream_events (
-			timestamp, event_id, tenant_id, internal_name, event_type, status, node_id, event_data
+			timestamp, event_id, tenant_id, internal_name, node_id, event_type, event_data
 		)`)
 	if err != nil {
 		h.logger.Errorf("Failed to prepare ClickHouse batch: %v", err)
@@ -374,12 +595,11 @@ func (h *AnalyticsHandler) processStreamView(ctx context.Context, event kafka.An
 	if err := batch.Append(
 		event.Timestamp,
 		event.EventID,
-		getTenantIDFromEvent(event),
-		*event.InternalName,
+		getTenantIDFromKafkaEvent(*event),
+		streamView.InternalName,
+		streamView.NodeID,
 		"stream-view",
-		"request",
-		event.Data["node_id"],
-		marshalEventData(event.Data),
+		marshalTypedEventData(streamView),
 	); err != nil {
 		h.logger.Errorf("Failed to append to ClickHouse batch: %v", err)
 		return err
@@ -394,64 +614,44 @@ func (h *AnalyticsHandler) processStreamView(ctx context.Context, event kafka.An
 }
 
 // processLoadBalancing handles load balancing events
-func (h *AnalyticsHandler) processLoadBalancing(ctx context.Context, event kafka.AnalyticsEvent) error {
+func (h *AnalyticsHandler) processLoadBalancing(ctx context.Context, event *validation.KafkaEvent) error {
 	h.logger.Infof("Processing load balancing event: %s", event.EventID)
 
-	data := event.Data
-	if data == nil {
-		h.logger.Warnf("No data in load balancing event: %s", event.EventID)
+	// Get typed load balancing payload
+	if event.Data.LoadBalancing == nil {
+		h.logger.Warnf("No load balancing data in event: %s", event.EventID)
 		return nil
 	}
 
-	// Write to ClickHouse for time-series analysis
+	loadBalancing := event.Data.LoadBalancing
+
+	// Write to ClickHouse routing_events table - using ACTUAL fields from LoadBalancingPayload
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO routing_events (
-			timestamp, tenant_id, stream_name, selected_node, status, details, score, client_ip, client_country, client_region, client_city, client_latitude, client_longitude, node_scores, routing_metadata
+			timestamp, tenant_id, stream_name, selected_node, status, details, score, 
+			client_ip, client_country, client_latitude, client_longitude,
+			node_latitude, node_longitude, node_name
 		)`)
 	if err != nil {
 		h.logger.Errorf("Failed to prepare ClickHouse batch: %v", err)
 		return err
 	}
 
-	country := data["client_country"]
-	if country == nil {
-		country = data["country_code"]
-	}
-	region := data["client_region"]
-	if region == nil {
-		region = data["region"]
-	}
-	city := data["client_city"]
-	if city == nil {
-		city = data["city"]
-	}
-
-	// Resolve stream name/internal_name string
-	internalName := ""
-	if event.InternalName != nil {
-		internalName = *event.InternalName
-	} else if v, ok := data["internal_name"].(string); ok {
-		internalName = v
-	} else if v, ok := data["stream_name"].(string); ok {
-		internalName = v
-	}
-
 	if err := batch.Append(
 		event.Timestamp,
-		getTenantIDFromEvent(event),
-		internalName,
-		data["selected_node"],
-		data["status"],
-		data["details"],
-		convertToInt64(data["score"]),
-		data["client_ip"],
-		country,
-		region,
-		city,
-		convertToFloat64(data["client_latitude"]),
-		convertToFloat64(data["client_longitude"]),
-		data["node_scores"],
-		data["routing_metadata"],
+		getTenantIDFromKafkaEvent(*event),
+		loadBalancing.StreamID,
+		loadBalancing.SelectedNode,
+		loadBalancing.Status,
+		loadBalancing.Details,
+		int64(loadBalancing.Score),
+		loadBalancing.ClientIP,
+		loadBalancing.ClientCountry,
+		loadBalancing.Latitude,
+		loadBalancing.Longitude,
+		loadBalancing.NodeLatitude,
+		loadBalancing.NodeLongitude,
+		loadBalancing.NodeName,
 	); err != nil {
 		h.logger.Errorf("Failed to append to ClickHouse batch: %v", err)
 		return err
@@ -468,23 +668,67 @@ func (h *AnalyticsHandler) processLoadBalancing(ctx context.Context, event kafka
 
 	h.logger.WithFields(logging.Fields{
 		"event_id":    event.EventID,
-		"stream_name": internalName,
+		"stream_name": loadBalancing.StreamID,
 	}).Debug("Processed load balancing event")
 
 	return nil
 }
 
 // processClientLifecycle handles per-client bandwidth and connection metrics
-func (h *AnalyticsHandler) processClientLifecycle(ctx context.Context, event kafka.AnalyticsEvent) error {
-	data := event.Data
-	if data == nil {
-		h.logger.Warnf("No data in client lifecycle event: %s", event.EventID)
+func (h *AnalyticsHandler) processClientLifecycle(ctx context.Context, event *validation.KafkaEvent) error {
+	h.logger.Infof("Processing client lifecycle event: %s", event.EventID)
+
+	// Get typed client lifecycle payload
+	if event.Data.ClientLifecycle == nil {
+		h.logger.Warnf("No client lifecycle data in event: %s", event.EventID)
 		return nil
 	}
 
-	// Write time-series performance metrics to ClickHouse (stream_health_metrics)
-	if err := h.writeStreamMetrics(ctx, event); err != nil {
-		h.logger.WithError(err).Error("Failed to write client lifecycle metrics")
+	clientLifecycle := event.Data.ClientLifecycle
+
+	// Calculate connection quality if packets were sent
+	var connectionQuality *float32
+	if clientLifecycle.PacketsSent > 0 {
+		quality := float32(1.0 - (float64(clientLifecycle.PacketsLost) / float64(clientLifecycle.PacketsSent)))
+		connectionQuality = &quality
+	}
+
+	// Write to client_metrics table (not stream_health_metrics)
+	batch, err := h.clickhouse.PrepareBatch(ctx, `
+		INSERT INTO client_metrics (
+			timestamp, tenant_id, internal_name, session_id, node_id, protocol, host,
+			connection_time, bandwidth_in, bandwidth_out, bytes_downloaded, bytes_uploaded,
+			packets_sent, packets_lost, packets_retransmitted, connection_quality
+		)`)
+	if err != nil {
+		h.logger.Errorf("Failed to prepare ClickHouse batch: %v", err)
+		return err
+	}
+
+	if err := batch.Append(
+		event.Timestamp,
+		getTenantIDFromKafkaEvent(*event),
+		clientLifecycle.InternalName,
+		clientLifecycle.SessionID,
+		clientLifecycle.NodeID,
+		clientLifecycle.Protocol,
+		clientLifecycle.Host,
+		clientLifecycle.ConnectionTime,
+		uint64(clientLifecycle.BandwidthIn),
+		uint64(clientLifecycle.BandwidthOut),
+		uint64(clientLifecycle.BytesDown),
+		uint64(clientLifecycle.BytesUp),
+		uint64(clientLifecycle.PacketsSent),
+		uint64(clientLifecycle.PacketsLost),
+		uint64(clientLifecycle.PacketsRetransmitted),
+		connectionQuality,
+	); err != nil {
+		h.logger.Errorf("Failed to append to ClickHouse batch: %v", err)
+		return err
+	}
+
+	if err := batch.Send(); err != nil {
+		h.logger.Errorf("Failed to send ClickHouse batch: %v", err)
 		return err
 	}
 
@@ -496,10 +740,18 @@ func (h *AnalyticsHandler) processClientLifecycle(ctx context.Context, event kaf
 }
 
 // processNodeLifecycle handles node health and resource metrics
-func (h *AnalyticsHandler) processNodeLifecycle(ctx context.Context, event kafka.AnalyticsEvent) error {
+func (h *AnalyticsHandler) processNodeLifecycle(ctx context.Context, event *validation.KafkaEvent) error {
 	h.logger.Infof("Processing node lifecycle event: %s", event.EventID)
 
-	// Write to ClickHouse for time-series analysis
+	// Get typed node lifecycle payload
+	if event.Data.NodeLifecycle == nil {
+		h.logger.Warnf("No node lifecycle data in event: %s", event.EventID)
+		return nil
+	}
+
+	nodeLifecycle := event.Data.NodeLifecycle
+
+	// Write to ClickHouse for time-series analysis using typed data
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO node_metrics (
 			timestamp, tenant_id, node_id, cpu_usage, ram_max, ram_current,
@@ -512,15 +764,15 @@ func (h *AnalyticsHandler) processNodeLifecycle(ctx context.Context, event kafka
 
 	if err := batch.Append(
 		event.Timestamp,
-		getTenantIDFromEvent(event),
-		event.Data["node_id"],
-		convertToFloat32(event.Data["cpu_usage"]),
-		convertToInt64(event.Data["ram_max"]),
-		convertToInt64(event.Data["ram_current"]),
-		convertToInt64(event.Data["up_speed"]),
-		convertToInt64(event.Data["down_speed"]),
-		convertToInt(event.Data["stream_count"]),
-		event.Data["is_healthy"],
+		getTenantIDFromKafkaEvent(*event),
+		nodeLifecycle.NodeID,
+		float32(nodeLifecycle.CPUUsage),
+		int64(nodeLifecycle.RAMMax),
+		int64(nodeLifecycle.RAMCurrent),
+		int64(nodeLifecycle.BandwidthUp),   // UpSpeed -> BandwidthUp
+		int64(nodeLifecycle.BandwidthDown), // DownSpeed -> BandwidthDown
+		int(nodeLifecycle.ActiveStreams),   // StreamCount -> ActiveStreams
+		nodeLifecycle.IsHealthy,
 	); err != nil {
 		h.logger.Errorf("Failed to append to ClickHouse batch: %v", err)
 		return err
@@ -535,105 +787,169 @@ func (h *AnalyticsHandler) processNodeLifecycle(ctx context.Context, event kafka
 }
 
 // processStreamBuffer handles STREAM_BUFFER webhook events with rich health metrics
-func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event kafka.AnalyticsEvent) error {
+func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event *validation.KafkaEvent) error {
 	h.logger.Infof("Processing stream buffer event: %s", event.EventID)
 
-	// Write to stream_events for historical record
-	batch, err := h.clickhouse.PrepareBatch(ctx, `
+	// Get typed stream lifecycle payload (StreamBuffer events use this payload type)
+	if event.Data.StreamLifecycle == nil {
+		h.logger.Warnf("No stream lifecycle data in stream buffer event: %s", event.EventID)
+		return nil
+	}
+
+	streamLifecycle := event.Data.StreamLifecycle
+
+	// Write to ClickHouse stream_events table
+	streamEventsBatch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO stream_events (
-			timestamp, event_id, tenant_id, internal_name, event_type, status, node_id, event_data
+			timestamp, event_id, tenant_id, internal_name, node_id, event_type,
+			buffer_state, health_score, has_issues, issues_description, track_count, 
+			quality_tier, primary_width, primary_height, primary_fps, event_data
 		)`)
 	if err != nil {
-		return err
-	}
-	if err := appendAndSend(batch, event.Timestamp, event.EventID, getTenantIDFromEvent(event), *event.InternalName, "stream-buffer", event.Data["status"], event.Data["node_id"], marshalEventData(event.Data)); err != nil {
+		h.logger.Errorf("Failed to prepare stream_events batch: %v", err)
 		return err
 	}
 
-	// Write rich health metrics to stream_health_metrics table
+	if err := streamEventsBatch.Append(
+		event.Timestamp,
+		event.EventID,
+		getTenantIDFromKafkaEvent(*event),
+		streamLifecycle.InternalName,
+		streamLifecycle.NodeID,
+		"stream-buffer",
+		streamLifecycle.BufferState,
+		streamLifecycle.HealthScore,
+		streamLifecycle.HasIssues,
+		streamLifecycle.IssuesDesc,
+		streamLifecycle.TrackCount,
+		streamLifecycle.QualityTier,
+		streamLifecycle.PrimaryWidth,
+		streamLifecycle.PrimaryHeight,
+		streamLifecycle.PrimaryFPS,
+		marshalTypedEventData(streamLifecycle),
+	); err != nil {
+		h.logger.Errorf("Failed to append to stream_events batch: %v", err)
+		return err
+	}
+
+	if err := streamEventsBatch.Send(); err != nil {
+		h.logger.Errorf("Failed to send stream_events batch: %v", err)
+		return err
+	}
+
+	// ALSO write to stream_health_metrics table for detailed health tracking and rebuffering_events MV
 	healthBatch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO stream_health_metrics (
-			timestamp, tenant_id, internal_name, node_id,
-			bitrate, fps, width, height, codec, profile,
-			buffer_state, frame_jitter_ms, keyframe_stability_ms,
-			issues_description, has_issues, health_score, track_count,
-			frame_ms_max, frame_ms_min, frames_max, frames_min,
-			keyframe_ms_max, keyframe_ms_min, packets_sent, packets_lost,
-			audio_channels, audio_sample_rate, audio_codec, audio_bitrate
+			timestamp, tenant_id, internal_name, node_id, buffer_state, health_score, 
+			has_issues, issues_description, track_count, frame_jitter_ms, keyframe_stability_ms,
+			codec, bitrate, fps, width, height, frame_ms_max, frame_ms_min, 
+			frames_max, frames_min, keyframe_ms_max
 		)`)
 	if err != nil {
-		h.logger.Errorf("Failed to prepare health metrics batch: %v", err)
+		h.logger.Errorf("Failed to prepare stream_health_metrics batch: %v", err)
 		return err
 	}
 
 	if err := healthBatch.Append(
 		event.Timestamp,
-		getTenantIDFromEvent(event),
-		*event.InternalName,
-		event.Data["node_id"],
-		convertToInt(event.Data["bitrate"]),
-		convertToFloat32(event.Data["fps"]),
-		convertToInt(event.Data["width"]),
-		convertToInt(event.Data["height"]),
-		event.Data["codec"],
-		event.Data["profile"],
-		event.Data["buffer_state"],
-		convertToFloat32(event.Data["frame_jitter_ms"]),
-		convertToFloat32(event.Data["keyframe_stability_ms"]),
-		event.Data["issues_description"],
-		convertToInt(event.Data["has_issues"]),
-		convertToFloat32(event.Data["health_score"]),
-		convertToInt(event.Data["track_count"]),
-		convertToFloat32(event.Data["frame_ms_max"]),
-		convertToFloat32(event.Data["frame_ms_min"]),
-		convertToInt(event.Data["frames_max"]),
-		convertToInt(event.Data["frames_min"]),
-		convertToFloat32(event.Data["keyframe_ms_max"]),
-		convertToFloat32(event.Data["keyframe_ms_min"]),
-		convertToInt64(event.Data["packets_sent"]),
-		convertToInt64(event.Data["packets_lost"]),
-		convertToInt(event.Data["audio_channels"]),
-		convertToInt(event.Data["audio_sample_rate"]),
-		event.Data["audio_codec"],
-		convertToInt(event.Data["audio_bitrate"]),
+		getTenantIDFromKafkaEvent(*event),
+		streamLifecycle.InternalName,
+		streamLifecycle.NodeID,
+		streamLifecycle.BufferState,
+		streamLifecycle.HealthScore,
+		streamLifecycle.HasIssues,
+		streamLifecycle.IssuesDesc,
+		streamLifecycle.TrackCount,
+		streamLifecycle.FrameJitterMS,
+		streamLifecycle.KeyFrameStabilityMS,
+		streamLifecycle.PrimaryCodec,
+		streamLifecycle.PrimaryBitrate,
+		streamLifecycle.PrimaryFPS,
+		streamLifecycle.PrimaryWidth,
+		streamLifecycle.PrimaryHeight,
+		streamLifecycle.FrameMSMax,
+		streamLifecycle.FrameMSMin,
+		streamLifecycle.FramesMax,
+		streamLifecycle.FramesMin,
+		streamLifecycle.KeyFrameIntervalMS,
 	); err != nil {
-		h.logger.Errorf("Failed to append health metrics: %v", err)
+		h.logger.Errorf("Failed to append to stream_health_metrics batch: %v", err)
 		return err
 	}
 
 	if err := healthBatch.Send(); err != nil {
-		h.logger.Errorf("Failed to send health metrics batch: %v", err)
+		h.logger.Errorf("Failed to send stream_health_metrics batch: %v", err)
 		return err
 	}
 
-	h.logger.Debugf("Successfully processed stream buffer health metrics for stream: %s", *event.InternalName)
+	h.logger.Debugf("Successfully processed stream buffer event for stream: %s (written to both stream_events and stream_health_metrics)", streamLifecycle.InternalName)
 	return nil
 }
 
 // processStreamEnd handles STREAM_END webhook events
-func (h *AnalyticsHandler) processStreamEnd(ctx context.Context, ydb database.PostgresConn, event kafka.AnalyticsEvent) error {
-	batch, err := h.clickhouse.PrepareBatch(ctx, `
-                INSERT INTO stream_events (
-                        timestamp, event_id, tenant_id, internal_name, event_type, status, node_id, event_data
-                )`)
-	if err != nil {
-		return err
-	}
-	if err := appendAndSend(batch, event.Timestamp, event.EventID, getTenantIDFromEvent(event), *event.InternalName, "stream-end", event.Data["status"], event.Data["node_id"], marshalEventData(event.Data)); err != nil {
-		return err
-	}
-	if err := h.reduceStreamEnd(ctx, ydb, event); err != nil {
-		h.logger.Errorf("Failed to reduce stream end: %v", err)
-	}
-	return nil
-}
+func (h *AnalyticsHandler) processStreamEnd(ctx context.Context, ydb database.PostgresConn, event *validation.KafkaEvent) error {
+	h.logger.Infof("Processing stream end event: %s", event.EventID)
 
-func (h *AnalyticsHandler) reduceStreamLifecycle(ctx context.Context, ydb database.PostgresConn, event kafka.AnalyticsEvent) error {
-	if event.InternalName == nil {
+	// Get typed stream lifecycle payload (StreamEnd events use this payload type)
+	if event.Data.StreamLifecycle == nil {
+		h.logger.Warnf("No stream lifecycle data in stream end event: %s", event.EventID)
 		return nil
 	}
 
-	status, _ := event.Data["status"].(string)
+	streamLifecycle := event.Data.StreamLifecycle
+
+	// Write to ClickHouse stream_events table using ONLY end-specific fields
+	batch, err := h.clickhouse.PrepareBatch(ctx, `
+		INSERT INTO stream_events (
+			timestamp, event_id, tenant_id, internal_name, node_id, event_type,
+			downloaded_bytes, uploaded_bytes, total_viewers, total_inputs, total_outputs, 
+			viewer_seconds, event_data
+		)`)
+	if err != nil {
+		h.logger.Errorf("Failed to prepare ClickHouse batch: %v", err)
+		return err
+	}
+
+	if err := batch.Append(
+		event.Timestamp,
+		event.EventID,
+		getTenantIDFromKafkaEvent(*event),
+		streamLifecycle.InternalName,
+		streamLifecycle.NodeID,
+		"stream-end",
+		streamLifecycle.DownloadedBytes,
+		streamLifecycle.UploadedBytes,
+		streamLifecycle.TotalViewers,
+		streamLifecycle.TotalInputs,
+		streamLifecycle.TotalOutputs,
+		streamLifecycle.ViewerSeconds,
+		marshalTypedEventData(streamLifecycle),
+	); err != nil {
+		h.logger.Errorf("Failed to append to ClickHouse batch: %v", err)
+		return err
+	}
+
+	if err := batch.Send(); err != nil {
+		h.logger.Errorf("Failed to send ClickHouse batch: %v", err)
+		return err
+	}
+
+	// Also update PostgreSQL reduced state
+	if err := h.reduceStreamEnd(ctx, ydb, *event); err != nil {
+		h.logger.Errorf("Failed to reduce stream end: %v", err)
+	}
+
+	h.logger.Debugf("Successfully processed stream end event for stream: %s", streamLifecycle.InternalName)
+	return nil
+}
+
+func (h *AnalyticsHandler) reduceStreamLifecycle(ctx context.Context, ydb database.PostgresConn, event validation.KafkaEvent) error {
+	if event.Data.StreamLifecycle == nil {
+		return nil
+	}
+
+	streamLifecycle := event.Data.StreamLifecycle
+	status := streamLifecycle.Status
 	var startTime interface{}
 	switch status {
 	case "start", "started", "ingest_start", "live":
@@ -642,38 +958,44 @@ func (h *AnalyticsHandler) reduceStreamLifecycle(ctx context.Context, ydb databa
 		startTime = nil
 	}
 
-	// Extract metrics from detailed stream lifecycle events (from Prometheus monitor)
-	source, _ := event.Data["source"].(string)
-	if source == "mistserver_api" {
-		// This is a detailed event with actual metrics data
-		nodeID, _ := event.Data["node_id"].(string)
-		viewers := convertToInt(event.Data["viewers"])
-		clients := convertToInt(event.Data["clients"])
-		trackCount := convertToInt(event.Data["track_count"])
-		upBytes := convertToInt64(event.Data["bandwidth_in"])
-		downBytes := convertToInt64(event.Data["bandwidth_out"])
-		packetsSent := convertToInt64(event.Data["packets_sent"])
-		packetsLost := convertToInt64(event.Data["packets_lost"])
-		inputs := convertToInt(event.Data["inputs"])
-		outputs := convertToInt(event.Data["outputs"])
+	// Extract metrics from detailed stream lifecycle events using typed data
+	if event.Data.StreamLifecycle != nil {
+		// Use available typed data from StreamLifecyclePayload
+		streamLifecycle := event.Data.StreamLifecycle
+		nodeID := streamLifecycle.NodeID
+		viewers := streamLifecycle.TotalViewers
+		trackCount := streamLifecycle.TrackCount
+		upBytes := streamLifecycle.UploadedBytes
+		downBytes := streamLifecycle.DownloadedBytes
+		inputs := streamLifecycle.TotalInputs
+		outputs := streamLifecycle.TotalOutputs
 
 		// Calculate bitrate from bandwidth (convert bytes to kbps)
-		var avgBitrate float64
+		var avgBitrateKbps int
 		if upBytes > 0 {
-			avgBitrate = float64(upBytes*8) / 1000 // Convert bytes to kbps
+			avgBitrateKbps = int((upBytes * 8) / 1000) // Convert bytes to kbps, round down
+		}
+
+		// Map Mist status strictly to enum when it matches known values
+		var mistStatus interface{}
+		switch status {
+		case "offline", "init", "boot", "wait", "ready", "shutdown", "invalid":
+			mistStatus = status
+		default:
+			mistStatus = nil
 		}
 
 		_, err := ydb.ExecContext(ctx, `
 			INSERT INTO stream_analytics (
-				tenant_id, internal_name, status, session_start_time, 
+				tenant_id, internal_name, stream_id, status, mist_status, session_start_time, 
 				current_viewers, total_connections, track_count,
 				bandwidth_in, bandwidth_out, upbytes, downbytes,
-				packets_sent, packets_lost, inputs, outputs,
-				avg_bitrate, primary_node_id, last_updated
+				inputs, outputs, bitrate_kbps, node_id, last_updated
 			)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+			VALUES ($1, $2, NULLIF($3,'')::uuid, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
 			ON CONFLICT (tenant_id, internal_name) DO UPDATE SET
 				status = EXCLUDED.status,
+				mist_status = COALESCE(EXCLUDED.mist_status, stream_analytics.mist_status),
 				session_start_time = COALESCE(stream_analytics.session_start_time, EXCLUDED.session_start_time),
 				current_viewers = EXCLUDED.current_viewers,
 				peak_viewers = GREATEST(stream_analytics.peak_viewers, EXCLUDED.current_viewers),
@@ -683,92 +1005,87 @@ func (h *AnalyticsHandler) reduceStreamLifecycle(ctx context.Context, ydb databa
 				bandwidth_out = EXCLUDED.bandwidth_out,
 				upbytes = EXCLUDED.upbytes,
 				downbytes = EXCLUDED.downbytes,
-				packets_sent = EXCLUDED.packets_sent,
-				packets_lost = EXCLUDED.packets_lost,
 				inputs = EXCLUDED.inputs,
 				outputs = EXCLUDED.outputs,
-				avg_bitrate = EXCLUDED.avg_bitrate,
-				primary_node_id = EXCLUDED.primary_node_id,
+				bitrate_kbps = EXCLUDED.bitrate_kbps,
+				node_id = EXCLUDED.node_id,
 				last_updated = EXCLUDED.last_updated
-		`, getTenantIDFromEvent(event), *event.InternalName, status, startTime,
-			viewers, clients, trackCount, upBytes, downBytes, upBytes, downBytes,
-			packetsSent, packetsLost, inputs, outputs, avgBitrate, nodeID, event.Timestamp)
+		`, getTenantIDFromKafkaEvent(event), streamLifecycle.InternalName, streamLifecycle.InternalName, status, mistStatus, startTime,
+			viewers, viewers, trackCount, downBytes, upBytes, upBytes, downBytes,
+			inputs, outputs, avgBitrateKbps, nodeID, event.Timestamp)
 		return err
 	} else {
-		// Basic lifecycle event without detailed metrics
-		_, err := ydb.ExecContext(ctx, `
-			INSERT INTO stream_analytics (tenant_id, internal_name, status, session_start_time, last_updated)
-			VALUES ($1, $2, $3, $4, $5)
-			ON CONFLICT (tenant_id, internal_name) DO UPDATE SET
-				status = EXCLUDED.status,
-				session_start_time = COALESCE(stream_analytics.session_start_time, EXCLUDED.session_start_time),
-				last_updated = EXCLUDED.last_updated
-		`, getTenantIDFromEvent(event), *event.InternalName, status, startTime, event.Timestamp)
-		return err
+		// No StreamLifecycle data available - this shouldn't happen for stream lifecycle events
+		h.logger.Warnf("StreamLifecycle event with no StreamLifecycle data: %s", event.EventID)
+		return nil
 	}
 }
 
-func (h *AnalyticsHandler) reduceUserConnection(ctx context.Context, ydb database.PostgresConn, event kafka.AnalyticsEvent) error {
-	if event.InternalName == nil {
+func (h *AnalyticsHandler) reduceUserConnection(ctx context.Context, ydb database.PostgresConn, event validation.KafkaEvent) error {
+	if event.Data.UserConnection == nil {
 		return nil
 	}
-	action, _ := event.Data["action"].(string)
-	tenantID := getTenantIDFromEvent(event)
-	internal := *event.InternalName
-	upBytes := convertToInt64(event.Data["up_bytes"])
-	downBytes := convertToInt64(event.Data["down_bytes"])
-	duration := convertToInt(event.Data["seconds_connected"])
+
+	userConn := event.Data.UserConnection
+	action := userConn.Action
+	tenantID := getTenantIDFromKafkaEvent(event)
+	internal := userConn.InternalName // From embedded periscope.ConnectionEvent
+	upBytes := int64(userConn.UploadedBytes)
+	downBytes := int64(userConn.DownloadedBytes)
+	duration := int(userConn.SecondsConnected)
 
 	switch action {
 	case "connect":
 		_, err := ydb.ExecContext(ctx, `
-                        INSERT INTO stream_analytics (tenant_id, internal_name, current_viewers, peak_viewers, total_connections, last_updated)
-                        VALUES ($1,$2,1,1,1,$3)
+                        INSERT INTO stream_analytics (tenant_id, internal_name, stream_id, current_viewers, peak_viewers, total_connections, last_updated)
+                        VALUES ($1,$2,NULLIF($3,'')::uuid,1,1,1,$4)
                         ON CONFLICT (tenant_id, internal_name) DO UPDATE SET
                                 current_viewers = stream_analytics.current_viewers + 1,
                                 peak_viewers = GREATEST(stream_analytics.peak_viewers, stream_analytics.current_viewers + 1),
                                 total_connections = stream_analytics.total_connections + 1,
                                 last_updated = EXCLUDED.last_updated
-                `, tenantID, internal, event.Timestamp)
+                `, tenantID, internal, internal, event.Timestamp)
 		return err
 	case "disconnect":
 		_, err := ydb.ExecContext(ctx, `
-                        INSERT INTO stream_analytics (tenant_id, internal_name, last_updated)
-                        VALUES ($1,$2,$3)
+                        INSERT INTO stream_analytics (tenant_id, internal_name, stream_id, last_updated)
+                        VALUES ($1,$2,NULLIF($3,'')::uuid,$4)
                         ON CONFLICT (tenant_id, internal_name) DO UPDATE SET
                                 current_viewers = GREATEST(stream_analytics.current_viewers - 1, 0),
-                                total_session_duration = stream_analytics.total_session_duration + $4,
-                                upbytes = stream_analytics.upbytes + $5,
-                                downbytes = stream_analytics.downbytes + $6,
-                                bandwidth_in = stream_analytics.bandwidth_in + $5,
-                                bandwidth_out = stream_analytics.bandwidth_out + $6,
+                                total_session_duration = stream_analytics.total_session_duration + $5,
+                                upbytes = stream_analytics.upbytes + $6,
+                                downbytes = stream_analytics.downbytes + $7,
+                                bandwidth_in = stream_analytics.bandwidth_in + $6,
+                                bandwidth_out = stream_analytics.bandwidth_out + $7,
                                 last_updated = EXCLUDED.last_updated
-                `, tenantID, internal, event.Timestamp, duration, upBytes, downBytes)
+                `, tenantID, internal, internal, event.Timestamp, duration, upBytes, downBytes)
 		return err
 	default:
 		_, err := ydb.ExecContext(ctx, `
-                        INSERT INTO stream_analytics (tenant_id, internal_name, last_updated)
-                        VALUES ($1,$2,$3)
+                        INSERT INTO stream_analytics (tenant_id, internal_name, stream_id, last_updated)
+                        VALUES ($1,$2,NULLIF($3,'')::uuid,$4)
                         ON CONFLICT (tenant_id, internal_name) DO UPDATE SET
                                 last_updated = EXCLUDED.last_updated
-                `, tenantID, internal, event.Timestamp)
+                `, tenantID, internal, internal, event.Timestamp)
 		return err
 	}
 }
 
-func (h *AnalyticsHandler) reduceStreamEnd(ctx context.Context, ydb database.PostgresConn, event kafka.AnalyticsEvent) error {
-	if event.InternalName == nil {
+func (h *AnalyticsHandler) reduceStreamEnd(ctx context.Context, ydb database.PostgresConn, event validation.KafkaEvent) error {
+	if event.Data.StreamLifecycle == nil {
 		return nil
 	}
-	status, _ := event.Data["status"].(string)
+
+	streamLifecycle := event.Data.StreamLifecycle
+	status := streamLifecycle.Status
 	_, err := ydb.ExecContext(ctx, `
-                INSERT INTO stream_analytics (tenant_id, internal_name, status, session_end_time, last_updated)
-                VALUES ($1,$2,$3,$4,$4)
+                INSERT INTO stream_analytics (tenant_id, internal_name, stream_id, status, session_end_time, last_updated)
+                VALUES ($1,$2,NULLIF($3,'')::uuid,$4,$5,$5)
                 ON CONFLICT (tenant_id, internal_name) DO UPDATE SET
                         status = EXCLUDED.status,
                         session_end_time = EXCLUDED.session_end_time,
                         last_updated = EXCLUDED.last_updated
-        `, getTenantIDFromEvent(event), *event.InternalName, status, event.Timestamp)
+        `, getTenantIDFromKafkaEvent(event), streamLifecycle.InternalName, streamLifecycle.InternalName, status, event.Timestamp)
 	return err
 }
 
@@ -782,102 +1099,19 @@ func appendAndSend(batch interface {
 	return batch.Send()
 }
 
-// writeStreamMetrics writes time-series metrics to ClickHouse
-func (h *AnalyticsHandler) writeStreamMetrics(ctx context.Context, event kafka.AnalyticsEvent) error {
-	batch, err := h.clickhouse.PrepareBatch(ctx, `
-		INSERT INTO stream_health_metrics (
-			timestamp, tenant_id, internal_name, node_id,
-			bitrate, fps, buffer_health, packets_sent, packets_lost, packets_retransmitted,
-			bandwidth_in, bandwidth_out
-		)`)
-	if err != nil {
-		h.logger.Errorf("Failed to prepare ClickHouse batch: %v", err)
-		return err
-	}
-
-	if err := batch.Append(
-		event.Timestamp,
-		getTenantIDFromEvent(event),
-		*event.InternalName,
-		event.Data["node_id"],
-		convertToInt(event.Data["bitrate"]),
-		convertToFloat64(event.Data["fps"]),
-		convertToFloat32(event.Data["buffer_health"]),
-		convertToInt64(event.Data["packets_sent"]),
-		convertToInt64(event.Data["packets_lost"]),
-		convertToInt64(event.Data["packets_retransmitted"]),
-		convertToInt64(event.Data["bandwidth_in"]),
-		convertToInt64(event.Data["bandwidth_out"]),
-	); err != nil {
-		h.logger.Errorf("Failed to append to ClickHouse batch: %v", err)
-		return err
-	}
-
-	if err := batch.Send(); err != nil {
-		h.logger.Errorf("Failed to send ClickHouse batch: %v", err)
-		return err
-	}
-
-	return nil
-}
-
-// writeViewerMetric writes a single viewer_metrics sample derived from client-lifecycle
-func (h *AnalyticsHandler) writeViewerMetric(ctx context.Context, event kafka.AnalyticsEvent) error {
-	batch, err := h.clickhouse.PrepareBatch(ctx, `
-		INSERT INTO viewer_metrics (
-			timestamp, tenant_id, internal_name,
-			viewer_count, connection_type, node_id,
-			country_code, city, latitude, longitude,
-			connection_quality, buffer_health
-		)`)
-	if err != nil {
-		return err
-	}
-
-	// Compute connection_quality = 1 - (packets_lost/packets_sent) when possible
-	var quality float64
-	ps := convertToInt64(event.Data["packets_sent"])
-	pl := convertToInt64(event.Data["packets_lost"])
-	if ps > 0 {
-		loss := float64(pl) / float64(ps)
-		if loss < 0 {
-			loss = 0
-		}
-		if loss > 1 {
-			loss = 1
-		}
-		quality = 1 - loss
-	} else {
-		quality = 0
-	}
-
-	// Buffer health
-	bh := convertToFloat32(event.Data["buffer_health"]) // may be nil, driver handles NULL
-
-	if err := batch.Append(
-		event.Timestamp,
-		getTenantIDFromEvent(event),
-		*event.InternalName,
-		uint32(1),
-		event.Data["protocol"],
-		event.Data["node_id"],
-		"",
-		"",
-		float64(0),
-		float64(0),
-		float32(quality),
-		bh,
-	); err != nil {
-		return err
-	}
-	return batch.Send()
-}
-
 // processTrackList handles track list events with quality metrics
-func (h *AnalyticsHandler) processTrackList(ctx context.Context, event kafka.AnalyticsEvent) error {
+func (h *AnalyticsHandler) processTrackList(ctx context.Context, event *validation.KafkaEvent) error {
 	h.logger.Infof("Processing track list event: %s", event.EventID)
 
-	// Write to track_list_events with enhanced quality metrics
+	// Get typed track list payload
+	if event.Data.TrackList == nil {
+		h.logger.Warnf("No track list data in event: %s", event.EventID)
+		return nil
+	}
+
+	trackList := event.Data.TrackList
+
+	// Write to track_list_events with enhanced quality metrics using typed data
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO track_list_events (
 			timestamp, event_id, tenant_id, internal_name, node_id, 
@@ -891,31 +1125,26 @@ func (h *AnalyticsHandler) processTrackList(ctx context.Context, event kafka.Ana
 		return err
 	}
 
-	trackList := ""
-	if v, ok := event.Data["track_list"].(string); ok {
-		trackList = v
-	}
-
 	if err := batch.Append(
 		event.Timestamp,
 		event.EventID,
-		getTenantIDFromEvent(event),
-		*event.InternalName,
-		event.Data["node_id"],
-		trackList,
-		convertToInt(event.Data["track_count"]),
-		convertToInt(event.Data["video_track_count"]),
-		convertToInt(event.Data["audio_track_count"]),
-		convertToInt(event.Data["primary_width"]),
-		convertToInt(event.Data["primary_height"]),
-		convertToFloat32(event.Data["primary_fps"]),
-		event.Data["primary_video_codec"],
-		convertToInt(event.Data["primary_video_bitrate"]),
-		event.Data["quality_tier"],
-		convertToInt(event.Data["primary_audio_channels"]),
-		convertToInt(event.Data["primary_audio_sample_rate"]),
-		event.Data["primary_audio_codec"],
-		convertToInt(event.Data["primary_audio_bitrate"]),
+		getTenantIDFromKafkaEvent(*event),
+		trackList.InternalName,
+		trackList.NodeID,
+		trackList.TrackListJSON,
+		trackList.TrackCount,
+		trackList.VideoTrackCount,
+		trackList.AudioTrackCount,
+		trackList.PrimaryWidth,
+		trackList.PrimaryHeight,
+		float32(trackList.PrimaryFPS),
+		trackList.PrimaryVideoCodec,
+		trackList.PrimaryVideoBitrate,
+		trackList.QualityTier,
+		trackList.PrimaryAudioChannels,
+		trackList.PrimaryAudioSampleRate,
+		trackList.PrimaryAudioCodec,
+		trackList.PrimaryAudioBitrate,
 	); err != nil {
 		h.logger.Errorf("Failed to append track list data: %v", err)
 		return err
@@ -932,56 +1161,78 @@ func (h *AnalyticsHandler) processTrackList(ctx context.Context, event kafka.Ana
 		// Don't fail the main operation for this
 	}
 
-	h.logger.Debugf("Successfully processed track list for stream: %s", *event.InternalName)
+	h.logger.Debugf("Successfully processed track list for stream: %s", trackList.InternalName)
 	return nil
 }
 
 // processBandwidthThreshold handles bandwidth threshold events
-func (h *AnalyticsHandler) processBandwidthThreshold(ctx context.Context, event kafka.AnalyticsEvent) error {
+func (h *AnalyticsHandler) processBandwidthThreshold(ctx context.Context, event *validation.KafkaEvent) error {
 	h.logger.Infof("Processing bandwidth threshold event: %s", event.EventID)
 
-	// Write to stream_events for threshold alerts
+	// Get typed bandwidth threshold payload
+	if event.Data.BandwidthThreshold == nil {
+		h.logger.Warnf("No bandwidth threshold data in event: %s", event.EventID)
+		return nil
+	}
+
+	bandwidthThreshold := event.Data.BandwidthThreshold
+
+	// Write to stream_events for threshold alerts using typed data
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO stream_events (
-			timestamp, event_id, tenant_id, internal_name, event_type, status, node_id, event_data
+			timestamp, event_id, tenant_id, internal_name, event_type, node_id, 
+			current_bytes_per_sec, threshold_exceeded, threshold_value, event_data
 		)`)
 	if err != nil {
 		h.logger.Errorf("Failed to prepare bandwidth threshold batch: %v", err)
 		return err
 	}
 
-	if err := appendAndSend(batch,
+	if err := batch.Append(
 		event.Timestamp,
 		event.EventID,
-		getTenantIDFromEvent(event),
-		*event.InternalName,
+		getTenantIDFromKafkaEvent(*event),
+		bandwidthThreshold.InternalName,
 		"bandwidth-threshold",
-		event.Data["threshold_type"],
-		event.Data["node_id"],
-		marshalEventData(event.Data)); err != nil {
-		h.logger.Errorf("Failed to write bandwidth threshold event: %v", err)
+		bandwidthThreshold.NodeID,
+		bandwidthThreshold.CurrentBytesPerSec,
+		bandwidthThreshold.ThresholdExceeded,
+		bandwidthThreshold.ThresholdValue,
+		marshalTypedEventData(bandwidthThreshold),
+	); err != nil {
+		h.logger.Errorf("Failed to append bandwidth threshold event: %v", err)
 		return err
 	}
 
-	h.logger.Debugf("Successfully processed bandwidth threshold for stream: %s", *event.InternalName)
+	if err := batch.Send(); err != nil {
+		h.logger.Errorf("Failed to send bandwidth threshold batch: %v", err)
+		return err
+	}
+
+	h.logger.Debugf("Successfully processed bandwidth threshold for stream: %s", bandwidthThreshold.InternalName)
 	return nil
 }
 
 // detectQualityChanges detects and records quality tier changes
-func (h *AnalyticsHandler) detectQualityChanges(ctx context.Context, event kafka.AnalyticsEvent) error {
+func (h *AnalyticsHandler) detectQualityChanges(ctx context.Context, event *validation.KafkaEvent) error {
 	// For now, we'll record every track list event as a potential change
 	// In a full implementation, we'd query the previous state and compare
-	currentQuality := event.Data["quality_tier"]
-	currentCodec := event.Data["primary_video_codec"]
+
+	// Get typed track list payload
+	if event.Data.TrackList == nil {
+		return nil // No track list data to process
+	}
+
+	trackList := event.Data.TrackList
+	currentQuality := trackList.QualityTier
+	currentCodec := trackList.PrimaryVideoCodec
 	currentResolution := ""
-	if w, ok := event.Data["primary_width"]; ok {
-		if h, ok := event.Data["primary_height"]; ok {
-			currentResolution = fmt.Sprintf("%dx%d", convertToInt(w), convertToInt(h))
-		}
+	if trackList.PrimaryWidth > 0 && trackList.PrimaryHeight > 0 {
+		currentResolution = fmt.Sprintf("%dx%d", trackList.PrimaryWidth, trackList.PrimaryHeight)
 	}
 
 	// Simple change detection - record when we have quality info
-	if currentQuality != nil || currentCodec != nil {
+	if currentQuality != "" || currentCodec != "" {
 		batch, err := h.clickhouse.PrepareBatch(ctx, `
 			INSERT INTO track_change_events (
 				timestamp, event_id, tenant_id, internal_name, node_id,
@@ -994,11 +1245,11 @@ func (h *AnalyticsHandler) detectQualityChanges(ctx context.Context, event kafka
 		if err := batch.Append(
 			event.Timestamp,
 			event.EventID,
-			getTenantIDFromEvent(event),
-			*event.InternalName,
-			event.Data["node_id"],
+			getTenantIDFromKafkaEvent(*event),
+			trackList.InternalName,
+			trackList.NodeID,
 			"track_update", // Generic change type
-			event.Data["track_list"],
+			trackList.TrackListJSON,
 			currentQuality,
 			currentResolution,
 			currentCodec,
@@ -1014,17 +1265,61 @@ func (h *AnalyticsHandler) detectQualityChanges(ctx context.Context, event kafka
 	return nil
 }
 
-// getTenantIDFromEvent extracts tenant_id from event if present
-func getTenantIDFromEvent(event kafka.AnalyticsEvent) string {
-	if event.TenantID != "" {
-		return event.TenantID
-	}
-	if event.Data != nil {
-		if v, ok := event.Data["tenant_id"].(string); ok && v != "" {
-			return v
+// getTenantIDFromKafkaEvent extracts tenant_id from typed KafkaEvent
+func getTenantIDFromKafkaEvent(event validation.KafkaEvent) string {
+	// Extract tenant ID based on event type from typed payload
+	switch validation.EventType(event.EventType) {
+	case validation.EventStreamIngest:
+		if event.Data.StreamIngest != nil {
+			return event.Data.StreamIngest.TenantID
+		}
+	case validation.EventStreamView:
+		if event.Data.StreamView != nil {
+			return event.Data.StreamView.TenantID
+		}
+	case validation.EventStreamLifecycle:
+		if event.Data.StreamLifecycle != nil {
+			return event.Data.StreamLifecycle.TenantID
+		}
+	case validation.EventUserConnection:
+		if event.Data.UserConnection != nil {
+			return event.Data.UserConnection.TenantID
+		}
+	case validation.EventClientLifecycle:
+		if event.Data.ClientLifecycle != nil {
+			return event.Data.ClientLifecycle.TenantID
+		}
+	case validation.EventTrackList:
+		if event.Data.TrackList != nil {
+			return event.Data.TrackList.TenantID
+		}
+	case validation.EventRecordingLifecycle:
+		if event.Data.Recording != nil {
+			return event.Data.Recording.TenantID
+		}
+	case validation.EventPushLifecycle:
+		if event.Data.PushLifecycle != nil {
+			return event.Data.PushLifecycle.TenantID
+		}
+	case validation.EventBandwidthThreshold:
+		if event.Data.BandwidthThreshold != nil {
+			return event.Data.BandwidthThreshold.TenantID
+		}
+	case validation.EventLoadBalancing:
+		if event.Data.LoadBalancing != nil {
+			return event.Data.LoadBalancing.TenantID
 		}
 	}
 	return "00000000-0000-0000-0000-000000000001"
+}
+
+// nilIfZero returns nil if the value is zero/empty, otherwise returns the value
+func nilIfZero[T comparable](value T) interface{} {
+	var zero T
+	if value == zero {
+		return nil
+	}
+	return value
 }
 
 // Utility functions for data conversion
@@ -1094,170 +1389,11 @@ func convertToFloat32(v interface{}) float32 {
 	return 0
 }
 
-func marshalEventData(m map[string]interface{}) string {
-	if m == nil {
+// marshalTypedEventData marshals any typed event data structure to JSON string
+func marshalTypedEventData(data interface{}) string {
+	if data == nil {
 		return "{}"
 	}
-	b, _ := json.Marshal(m)
+	b, _ := json.Marshal(data)
 	return string(b)
-}
-
-// extractHealthMetricsFromLifecycle extracts health metrics from stream-lifecycle events
-// that contain detailed health_data and track_details from the Prometheus monitor
-func (h *AnalyticsHandler) extractHealthMetricsFromLifecycle(ctx context.Context, event kafka.AnalyticsEvent) error {
-	// Only process events from the mistserver_api source (Prometheus monitor)
-	source, hasSource := event.Data["source"].(string)
-	if !hasSource || source != "mistserver_api" {
-		return nil // Skip events that aren't from the detailed monitor
-	}
-
-	// Check if this event has health_data and track_details
-	healthData, hasHealthData := event.Data["health_data"]
-	trackDetails, hasTrackDetails := event.Data["track_details"]
-
-	if !hasHealthData && !hasTrackDetails {
-		return nil // No health data to extract
-	}
-
-	h.logger.Debugf("Extracting health metrics from lifecycle event: %s", event.EventID)
-
-	// Prepare health metrics batch
-	healthBatch, err := h.clickhouse.PrepareBatch(ctx, `
-		INSERT INTO stream_health_metrics (
-			timestamp, tenant_id, internal_name, node_id,
-			bitrate, fps, width, height, buffer_size, buffer_used,
-			buffer_health, packets_sent, packets_lost, packets_retransmitted,
-			bandwidth_in, bandwidth_out, codec, profile, track_count,
-			gop_size, buffer_state, frame_jitter_ms, keyframe_stability_ms,
-			issues_description, has_issues, health_score,
-			frame_ms_max, frame_ms_min, frames_max, frames_min,
-			keyframe_ms_max, keyframe_ms_min,
-			audio_channels, audio_sample_rate, audio_codec, audio_bitrate
-		)`)
-	if err != nil {
-		h.logger.Errorf("Failed to prepare health metrics batch: %v", err)
-		return err
-	}
-
-	// Extract basic metrics from the event data
-	bitrate := convertToInt(event.Data["bandwidth_in"])
-	nodeID := ""
-	if nid, ok := event.Data["node_id"].(string); ok {
-		nodeID = nid
-	}
-
-	// Extract metrics from track_details if available
-	var primaryTrack map[string]interface{}
-	var trackCount int
-	if trackDetails != nil {
-		if tracks, ok := trackDetails.([]interface{}); ok {
-			trackCount = len(tracks)
-			// Get primary track (first video track or first track)
-			for _, track := range tracks {
-				if trackMap, ok := track.(map[string]interface{}); ok {
-					if trackType, hasType := trackMap["type"].(string); hasType && trackType == "video" {
-						primaryTrack = trackMap
-						break
-					}
-					if primaryTrack == nil {
-						primaryTrack = trackMap // Use first track if no video track found
-					}
-				}
-			}
-		}
-	}
-
-	// Extract video metrics from primary track
-	var width, height, gopSize int
-	var fps float32
-	var codec, profile string
-	var audioChannels, audioSampleRate, audioBitrate int
-	var audioCodec string
-
-	if primaryTrack != nil {
-		width = convertToInt(primaryTrack["width"])
-		height = convertToInt(primaryTrack["height"])
-		fps = convertToFloat32(primaryTrack["fps"])
-		if c, ok := primaryTrack["codec"].(string); ok {
-			codec = c
-		}
-		if trackType, hasType := primaryTrack["type"].(string); hasType && trackType == "video" {
-			bitrate = convertToInt(primaryTrack["bitrate_kbps"]) // Use track bitrate if available
-		}
-
-		// Audio metrics (if this is an audio track or has audio info)
-		if trackType, hasType := primaryTrack["type"].(string); hasType && trackType == "audio" {
-			audioChannels = convertToInt(primaryTrack["channels"])
-			audioSampleRate = convertToInt(primaryTrack["sample_rate"])
-			audioBitrate = convertToInt(primaryTrack["bitrate_kbps"])
-			if ac, ok := primaryTrack["codec"].(string); ok {
-				audioCodec = ac
-			}
-		}
-	}
-
-	// Extract health score and buffer state
-	var healthScore float32
-	bufferState := "unknown"
-	var hasIssues int
-
-	if healthData != nil {
-		if hd, ok := healthData.(map[string]interface{}); ok {
-			healthScore = convertToFloat32(hd["health_score"])
-			if state, ok := hd["buffer_state"].(string); ok {
-				bufferState = state
-			}
-			hasIssues = convertToInt(hd["has_issues"])
-		}
-	}
-
-	if err := healthBatch.Append(
-		event.Timestamp,
-		getTenantIDFromEvent(event),
-		*event.InternalName,
-		nodeID,
-		bitrate,
-		fps,
-		width,
-		height,
-		convertToInt(event.Data["buffer_size"]),
-		convertToInt(event.Data["buffer_used"]),
-		convertToFloat32(event.Data["buffer_health"]),
-		convertToInt64(event.Data["packets_sent"]),
-		convertToInt64(event.Data["packets_lost"]),
-		convertToInt64(event.Data["packets_retransmitted"]),
-		convertToInt64(event.Data["bandwidth_in"]),
-		convertToInt64(event.Data["bandwidth_out"]),
-		codec,
-		profile,
-		trackCount,
-		gopSize,
-		bufferState,
-		convertToFloat32(event.Data["frame_jitter_ms"]),
-		convertToFloat32(event.Data["keyframe_stability_ms"]),
-		event.Data["issues_description"],
-		hasIssues,
-		healthScore,
-		convertToFloat32(event.Data["frame_ms_max"]),
-		convertToFloat32(event.Data["frame_ms_min"]),
-		convertToInt(event.Data["frames_max"]),
-		convertToInt(event.Data["frames_min"]),
-		convertToFloat32(event.Data["keyframe_ms_max"]),
-		convertToFloat32(event.Data["keyframe_ms_min"]),
-		audioChannels,
-		audioSampleRate,
-		audioCodec,
-		audioBitrate,
-	); err != nil {
-		h.logger.Errorf("Failed to append health metrics from lifecycle: %v", err)
-		return err
-	}
-
-	if err := healthBatch.Send(); err != nil {
-		h.logger.Errorf("Failed to send health metrics from lifecycle: %v", err)
-		return err
-	}
-
-	h.logger.Debugf("Successfully extracted health metrics from lifecycle event for stream: %s", *event.InternalName)
-	return nil
 }

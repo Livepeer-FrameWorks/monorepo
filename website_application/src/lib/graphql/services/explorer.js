@@ -182,7 +182,7 @@ export const explorerService = {
         fetchPolicy: 'cache-first',
       });
       return data.__schema;
-    } catch (error) {
+    } catch (/** @type {any} */ error) {
       console.error('Failed to introspect schema:', error);
       throw error;
     }
@@ -198,7 +198,7 @@ export const explorerService = {
         fetchPolicy: 'cache-first',
       });
       return data.__schema;
-    } catch (error) {
+    } catch (/** @type {any} */ error) {
       console.error('Failed to get root types:', error);
       throw error;
     }
@@ -243,14 +243,14 @@ export const explorerService = {
 
       return {
         data: result.data,
-        loading: result.loading,
-        error: result.error,
-        networkStatus: result.networkStatus,
+        loading: result.loading || false,
+        error: result.error || result.errors?.[0]?.message,
+        networkStatus: result.networkStatus || 7, // 7 = ready
         duration,
         timestamp: new Date().toISOString(),
         demoMode
       };
-    } catch (error) {
+    } catch (/** @type {any} */ error) {
       console.error('GraphQL query execution failed:', error);
       return {
         data: null,
@@ -717,10 +717,10 @@ ${Object.entries(variables).map(([key, value]) => `        "${key}": ${JSON.stri
         valid: true,
         error: null
       };
-    } catch (error) {
+    } catch (/** @type {any} */ error) {
       return {
         valid: false,
-        error: error.message
+        error: error?.message || 'Unknown error'
       };
     }
   },
@@ -730,7 +730,7 @@ ${Object.entries(variables).map(([key, value]) => `        "${key}": ${JSON.stri
    * @param {Object} result - Query result from executeQuery
    */
   formatResponse(result) {
-    const { data, error, duration, timestamp, networkStatus } = result;
+    const { data, error, duration, timestamp, networkStatus } = result || {};
     
     // Note: These will be rendered as HTML strings in the GraphQL Explorer UI
     // The component consuming this will handle the HTML rendering

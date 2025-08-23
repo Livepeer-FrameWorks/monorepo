@@ -27,12 +27,13 @@ type StreamEventsResponse = []StreamEvent
 
 // StreamEvent represents a single stream event
 type StreamEvent struct {
-	Timestamp time.Time `json:"timestamp"`
-	EventID   string    `json:"event_id"`
-	EventType string    `json:"event_type"`
-	Status    string    `json:"status"`
-	NodeID    string    `json:"node_id"`
-	EventData string    `json:"event_data"`
+	Timestamp    time.Time `json:"timestamp"`
+	EventID      string    `json:"event_id"`
+	EventType    string    `json:"event_type"`
+	Status       string    `json:"status"`
+	NodeID       string    `json:"node_id"`
+	EventData    string    `json:"event_data"`
+	InternalName string    `json:"internal_name"`
 }
 
 // TrackListEventsResponse represents the response from GetTrackListEvents
@@ -44,6 +45,7 @@ type AnalyticsTrackListEvent struct {
 	NodeID     string    `json:"node_id"`
 	TrackList  string    `json:"track_list"`
 	TrackCount int       `json:"track_count"`
+	Stream     string    `json:"stream"`
 }
 
 // ViewerStatsResponse represents the response from GetViewerStats
@@ -123,34 +125,49 @@ type RealtimeStreamViewer struct {
 	UniqueCities    int     `json:"unique_cities"`
 }
 
+// RealtimeEvent represents a single realtime event (union type)
+type RealtimeEvent struct {
+	// Common fields
+	Timestamp time.Time `json:"timestamp"`
+	EventType string    `json:"event_type"`
+
+	// Stream event fields (nullable when not applicable)
+	StreamEvent *StreamEvent `json:"stream_event,omitempty"`
+
+	// Connection event fields (nullable when not applicable)
+	ConnectionEvent *ConnectionEvent `json:"connection_event,omitempty"`
+
+	// Buffer event fields (nullable when not applicable)
+	BufferEvent *BufferEvent `json:"buffer_event,omitempty"`
+
+	// Viewer metrics event (nullable when not applicable)
+	ViewerMetrics *ViewerHistoryEntry `json:"viewer_metrics,omitempty"`
+}
+
 // RealtimeEventsResponse represents the response from GetRealtimeEvents
 type RealtimeEventsResponse struct {
-	Events []interface{} `json:"events"` // Mixed event types
-	Count  int           `json:"count"`
+	Events []RealtimeEvent `json:"events"`
+	Count  int             `json:"count"`
 }
 
 // ConnectionEventsResponse represents the response from GetConnectionEvents
 type ConnectionEventsResponse = []ConnectionEvent
 
-// ConnectionEvent represents a connection event
+// ConnectionEvent represents a connection event from MistServer webhooks
 type ConnectionEvent struct {
-	EventID          string    `json:"event_id"`
-	Timestamp        time.Time `json:"timestamp"`
-	TenantID         string    `json:"tenant_id"`
-	InternalName     string    `json:"internal_name"`
-	UserID           string    `json:"user_id"`
-	SessionID        string    `json:"session_id"`
-	ConnectionAddr   string    `json:"connection_addr"`
-	UserAgent        string    `json:"user_agent"`
-	Connector        string    `json:"connector"`
-	NodeID           string    `json:"node_id"`
-	CountryCode      string    `json:"country_code"`
-	City             string    `json:"city"`
-	Latitude         float64   `json:"latitude"`
-	Longitude        float64   `json:"longitude"`
-	EventType        string    `json:"event_type"`
-	SessionDuration  int       `json:"session_duration"`
-	BytesTransferred int64     `json:"bytes_transferred"`
+	EventID        string    `json:"event_id"`
+	Timestamp      time.Time `json:"timestamp"`
+	TenantID       string    `json:"tenant_id"`
+	InternalName   string    `json:"internal_name"`
+	SessionID      string    `json:"session_id"`
+	ConnectionAddr string    `json:"connection_addr"`
+	Connector      string    `json:"connector"`
+	NodeID         string    `json:"node_id"`
+	CountryCode    string    `json:"country_code"`
+	City           string    `json:"city"`
+	Latitude       float64   `json:"latitude"`
+	Longitude      float64   `json:"longitude"`
+	EventType      string    `json:"event_type"` // "connect" or "disconnect"
 }
 
 // NodeMetricsResponse represents the response from GetNodeMetrics
@@ -226,6 +243,16 @@ type StreamHealthMetric struct {
 	Codec                string    `json:"codec"`
 	Profile              string    `json:"profile"`
 	TrackMetadata        string    `json:"track_metadata"`
+
+	// Derived metrics computed in Periscope/MVs
+	HealthScore          float32  `json:"health_score"`
+	FrameJitterMs        *float64 `json:"frame_jitter_ms,omitempty"`
+	KeyframeStabilityMs  *float64 `json:"keyframe_stability_ms,omitempty"`
+	IssuesDescription    *string  `json:"issues_description,omitempty"`
+	HasIssues            bool     `json:"has_issues"`
+	PacketLossPercentage *float64 `json:"packet_loss_percentage,omitempty"`
+	QualityTier          *string  `json:"quality_tier,omitempty"`
+	BufferState          string   `json:"buffer_state"`
 }
 
 // BufferEventsResponse represents the response from GetStreamBufferEvents
@@ -250,6 +277,25 @@ type EndEvent struct {
 	Status    string    `json:"status"`
 	NodeID    string    `json:"node_id"`
 	EventData string    `json:"event_data"`
+}
+
+// PlatformEventsResponse represents the response from GetPlatformEvents
+type PlatformEventsResponse struct {
+	Events []PlatformEvent `json:"events"`
+	Count  int             `json:"count"`
+}
+
+// PlatformEvent represents a platform-wide analytics event
+type PlatformEvent struct {
+	Timestamp         time.Time `json:"timestamp"`
+	InternalName      string    `json:"internal_name"`
+	NodeID            string    `json:"node_id"`
+	ViewerCount       int       `json:"viewer_count"`
+	ConnectionType    string    `json:"connection_type"`
+	BufferHealth      float32   `json:"buffer_health"`
+	ConnectionQuality float32   `json:"connection_quality"`
+	CountryCode       string    `json:"country_code"`
+	City              string    `json:"city"`
 }
 
 // ErrorResponse is a type alias to the common error response

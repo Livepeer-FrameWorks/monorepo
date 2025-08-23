@@ -11,6 +11,7 @@ import (
 
 	"frameworks/pkg/clients"
 	"frameworks/pkg/logging"
+	"frameworks/pkg/validation"
 )
 
 // Client represents a Foghorn API client
@@ -61,35 +62,35 @@ func NewClient(config Config) *Client {
 
 // NodeUpdateRequest represents a node update request to Foghorn
 type NodeUpdateRequest struct {
-	NodeID    string                 `json:"node_id"`
-	BaseURL   string                 `json:"base_url"`
-	IsHealthy bool                   `json:"is_healthy"`
-	Latitude  *float64               `json:"latitude,omitempty"`
-	Longitude *float64               `json:"longitude,omitempty"`
-	Location  string                 `json:"location,omitempty"`
-	EventType string                 `json:"event_type"`
-	Timestamp int64                  `json:"timestamp"`
-	Metrics   map[string]interface{} `json:"metrics,omitempty"`
+	NodeID    string                        `json:"node_id"`
+	BaseURL   string                        `json:"base_url"`
+	IsHealthy bool                          `json:"is_healthy"`
+	Latitude  *float64                      `json:"latitude,omitempty"`
+	Longitude *float64                      `json:"longitude,omitempty"`
+	Location  string                        `json:"location,omitempty"`
+	EventType string                        `json:"event_type"`
+	Timestamp int64                         `json:"timestamp"`
+	Metrics   *validation.FoghornNodeUpdate `json:"metrics,omitempty"`
 }
 
 // NodeShutdownRequest represents a node shutdown notification to Foghorn
 // Must match exactly what Foghorn expects: node_id, type, timestamp, reason, details
 type NodeShutdownRequest struct {
-	NodeID    string                 `json:"node_id"`
-	Type      string                 `json:"type"`
-	Timestamp int64                  `json:"timestamp"`
-	Reason    string                 `json:"reason"`
-	Details   map[string]interface{} `json:"details"`
+	NodeID    string                          `json:"node_id"`
+	Type      string                          `json:"type"`
+	Timestamp int64                           `json:"timestamp"`
+	Reason    string                          `json:"reason"`
+	Details   *validation.FoghornNodeShutdown `json:"details"`
 }
 
 // StreamHealthRequest represents a stream health update to Foghorn
 type StreamHealthRequest struct {
-	NodeID       string                 `json:"node_id"`
-	StreamName   string                 `json:"stream_name"`
-	InternalName string                 `json:"internal_name"`
-	IsHealthy    bool                   `json:"is_healthy"`
-	Timestamp    int64                  `json:"timestamp"`
-	Details      map[string]interface{} `json:"details,omitempty"`
+	NodeID       string                          `json:"node_id"`
+	StreamName   string                          `json:"stream_name"`
+	InternalName string                          `json:"internal_name"`
+	IsHealthy    bool                            `json:"is_healthy"`
+	Timestamp    int64                           `json:"timestamp"`
+	Details      *validation.FoghornStreamHealth `json:"details,omitempty"`
 }
 
 // UpdateNode sends a node update to Foghorn

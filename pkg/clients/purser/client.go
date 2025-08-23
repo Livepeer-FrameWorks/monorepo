@@ -152,12 +152,14 @@ func (c *Client) CheckUserLimit(ctx context.Context, req *purser.CheckUserLimitR
 
 	// Extract user limits from tier features
 	var maxUsers int = 10 // Default limit
-	if billingStatus.Tier.Features != nil {
-		if userLimit, exists := billingStatus.Tier.Features["max_users"]; exists {
-			if limit, ok := userLimit.(float64); ok {
-				maxUsers = int(limit)
-			}
-		}
+	// Note: BillingFeatures doesn't currently have max_users field
+	// For now, use a reasonable default based on tier pricing
+	if billingStatus.Tier.BasePrice == 0 {
+		maxUsers = 1 // Free tier
+	} else if billingStatus.Tier.BasePrice < 100 {
+		maxUsers = 10 // Pro tier
+	} else {
+		maxUsers = 100 // Enterprise tier
 	}
 
 	// TODO: Get current user count from a different endpoint or cache

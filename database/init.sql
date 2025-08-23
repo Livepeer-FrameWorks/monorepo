@@ -6,6 +6,15 @@
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
+-- Enumerated statuses
+DO $$ BEGIN
+    CREATE TYPE stream_status AS ENUM ('offline','live','terminated');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+    CREATE TYPE mist_stream_status AS ENUM ('offline','init','boot','wait','ready','shutdown','invalid');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
 -- ============================================================================
 -- CORE TENANT MANAGEMENT
 -- ============================================================================
@@ -478,7 +487,7 @@ CREATE TABLE IF NOT EXISTS streams (
     password VARCHAR(255), -- Stream password protection
     
     -- Operational state (Control Plane lifecycle tracking)
-    status VARCHAR(20) DEFAULT 'offline', -- offline, live, terminated
+    status stream_status DEFAULT 'offline', -- offline, live, terminated
     start_time TIMESTAMP,
     end_time TIMESTAMP,
     
@@ -490,6 +499,7 @@ CREATE TABLE IF NOT EXISTS streams (
 CREATE TABLE IF NOT EXISTS stream_keys (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     stream_id UUID NOT NULL REFERENCES streams(id) ON DELETE CASCADE,
     
     key_value VARCHAR(255) UNIQUE NOT NULL,
@@ -498,7 +508,8 @@ CREATE TABLE IF NOT EXISTS stream_keys (
     is_active BOOLEAN DEFAULT TRUE,
     last_used_at TIMESTAMP,
     
-    created_at TIMESTAMP DEFAULT NOW()
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
 );
 
 -- ============================================================================
@@ -558,6 +569,7 @@ CREATE TABLE IF NOT EXISTS clips (
 CREATE TABLE IF NOT EXISTS stream_analytics (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    stream_id UUID REFERENCES streams(id) ON DELETE CASCADE,
     
     internal_name VARCHAR(255) NOT NULL,
     
@@ -592,6 +604,13 @@ CREATE TABLE IF NOT EXISTS stream_analytics (
     inputs INTEGER DEFAULT 0,
     outputs INTEGER DEFAULT 0,
     
+    -- Current health state (from STREAM_BUFFER events)
+    current_health_score DECIMAL(3,2),
+    current_buffer_state VARCHAR(20),
+    current_issues TEXT,
+    current_codec VARCHAR(50),
+    current_fps DECIMAL(5,2),
+    
     -- Track details
     track_details JSONB,
     health_data JSONB,
@@ -605,6 +624,7 @@ CREATE TABLE IF NOT EXISTS stream_analytics (
     
     -- Stream status (Data Plane perspective)
     status VARCHAR(50) DEFAULT 'offline',
+    mist_status mist_stream_status,
     last_updated TIMESTAMP DEFAULT NOW(),
     created_at TIMESTAMP DEFAULT NOW(),
     
@@ -706,6 +726,7 @@ CREATE INDEX IF NOT EXISTS idx_clips_created_at ON clips(tenant_id, created_at D
 CREATE INDEX IF NOT EXISTS idx_stream_analytics_tenant_id ON stream_analytics(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_stream_analytics_internal_name ON stream_analytics(internal_name);
 CREATE INDEX IF NOT EXISTS idx_stream_analytics_tenant_internal ON stream_analytics(tenant_id, internal_name);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_stream_analytics_tenant_stream_id ON stream_analytics(tenant_id, stream_id);
 CREATE INDEX IF NOT EXISTS idx_stream_analytics_status ON stream_analytics(tenant_id, status);
 CREATE INDEX IF NOT EXISTS idx_stream_analytics_last_updated ON stream_analytics(tenant_id, last_updated);
 
@@ -746,9 +767,9 @@ BEGIN
     INSERT INTO streams (id, tenant_id, user_id, stream_key, playback_id, internal_name, title)
     VALUES (new_stream_id, p_tenant_id, p_user_id, new_stream_key, new_playback_id, new_internal_name, p_title);
     
-    -- Also create an entry in stream_keys for backward compatibility
-    INSERT INTO stream_keys (tenant_id, stream_id, key_value, key_name, is_active)
-    VALUES (p_tenant_id, new_stream_id, new_stream_key, 'Primary Key', TRUE);
+    -- Also create an entry in stream_keys
+    INSERT INTO stream_keys (tenant_id, user_id, stream_id, key_value, key_name, is_active)
+    VALUES (p_tenant_id, p_user_id, new_stream_id, new_stream_key, 'Primary Key', TRUE);
     
     RETURN QUERY SELECT new_stream_id, new_stream_key, new_playback_id, new_internal_name;
 END;
@@ -898,12 +919,14 @@ CREATE TABLE IF NOT EXISTS crypto_wallets (
     invoice_id UUID NOT NULL REFERENCES billing_invoices(id) ON DELETE CASCADE,
     asset VARCHAR(10) NOT NULL, -- BTC, ETH, USDC, LPT
     wallet_address VARCHAR(255) NOT NULL,
-    status VARCHAR(50) NOT NULL DEFAULT 'active', -- active, used, expired
+    status VARCHAR(50) NOT NULL DEFAULT 'active', -- active, used, expired, swept
     expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     UNIQUE(invoice_id, asset)
 );
+
+CREATE INDEX IF NOT EXISTS idx_crypto_wallets_active ON crypto_wallets(status, expires_at);
 
 -- ============================================================================
 -- FLEXIBLE TIER-BASED BILLING SYSTEM

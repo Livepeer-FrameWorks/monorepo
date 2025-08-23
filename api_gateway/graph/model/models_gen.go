@@ -10,10 +10,6 @@ import (
 	"time"
 )
 
-type TenantEvent interface {
-	IsTenantEvent()
-}
-
 type CityMetric struct {
 	City        string   `json:"city"`
 	CountryCode *string  `json:"countryCode,omitempty"`
@@ -21,29 +17,6 @@ type CityMetric struct {
 	Percentage  float64  `json:"percentage"`
 	Latitude    *float64 `json:"latitude,omitempty"`
 	Longitude   *float64 `json:"longitude,omitempty"`
-}
-
-type Clip struct {
-	ID          string    `json:"id"`
-	Stream      string    `json:"stream"`
-	Title       string    `json:"title"`
-	Description *string   `json:"description,omitempty"`
-	StartTime   int       `json:"startTime"`
-	EndTime     int       `json:"endTime"`
-	Duration    int       `json:"duration"`
-	PlaybackID  string    `json:"playbackId"`
-	Status      string    `json:"status"`
-	CreatedAt   time.Time `json:"createdAt"`
-	UpdatedAt   time.Time `json:"updatedAt"`
-}
-
-type Cluster struct {
-	ID        string     `json:"id"`
-	Name      string     `json:"name"`
-	Region    string     `json:"region"`
-	Status    NodeStatus `json:"status"`
-	Nodes     []*Node    `json:"nodes"`
-	CreatedAt time.Time  `json:"createdAt"`
 }
 
 type CountryMetric struct {
@@ -85,15 +58,8 @@ type CreateStreamInput struct {
 	Record      *bool   `json:"record,omitempty"`
 }
 
-type DeveloperToken struct {
-	ID          string     `json:"id"`
-	Name        string     `json:"name"`
-	Token       *string    `json:"token,omitempty"`
-	Permissions string     `json:"permissions"`
-	Status      string     `json:"status"`
-	LastUsedAt  *time.Time `json:"lastUsedAt,omitempty"`
-	ExpiresAt   *time.Time `json:"expiresAt,omitempty"`
-	CreatedAt   time.Time  `json:"createdAt"`
+type CreateStreamKeyInput struct {
+	Name string `json:"name"`
 }
 
 type GeographicDistribution struct {
@@ -125,6 +91,7 @@ type LoadBalancingMetric struct {
 	ClientLongitude *float64  `json:"clientLongitude,omitempty"`
 	NodeLatitude    *float64  `json:"nodeLatitude,omitempty"`
 	NodeLongitude   *float64  `json:"nodeLongitude,omitempty"`
+	NodeName        *string   `json:"nodeName,omitempty"`
 	Score           *int      `json:"score,omitempty"`
 	Status          string    `json:"status"`
 	Details         *string   `json:"details,omitempty"`
@@ -136,27 +103,22 @@ type LoadBalancingMetric struct {
 type Mutation struct {
 }
 
-type Node struct {
-	ID        string     `json:"id"`
-	Name      string     `json:"name"`
-	Cluster   string     `json:"cluster"`
-	Type      string     `json:"type"`
-	Status    NodeStatus `json:"status"`
-	Region    string     `json:"region"`
-	IPAddress *string    `json:"ipAddress,omitempty"`
-	LastSeen  time.Time  `json:"lastSeen"`
-	CreatedAt time.Time  `json:"createdAt"`
-	Latitude  *float64   `json:"latitude,omitempty"`
-	Longitude *float64   `json:"longitude,omitempty"`
-	Location  *string    `json:"location,omitempty"`
+type NodeMetricHourly struct {
+	Timestamp         time.Time `json:"timestamp"`
+	NodeID            string    `json:"nodeId"`
+	AvgCPU            float64   `json:"avgCpu"`
+	PeakCPU           float64   `json:"peakCpu"`
+	AvgMemory         float64   `json:"avgMemory"`
+	PeakMemory        float64   `json:"peakMemory"`
+	TotalBandwidthIn  int       `json:"totalBandwidthIn"`
+	TotalBandwidthOut int       `json:"totalBandwidthOut"`
+	AvgHealthScore    float64   `json:"avgHealthScore"`
+	WasHealthy        bool      `json:"wasHealthy"`
 }
 
-type PlatformOverview struct {
-	TotalStreams   int        `json:"totalStreams"`
-	TotalViewers   int        `json:"totalViewers"`
-	TotalBandwidth float64    `json:"totalBandwidth"`
-	TotalUsers     int        `json:"totalUsers"`
-	TimeRange      *TimeRange `json:"timeRange"`
+type PaginationInput struct {
+	Limit  *int `json:"limit,omitempty"`
+	Offset *int `json:"offset,omitempty"`
 }
 
 type Query struct {
@@ -175,16 +137,6 @@ type RebufferingEvent struct {
 	PacketLossPercentage *float64    `json:"packetLossPercentage,omitempty"`
 }
 
-type StreamEvent struct {
-	Type      StreamEventType `json:"type"`
-	Stream    string          `json:"stream"`
-	Status    StreamStatus    `json:"status"`
-	Timestamp time.Time       `json:"timestamp"`
-	Details   *string         `json:"details,omitempty"`
-}
-
-func (StreamEvent) IsTenantEvent() {}
-
 type StreamHealthAlert struct {
 	Timestamp            time.Time     `json:"timestamp"`
 	Stream               string        `json:"stream"`
@@ -197,32 +149,6 @@ type StreamHealthAlert struct {
 	IssuesDescription    *string       `json:"issuesDescription,omitempty"`
 	BufferState          *BufferState  `json:"bufferState,omitempty"`
 	QualityTier          *string       `json:"qualityTier,omitempty"`
-}
-
-type StreamHealthMetric struct {
-	Timestamp            time.Time   `json:"timestamp"`
-	Stream               string      `json:"stream"`
-	NodeID               string      `json:"nodeId"`
-	HealthScore          float64     `json:"healthScore"`
-	FrameJitterMs        *float64    `json:"frameJitterMs,omitempty"`
-	KeyframeStabilityMs  *float64    `json:"keyframeStabilityMs,omitempty"`
-	IssuesDescription    *string     `json:"issuesDescription,omitempty"`
-	HasIssues            bool        `json:"hasIssues"`
-	Bitrate              *int        `json:"bitrate,omitempty"`
-	Fps                  *float64    `json:"fps,omitempty"`
-	Width                *int        `json:"width,omitempty"`
-	Height               *int        `json:"height,omitempty"`
-	Codec                *string     `json:"codec,omitempty"`
-	QualityTier          *string     `json:"qualityTier,omitempty"`
-	PacketsSent          *int        `json:"packetsSent,omitempty"`
-	PacketsLost          *int        `json:"packetsLost,omitempty"`
-	PacketLossPercentage *float64    `json:"packetLossPercentage,omitempty"`
-	BufferState          BufferState `json:"bufferState"`
-	BufferHealth         *float64    `json:"bufferHealth,omitempty"`
-	AudioChannels        *int        `json:"audioChannels,omitempty"`
-	AudioSampleRate      *int        `json:"audioSampleRate,omitempty"`
-	AudioCodec           *string     `json:"audioCodec,omitempty"`
-	AudioBitrate         *int        `json:"audioBitrate,omitempty"`
 }
 
 type StreamQualityChange struct {
@@ -260,6 +186,22 @@ type SystemHealthEvent struct {
 	Timestamp   time.Time  `json:"timestamp"`
 }
 
+type TenantClusterAssignment struct {
+	ID                        string    `json:"id"`
+	TenantID                  string    `json:"tenantId"`
+	ClusterID                 string    `json:"clusterId"`
+	DeploymentTier            *string   `json:"deploymentTier,omitempty"`
+	Priority                  int       `json:"priority"`
+	IsPrimary                 bool      `json:"isPrimary"`
+	IsActive                  bool      `json:"isActive"`
+	MaxStreamsOnCluster       *int      `json:"maxStreamsOnCluster,omitempty"`
+	MaxViewersOnCluster       *int      `json:"maxViewersOnCluster,omitempty"`
+	MaxBandwidthMbpsOnCluster *int      `json:"maxBandwidthMbpsOnCluster,omitempty"`
+	FallbackWhenFull          bool      `json:"fallbackWhenFull"`
+	CreatedAt                 time.Time `json:"createdAt"`
+	UpdatedAt                 time.Time `json:"updatedAt"`
+}
+
 type TimeRange struct {
 	Start time.Time `json:"start"`
 	End   time.Time `json:"end"`
@@ -269,15 +211,6 @@ type TimeRangeInput struct {
 	Start time.Time `json:"start"`
 	End   time.Time `json:"end"`
 }
-
-type TrackListEvent struct {
-	Stream     string    `json:"stream"`
-	TrackList  string    `json:"trackList"`
-	TrackCount int       `json:"trackCount"`
-	Timestamp  time.Time `json:"timestamp"`
-}
-
-func (TrackListEvent) IsTenantEvent() {}
 
 type UpdateStreamInput struct {
 	Name        *string `json:"name,omitempty"`
@@ -290,25 +223,6 @@ type UpdateTenantInput struct {
 	Settings *string `json:"settings,omitempty"`
 }
 
-type ViewerGeographic struct {
-	Timestamp      time.Time `json:"timestamp"`
-	Stream         *string   `json:"stream,omitempty"`
-	NodeID         *string   `json:"nodeId,omitempty"`
-	CountryCode    *string   `json:"countryCode,omitempty"`
-	City           *string   `json:"city,omitempty"`
-	Latitude       *float64  `json:"latitude,omitempty"`
-	Longitude      *float64  `json:"longitude,omitempty"`
-	ViewerCount    *int      `json:"viewerCount,omitempty"`
-	ConnectionAddr *string   `json:"connectionAddr,omitempty"`
-	EventType      *string   `json:"eventType,omitempty"`
-	Source         *string   `json:"source,omitempty"`
-}
-
-type ViewerMetric struct {
-	Timestamp   time.Time `json:"timestamp"`
-	ViewerCount int       `json:"viewerCount"`
-}
-
 type ViewerMetrics struct {
 	Stream            string    `json:"stream"`
 	CurrentViewers    int       `json:"currentViewers"`
@@ -319,8 +233,6 @@ type ViewerMetrics struct {
 	BufferHealth      *float64  `json:"bufferHealth,omitempty"`
 	Timestamp         time.Time `json:"timestamp"`
 }
-
-func (ViewerMetrics) IsTenantEvent() {}
 
 type AlertSeverity string
 
@@ -501,6 +413,128 @@ func (e BufferState) MarshalJSON() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+type InstanceStatus string
+
+const (
+	InstanceStatusRunning  InstanceStatus = "RUNNING"
+	InstanceStatusStarting InstanceStatus = "STARTING"
+	InstanceStatusStopping InstanceStatus = "STOPPING"
+	InstanceStatusStopped  InstanceStatus = "STOPPED"
+	InstanceStatusError    InstanceStatus = "ERROR"
+	InstanceStatusUnknown  InstanceStatus = "UNKNOWN"
+)
+
+var AllInstanceStatus = []InstanceStatus{
+	InstanceStatusRunning,
+	InstanceStatusStarting,
+	InstanceStatusStopping,
+	InstanceStatusStopped,
+	InstanceStatusError,
+	InstanceStatusUnknown,
+}
+
+func (e InstanceStatus) IsValid() bool {
+	switch e {
+	case InstanceStatusRunning, InstanceStatusStarting, InstanceStatusStopping, InstanceStatusStopped, InstanceStatusError, InstanceStatusUnknown:
+		return true
+	}
+	return false
+}
+
+func (e InstanceStatus) String() string {
+	return string(e)
+}
+
+func (e *InstanceStatus) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = InstanceStatus(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid InstanceStatus", str)
+	}
+	return nil
+}
+
+func (e InstanceStatus) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *InstanceStatus) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e InstanceStatus) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type InvoiceStatus string
+
+const (
+	InvoiceStatusPending   InvoiceStatus = "PENDING"
+	InvoiceStatusPaid      InvoiceStatus = "PAID"
+	InvoiceStatusFailed    InvoiceStatus = "FAILED"
+	InvoiceStatusCancelled InvoiceStatus = "CANCELLED"
+)
+
+var AllInvoiceStatus = []InvoiceStatus{
+	InvoiceStatusPending,
+	InvoiceStatusPaid,
+	InvoiceStatusFailed,
+	InvoiceStatusCancelled,
+}
+
+func (e InvoiceStatus) IsValid() bool {
+	switch e {
+	case InvoiceStatusPending, InvoiceStatusPaid, InvoiceStatusFailed, InvoiceStatusCancelled:
+		return true
+	}
+	return false
+}
+
+func (e InvoiceStatus) String() string {
+	return string(e)
+}
+
+func (e *InvoiceStatus) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = InvoiceStatus(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid InvoiceStatus", str)
+	}
+	return nil
+}
+
+func (e InvoiceStatus) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *InvoiceStatus) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e InvoiceStatus) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
 type NodeStatus string
 
 const (
@@ -615,6 +649,63 @@ func (e PaymentMethod) MarshalJSON() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+type PaymentStatus string
+
+const (
+	PaymentStatusPending   PaymentStatus = "PENDING"
+	PaymentStatusConfirmed PaymentStatus = "CONFIRMED"
+	PaymentStatusFailed    PaymentStatus = "FAILED"
+)
+
+var AllPaymentStatus = []PaymentStatus{
+	PaymentStatusPending,
+	PaymentStatusConfirmed,
+	PaymentStatusFailed,
+}
+
+func (e PaymentStatus) IsValid() bool {
+	switch e {
+	case PaymentStatusPending, PaymentStatusConfirmed, PaymentStatusFailed:
+		return true
+	}
+	return false
+}
+
+func (e PaymentStatus) String() string {
+	return string(e)
+}
+
+func (e *PaymentStatus) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = PaymentStatus(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid PaymentStatus", str)
+	}
+	return nil
+}
+
+func (e PaymentStatus) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *PaymentStatus) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e PaymentStatus) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
 type QualityChangeType string
 
 const (
@@ -673,6 +764,61 @@ func (e *QualityChangeType) UnmarshalJSON(b []byte) error {
 }
 
 func (e QualityChangeType) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type SortOrder string
+
+const (
+	SortOrderAsc  SortOrder = "ASC"
+	SortOrderDesc SortOrder = "DESC"
+)
+
+var AllSortOrder = []SortOrder{
+	SortOrderAsc,
+	SortOrderDesc,
+}
+
+func (e SortOrder) IsValid() bool {
+	switch e {
+	case SortOrderAsc, SortOrderDesc:
+		return true
+	}
+	return false
+}
+
+func (e SortOrder) String() string {
+	return string(e)
+}
+
+func (e *SortOrder) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = SortOrder(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid SortOrder", str)
+	}
+	return nil
+}
+
+func (e SortOrder) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *SortOrder) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e SortOrder) MarshalJSON() ([]byte, error) {
 	var buf bytes.Buffer
 	e.MarshalGQL(&buf)
 	return buf.Bytes(), nil

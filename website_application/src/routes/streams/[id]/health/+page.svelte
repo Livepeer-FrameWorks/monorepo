@@ -18,6 +18,7 @@
   let healthAlerts = [];
   let qualityChanges = [];
   let rebufferingEvents = [];
+  let comprehensiveAnalysis = null;
   let loading = true;
   let error = null;
 
@@ -33,6 +34,7 @@
   onMount(async () => {
     await loadStreamData();
     await loadHealthData();
+    await loadComprehensiveAnalysis();
     
     // Set up auto-refresh every 30 seconds for current health
     refreshInterval = setInterval(async () => {
@@ -94,6 +96,14 @@
     }
   }
 
+  async function loadComprehensiveAnalysis() {
+    try {
+      comprehensiveAnalysis = await healthService.getComprehensiveHealthAnalysis(streamId, timeRange);
+    } catch (err) {
+      console.error('Failed to load comprehensive analysis:', err);
+    }
+  }
+
   function formatTimestamp(timestamp) {
     return new Date(timestamp).toLocaleString();
   }
@@ -111,6 +121,41 @@
 
   function navigateBack() {
     goto(`${base}/streams`);
+  }
+
+  function getTrendColor(trend) {
+    switch (trend) {
+      case 'improving': return 'text-green-400';
+      case 'degrading': return 'text-red-400';
+      default: return 'text-tokyo-night-fg';
+    }
+  }
+
+  function getTrendIcon(trend) {
+    switch (trend) {
+      case 'improving': return 'TrendingUp';
+      case 'degrading': return 'TrendingDown';
+      default: return 'Minus';
+    }
+  }
+
+  function getStabilityColor(stability) {
+    switch (stability) {
+      case 'stable': return 'text-green-400';
+      case 'minor-changes': return 'text-yellow-400';
+      case 'unstable': return 'text-red-400';
+      default: return 'text-tokyo-night-fg';
+    }
+  }
+
+  function getImpactColor(impact) {
+    switch (impact) {
+      case 'none': return 'text-green-400';
+      case 'low': return 'text-yellow-400';
+      case 'medium': return 'text-orange-400';
+      case 'high': return 'text-red-400';
+      default: return 'text-tokyo-night-fg';
+    }
   }
 </script>
 
@@ -211,6 +256,69 @@
                   <p class="text-sm text-red-400 mt-1">{currentHealth.issuesDescription}</p>
                 </div>
               {/if}
+            </div>
+          </div>
+        </div>
+      {/if}
+
+      <!-- Comprehensive Health Analysis -->
+      {#if comprehensiveAnalysis?.analysis}
+        <div class="bg-tokyo-night-surface rounded-lg p-6 mb-8">
+          <h2 class="text-xl font-semibold text-tokyo-night-cyan mb-6">Health Analysis Summary</h2>
+          
+          <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+            <!-- Overall Health Score -->
+            <div class="text-center">
+              <div class="relative inline-flex items-center justify-center">
+                <div class="w-20 h-20 rounded-full border-4 {comprehensiveAnalysis.analysis.overallScore >= 80 ? 'border-green-400' : comprehensiveAnalysis.analysis.overallScore >= 60 ? 'border-yellow-400' : 'border-red-400'} flex items-center justify-center">
+                  <span class="text-2xl font-bold {comprehensiveAnalysis.analysis.overallScore >= 80 ? 'text-green-400' : comprehensiveAnalysis.analysis.overallScore >= 60 ? 'text-yellow-400' : 'text-red-400'}">
+                    {comprehensiveAnalysis.analysis.overallScore}
+                  </span>
+                </div>
+              </div>
+              <p class="text-sm text-tokyo-night-comment mt-2">Overall Score</p>
+            </div>
+
+            <!-- Health Trend -->
+            <div class="text-center">
+              <div class="flex items-center justify-center space-x-2 mb-2">
+                <svelte:component 
+                  this={getIconComponent(getTrendIcon(comprehensiveAnalysis.analysis.healthTrend))} 
+                  class="w-6 h-6 {getTrendColor(comprehensiveAnalysis.analysis.healthTrend)}" 
+                />
+                <span class={getTrendColor(comprehensiveAnalysis.analysis.healthTrend)}>
+                  {comprehensiveAnalysis.analysis.healthTrend}
+                </span>
+              </div>
+              <p class="text-sm text-tokyo-night-comment">Health Trend</p>
+            </div>
+
+            <!-- Quality Stability -->
+            <div class="text-center">
+              <div class="flex items-center justify-center space-x-2 mb-2">
+                <svelte:component 
+                  this={getIconComponent('Activity')} 
+                  class="w-6 h-6 {getStabilityColor(comprehensiveAnalysis.analysis.qualityStability)}" 
+                />
+                <span class={getStabilityColor(comprehensiveAnalysis.analysis.qualityStability)}>
+                  {comprehensiveAnalysis.analysis.qualityStability.replace('-', ' ')}
+                </span>
+              </div>
+              <p class="text-sm text-tokyo-night-comment">Quality Stability</p>
+            </div>
+
+            <!-- Rebuffer Impact -->
+            <div class="text-center">
+              <div class="flex items-center justify-center space-x-2 mb-2">
+                <svelte:component 
+                  this={getIconComponent('Pause')} 
+                  class="w-6 h-6 {getImpactColor(comprehensiveAnalysis.analysis.rebufferImpact)}" 
+                />
+                <span class={getImpactColor(comprehensiveAnalysis.analysis.rebufferImpact)}>
+                  {comprehensiveAnalysis.analysis.rebufferImpact} impact
+                </span>
+              </div>
+              <p class="text-sm text-tokyo-night-comment">Rebuffer Impact</p>
             </div>
           </div>
         </div>

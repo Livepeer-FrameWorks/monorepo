@@ -1,31 +1,74 @@
 # Analytics queries
 query GetStreamAnalytics($stream: String!, $timeRange: TimeRangeInput) {
   streamAnalytics(stream: $stream, timeRange: $timeRange) {
-    stream
-    totalViews
-    totalViewTime
+    # Core identifiers
+    id
+    tenantId
+    streamId
+    internalName
+    
+    # Session timing
+    sessionStartTime
+    sessionEndTime
+    totalSessionDuration
+    
+    # Viewer metrics
+    currentViewers
     peakViewers
-    averageViewers
-    uniqueViewers
-    timeRange {
-      start
-      end
-    }
-    # New health metrics
+    totalConnections
+    
+    # Bandwidth metrics
+    bandwidthIn
+    bandwidthOut
+    totalBandwidthGb
+    upbytes
+    downbytes
+    
+    # Stream quality
+    bitrateKbps
+    resolution
+    
+    # Network performance
+    packetsSent
+    packetsLost
+    packetsRetrans
+    firstMs
+    lastMs
+    
+    # Stream details
+    trackCount
+    inputs
+    outputs
+    
+    # Location
+    nodeId
+    nodeName
+    latitude
+    longitude
+    location
+    
+    # Status
+    status
+    lastUpdated
+    createdAt
+    
+    # Current health state (from STREAM_BUFFER events)
     currentHealthScore
-    averageHealthScore
-    frameJitterMs
-    keyframeStabilityMs
+    currentBufferState
     currentIssues
-    bufferState
-    packetLossPercentage
-    qualityTier
     currentCodec
-    currentResolution
-    currentBitrate
     currentFps
-    rebufferCount
-    alertCount
+    currentResolution
+    mistStatus
+    qualityTier
+    
+    # Enriched analytics from ClickHouse (computed)
+    avgViewers
+    uniqueCountries
+    uniqueCities
+    avgBufferHealth
+    avgBitrate
+    packetLossRate
   }
 }
 

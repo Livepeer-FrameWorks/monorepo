@@ -5,6 +5,8 @@ import {
   GetClusterDocument,
   GetNodesDocument,
   GetNodeDocument,
+  GetServiceInstancesDocument,
+  GetTenantClusterAssignmentsDocument,
   SystemHealthDocument,
   UpdateTenantDocument
 } from '../generated/apollo-helpers';
@@ -51,6 +53,37 @@ export const infrastructureService = {
       fetchPolicy: 'cache-first'
     });
     return result.data.node;
+  },
+
+  // Service Instances
+  async getServiceInstances(clusterId = null) {
+    try {
+      const result = await client.query({
+        query: GetServiceInstancesDocument,
+        variables: clusterId ? { clusterId } : {},
+        fetchPolicy: 'cache-first',
+        errorPolicy: 'all'
+      });
+      return result.data?.serviceInstances || [];
+    } catch (error) {
+      console.error('Failed to fetch service instances:', error);
+      return [];
+    }
+  },
+
+  // Tenant Cluster Assignments
+  async getTenantClusterAssignments() {
+    try {
+      const result = await client.query({
+        query: GetTenantClusterAssignmentsDocument,
+        fetchPolicy: 'cache-first',
+        errorPolicy: 'all'
+      });
+      return result.data?.tenantClusterAssignments || [];
+    } catch (error) {
+      console.error('Failed to fetch tenant cluster assignments:', error);
+      return [];
+    }
   },
 
   // Mutations

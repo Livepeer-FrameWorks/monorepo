@@ -91,6 +91,23 @@ export type Cluster = {
   status: NodeStatus;
 };
 
+export type ConnectionEvent = {
+  __typename?: 'ConnectionEvent';
+  city?: Maybe<Scalars['String']['output']>;
+  connectionAddr: Scalars['String']['output'];
+  connector: Scalars['String']['output'];
+  countryCode?: Maybe<Scalars['String']['output']>;
+  eventId: Scalars['String']['output'];
+  eventType: Scalars['String']['output'];
+  internalName: Scalars['String']['output'];
+  latitude?: Maybe<Scalars['Float']['output']>;
+  longitude?: Maybe<Scalars['Float']['output']>;
+  nodeId: Scalars['String']['output'];
+  sessionId: Scalars['String']['output'];
+  tenantId: Scalars['String']['output'];
+  timestamp: Scalars['Time']['output'];
+};
+
 export type CountryMetric = {
   __typename?: 'CountryMetric';
   cities?: Maybe<Array<CityMetric>>;
@@ -132,6 +149,10 @@ export type CreateStreamInput = {
   record?: InputMaybe<Scalars['Boolean']['input']>;
 };
 
+export type CreateStreamKeyInput = {
+  name: Scalars['String']['input'];
+};
+
 export type DeveloperToken = {
   __typename?: 'DeveloperToken';
   createdAt: Scalars['Time']['output'];
@@ -164,8 +185,15 @@ export type Invoice = {
   dueDate: Scalars['Time']['output'];
   id: Scalars['ID']['output'];
   lineItems: Array<LineItem>;
-  status: Scalars['String']['output'];
+  status: InvoiceStatus;
 };
+
+export enum InvoiceStatus {
+  Cancelled = 'CANCELLED',
+  Failed = 'FAILED',
+  Paid = 'PAID',
+  Pending = 'PENDING'
+}
 
 export type LineItem = {
   __typename?: 'LineItem';
@@ -186,6 +214,7 @@ export type LoadBalancingMetric = {
   nodeId?: Maybe<Scalars['String']['output']>;
   nodeLatitude?: Maybe<Scalars['Float']['output']>;
   nodeLongitude?: Maybe<Scalars['Float']['output']>;
+  nodeName?: Maybe<Scalars['String']['output']>;
   routingDistance?: Maybe<Scalars['Float']['output']>;
   score?: Maybe<Scalars['Int']['output']>;
   selectedNode: Scalars['String']['output'];
@@ -201,7 +230,9 @@ export type Mutation = {
   createDeveloperToken: DeveloperToken;
   createPayment: Payment;
   createStream: Stream;
+  createStreamKey: StreamKey;
   deleteStream: Scalars['Boolean']['output'];
+  deleteStreamKey: Scalars['Boolean']['output'];
   refreshStreamKey: Stream;
   revokeDeveloperToken: Scalars['Boolean']['output'];
   updateBillingTier: BillingStatus;
@@ -230,8 +261,20 @@ export type MutationCreateStreamArgs = {
 };
 
 
+export type MutationCreateStreamKeyArgs = {
+  input: CreateStreamKeyInput;
+  streamId: Scalars['ID']['input'];
+};
+
+
 export type MutationDeleteStreamArgs = {
   id: Scalars['ID']['input'];
+};
+
+
+export type MutationDeleteStreamKeyArgs = {
+  keyId: Scalars['ID']['input'];
+  streamId: Scalars['ID']['input'];
 };
 
 
@@ -276,6 +319,23 @@ export type Node = {
   type: Scalars['String']['output'];
 };
 
+export type NodeMetric = {
+  __typename?: 'NodeMetric';
+  cpuUsage: Scalars['Float']['output'];
+  diskUsage: Scalars['Float']['output'];
+  healthScore: Scalars['Float']['output'];
+  latitude?: Maybe<Scalars['Float']['output']>;
+  longitude?: Maybe<Scalars['Float']['output']>;
+  memoryUsage: Scalars['Float']['output'];
+  metadata?: Maybe<Scalars['String']['output']>;
+  networkRx: Scalars['Int']['output'];
+  networkTx: Scalars['Int']['output'];
+  nodeId: Scalars['String']['output'];
+  status: Scalars['String']['output'];
+  tags?: Maybe<Array<Scalars['String']['output']>>;
+  timestamp: Scalars['Time']['output'];
+};
+
 export enum NodeStatus {
   Degraded = 'DEGRADED',
   Healthy = 'HEALTHY',
@@ -289,13 +349,19 @@ export type Payment = {
   currency: Scalars['String']['output'];
   id: Scalars['ID']['output'];
   method: PaymentMethod;
-  status: Scalars['String']['output'];
+  status: PaymentStatus;
 };
 
 export enum PaymentMethod {
   BankTransfer = 'BANK_TRANSFER',
   Card = 'CARD',
   Crypto = 'CRYPTO'
+}
+
+export enum PaymentStatus {
+  Confirmed = 'CONFIRMED',
+  Failed = 'FAILED',
+  Pending = 'PENDING'
 }
 
 export type PlatformOverview = {
@@ -322,6 +388,7 @@ export type Query = {
   billingTiers: Array<BillingTier>;
   cluster?: Maybe<Cluster>;
   clusters: Array<Cluster>;
+  connectionEvents: Array<ConnectionEvent>;
   currentStreamHealth?: Maybe<StreamHealthMetric>;
   developerTokens: Array<DeveloperToken>;
   geographicDistribution: GeographicDistribution;
@@ -329,25 +396,38 @@ export type Query = {
   invoices: Array<Invoice>;
   loadBalancingMetrics: Array<LoadBalancingMetric>;
   node?: Maybe<Node>;
+  nodeMetrics: Array<NodeMetric>;
   nodes: Array<Node>;
   platformOverview: PlatformOverview;
   rebufferingEvents: Array<RebufferingEvent>;
+  recordings: Array<Recording>;
+  routingEvents: Array<RoutingEvent>;
+  serviceInstances: Array<ServiceInstance>;
   stream?: Maybe<Stream>;
   streamAnalytics?: Maybe<StreamAnalytics>;
   streamHealthAlerts: Array<StreamHealthAlert>;
   streamHealthMetrics: Array<StreamHealthMetric>;
+  streamKeys: Array<StreamKey>;
   streamQualityChanges: Array<StreamQualityChange>;
   streams: Array<Stream>;
   tenant?: Maybe<Tenant>;
+  tenantClusterAssignments: Array<TenantClusterAssignment>;
   usageRecords: Array<UsageRecord>;
   validateStreamKey: StreamValidation;
   viewerGeographics: Array<ViewerGeographic>;
   viewerMetrics: Array<ViewerMetric>;
+  viewerMetrics5m: Array<ViewerMetrics5m>;
 };
 
 
 export type QueryClusterArgs = {
   id: Scalars['ID']['input'];
+};
+
+
+export type QueryConnectionEventsArgs = {
+  stream?: InputMaybe<Scalars['String']['input']>;
+  timeRange?: InputMaybe<TimeRangeInput>;
 };
 
 
@@ -377,6 +457,12 @@ export type QueryNodeArgs = {
 };
 
 
+export type QueryNodeMetricsArgs = {
+  nodeId?: InputMaybe<Scalars['String']['input']>;
+  timeRange?: InputMaybe<TimeRangeInput>;
+};
+
+
 export type QueryPlatformOverviewArgs = {
   timeRange?: InputMaybe<TimeRangeInput>;
 };
@@ -385,6 +471,22 @@ export type QueryPlatformOverviewArgs = {
 export type QueryRebufferingEventsArgs = {
   stream: Scalars['String']['input'];
   timeRange?: InputMaybe<TimeRangeInput>;
+};
+
+
+export type QueryRecordingsArgs = {
+  streamId?: InputMaybe<Scalars['ID']['input']>;
+};
+
+
+export type QueryRoutingEventsArgs = {
+  stream?: InputMaybe<Scalars['String']['input']>;
+  timeRange?: InputMaybe<TimeRangeInput>;
+};
+
+
+export type QueryServiceInstancesArgs = {
+  clusterId?: InputMaybe<Scalars['String']['input']>;
 };
 
 
@@ -408,6 +510,11 @@ export type QueryStreamHealthAlertsArgs = {
 export type QueryStreamHealthMetricsArgs = {
   stream: Scalars['String']['input'];
   timeRange?: InputMaybe<TimeRangeInput>;
+};
+
+
+export type QueryStreamKeysArgs = {
+  streamId: Scalars['ID']['input'];
 };
 
 
@@ -438,6 +545,12 @@ export type QueryViewerMetricsArgs = {
   timeRange?: InputMaybe<TimeRangeInput>;
 };
 
+
+export type QueryViewerMetrics5mArgs = {
+  stream?: InputMaybe<Scalars['String']['input']>;
+  timeRange?: InputMaybe<TimeRangeInput>;
+};
+
 export type RebufferingEvent = {
   __typename?: 'RebufferingEvent';
   bufferState: BufferState;
@@ -450,6 +563,59 @@ export type RebufferingEvent = {
   rebufferStart: Scalars['Boolean']['output'];
   stream: Scalars['String']['output'];
   timestamp: Scalars['Time']['output'];
+};
+
+export type Recording = {
+  __typename?: 'Recording';
+  createdAt: Scalars['Time']['output'];
+  duration?: Maybe<Scalars['Int']['output']>;
+  endTime?: Maybe<Scalars['Time']['output']>;
+  fileSizeBytes?: Maybe<Scalars['Int']['output']>;
+  id: Scalars['ID']['output'];
+  playbackId?: Maybe<Scalars['String']['output']>;
+  startTime?: Maybe<Scalars['Time']['output']>;
+  status: Scalars['String']['output'];
+  streamId: Scalars['ID']['output'];
+  thumbnailUrl?: Maybe<Scalars['String']['output']>;
+  title?: Maybe<Scalars['String']['output']>;
+  updatedAt: Scalars['Time']['output'];
+};
+
+export type RoutingEvent = {
+  __typename?: 'RoutingEvent';
+  clientCountry?: Maybe<Scalars['String']['output']>;
+  clientIp?: Maybe<Scalars['String']['output']>;
+  clientLatitude?: Maybe<Scalars['Float']['output']>;
+  clientLongitude?: Maybe<Scalars['Float']['output']>;
+  details?: Maybe<Scalars['String']['output']>;
+  nodeLatitude?: Maybe<Scalars['Float']['output']>;
+  nodeLongitude?: Maybe<Scalars['Float']['output']>;
+  nodeName?: Maybe<Scalars['String']['output']>;
+  score?: Maybe<Scalars['Int']['output']>;
+  selectedNode: Scalars['String']['output'];
+  status: Scalars['String']['output'];
+  streamName: Scalars['String']['output'];
+  timestamp: Scalars['Time']['output'];
+};
+
+export type ServiceInstance = {
+  __typename?: 'ServiceInstance';
+  clusterId: Scalars['String']['output'];
+  containerId?: Maybe<Scalars['String']['output']>;
+  cpuUsagePercent?: Maybe<Scalars['Float']['output']>;
+  healthStatus: Scalars['String']['output'];
+  id: Scalars['ID']['output'];
+  instanceId: Scalars['String']['output'];
+  lastHealthCheck?: Maybe<Scalars['Time']['output']>;
+  memoryUsageMb?: Maybe<Scalars['Int']['output']>;
+  nodeId?: Maybe<Scalars['String']['output']>;
+  port?: Maybe<Scalars['Int']['output']>;
+  processId?: Maybe<Scalars['Int']['output']>;
+  serviceId: Scalars['String']['output'];
+  startedAt?: Maybe<Scalars['Time']['output']>;
+  status: Scalars['String']['output'];
+  stoppedAt?: Maybe<Scalars['Time']['output']>;
+  version?: Maybe<Scalars['String']['output']>;
 };
 
 export type Stream = {
@@ -467,27 +633,53 @@ export type Stream = {
 
 export type StreamAnalytics = {
   __typename?: 'StreamAnalytics';
-  alertCount?: Maybe<Scalars['Int']['output']>;
-  averageHealthScore?: Maybe<Scalars['Float']['output']>;
-  averageViewers: Scalars['Float']['output'];
-  bufferState?: Maybe<BufferState>;
-  currentBitrate?: Maybe<Scalars['Int']['output']>;
+  avgBitrate?: Maybe<Scalars['Int']['output']>;
+  avgBufferHealth?: Maybe<Scalars['Float']['output']>;
+  avgViewers?: Maybe<Scalars['Float']['output']>;
+  bandwidthIn: Scalars['Float']['output'];
+  bandwidthOut: Scalars['Float']['output'];
+  bitrateKbps?: Maybe<Scalars['Int']['output']>;
+  createdAt: Scalars['Time']['output'];
+  currentBufferState?: Maybe<Scalars['String']['output']>;
   currentCodec?: Maybe<Scalars['String']['output']>;
   currentFps?: Maybe<Scalars['Float']['output']>;
   currentHealthScore?: Maybe<Scalars['Float']['output']>;
   currentIssues?: Maybe<Scalars['String']['output']>;
   currentResolution?: Maybe<Scalars['String']['output']>;
-  frameJitterMs?: Maybe<Scalars['Float']['output']>;
-  keyframeStabilityMs?: Maybe<Scalars['Float']['output']>;
-  packetLossPercentage?: Maybe<Scalars['Float']['output']>;
+  currentViewers: Scalars['Int']['output'];
+  downbytes: Scalars['Float']['output'];
+  firstMs?: Maybe<Scalars['Int']['output']>;
+  id: Scalars['ID']['output'];
+  inputs: Scalars['Int']['output'];
+  internalName: Scalars['String']['output'];
+  lastMs?: Maybe<Scalars['Int']['output']>;
+  lastUpdated: Scalars['Time']['output'];
+  latitude?: Maybe<Scalars['Float']['output']>;
+  location?: Maybe<Scalars['String']['output']>;
+  longitude?: Maybe<Scalars['Float']['output']>;
+  mistStatus?: Maybe<Scalars['String']['output']>;
+  nodeId?: Maybe<Scalars['String']['output']>;
+  nodeName?: Maybe<Scalars['String']['output']>;
+  outputs: Scalars['Int']['output'];
+  packetLossRate?: Maybe<Scalars['Float']['output']>;
+  packetsLost: Scalars['Float']['output'];
+  packetsRetrans: Scalars['Float']['output'];
+  packetsSent: Scalars['Float']['output'];
   peakViewers: Scalars['Int']['output'];
   qualityTier?: Maybe<Scalars['String']['output']>;
-  rebufferCount?: Maybe<Scalars['Int']['output']>;
-  stream: Scalars['String']['output'];
-  timeRange: TimeRange;
-  totalViewTime: Scalars['Float']['output'];
-  totalViews: Scalars['Int']['output'];
-  uniqueViewers: Scalars['Int']['output'];
+  resolution?: Maybe<Scalars['String']['output']>;
+  sessionEndTime?: Maybe<Scalars['Time']['output']>;
+  sessionStartTime?: Maybe<Scalars['Time']['output']>;
+  status?: Maybe<Scalars['String']['output']>;
+  streamId?: Maybe<Scalars['ID']['output']>;
+  tenantId: Scalars['ID']['output'];
+  totalBandwidthGb: Scalars['Float']['output'];
+  totalConnections: Scalars['Int']['output'];
+  totalSessionDuration: Scalars['Int']['output'];
+  trackCount: Scalars['Int']['output'];
+  uniqueCities?: Maybe<Scalars['Int']['output']>;
+  uniqueCountries?: Maybe<Scalars['Int']['output']>;
+  upbytes: Scalars['Float']['output'];
 };
 
 export type StreamEvent = {
@@ -549,6 +741,17 @@ export type StreamHealthMetric = {
   width?: Maybe<Scalars['Int']['output']>;
 };
 
+export type StreamKey = {
+  __typename?: 'StreamKey';
+  createdAt: Scalars['Time']['output'];
+  id: Scalars['ID']['output'];
+  isActive: Scalars['Boolean']['output'];
+  keyName?: Maybe<Scalars['String']['output']>;
+  keyValue: Scalars['String']['output'];
+  lastUsedAt?: Maybe<Scalars['Time']['output']>;
+  streamId: Scalars['ID']['output'];
+};
+
 export type StreamQualityChange = {
   __typename?: 'StreamQualityChange';
   changeType: QualityChangeType;
@@ -584,7 +787,6 @@ export type Subscription = {
   streamEvents: StreamEvent;
   systemHealth: SystemHealthEvent;
   trackListUpdates: TrackListEvent;
-  userEvents: TenantEvent;
   viewerMetrics: ViewerMetrics;
 };
 
@@ -624,7 +826,22 @@ export type Tenant = {
   settings?: Maybe<Scalars['JSON']['output']>;
 };
 
-export type TenantEvent = StreamEvent | TrackListEvent | ViewerMetrics;
+export type TenantClusterAssignment = {
+  __typename?: 'TenantClusterAssignment';
+  clusterId: Scalars['String']['output'];
+  createdAt: Scalars['Time']['output'];
+  deploymentTier?: Maybe<Scalars['String']['output']>;
+  fallbackWhenFull: Scalars['Boolean']['output'];
+  id: Scalars['ID']['output'];
+  isActive: Scalars['Boolean']['output'];
+  isPrimary: Scalars['Boolean']['output'];
+  maxBandwidthMbpsOnCluster?: Maybe<Scalars['Int']['output']>;
+  maxStreamsOnCluster?: Maybe<Scalars['Int']['output']>;
+  maxViewersOnCluster?: Maybe<Scalars['Int']['output']>;
+  priority: Scalars['Int']['output'];
+  tenantId: Scalars['ID']['output'];
+  updatedAt: Scalars['Time']['output'];
+};
 
 export type TimeRange = {
   __typename?: 'TimeRange';
@@ -706,6 +923,19 @@ export type ViewerMetrics = {
   stream: Scalars['String']['output'];
   timestamp: Scalars['Time']['output'];
   viewerCount: Scalars['Int']['output'];
+};
+
+export type ViewerMetrics5m = {
+  __typename?: 'ViewerMetrics5m';
+  avgBufferHealth: Scalars['Float']['output'];
+  avgConnectionQuality: Scalars['Float']['output'];
+  avgViewers: Scalars['Float']['output'];
+  internalName: Scalars['String']['output'];
+  nodeId: Scalars['String']['output'];
+  peakViewers: Scalars['Int']['output'];
+  timestamp: Scalars['Time']['output'];
+  uniqueCities: Scalars['Int']['output'];
+  uniqueCountries: Scalars['Int']['output'];
 };
 
 /**
@@ -903,7 +1133,7 @@ export type CreatePaymentMutationVariables = Exact<{
 }>;
 
 
-export type CreatePaymentMutation = { __typename?: 'Mutation', createPayment: { __typename?: 'Payment', id: string, amount: number, currency: string, method: PaymentMethod, status: string, createdAt: string } };
+export type CreatePaymentMutation = { __typename?: 'Mutation', createPayment: { __typename?: 'Payment', id: string, amount: number, currency: string, method: PaymentMethod, status: PaymentStatus, createdAt: string } };
 
 export type UpdateBillingTierMutationVariables = Exact<{
   tierId: Scalars['ID']['input'];
@@ -969,13 +1199,29 @@ export type RefreshStreamKeyMutationVariables = Exact<{
 
 export type RefreshStreamKeyMutation = { __typename?: 'Mutation', refreshStreamKey: { __typename?: 'Stream', id: string, name: string, description?: string | null | undefined, streamKey: string, playbackId: string, status: StreamStatus, record: boolean, createdAt: string, updatedAt: string } };
 
+export type CreateStreamKeyMutationVariables = Exact<{
+  streamId: Scalars['ID']['input'];
+  input: CreateStreamKeyInput;
+}>;
+
+
+export type CreateStreamKeyMutation = { __typename?: 'Mutation', createStreamKey: { __typename?: 'StreamKey', id: string, streamId: string, keyValue: string, keyName?: string | null | undefined, isActive: boolean, lastUsedAt?: string | null | undefined, createdAt: string } };
+
+export type DeleteStreamKeyMutationVariables = Exact<{
+  streamId: Scalars['ID']['input'];
+  keyId: Scalars['ID']['input'];
+}>;
+
+
+export type DeleteStreamKeyMutation = { __typename?: 'Mutation', deleteStreamKey: boolean };
+
 export type GetStreamAnalyticsQueryVariables = Exact<{
   stream: Scalars['String']['input'];
   timeRange?: InputMaybe<TimeRangeInput>;
 }>;
 
 
-export type GetStreamAnalyticsQuery = { __typename?: 'Query', streamAnalytics?: { __typename?: 'StreamAnalytics', stream: string, totalViews: number, totalViewTime: number, peakViewers: number, averageViewers: number, uniqueViewers: number, currentHealthScore?: number | null | undefined, averageHealthScore?: number | null | undefined, frameJitterMs?: number | null | undefined, keyframeStabilityMs?: number | null | undefined, currentIssues?: string | null | undefined, bufferState?: BufferState | null | undefined, packetLossPercentage?: number | null | undefined, qualityTier?: string | null | undefined, currentCodec?: string | null | undefined, currentResolution?: string | null | undefined, currentBitrate?: number | null | undefined, currentFps?: number | null | undefined, rebufferCount?: number | null | undefined, alertCount?: number | null | undefined, timeRange: { __typename?: 'TimeRange', start: string, end: string } } | null | undefined };
+export type GetStreamAnalyticsQuery = { __typename?: 'Query', streamAnalytics?: { __typename?: 'StreamAnalytics', id: string, tenantId: string, streamId?: string | null | undefined, internalName: string, sessionStartTime?: string | null | undefined, sessionEndTime?: string | null | undefined, totalSessionDuration: number, currentViewers: number, peakViewers: number, totalConnections: number, bandwidthIn: number, bandwidthOut: number, totalBandwidthGb: number, upbytes: number, downbytes: number, bitrateKbps?: number | null | undefined, resolution?: string | null | undefined, packetsSent: number, packetsLost: number, packetsRetrans: number, firstMs?: number | null | undefined, lastMs?: number | null | undefined, trackCount: number, inputs: number, outputs: number, nodeId?: string | null | undefined, nodeName?: string | null | undefined, latitude?: number | null | undefined, longitude?: number | null | undefined, location?: string | null | undefined, status?: string | null | undefined, lastUpdated: string, createdAt: string, currentHealthScore?: number | null | undefined, currentBufferState?: string | null | undefined, currentIssues?: string | null | undefined, currentCodec?: string | null | undefined, currentFps?: number | null | undefined, currentResolution?: string | null | undefined, mistStatus?: string | null | undefined, qualityTier?: string | null | undefined, avgViewers?: number | null | undefined, uniqueCountries?: number | null | undefined, uniqueCities?: number | null | undefined, avgBufferHealth?: number | null | undefined, avgBitrate?: number | null | undefined, packetLossRate?: number | null | undefined } | null | undefined };
 
 export type GetViewerMetricsQueryVariables = Exact<{
   stream?: InputMaybe<Scalars['String']['input']>;
@@ -1022,11 +1268,6 @@ export type GetLoadBalancingMetricsQueryVariables = Exact<{
 
 export type GetLoadBalancingMetricsQuery = { __typename?: 'Query', loadBalancingMetrics: Array<{ __typename?: 'LoadBalancingMetric', timestamp: string, stream: string, selectedNode: string, nodeId?: string | null | undefined, clientIp?: string | null | undefined, clientCountry?: string | null | undefined, clientLatitude?: number | null | undefined, clientLongitude?: number | null | undefined, nodeLatitude?: number | null | undefined, nodeLongitude?: number | null | undefined, score?: number | null | undefined, status: string, details?: string | null | undefined, routingDistance?: number | null | undefined, eventType?: string | null | undefined, source?: string | null | undefined }> };
 
-export type PlaceholderQueryVariables = Exact<{ [key: string]: never; }>;
-
-
-export type PlaceholderQuery = { __typename: 'Query' };
-
 export type GetBillingTiersQueryVariables = Exact<{ [key: string]: never; }>;
 
 
@@ -1040,14 +1281,14 @@ export type GetBillingStatusQuery = { __typename?: 'Query', billingStatus: { __t
 export type GetInvoicesQueryVariables = Exact<{ [key: string]: never; }>;
 
 
-export type GetInvoicesQuery = { __typename?: 'Query', invoices: Array<{ __typename?: 'Invoice', id: string, amount: number, currency: string, status: string, dueDate: string, createdAt: string, lineItems: Array<{ __typename?: 'LineItem', description: string, quantity: number, unitPrice: number, total: number }> }> };
+export type GetInvoicesQuery = { __typename?: 'Query', invoices: Array<{ __typename?: 'Invoice', id: string, amount: number, currency: string, status: InvoiceStatus, dueDate: string, createdAt: string, lineItems: Array<{ __typename?: 'LineItem', description: string, quantity: number, unitPrice: number, total: number }> }> };
 
 export type GetInvoiceQueryVariables = Exact<{
   id: Scalars['ID']['input'];
 }>;
 
 
-export type GetInvoiceQuery = { __typename?: 'Query', invoice?: { __typename?: 'Invoice', id: string, amount: number, currency: string, status: string, dueDate: string, createdAt: string, lineItems: Array<{ __typename?: 'LineItem', description: string, quantity: number, unitPrice: number, total: number }> } | null | undefined };
+export type GetInvoiceQuery = { __typename?: 'Query', invoice?: { __typename?: 'Invoice', id: string, amount: number, currency: string, status: InvoiceStatus, dueDate: string, createdAt: string, lineItems: Array<{ __typename?: 'LineItem', description: string, quantity: number, unitPrice: number, total: number }> } | null | undefined };
 
 export type GetApiTokensQueryVariables = Exact<{ [key: string]: never; }>;
 
@@ -1122,6 +1363,22 @@ export type GetNodeQueryVariables = Exact<{
 
 export type GetNodeQuery = { __typename?: 'Query', node?: { __typename?: 'Node', id: string, name: string, cluster: string, type: string, status: NodeStatus, region: string, ipAddress?: string | null | undefined, lastSeen: string, createdAt: string, latitude?: number | null | undefined, longitude?: number | null | undefined, location?: string | null | undefined } | null | undefined };
 
+export type ServiceInstanceInfoFragment = { __typename?: 'ServiceInstance', id: string, instanceId: string, clusterId: string, nodeId?: string | null | undefined, serviceId: string, version?: string | null | undefined, port?: number | null | undefined, processId?: number | null | undefined, containerId?: string | null | undefined, status: string, healthStatus: string, startedAt?: string | null | undefined, stoppedAt?: string | null | undefined, lastHealthCheck?: string | null | undefined };
+
+export type GetServiceInstancesQueryVariables = Exact<{
+  clusterId?: InputMaybe<Scalars['String']['input']>;
+}>;
+
+
+export type GetServiceInstancesQuery = { __typename?: 'Query', serviceInstances: Array<{ __typename?: 'ServiceInstance', id: string, instanceId: string, clusterId: string, nodeId?: string | null | undefined, serviceId: string, version?: string | null | undefined, port?: number | null | undefined, processId?: number | null | undefined, containerId?: string | null | undefined, status: string, healthStatus: string, startedAt?: string | null | undefined, stoppedAt?: string | null | undefined, lastHealthCheck?: string | null | undefined }> };
+
+export type TenantClusterAssignmentInfoFragment = { __typename?: 'TenantClusterAssignment', id: string, tenantId: string, clusterId: string, deploymentTier?: string | null | undefined, priority: number, isPrimary: boolean, isActive: boolean, maxStreamsOnCluster?: number | null | undefined, maxViewersOnCluster?: number | null | undefined, maxBandwidthMbpsOnCluster?: number | null | undefined, fallbackWhenFull: boolean, createdAt: string, updatedAt: string };
+
+export type GetTenantClusterAssignmentsQueryVariables = Exact<{ [key: string]: never; }>;
+
+
+export type GetTenantClusterAssignmentsQuery = { __typename?: 'Query', tenantClusterAssignments: Array<{ __typename?: 'TenantClusterAssignment', id: string, tenantId: string, clusterId: string, deploymentTier?: string | null | undefined, priority: number, isPrimary: boolean, isActive: boolean, maxStreamsOnCluster?: number | null | undefined, maxViewersOnCluster?: number | null | undefined, maxBandwidthMbpsOnCluster?: number | null | undefined, fallbackWhenFull: boolean, createdAt: string, updatedAt: string }> };
+
 export type IntrospectSchemaQueryVariables = Exact<{ [key: string]: never; }>;
 
 
@@ -1137,6 +1394,97 @@ export type GetRootTypesQueryVariables = Exact<{ [key: string]: never; }>;
 
 
 export type GetRootTypesQuery = { __typename?: 'Query', __schema: { __typename?: '__Schema', queryType: { __typename?: '__Type', name?: string | null | undefined, fields?: Array<{ __typename?: '__Field', name: string, description?: string | null | undefined }> | null | undefined }, mutationType?: { __typename?: '__Type', name?: string | null | undefined, fields?: Array<{ __typename?: '__Field', name: string, description?: string | null | undefined }> | null | undefined } | null | undefined, subscriptionType?: { __typename?: '__Type', name?: string | null | undefined, fields?: Array<{ __typename?: '__Field', name: string, description?: string | null | undefined }> | null | undefined } | null | undefined } };
+
+export type GetViewerMetrics5mQueryVariables = Exact<{
+  stream?: InputMaybe<Scalars['String']['input']>;
+  timeRange?: InputMaybe<TimeRangeInput>;
+}>;
+
+
+export type GetViewerMetrics5mQuery = { __typename?: 'Query', viewerMetrics5m: Array<{ __typename?: 'ViewerMetrics5m', timestamp: string, internalName: string, nodeId: string, peakViewers: number, avgViewers: number, uniqueCountries: number, uniqueCities: number, avgConnectionQuality: number, avgBufferHealth: number }> };
+
+export type GetPerformanceServiceInstancesQueryVariables = Exact<{
+  clusterId?: InputMaybe<Scalars['String']['input']>;
+}>;
+
+
+export type GetPerformanceServiceInstancesQuery = { __typename?: 'Query', serviceInstances: Array<{ __typename?: 'ServiceInstance', id: string, instanceId: string, clusterId: string, nodeId?: string | null | undefined, serviceId: string, version?: string | null | undefined, port?: number | null | undefined, processId?: number | null | undefined, containerId?: string | null | undefined, status: string, healthStatus: string, startedAt?: string | null | undefined, stoppedAt?: string | null | undefined, lastHealthCheck?: string | null | undefined, cpuUsagePercent?: number | null | undefined, memoryUsageMb?: number | null | undefined }> };
+
+export type GetPlatformPerformanceQueryVariables = Exact<{
+  timeRange?: InputMaybe<TimeRangeInput>;
+}>;
+
+
+export type GetPlatformPerformanceQuery = { __typename?: 'Query', viewerMetrics5m: Array<{ __typename?: 'ViewerMetrics5m', timestamp: string, internalName: string, nodeId: string, peakViewers: number, avgViewers: number, uniqueCountries: number, uniqueCities: number, avgConnectionQuality: number, avgBufferHealth: number }>, nodeMetrics: Array<{ __typename?: 'NodeMetric', timestamp: string, nodeId: string, cpuUsage: number, memoryUsage: number, diskUsage: number, healthScore: number, status: string }> };
+
+export type GetStreamPerformanceQueryVariables = Exact<{
+  stream: Scalars['String']['input'];
+  timeRange?: InputMaybe<TimeRangeInput>;
+}>;
+
+
+export type GetStreamPerformanceQuery = { __typename?: 'Query', viewerMetrics5m: Array<{ __typename?: 'ViewerMetrics5m', timestamp: string, internalName: string, nodeId: string, peakViewers: number, avgViewers: number, uniqueCountries: number, uniqueCities: number, avgConnectionQuality: number, avgBufferHealth: number }>, routingEvents: Array<{ __typename?: 'RoutingEvent', timestamp: string, selectedNode: string, score?: number | null | undefined, status: string, clientCountry?: string | null | undefined, nodeLatitude?: number | null | undefined, nodeLongitude?: number | null | undefined }> };
+
+export type GetNodeEfficiencyQueryVariables = Exact<{
+  nodeId: Scalars['String']['input'];
+  timeRange?: InputMaybe<TimeRangeInput>;
+}>;
+
+
+export type GetNodeEfficiencyQuery = { __typename?: 'Query', nodeMetrics: Array<{ __typename?: 'NodeMetric', timestamp: string, nodeId: string, cpuUsage: number, memoryUsage: number, diskUsage: number, networkRx: number, networkTx: number, healthScore: number, status: string }>, routingEvents: Array<{ __typename?: 'RoutingEvent', timestamp: string, streamName: string, selectedNode: string, score?: number | null | undefined, status: string, clientCountry?: string | null | undefined }> };
+
+export type GetRegionalPerformanceQueryVariables = Exact<{
+  timeRange?: InputMaybe<TimeRangeInput>;
+}>;
+
+
+export type GetRegionalPerformanceQuery = { __typename?: 'Query', viewerMetrics5m: Array<{ __typename?: 'ViewerMetrics5m', timestamp: string, internalName: string, nodeId: string, avgViewers: number, uniqueCountries: number, avgConnectionQuality: number, avgBufferHealth: number }>, connectionEvents: Array<{ __typename?: 'ConnectionEvent', timestamp: string, nodeId: string, countryCode?: string | null | undefined, city?: string | null | undefined, eventType: string }> };
+
+export type GetRoutingEventsQueryVariables = Exact<{
+  stream?: InputMaybe<Scalars['String']['input']>;
+  timeRange?: InputMaybe<TimeRangeInput>;
+}>;
+
+
+export type GetRoutingEventsQuery = { __typename?: 'Query', routingEvents: Array<{ __typename?: 'RoutingEvent', timestamp: string, streamName: string, selectedNode: string, status: string, details?: string | null | undefined, score?: number | null | undefined, clientIp?: string | null | undefined, clientCountry?: string | null | undefined, clientLatitude?: number | null | undefined, clientLongitude?: number | null | undefined, nodeLatitude?: number | null | undefined, nodeLongitude?: number | null | undefined, nodeName?: string | null | undefined }> };
+
+export type GetConnectionEventsQueryVariables = Exact<{
+  stream?: InputMaybe<Scalars['String']['input']>;
+  timeRange?: InputMaybe<TimeRangeInput>;
+}>;
+
+
+export type GetConnectionEventsQuery = { __typename?: 'Query', connectionEvents: Array<{ __typename?: 'ConnectionEvent', eventId: string, timestamp: string, tenantId: string, internalName: string, sessionId: string, connectionAddr: string, connector: string, nodeId: string, countryCode?: string | null | undefined, city?: string | null | undefined, latitude?: number | null | undefined, longitude?: number | null | undefined, eventType: string }> };
+
+export type GetNodeMetricsQueryVariables = Exact<{
+  nodeId?: InputMaybe<Scalars['String']['input']>;
+  timeRange?: InputMaybe<TimeRangeInput>;
+}>;
+
+
+export type GetNodeMetricsQuery = { __typename?: 'Query', nodeMetrics: Array<{ __typename?: 'NodeMetric', timestamp: string, nodeId: string, cpuUsage: number, memoryUsage: number, diskUsage: number, networkRx: number, networkTx: number, healthScore: number, status: string, latitude?: number | null | undefined, longitude?: number | null | undefined, tags?: Array<string> | null | undefined, metadata?: string | null | undefined }> };
+
+export type GetPlatformRoutingEventsQueryVariables = Exact<{
+  timeRange?: InputMaybe<TimeRangeInput>;
+}>;
+
+
+export type GetPlatformRoutingEventsQuery = { __typename?: 'Query', routingEvents: Array<{ __typename?: 'RoutingEvent', timestamp: string, streamName: string, selectedNode: string, status: string, score?: number | null | undefined, clientCountry?: string | null | undefined, clientLatitude?: number | null | undefined, clientLongitude?: number | null | undefined, nodeLatitude?: number | null | undefined, nodeLongitude?: number | null | undefined, nodeName?: string | null | undefined, details?: string | null | undefined }> };
+
+export type GetStreamConnectionEventsQueryVariables = Exact<{
+  stream: Scalars['String']['input'];
+  timeRange?: InputMaybe<TimeRangeInput>;
+}>;
+
+
+export type GetStreamConnectionEventsQuery = { __typename?: 'Query', connectionEvents: Array<{ __typename?: 'ConnectionEvent', timestamp: string, sessionId: string, connectionAddr: string, nodeId: string, countryCode?: string | null | undefined, city?: string | null | undefined, latitude?: number | null | undefined, longitude?: number | null | undefined, eventType: string }> };
+
+export type GetAllNodeMetricsQueryVariables = Exact<{
+  timeRange?: InputMaybe<TimeRangeInput>;
+}>;
+
+
+export type GetAllNodeMetricsQuery = { __typename?: 'Query', nodeMetrics: Array<{ __typename?: 'NodeMetric', timestamp: string, nodeId: string, cpuUsage: number, memoryUsage: number, diskUsage: number, networkRx: number, networkTx: number, healthScore: number, status: string, latitude?: number | null | undefined, longitude?: number | null | undefined }> };
 
 export type StreamInfoFragment = { __typename?: 'Stream', id: string, name: string, description?: string | null | undefined, streamKey: string, playbackId: string, status: StreamStatus, record: boolean, createdAt: string, updatedAt: string };
 
@@ -1159,6 +1507,31 @@ export type ValidateStreamKeyQueryVariables = Exact<{
 
 export type ValidateStreamKeyQuery = { __typename?: 'Query', validateStreamKey: { __typename?: 'StreamValidation', valid: boolean, streamKey: string, error?: string | null | undefined } };
 
+export type StreamKeyInfoFragment = { __typename?: 'StreamKey', id: string, streamId: string, keyValue: string, keyName?: string | null | undefined, isActive: boolean, lastUsedAt?: string | null | undefined, createdAt: string };
+
+export type GetStreamKeysQueryVariables = Exact<{
+  streamId: Scalars['ID']['input'];
+}>;
+
+
+export type GetStreamKeysQuery = { __typename?: 'Query', streamKeys: Array<{ __typename?: 'StreamKey', id: string, streamId: string, keyValue: string, keyName?: string | null | undefined, isActive: boolean, lastUsedAt?: string | null | undefined, createdAt: string }> };
+
+export type RecordingInfoFragment = { __typename?: 'Recording', id: string, streamId: string, title?: string | null | undefined, duration?: number | null | undefined, fileSizeBytes?: number | null | undefined, playbackId?: string | null | undefined, thumbnailUrl?: string | null | undefined, startTime?: string | null | undefined, endTime?: string | null | undefined, status: string, createdAt: string, updatedAt: string };
+
+export type GetRecordingsQueryVariables = Exact<{
+  streamId?: InputMaybe<Scalars['ID']['input']>;
+}>;
+
+
+export type GetRecordingsQuery = { __typename?: 'Query', recordings: Array<{ __typename?: 'Recording', id: string, streamId: string, title?: string | null | undefined, duration?: number | null | undefined, fileSizeBytes?: number | null | undefined, playbackId?: string | null | undefined, thumbnailUrl?: string | null | undefined, startTime?: string | null | undefined, endTime?: string | null | undefined, status: string, createdAt: string, updatedAt: string }> };
+
+export type GetStreamRecordingsQueryVariables = Exact<{
+  streamId: Scalars['ID']['input'];
+}>;
+
+
+export type GetStreamRecordingsQuery = { __typename?: 'Query', recordings: Array<{ __typename?: 'Recording', id: string, streamId: string, title?: string | null | undefined, duration?: number | null | undefined, fileSizeBytes?: number | null | undefined, playbackId?: string | null | undefined, thumbnailUrl?: string | null | undefined, startTime?: string | null | undefined, endTime?: string | null | undefined, status: string, createdAt: string, updatedAt: string }> };
+
 export type StreamEventsSubscriptionVariables = Exact<{
   stream?: InputMaybe<Scalars['String']['input']>;
 }>;
@@ -1179,11 +1552,6 @@ export type TrackListUpdatesSubscriptionVariables = Exact<{
 
 
 export type TrackListUpdatesSubscription = { __typename?: 'Subscription', trackListUpdates: { __typename?: 'TrackListEvent', stream: string, trackList: string, trackCount: number, timestamp: string } };
-
-export type TenantEventsSubscriptionVariables = Exact<{ [key: string]: never; }>;
-
-
-export type TenantEventsSubscription = { __typename?: 'Subscription', userEvents: { __typename?: 'StreamEvent', type: StreamEventType, stream: string, status: StreamStatus, timestamp: string, details?: string | null | undefined } | { __typename?: 'TrackListEvent', stream: string, trackList: string, trackCount: number, timestamp: string } | { __typename?: 'ViewerMetrics', stream: string, currentViewers: number, viewerCount: number, peakViewers: number, bandwidth: number, connectionQuality?: number | null | undefined, bufferHealth?: number | null | undefined, timestamp: string } };
 
 export type SystemHealthSubscriptionVariables = Exact<{ [key: string]: never; }>;
 

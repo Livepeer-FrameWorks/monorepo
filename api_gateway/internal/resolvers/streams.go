@@ -252,21 +252,26 @@ func (r *Resolver) DoValidateStreamKey(ctx context.Context, streamKey string) (*
 }
 
 // DoCreateClip creates a new clip
-func (r *Resolver) DoCreateClip(ctx context.Context, input model.CreateClipInput) (*model.Clip, error) {
+func (r *Resolver) DoCreateClip(ctx context.Context, input model.CreateClipInput) (*commodore.ClipResponse, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo clip creation")
-		return &model.Clip{
-			ID:          "clip_demo_" + time.Now().Format("20060102150405"),
-			Stream:      input.Stream,
-			Title:       input.Title,
-			Description: input.Description,
-			StartTime:   input.StartTime,
-			EndTime:     input.EndTime,
-			Duration:    input.EndTime - input.StartTime,
-			PlaybackID:  "pb_clip_demo_" + time.Now().Format("150405"),
-			Status:      "processing",
-			CreatedAt:   time.Now(),
-			UpdatedAt:   time.Now(),
+		return &commodore.ClipResponse{
+			ID:       "clip_demo_" + time.Now().Format("20060102150405"),
+			StreamID: input.Stream,
+			Title:    input.Title,
+			Description: func() string {
+				if input.Description != nil {
+					return *input.Description
+				}
+				return ""
+			}(),
+			StartTime:  int64(input.StartTime),
+			EndTime:    int64(input.EndTime),
+			Duration:   int64(input.EndTime - input.StartTime),
+			PlaybackID: "pb_clip_demo_" + time.Now().Format("150405"),
+			Status:     "processing",
+			CreatedAt:  time.Now(),
+			UpdatedAt:  time.Now(),
 		}, nil
 	}
 
@@ -296,18 +301,221 @@ func (r *Resolver) DoCreateClip(ctx context.Context, input model.CreateClipInput
 		return nil, fmt.Errorf("failed to create clip: %w", err)
 	}
 
+	return clipResp, nil
+}
+
+// === STREAM KEYS MANAGEMENT ===
+
+// DoGetStreamKeys retrieves all stream keys for a specific stream
+func (r *Resolver) DoGetStreamKeys(ctx context.Context, streamID string) ([]*models.StreamKey, error) {
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Returning demo stream keys")
+		return []*models.StreamKey{
+			{
+				ID:         "sk_demo_1",
+				TenantID:   "tenant_demo_1",
+				UserID:     "user_demo_1",
+				StreamID:   streamID,
+				KeyValue:   "sk_demo_live_primary",
+				KeyName:    func() *string { s := "Primary Key"; return &s }(),
+				IsActive:   true,
+				LastUsedAt: func() *time.Time { t := time.Now().Add(-1 * time.Hour); return &t }(),
+				CreatedAt:  time.Now().Add(-7 * 24 * time.Hour),
+				UpdatedAt:  time.Now().Add(-7 * 24 * time.Hour),
+			},
+			{
+				ID:         "sk_demo_2",
+				TenantID:   "tenant_demo_1",
+				UserID:     "user_demo_1",
+				StreamID:   streamID,
+				KeyValue:   "sk_demo_live_backup",
+				KeyName:    func() *string { s := "Backup Key"; return &s }(),
+				IsActive:   false,
+				LastUsedAt: func() *time.Time { t := time.Now().Add(-3 * 24 * time.Hour); return &t }(),
+				CreatedAt:  time.Now().Add(-30 * 24 * time.Hour),
+				UpdatedAt:  time.Now().Add(-30 * 24 * time.Hour),
+			},
+		}, nil
+	}
+
+	// Extract JWT token from context
+	userToken, ok := ctx.Value("jwt_token").(string)
+	if !ok {
+		return nil, fmt.Errorf("user not authenticated")
+	}
+
+	// Get stream keys from Commodore
+	keysResp, err := r.Clients.Commodore.GetStreamKeys(ctx, userToken, streamID)
+	if err != nil {
+		r.Logger.WithError(err).Error("Failed to get stream keys")
+		return nil, fmt.Errorf("failed to get stream keys: %w", err)
+	}
+
 	// Convert to GraphQL model
-	return &model.Clip{
-		ID:          clipResp.ID,
-		Stream:      clipResp.StreamID,
-		Title:       clipResp.Title,
-		Description: &clipResp.Description,
-		StartTime:   int(clipResp.StartTime),
-		EndTime:     int(clipResp.EndTime),
-		Duration:    int(clipResp.Duration),
-		PlaybackID:  clipResp.PlaybackID,
-		Status:      clipResp.Status,
-		CreatedAt:   clipResp.CreatedAt,
-		UpdatedAt:   clipResp.UpdatedAt,
+	keys := make([]*models.StreamKey, len(keysResp.StreamKeys))
+	for i, key := range keysResp.StreamKeys {
+		keys[i] = &models.StreamKey{
+			ID:       key.ID,
+			TenantID: key.TenantID,
+			UserID:   key.UserID,
+			StreamID: key.StreamID,
+			KeyValue: key.KeyValue,
+			KeyName: func() *string {
+				if key.KeyName != "" {
+					return &key.KeyName
+				} else {
+					return nil
+				}
+			}(),
+			IsActive:   key.IsActive,
+			LastUsedAt: key.LastUsedAt,
+			CreatedAt:  key.CreatedAt,
+			UpdatedAt:  key.UpdatedAt,
+		}
+	}
+
+	return keys, nil
+}
+
+// DoCreateStreamKey creates a new stream key for a specific stream
+func (r *Resolver) DoCreateStreamKey(ctx context.Context, streamID string, input model.CreateStreamKeyInput) (*models.StreamKey, error) {
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Returning demo stream key creation")
+		return &models.StreamKey{
+			ID:         "sk_demo_new_" + time.Now().Format("20060102150405"),
+			TenantID:   "tenant_demo_1",
+			UserID:     "user_demo_1",
+			StreamID:   streamID,
+			KeyValue:   "sk_demo_" + time.Now().Format("150405"),
+			KeyName:    &input.Name,
+			IsActive:   true,
+			LastUsedAt: nil,
+			CreatedAt:  time.Now(),
+			UpdatedAt:  time.Now(),
+		}, nil
+	}
+
+	// Extract JWT token from context
+	userToken, ok := ctx.Value("jwt_token").(string)
+	if !ok {
+		return nil, fmt.Errorf("user not authenticated")
+	}
+
+	// Convert to Commodore request format
+	req := &commodore.CreateStreamKeyRequest{
+		KeyName: input.Name,
+	}
+
+	// Call Commodore to create stream key
+	keyResp, err := r.Clients.Commodore.CreateStreamKey(ctx, userToken, streamID, req)
+	if err != nil {
+		r.Logger.WithError(err).Error("Failed to create stream key")
+		return nil, fmt.Errorf("failed to create stream key: %w", err)
+	}
+
+	// Convert to GraphQL model
+	return &models.StreamKey{
+		ID:       keyResp.StreamKey.ID,
+		TenantID: keyResp.StreamKey.TenantID,
+		UserID:   keyResp.StreamKey.UserID,
+		StreamID: keyResp.StreamKey.StreamID,
+		KeyValue: keyResp.StreamKey.KeyValue,
+		KeyName: func() *string {
+			if keyResp.StreamKey.KeyName != "" {
+				return &keyResp.StreamKey.KeyName
+			} else {
+				return nil
+			}
+		}(),
+		IsActive:   keyResp.StreamKey.IsActive,
+		LastUsedAt: keyResp.StreamKey.LastUsedAt,
+		CreatedAt:  keyResp.StreamKey.CreatedAt,
+		UpdatedAt:  keyResp.StreamKey.UpdatedAt,
 	}, nil
+}
+
+// DoDeleteStreamKey deactivates a stream key
+func (r *Resolver) DoDeleteStreamKey(ctx context.Context, streamID, keyID string) (bool, error) {
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Returning demo stream key deletion")
+		return true, nil
+	}
+
+	// Extract JWT token from context
+	userToken, ok := ctx.Value("jwt_token").(string)
+	if !ok {
+		return false, fmt.Errorf("user not authenticated")
+	}
+
+	// Call Commodore to deactivate stream key
+	_, err := r.Clients.Commodore.DeactivateStreamKey(ctx, userToken, streamID, keyID)
+	if err != nil {
+		r.Logger.WithError(err).Error("Failed to deactivate stream key")
+		return false, fmt.Errorf("failed to deactivate stream key: %w", err)
+	}
+
+	return true, nil
+}
+
+// === RECORDINGS MANAGEMENT ===
+
+// DoGetRecordings retrieves all recordings for the authenticated user
+func (r *Resolver) DoGetRecordings(ctx context.Context, streamID *string) ([]*commodore.Recording, error) {
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Returning demo recordings")
+		now := time.Now()
+		oneHour := 3600
+		thirtyMin := 1800
+		fileSize1 := int64(1048576)
+		fileSize2 := int64(512000)
+		pb1 := "pb_rec_demo_1"
+		pb2 := "pb_rec_demo_2"
+		thumb1 := "https://example.com/thumb1.jpg"
+		return []*commodore.Recording{
+			{
+				ID:           "rec_demo_1",
+				StreamID:     "stream_demo_1",
+				Filename:     "Demo Recording #1",
+				Duration:     &oneHour,
+				Status:       "completed",
+				PlaybackID:   &pb1,
+				ThumbnailURL: &thumb1,
+				FileSize:     &fileSize1,
+				CreatedAt:    now.Add(-24 * time.Hour),
+				UpdatedAt:    now.Add(-23 * time.Hour),
+			},
+			{
+				ID:         "rec_demo_2",
+				StreamID:   "stream_demo_2",
+				Filename:   "Demo Recording #2",
+				Duration:   &thirtyMin,
+				Status:     "processing",
+				PlaybackID: &pb2,
+				FileSize:   &fileSize2,
+				CreatedAt:  now.Add(-6 * time.Hour),
+				UpdatedAt:  now.Add(-5 * time.Hour),
+			},
+		}, nil
+	}
+
+	// Extract JWT token from context
+	userToken, ok := ctx.Value("jwt_token").(string)
+	if !ok {
+		return nil, fmt.Errorf("user not authenticated")
+	}
+
+	// Get recordings from Commodore
+	recordingsResp, err := r.Clients.Commodore.GetRecordings(ctx, userToken, streamID)
+	if err != nil {
+		r.Logger.WithError(err).Error("Failed to get recordings")
+		return nil, fmt.Errorf("failed to get recordings: %w", err)
+	}
+
+	// Return pointers to commodore.Recording items
+	recordings := make([]*commodore.Recording, len(recordingsResp.Recordings))
+	for i := range recordingsResp.Recordings {
+		recordings[i] = &recordingsResp.Recordings[i]
+	}
+
+	return recordings, nil
 }

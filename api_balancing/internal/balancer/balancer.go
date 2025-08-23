@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"frameworks/pkg/logging"
+	"frameworks/pkg/validation"
 )
 
 // LoadBalancer is the main load balancer instance
@@ -20,6 +21,7 @@ type LoadBalancer struct {
 	logger    logging.Logger
 	nodes     map[string]*Node
 	nodeIDMap map[string]string // NodeID -> BaseURL mapping
+	revIDMap  map[string]string // BaseURL -> NodeID mapping
 	mu        sync.RWMutex
 
 	// Configurable weights (exactly like C++ version)
@@ -42,7 +44,8 @@ type Node struct {
 	Tags           []string          `json:"tags"`
 	GeoLatitude    float64           `json:"geo_latitude"`
 	GeoLongitude   float64           `json:"geo_longitude"`
-	CPU            uint64            `json:"cpu"` // 0-1000 (like C++)
+	LocationName   string            `json:"location_name"`
+	CPU            uint64            `json:"cpu"` // 0-1000 (tenths of percentage, like C++)
 	RAMMax         uint64            `json:"ram_max"`
 	RAMCurrent     uint64            `json:"ram_current"`
 	UpSpeed        uint64            `json:"up_speed"`        // bytes/sec
@@ -73,6 +76,7 @@ func NewLoadBalancer(db *sql.DB, logger logging.Logger) *LoadBalancer {
 		logger:           logger,
 		nodes:            make(map[string]*Node),
 		nodeIDMap:        make(map[string]string),
+		revIDMap:         make(map[string]string),
 		WeightCPU:        500,  // Same as C++
 		WeightRAM:        500,  // Same as C++
 		WeightBW:         1000, // Same as C++
@@ -118,6 +122,7 @@ func (lb *LoadBalancer) AddNodeWithID(nodeID, host string, port int) error {
 	// Store NodeID mapping if provided
 	if nodeID != "" {
 		lb.nodeIDMap[nodeID] = host
+		lb.revIDMap[host] = nodeID
 		lb.logger.WithFields(logging.Fields{
 			"host":    host,
 			"node_id": nodeID,
@@ -192,6 +197,7 @@ func (lb *LoadBalancer) RemoveNode(host string) error {
 		for nodeID, mappedHost := range lb.nodeIDMap {
 			if mappedHost == host {
 				delete(lb.nodeIDMap, nodeID)
+				delete(lb.revIDMap, host)
 				lb.logger.WithFields(logging.Fields{
 					"host":    host,
 					"node_id": nodeID,
@@ -205,8 +211,8 @@ func (lb *LoadBalancer) RemoveNode(host string) error {
 	return nil
 }
 
-// UpdateNodeMetrics updates metrics for a node (called by Helmsman)
-func (lb *LoadBalancer) UpdateNodeMetrics(host string, data map[string]interface{}) error {
+// UpdateNodeMetrics updates metrics for a node (called by Helmsman) - TYPED VERSION
+func (lb *LoadBalancer) UpdateNodeMetrics(host string, data *validation.FoghornNodeUpdate) error {
 	lb.mu.Lock()
 	defer lb.mu.Unlock()
 
@@ -215,95 +221,42 @@ func (lb *LoadBalancer) UpdateNodeMetrics(host string, data map[string]interface
 		return fmt.Errorf("node %s not found", host)
 	}
 
-	// Update metrics exactly like C++ update() method
-	if cpu, ok := data["cpu"].(float64); ok {
-		node.CPU = uint64(cpu)
-	}
-	if ramMax, ok := data["ram_max"].(float64); ok {
-		node.RAMMax = uint64(ramMax)
-	}
-	if ramCurr, ok := data["ram_current"].(float64); ok {
-		node.RAMCurrent = uint64(ramCurr)
-	}
-	if upSpeed, ok := data["up_speed"].(float64); ok {
-		node.UpSpeed = uint64(upSpeed)
-	}
-	if downSpeed, ok := data["down_speed"].(float64); ok {
-		node.DownSpeed = uint64(downSpeed)
-	}
-	if bwLimit, ok := data["bwlimit"].(float64); ok && bwLimit > 0 {
-		node.AvailBandwidth = uint64(bwLimit)
+	// Update metrics from typed data (matches raw MistServer data)
+	node.CPU = uint64(data.CPU)               // Raw CPU (tenths of percentage)
+	node.RAMMax = uint64(data.RAMMax)         // Raw RAM max (MiB)
+	node.RAMCurrent = uint64(data.RAMCurrent) // Raw RAM current (MiB)
+	node.UpSpeed = uint64(data.UpSpeed)       // Raw upload speed (bytes/sec)
+	node.DownSpeed = uint64(data.DownSpeed)   // Raw download speed (bytes/sec)
+	if data.BWLimit > 0 {
+		node.AvailBandwidth = uint64(data.BWLimit) // Raw bandwidth limit (bytes/sec)
 	}
 
-	// Update geo location
-	if loc, ok := data["loc"].(map[string]interface{}); ok {
-		if lat, ok := loc["lat"].(float64); ok {
-			node.GeoLatitude = lat
+	// Update geo location from typed data
+	node.GeoLatitude = data.Location.Latitude
+	node.GeoLongitude = data.Location.Longitude
+	node.LocationName = data.Location.Name
+
+	// Update tags from typed data
+	node.Tags = make([]string, len(data.Tags))
+	copy(node.Tags, data.Tags)
+
+	// Update streams from typed data
+	node.Streams = make(map[string]Stream)
+	for streamName, streamData := range data.Streams {
+		stream := Stream{
+			Total:      streamData.Total,
+			Inputs:     streamData.Inputs,
+			Bandwidth:  streamData.Bandwidth,
+			BytesUp:    streamData.BytesUp,
+			BytesDown:  streamData.BytesDown,
+			Replicated: streamData.Replicated,
 		}
-		if lon, ok := loc["lon"].(float64); ok {
-			node.GeoLongitude = lon
-		}
+		node.Streams[streamName] = stream
 	}
 
-	// Update tags
-	if tags, ok := data["tags"].([]interface{}); ok {
-		node.Tags = make([]string, len(tags))
-		for i, tag := range tags {
-			if tagStr, ok := tag.(string); ok {
-				node.Tags[i] = tagStr
-			}
-		}
-	}
-
-	// Update streams (exactly like C++)
-	if streams, ok := data["streams"].(map[string]interface{}); ok {
-		node.Streams = make(map[string]Stream)
-		for streamName, streamData := range streams {
-			if streamMap, ok := streamData.(map[string]interface{}); ok {
-				stream := Stream{}
-				if total, ok := streamMap["total"].(uint64); ok {
-					stream.Total = total
-				} else if total, ok := streamMap["total"].(float64); ok {
-					stream.Total = uint64(total)
-				}
-				if inputs, ok := streamMap["inputs"].(uint32); ok {
-					stream.Inputs = inputs
-				} else if inputs, ok := streamMap["inputs"].(float64); ok {
-					stream.Inputs = uint32(inputs)
-				}
-				if bandwidth, ok := streamMap["bandwidth"].(uint32); ok {
-					stream.Bandwidth = bandwidth
-				} else if bandwidth, ok := streamMap["bandwidth"].(float64); ok {
-					stream.Bandwidth = uint32(bandwidth)
-				}
-				if bytesUp, ok := streamMap["bytes_up"].(uint64); ok {
-					stream.BytesUp = bytesUp
-				} else if bytesUp, ok := streamMap["bytes_up"].(float64); ok {
-					stream.BytesUp = uint64(bytesUp)
-				}
-				if bytesDown, ok := streamMap["bytes_down"].(uint64); ok {
-					stream.BytesDown = bytesDown
-				} else if bytesDown, ok := streamMap["bytes_down"].(float64); ok {
-					stream.BytesDown = uint64(bytesDown)
-				}
-				// Check for replication flag (matches C++ strm.rep parsing)
-				if replicated, ok := streamMap["replicated"].(bool); ok {
-					stream.Replicated = replicated
-				}
-				node.Streams[streamName] = stream
-			}
-		}
-	}
-
-	// Update config streams
-	if confStreams, ok := data["conf_streams"].([]interface{}); ok {
-		node.ConfigStreams = make([]string, len(confStreams))
-		for i, stream := range confStreams {
-			if streamStr, ok := stream.(string); ok {
-				node.ConfigStreams[i] = streamStr
-			}
-		}
-	}
+	// Update config streams from typed data
+	node.ConfigStreams = make([]string, len(data.ConfigStreams))
+	copy(node.ConfigStreams, data.ConfigStreams)
 
 	// Decay add bandwidth (like C++)
 	node.AddBandwidth = uint64(float64(node.AddBandwidth) * 0.75)
@@ -356,6 +309,7 @@ func (lb *LoadBalancer) UpdateNodeIDMapping(nodeID, baseURL string) error {
 	}
 
 	lb.nodeIDMap[nodeID] = baseURL
+	lb.revIDMap[baseURL] = nodeID
 	lb.logger.WithFields(logging.Fields{
 		"node_id":  nodeID,
 		"base_url": baseURL,
@@ -364,14 +318,21 @@ func (lb *LoadBalancer) UpdateNodeIDMapping(nodeID, baseURL string) error {
 	return nil
 }
 
+// GetNodeIDByHost returns the NodeID for a given host if known
+func (lb *LoadBalancer) GetNodeIDByHost(host string) string {
+	lb.mu.RLock()
+	defer lb.mu.RUnlock()
+	return lb.revIDMap[host]
+}
+
 // GetBestNode finds the best node using EXACT C++ rate() algorithm
 func (lb *LoadBalancer) GetBestNode(ctx context.Context, streamName string, lat, lon float64, tagAdjust map[string]int) (string, error) {
-	host, _, err := lb.GetBestNodeWithScore(ctx, streamName, lat, lon, tagAdjust, "")
+	host, _, _, _, _, err := lb.GetBestNodeWithScore(ctx, streamName, lat, lon, tagAdjust, "")
 	return host, err
 }
 
 // GetBestNodeWithScore finds the best node and returns both node and score
-func (lb *LoadBalancer) GetBestNodeWithScore(ctx context.Context, streamName string, lat, lon float64, tagAdjust map[string]int, clientIP string) (string, uint64, error) {
+func (lb *LoadBalancer) GetBestNodeWithScore(ctx context.Context, streamName string, lat, lon float64, tagAdjust map[string]int, clientIP string) (string, uint64, float64, float64, string, error) {
 	lb.mu.RLock()
 	defer lb.mu.RUnlock()
 
@@ -408,7 +369,7 @@ func (lb *LoadBalancer) GetBestNodeWithScore(ctx context.Context, streamName str
 	}
 
 	if bestScore == 0 || bestHost == nil {
-		return "", 0, fmt.Errorf("all servers seem to be out of bandwidth")
+		return "", 0, 0, 0, "", fmt.Errorf("all servers seem to be out of bandwidth")
 	}
 
 	lb.logger.WithFields(logging.Fields{
@@ -422,7 +383,7 @@ func (lb *LoadBalancer) GetBestNodeWithScore(ctx context.Context, streamName str
 	// Add viewer (like C++)
 	lb.addViewer(bestHost, streamName)
 
-	return bestHost.Host, bestScore, nil
+	return bestHost.Host, bestScore, bestHost.GeoLatitude, bestHost.GeoLongitude, bestHost.LocationName, nil
 }
 
 // rateNode implements the EXACT C++ rate() method
@@ -631,8 +592,8 @@ func (lb *LoadBalancer) addViewer(node *Node, streamName string) {
 	node.AddBandwidth += toAdd
 }
 
-// UpdateStreamHealth updates the health status of a stream on a node
-func (lb *LoadBalancer) UpdateStreamHealth(host string, streamName string, isHealthy bool, details map[string]interface{}) error {
+// UpdateStreamHealth updates the health status of a stream on a node - TYPED VERSION
+func (lb *LoadBalancer) UpdateStreamHealth(host string, streamName string, isHealthy bool, details *validation.FoghornStreamHealth) error {
 	lb.mu.Lock()
 	defer lb.mu.Unlock()
 
@@ -665,24 +626,22 @@ func (lb *LoadBalancer) UpdateStreamHealth(host string, streamName string, isHea
 		}
 	}
 
-	// Update additional details if provided
+	// Update additional details from typed data if provided
 	if details != nil {
-		if bufferState, ok := details["buffer_state"].(string); ok {
-			// Buffer state affects health
-			switch bufferState {
-			case "EMPTY", "DRY":
-				stream.Total = 0
-				stream.Inputs = 0
-			case "FULL", "RECOVER":
-				if stream.Total == 0 {
-					stream.Total = 1
-				}
+		// Buffer state affects health
+		switch details.BufferState {
+		case "EMPTY", "DRY":
+			stream.Total = 0
+			stream.Inputs = 0
+		case "FULL", "RECOVER":
+			if stream.Total == 0 {
+				stream.Total = 1
 			}
 		}
 
-		// Update bandwidth if provided
-		if bwData, ok := details["bandwidth_data"].(string); ok {
-			if bw, err := strconv.ParseUint(bwData, 10, 32); err == nil {
+		// Update bandwidth from bandwidth_data if provided
+		if details.BandwidthData != "" {
+			if bw, err := strconv.ParseUint(details.BandwidthData, 10, 32); err == nil {
 				stream.Bandwidth = uint32(bw)
 			}
 		}
@@ -691,20 +650,25 @@ func (lb *LoadBalancer) UpdateStreamHealth(host string, streamName string, isHea
 	// Update the stream in the node
 	node.Streams[streamName] = stream
 
+	bufferState := ""
+	if details != nil {
+		bufferState = details.BufferState
+	}
+
 	lb.logger.WithFields(logging.Fields{
 		"host":         host,
 		"stream":       streamName,
 		"is_healthy":   isHealthy,
 		"total":        stream.Total,
 		"bandwidth":    stream.Bandwidth,
-		"buffer_state": details["buffer_state"],
+		"buffer_state": bufferState,
 	}).Info("Updated stream health status")
 
 	return nil
 }
 
-// HandleNodeShutdown marks a node as inactive and cleans up its state
-func (lb *LoadBalancer) HandleNodeShutdown(host string, reason string, details map[string]interface{}) error {
+// HandleNodeShutdown marks a node as inactive and cleans up its state - TYPED VERSION
+func (lb *LoadBalancer) HandleNodeShutdown(host string, reason string, details *validation.FoghornNodeShutdown) error {
 	lb.mu.Lock()
 	defer lb.mu.Unlock()
 
@@ -824,6 +788,11 @@ func (lb *LoadBalancer) checkStaleNodes() {
 		for nodeID, mappedHost := range lb.nodeIDMap {
 			if mappedHost == host {
 				delete(lb.nodeIDMap, nodeID)
+			}
+		}
+		for baseURL := range lb.revIDMap {
+			if baseURL == host {
+				delete(lb.revIDMap, baseURL)
 			}
 		}
 

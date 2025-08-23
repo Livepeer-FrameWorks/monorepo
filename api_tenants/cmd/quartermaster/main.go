@@ -70,13 +70,15 @@ func main() {
 
 			// Cluster management
 			protected.GET("/clusters", handlers.GetClusters)
+			protected.POST("/clusters", handlers.CreateCluster)
 			protected.GET("/clusters/:id", handlers.GetCluster)
+			protected.PUT("/clusters/:id", handlers.UpdateCluster)
 
 			// Service management
 			protected.GET("/services", handlers.GetServices)
 			protected.GET("/services/:id", handlers.GetService)
 			protected.GET("/clusters/:id/services", handlers.GetClusterServices)
-			protected.PUT("/clusters/:cluster_id/services/:service_id", handlers.UpdateClusterServiceState)
+			protected.PUT("/clusters/:id/services/:service_id", handlers.UpdateClusterServiceState)
 			protected.GET("/service-instances", handlers.GetServiceInstances)
 
 			// Node management

@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-func TestAnalyticsEventHandler_ConvertsEvent(t *testing.T) {
+func TestAnalyticsEventHandler_HandlesEvent(t *testing.T) {
 	handled := false
 	handler := NewAnalyticsEventHandler(nil, func(_ dbpkg.PostgresConn, evt AnalyticsEvent) error {
 		handled = true
@@ -19,7 +19,14 @@ func TestAnalyticsEventHandler_ConvertsEvent(t *testing.T) {
 		return nil
 	}, nil)
 
-	e := Event{ID: "1", Type: "stream-lifecycle", Source: "test", Timestamp: time.Now(), Data: map[string]interface{}{"internal_name": "foo"}}
+	name := "foo"
+	e := AnalyticsEvent{
+		EventID:      "1",
+		EventType:    "stream-lifecycle",
+		Source:       "test",
+		Timestamp:    time.Now(),
+		InternalName: &name,
+	}
 	if err := handler.HandleEvent(e); err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}

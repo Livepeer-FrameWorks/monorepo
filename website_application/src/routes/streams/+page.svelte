@@ -40,6 +40,18 @@
   /** @type {any} */
   let selectedStream = null;
 
+  // Tab management
+  let activeTab = "overview"; // overview, keys, recordings
+
+  // Stream keys management
+  /** @type {any[]} */
+  let streamKeys = [];
+  let loadingStreamKeys = false;
+  let creatingStreamKey = false;
+  let showCreateKeyModal = false;
+  let newKeyName = "";
+  let deletingKeyId = "";
+
   // Stream health data for all streams
   let streamHealthData = new Map();
 
@@ -211,6 +223,75 @@
   function selectStream(stream) {
     selectedStream = stream;
     startRealTimeSubscriptions();
+    
+    // Load stream keys when stream is selected
+    if (activeTab === "keys") {
+      loadStreamKeys();
+    }
+  }
+
+  // Load stream keys for selected stream
+  async function loadStreamKeys() {
+    if (!selectedStream) return;
+    
+    try {
+      loadingStreamKeys = true;
+      streamKeys = await streamsService.getStreamKeys(selectedStream.id);
+    } catch (error) {
+      console.error("Failed to load stream keys:", error);
+      toast.error("Failed to load stream keys");
+    } finally {
+      loadingStreamKeys = false;
+    }
+  }
+
+  // Create new stream key
+  async function createStreamKey() {
+    if (!selectedStream || !newKeyName.trim()) return;
+
+    try {
+      creatingStreamKey = true;
+      const newKey = await streamsService.createStreamKey(selectedStream.id, {
+        name: newKeyName.trim()
+      });
+      
+      streamKeys = [...streamKeys, newKey];
+      showCreateKeyModal = false;
+      newKeyName = "";
+      
+      toast.success("Stream key created successfully!");
+    } catch (error) {
+      console.error("Failed to create stream key:", error);
+      toast.error("Failed to create stream key");
+    } finally {
+      creatingStreamKey = false;
+    }
+  }
+
+  // Delete stream key
+  async function deleteStreamKey(keyId) {
+    if (!selectedStream) return;
+
+    try {
+      deletingKeyId = keyId;
+      await streamsService.deleteStreamKey(selectedStream.id, keyId);
+      
+      streamKeys = streamKeys.filter(key => key.id !== keyId);
+      toast.success("Stream key deleted successfully!");
+    } catch (error) {
+      console.error("Failed to delete stream key:", error);
+      toast.error("Failed to delete stream key");
+    } finally {
+      deletingKeyId = "";
+    }
+  }
+
+  // Switch tabs
+  function switchTab(tab) {
+    activeTab = tab;
+    if (tab === "keys" && selectedStream) {
+      loadStreamKeys();
+    }
   }
 
   // Show delete confirmation
@@ -376,6 +457,29 @@
 <svelte:head>
   <title>Streams - FrameWorks</title>
 </svelte:head>
+
+<style>
+  .tab-button {
+    display: flex;
+    align-items: center;
+    padding: 0.5rem 1rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--tokyo-night-fg-dark);
+    border-bottom: 2px solid transparent;
+    transition: color 0.2s, border-color 0.2s;
+  }
+  
+  .tab-button:hover {
+    color: var(--tokyo-night-fg);
+    border-bottom-color: var(--tokyo-night-cyan);
+  }
+  
+  .tab-active {
+    color: var(--tokyo-night-cyan);
+    border-bottom-color: var(--tokyo-night-cyan);
+  }
+</style>
 
 <div class="space-y-8 page-transition">
   <!-- Page Header -->
@@ -635,8 +739,48 @@
         </div>
       {/if}
 
-      <!-- Stream Configuration -->
-      <div class="grid grid-cols-1 xl:grid-cols-2 gap-8">
+      <!-- Stream Configuration Tabs -->
+      <div class="card">
+        <div class="card-header">
+          <div class="flex items-center justify-between mb-4">
+            <h2 class="text-xl font-semibold text-tokyo-night-fg">
+              Stream Configuration
+            </h2>
+            <p class="text-tokyo-night-fg-dark text-sm">
+              Manage ingest, keys, and delivery settings
+            </p>
+          </div>
+          
+          <!-- Tab Navigation -->
+          <div class="flex border-b border-tokyo-night-fg-gutter">
+            <button
+              class="tab-button {activeTab === 'overview' ? 'tab-active' : ''}"
+              on:click={() => switchTab('overview')}
+            >
+              <svelte:component this={getIconComponent('Settings')} class="w-4 h-4 mr-2" />
+              Overview
+            </button>
+            <button
+              class="tab-button {activeTab === 'keys' ? 'tab-active' : ''}"
+              on:click={() => switchTab('keys')}
+            >
+              <svelte:component this={getIconComponent('Key')} class="w-4 h-4 mr-2" />
+              Stream Keys
+            </button>
+            <button
+              class="tab-button {activeTab === 'recordings' ? 'tab-active' : ''}"
+              on:click={() => switchTab('recordings')}
+            >
+              <svelte:component this={getIconComponent('Video')} class="w-4 h-4 mr-2" />
+              Recordings
+            </button>
+          </div>
+        </div>
+
+        <!-- Tab Content -->
+        {#if activeTab === 'overview'}
+          <!-- Overview Tab Content -->
+          <div class="grid grid-cols-1 xl:grid-cols-2 gap-8">
         <!-- Ingest Configuration -->
         <div class="card">
           <div class="card-header">
@@ -882,9 +1026,221 @@ Quick Setup Guide
           </div>
         </div>
       </div>
+
+        {:else if activeTab === 'keys'}
+          <!-- Stream Keys Tab Content -->
+          <div class="space-y-6">
+            <div class="flex items-center justify-between">
+              <div>
+                <h3 class="text-lg font-semibold text-tokyo-night-fg">Stream Keys Management</h3>
+                <p class="text-tokyo-night-fg-dark text-sm">Create and manage multiple stream keys for different streaming setups</p>
+              </div>
+              <button
+                class="btn-primary"
+                on:click={() => showCreateKeyModal = true}
+              >
+                <svelte:component this={getIconComponent('Plus')} class="w-4 h-4 mr-2" />
+                Create Key
+              </button>
+            </div>
+
+            {#if loadingStreamKeys}
+              <div class="space-y-4">
+                {#each Array(3) as _}
+                  <LoadingCard variant="stream" />
+                {/each}
+              </div>
+            {:else if streamKeys.length === 0}
+              <EmptyState
+                iconName="Key"
+                title="No Stream Keys"
+                description="Create your first stream key to start broadcasting"
+                actionText="Create Stream Key"
+                onAction={() => showCreateKeyModal = true}
+              />
+            {:else}
+              <div class="space-y-4">
+                {#each streamKeys as key}
+                  <div class="bg-tokyo-night-bg-highlight p-4 rounded-lg border border-tokyo-night-fg-gutter">
+                    <div class="flex items-center justify-between mb-3">
+                      <div class="flex items-center space-x-3">
+                        <svelte:component this={getIconComponent('Key')} class="w-5 h-5 text-tokyo-night-yellow" />
+                        <div>
+                          <h4 class="font-semibold text-tokyo-night-fg">
+                            {key.keyName || 'Unnamed Key'}
+                          </h4>
+                          <p class="text-xs text-tokyo-night-comment">
+                            Created {new Date(key.createdAt).toLocaleDateString()}
+                          </p>
+                        </div>
+                      </div>
+                      
+                      <div class="flex items-center space-x-2">
+                        <span class="px-2 py-1 text-xs rounded {key.isActive ? 'bg-tokyo-night-green bg-opacity-20 text-tokyo-night-green' : 'bg-tokyo-night-red bg-opacity-20 text-tokyo-night-red'}">
+                          {key.isActive ? 'Active' : 'Inactive'}
+                        </span>
+                        <button
+                          class="text-tokyo-night-red hover:text-red-400 p-1"
+                          on:click={() => deleteStreamKey(key.id)}
+                          disabled={deletingKeyId === key.id}
+                        >
+                          {#if deletingKeyId === key.id}
+                            <svelte:component this={getIconComponent('Loader2')} class="w-4 h-4 animate-spin" />
+                          {:else}
+                            <svelte:component this={getIconComponent('Trash2')} class="w-4 h-4" />
+                          {/if}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div class="flex items-center space-x-3">
+                      <input
+                        type="text"
+                        value={key.keyValue}
+                        readonly
+                        class="input flex-1 font-mono text-sm"
+                      />
+                      <button
+                        on:click={() => copyToClipboard(key.keyValue)}
+                        class="btn-secondary"
+                      >
+                        {#if copiedUrl === key.keyValue}
+                          <svelte:component this={getIconComponent('CheckCircle')} class="w-4 h-4" />
+                        {:else}
+                          <svelte:component this={getIconComponent('Copy')} class="w-4 h-4" />
+                        {/if}
+                      </button>
+                    </div>
+
+                    {#if key.lastUsedAt}
+                      <p class="text-xs text-tokyo-night-comment mt-2">
+                        Last used: {new Date(key.lastUsedAt).toLocaleString()}
+                      </p>
+                    {/if}
+                  </div>
+                {/each}
+              </div>
+            {/if}
+          </div>
+
+        {:else if activeTab === 'recordings'}
+          <!-- Recordings Tab Content (placeholder for now) -->
+          <div class="space-y-6">
+            <div class="flex items-center justify-between">
+              <div>
+                <h3 class="text-lg font-semibold text-tokyo-night-fg">Stream Recordings</h3>
+                <p class="text-tokyo-night-fg-dark text-sm">View and manage recordings for this stream</p>
+              </div>
+            </div>
+
+            <EmptyState
+              iconName="Video"
+              title="Recordings Coming Soon"
+              description="Recording management will be available in the next update"
+            />
+          </div>
+        {/if}
+      </div>
+
+      <!-- Quick Setup Guide -->
+      <div class="card">
+        <div class="card-header">
+          <h2 class="text-xl font-semibold text-tokyo-night-fg mb-2">
+            Quick Setup Guide
+          </h2>
+          <p class="text-tokyo-night-fg-dark">Get started streaming in minutes</p>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div class="text-center">
+            <div class="text-3xl mb-3">
+              <svelte:component this={getIconComponent('Monitor')} class="w-8 h-8 text-tokyo-night-purple mx-auto" />
+            </div>
+            <h3 class="font-semibold text-tokyo-night-fg mb-2">
+              1. Configure Software
+            </h3>
+            <p class="text-sm text-tokyo-night-comment">
+              Copy the RTMP URL into OBS Studio, XSplit, or your preferred
+              streaming software
+            </p>
+          </div>
+
+          <div class="text-center">
+            <div class="text-3xl mb-3">
+              <svelte:component this={getIconComponent('Key')} class="w-8 h-8 text-tokyo-night-yellow mx-auto" />
+            </div>
+            <h3 class="font-semibold text-tokyo-night-fg mb-2">
+              2. Add Stream Key
+            </h3>
+            <p class="text-sm text-tokyo-night-comment">
+              Paste your unique stream key to authenticate your broadcast
+            </p>
+          </div>
+
+          <div class="text-center">
+            <div class="text-3xl mb-3">
+              <svelte:component this={getIconComponent('Video')} class="w-8 h-8 text-tokyo-night-cyan mx-auto" />
+            </div>
+            <h3 class="font-semibold text-tokyo-night-fg mb-2">
+              3. Start Streaming
+            </h3>
+            <p class="text-sm text-tokyo-night-comment">
+              Hit "Start Streaming" and share your HLS playback URL with viewers
+            </p>
+          </div>
+        </div>
+      </div>
     {/if}
   {/if}
 </div>
+
+<!-- Create Stream Key Modal -->
+{#if showCreateKeyModal}
+  <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+    <div class="bg-tokyo-night-bg-light p-6 rounded-lg border border-tokyo-night-fg-gutter max-w-md w-full mx-4">
+      <h3 class="text-xl font-semibold text-tokyo-night-fg mb-4">Create Stream Key</h3>
+      
+      <div class="space-y-4">
+        <div>
+          <label for="key-name" class="block text-sm font-medium text-tokyo-night-fg-dark mb-2">
+            Key Name *
+          </label>
+          <input
+            id="key-name"
+            type="text"
+            bind:value={newKeyName}
+            placeholder="Production Key"
+            class="input w-full"
+            disabled={creatingStreamKey}
+          />
+          <p class="text-xs text-tokyo-night-comment mt-1">
+            Give your stream key a descriptive name to identify its purpose
+          </p>
+        </div>
+      </div>
+      
+      <div class="flex justify-end space-x-3 mt-6">
+        <button
+          class="btn-secondary"
+          on:click={() => {
+            showCreateKeyModal = false;
+            newKeyName = '';
+          }}
+          disabled={creatingStreamKey}
+        >
+          Cancel
+        </button>
+        <button
+          class="btn-primary"
+          on:click={createStreamKey}
+          disabled={creatingStreamKey || !newKeyName.trim()}
+        >
+          {creatingStreamKey ? 'Creating...' : 'Create Key'}
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
 
 <!-- Create Stream Modal -->
 {#if showCreateModal}

@@ -6,51 +6,57 @@ import (
 
 // StreamAnalytics represents a stream's analytics data
 type StreamAnalytics struct {
-	ID                   string    `json:"id"`
-	TenantID             string    `json:"tenant_id"`
-	StreamID             string    `json:"stream_id"`
-	InternalName         string    `json:"internal_name"`
-	SessionStartTime     time.Time `json:"session_start_time"`
-	SessionEndTime       time.Time `json:"session_end_time"`
-	TotalSessionDuration int       `json:"total_session_duration"`
-	CurrentViewers       int       `json:"current_viewers"`
-	PeakViewers          int       `json:"peak_viewers"`
-	TotalConnections     int       `json:"total_connections"`
-	BandwidthIn          int64     `json:"bandwidth_in"`
-	BandwidthOut         int64     `json:"bandwidth_out"`
-	TotalBandwidthGB     float64   `json:"total_bandwidth_gb"`
-	BitrateKbps          int       `json:"bitrate_kbps"`
-	Resolution           string    `json:"resolution"`
-	PacketsSent          int64     `json:"packets_sent"`
-	PacketsLost          int64     `json:"packets_lost"`
-	PacketsRetrans       int64     `json:"packets_retrans"`
-	Upbytes              int64     `json:"upbytes"`
-	Downbytes            int64     `json:"downbytes"`
-	FirstMs              int       `json:"first_ms"`
-	LastMs               int       `json:"last_ms"`
-	TrackCount           int       `json:"track_count"`
-	Inputs               string    `json:"inputs"`
-	Outputs              string    `json:"outputs"`
-	NodeID               string    `json:"node_id"`
-	NodeName             string    `json:"node_name"`
-	Latitude             float64   `json:"latitude"`
-	Longitude            float64   `json:"longitude"`
-	Country              string    `json:"country"`
-	Region               string    `json:"region"`
-	City                 string    `json:"city"`
-	ISP                  string    `json:"isp"`
-	Location             string    `json:"location"`
-	Status               string    `json:"status"`
-	LastUpdated          time.Time `json:"last_updated"`
-	CreatedAt            time.Time `json:"created_at"`
+	ID                   string     `json:"id"`
+	TenantID             string     `json:"tenant_id"`
+	StreamID             string     `json:"stream_id"`
+	InternalName         string     `json:"internal_name"`
+	SessionStartTime     *time.Time `json:"session_start_time"`
+	SessionEndTime       *time.Time `json:"session_end_time"`
+	TotalSessionDuration int        `json:"total_session_duration"`
+	CurrentViewers       int        `json:"current_viewers"`
+	PeakViewers          int        `json:"peak_viewers"`
+	TotalConnections     int        `json:"total_connections"`
+	BandwidthIn          int64      `json:"bandwidth_in"`
+	BandwidthOut         int64      `json:"bandwidth_out"`
+	TotalBandwidthGB     float64    `json:"total_bandwidth_gb"`
+	BitrateKbps          *int       `json:"bitrate_kbps"`
+	Resolution           *string    `json:"resolution"`
+	PacketsSent          int64      `json:"packets_sent"`
+	PacketsLost          int64      `json:"packets_lost"`
+	PacketsRetrans       int64      `json:"packets_retrans"`
+	Upbytes              int64      `json:"upbytes"`
+	Downbytes            int64      `json:"downbytes"`
+	FirstMs              *int       `json:"first_ms"`
+	LastMs               *int       `json:"last_ms"`
+	TrackCount           int        `json:"track_count"`
+	Inputs               int        `json:"inputs"`
+	Outputs              int        `json:"outputs"`
+	NodeID               *string    `json:"node_id"`
+	NodeName             *string    `json:"node_name"`
+	Latitude             *float64   `json:"latitude"`
+	Longitude            *float64   `json:"longitude"`
+	Location             *string    `json:"location"`
+	Status               *string    `json:"status"`
+	LastUpdated          time.Time  `json:"last_updated"`
+	CreatedAt            time.Time  `json:"created_at"`
 
-	// Enriched metrics for API responses
-	AvgViewers      float64 `json:"avg_viewers"`
-	UniqueCountries int     `json:"unique_countries"`
-	UniqueCities    int     `json:"unique_cities"`
-	AvgBufferHealth float32 `json:"avg_buffer_health"`
-	AvgBitrate      int     `json:"avg_bitrate"`
-	PacketLossRate  float32 `json:"packet_loss_rate"`
+	// Current health state (from STREAM_BUFFER events)
+	CurrentHealthScore *float64 `json:"current_health_score,omitempty"`
+	CurrentBufferState *string  `json:"current_buffer_state,omitempty"`
+	CurrentIssues      *string  `json:"current_issues,omitempty"`
+	CurrentCodec       *string  `json:"current_codec,omitempty"`
+	CurrentFPS         *float64 `json:"current_fps,omitempty"`
+	CurrentResolution  *string  `json:"current_resolution,omitempty"`
+	MistStatus         *string  `json:"mist_status,omitempty"`
+	QualityTier        *string  `json:"quality_tier,omitempty"`
+
+	// Enriched metrics for API responses (computed from ClickHouse)
+	AvgViewers      float64 `json:"avg_viewers,omitempty"`
+	UniqueCountries int     `json:"unique_countries,omitempty"`
+	UniqueCities    int     `json:"unique_cities,omitempty"`
+	AvgBufferHealth float32 `json:"avg_buffer_health,omitempty"`
+	AvgBitrate      int     `json:"avg_bitrate,omitempty"`
+	PacketLossRate  float32 `json:"packet_loss_rate,omitempty"`
 }
 
 // ViewerMetrics represents viewer metrics for analytics
@@ -136,13 +142,15 @@ type Stream struct {
 
 // StreamKey represents a stream key for authentication
 type StreamKey struct {
-	ID        string     `json:"id"`
-	TenantID  string     `json:"tenant_id"`
-	UserID    string     `json:"user_id"`
-	StreamID  string     `json:"stream_id"`
-	KeyValue  string     `json:"key_value"`
-	IsActive  bool       `json:"is_active"`
-	ExpiresAt *time.Time `json:"expires_at,omitempty"`
-	CreatedAt time.Time  `json:"created_at"`
-	UpdatedAt time.Time  `json:"updated_at"`
+	ID         string     `json:"id"`
+	TenantID   string     `json:"tenant_id"`
+	UserID     string     `json:"user_id"`
+	StreamID   string     `json:"streamId"`
+	KeyValue   string     `json:"keyValue"`
+	KeyName    *string    `json:"keyName,omitempty"`
+	IsActive   bool       `json:"isActive"`
+	LastUsedAt *time.Time `json:"lastUsedAt,omitempty"`
+	ExpiresAt  *time.Time `json:"expires_at,omitempty"`
+	CreatedAt  time.Time  `json:"createdAt"`
+	UpdatedAt  time.Time  `json:"updated_at"`
 }

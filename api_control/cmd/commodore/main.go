@@ -92,6 +92,14 @@ func main() {
 			protected.GET("/streams/:id/metrics", handlers.GetStreamMetrics)
 			protected.POST("/streams/:id/refresh-key", handlers.RefreshStreamKey)
 
+			// Stream keys management
+			protected.GET("/streams/:id/keys", handlers.GetStreamKeys)
+			protected.POST("/streams/:id/keys", handlers.CreateStreamKey)
+			protected.DELETE("/streams/:id/keys/:key_id", handlers.DeactivateStreamKey)
+
+			// Recordings management
+			protected.GET("/recordings", handlers.GetRecordings)
+
 			// Clipping
 			protected.POST("/clips", handlers.CreateClip)
 

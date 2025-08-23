@@ -42,10 +42,7 @@ func notifyFoghornShutdown() error {
 		Type:      "node_shutdown",
 		Timestamp: time.Now().Unix(),
 		Reason:    "graceful_shutdown",
-		Details: map[string]interface{}{
-			"initiated_at": time.Now().UTC(),
-			"source":       "helmsman",
-		},
+		Details:   nil, // No FoghornNodeShutdown struct defined, using nil
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)

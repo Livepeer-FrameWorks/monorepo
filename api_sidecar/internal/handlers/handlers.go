@@ -16,9 +16,11 @@ import (
 	"frameworks/pkg/clients/foghorn"
 	"frameworks/pkg/geoip"
 	"frameworks/pkg/logging"
+	"frameworks/pkg/validation"
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 )
 
 // HandlerMetrics holds the metrics for handler operations
@@ -143,15 +145,27 @@ func GetPrometheusPassword(c *gin.Context) {
 // getCurrentNodeID gets the current node ID from the prometheus monitor
 func getCurrentNodeID() string {
 	if prometheusMonitor == nil {
+		logger.Warn("PrometheusMonitor is nil in getCurrentNodeID")
 		return "unknown"
 	}
 
-	nodes := prometheusMonitor.GetNodes()
-	// Each sidecar monitors exactly 1 node - return the first (and only) one
-	for nodeID := range nodes {
-		return nodeID
+	// Direct access to nodeID - more reliable than GetNodes()
+	prometheusMonitor.mutex.RLock()
+	nodeID := prometheusMonitor.nodeID
+	prometheusMonitor.mutex.RUnlock()
+
+	if nodeID == "" {
+		logger.WithFields(logging.Fields{
+			"prometheus_monitor": prometheusMonitor != nil,
+		}).Warn("PrometheusMonitor nodeID is empty")
+		return "unknown"
 	}
-	return "unknown"
+
+	logger.WithFields(logging.Fields{
+		"node_id": nodeID,
+	}).Debug("Retrieved node ID from PrometheusMonitor")
+
+	return nodeID
 }
 
 func validateStreamKeyViaAPI(streamKey string) (*commodoreapi.ValidateStreamKeyResponse, error) {
@@ -250,7 +264,7 @@ func HandlePushRewrite(c *gin.Context) {
 	streamKey := streamName
 
 	// Validate stream key via Commodore API
-	validation, err := validateStreamKeyViaAPI(streamKey)
+	streamKeyValidation, err := validateStreamKeyViaAPI(streamKey)
 	if err != nil {
 		logger.WithFields(logging.Fields{
 			"stream_key": streamKey,
@@ -265,10 +279,10 @@ func HandlePushRewrite(c *gin.Context) {
 		return
 	}
 
-	if !validation.Valid {
+	if !streamKeyValidation.Valid {
 		logger.WithFields(logging.Fields{
 			"stream_key": streamKey,
-			"api_error":  validation.Error,
+			"api_error":  streamKeyValidation.Error,
 		}).Error("Invalid stream key")
 
 		if metrics != nil {
@@ -298,34 +312,62 @@ func HandlePushRewrite(c *gin.Context) {
 	go forwardEventToCommodore("stream-start", map[string]interface{}{
 		"node_id":       nodeID,
 		"stream_key":    streamKey,
-		"internal_name": validation.InternalName,
+		"internal_name": streamKeyValidation.InternalName,
 		"hostname":      hostname,
 		"push_url":      pushURL,
 		"event_type":    "push_rewrite_success",
 		"timestamp":     time.Now().Unix(),
 	})
 
-	// Forward analytics event to Decklog for batched processing
-	go ForwardEventToDecklog("stream-ingest", map[string]interface{}{
-		"stream_key":    streamKey,
-		"internal_name": validation.InternalName,
-		"user_id":       validation.UserID,
-		"hostname":      hostname,
-		"push_url":      pushURL,
-		"protocol":      protocol,
-		"event_type":    "stream-ingest",
-		"timestamp":     time.Now().Unix(),
-		"source":        "mistserver_webhook",
-		"node_id":       nodeID,
-	})
+	// Create typed StreamIngestPayload
+	ingestPayload := &validation.StreamIngestPayload{
+		StreamKey:    streamKey,
+		InternalName: streamKeyValidation.InternalName,
+		UserID:       streamKeyValidation.UserID,
+		NodeID:       nodeID,
+		TenantID:     streamKeyValidation.TenantID,
+		Hostname:     hostname,
+		PushURL:      pushURL,
+		Protocol:     protocol,
+	}
+
+	// Add geographic data from node location if available
+	if prometheusMonitor != nil {
+		prometheusMonitor.mutex.RLock()
+		if prometheusMonitor.latitude != nil {
+			ingestPayload.Latitude = *prometheusMonitor.latitude
+		}
+		if prometheusMonitor.longitude != nil {
+			ingestPayload.Longitude = *prometheusMonitor.longitude
+		}
+		if prometheusMonitor.location != "" {
+			ingestPayload.Location = prometheusMonitor.location
+		}
+		prometheusMonitor.mutex.RUnlock()
+	}
+
+	// Create typed BaseEvent
+	baseEvent := &validation.BaseEvent{
+		EventID:       uuid.New().String(),
+		EventType:     validation.EventStreamIngest,
+		Timestamp:     time.Now().UTC(),
+		Source:        "mistserver_webhook",
+		InternalName:  &streamKeyValidation.InternalName,
+		UserID:        &streamKeyValidation.UserID,
+		SchemaVersion: "2.0",
+		StreamIngest:  ingestPayload,
+	}
+
+	// Forward to Decklog with typed event
+	go ForwardTypedEventToDecklog(baseEvent)
 
 	// Create wildcard stream name for MistServer routing
-	wildcardStreamName := fmt.Sprintf("live+%s", validation.InternalName)
+	wildcardStreamName := fmt.Sprintf("live+%s", streamKeyValidation.InternalName)
 
 	logger.WithFields(logging.Fields{
 		"stream_key":           streamKey,
 		"wildcard_stream_name": wildcardStreamName,
-		"user_id":              validation.UserID,
+		"user_id":              streamKeyValidation.UserID,
 	}).Info("Stream key validated, routing to wildcard stream")
 
 	// Track successful operation and resource allocation duration
@@ -421,17 +463,49 @@ func HandleDefaultStream(c *gin.Context) {
 	nodeID := getCurrentNodeID()
 
 	// Forward analytics event to Decklog for stream view tracking (data plane only)
-	go ForwardEventToDecklog("stream-view", map[string]interface{}{
-		"tenant_id":     resolveResponse.TenantID,
-		"playback_id":   defaultStream,
-		"internal_name": resolveResponse.InternalName,
-		"node_id":       nodeID,
-		"viewer_host":   viewerHost,
-		"output_type":   outputType,
-		"event_type":    "stream-view-request",
-		"timestamp":     time.Now().Unix(),
-		"source":        "mistserver_webhook",
-	})
+	// Create typed StreamViewPayload
+	viewPayload := &validation.StreamViewPayload{
+		TenantID:     resolveResponse.TenantID,
+		PlaybackID:   defaultStream,
+		InternalName: resolveResponse.InternalName,
+		NodeID:       nodeID,
+		ViewerHost:   viewerHost,
+		OutputType:   outputType,
+		RequestURL:   requestURL,
+	}
+
+	// Add geographic data from viewer IP if available
+	if geoipReader != nil && viewerHost != "" {
+		geoData := geoipReader.Lookup(viewerHost)
+		if geoData != nil {
+			viewPayload.CountryCode = geoData.CountryCode
+			viewPayload.City = geoData.City
+			viewPayload.Latitude = geoData.Latitude
+			viewPayload.Longitude = geoData.Longitude
+
+			logger.WithFields(logging.Fields{
+				"viewer_ip":    viewerHost,
+				"country_code": geoData.CountryCode,
+				"city":         geoData.City,
+				"playback_id":  defaultStream,
+			}).Debug("Enriched DEFAULT_STREAM with viewer geo data")
+		}
+	}
+
+	// Create typed BaseEvent
+	baseEvent := &validation.BaseEvent{
+		EventID:       uuid.New().String(),
+		EventType:     validation.EventStreamView,
+		Timestamp:     time.Now().UTC(),
+		Source:        "mistserver_webhook",
+		PlaybackID:    &defaultStream,
+		InternalName:  &resolveResponse.InternalName,
+		SchemaVersion: "2.0",
+		StreamView:    viewPayload,
+	}
+
+	// Forward to Decklog with typed event
+	go ForwardTypedEventToDecklog(baseEvent)
 
 	// Return the wildcard stream name: live+{internal_name}
 	wildcardStreamName := fmt.Sprintf("live+%s", resolveResponse.InternalName)
@@ -483,7 +557,7 @@ func enrichEventWithClusterMetadata(eventData map[string]interface{}) map[string
 	return enriched
 }
 
-// updateFoghornStreamHealth immediately updates Foghorn with stream health status
+// updateFoghornStreamHealth immediately updates Foghorn with stream health status - TYPED VERSION
 func updateFoghornStreamHealth(streamName string, isHealthy bool, details map[string]interface{}) error {
 	nodeID := getCurrentNodeID()
 
@@ -495,28 +569,43 @@ func updateFoghornStreamHealth(streamName string, isHealthy bool, details map[st
 		internalName = streamName
 	}
 
-	// Prepare update payload
-	update := map[string]interface{}{
-		"node_id":       nodeID,
-		"stream_name":   streamName,
-		"internal_name": internalName,
-		"is_healthy":    isHealthy,
-		"timestamp":     time.Now().Unix(),
+	// Convert untyped details to typed FoghornStreamHealth structure
+	var typedDetails *validation.FoghornStreamHealth
+	if len(details) > 0 {
+		typedDetails = &validation.FoghornStreamHealth{}
+
+		// Extract buffer state if present
+		if bufferState, ok := details["buffer_state"].(string); ok {
+			typedDetails.BufferState = bufferState
+		}
+
+		// Extract bandwidth data if present (may be JSON string)
+		if bandwidthData, ok := details["bandwidth_data"].(string); ok {
+			typedDetails.BandwidthData = bandwidthData
+		}
+
+		// Extract health score if present
+		if healthScore, ok := details["health_score"].(float64); ok {
+			typedDetails.HealthScore = healthScore
+		}
+
+		// Extract issues information
+		if hasIssues, ok := details["has_issues"].(bool); ok {
+			typedDetails.HasIssues = hasIssues
+		}
+		if issuesDesc, ok := details["issues_desc"].(string); ok {
+			typedDetails.IssuesDesc = issuesDesc
+		}
 	}
 
-	// Add any additional details
-	for k, v := range details {
-		update[k] = v
-	}
-
-	// Send to Foghorn using shared client
+	// Send to Foghorn using typed client
 	req := &foghorn.StreamHealthRequest{
 		NodeID:       nodeID,
 		StreamName:   streamName,
 		InternalName: internalName,
 		IsHealthy:    isHealthy,
 		Timestamp:    time.Now().Unix(),
-		Details:      details,
+		Details:      typedDetails,
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

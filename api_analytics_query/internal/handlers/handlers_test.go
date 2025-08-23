@@ -148,17 +148,15 @@ func TestGetStreamAnalytics_NullSessionTimes(t *testing.T) {
 
 				// Test COALESCE-like behavior for NULL handling
 				if sessionStartTime.Valid {
-					sa.SessionStartTime = sessionStartTime.Time
+					sa.SessionStartTime = &sessionStartTime.Time
 				} else {
-					// Default to zero time for NULL values
-					sa.SessionStartTime = time.Time{}
+					sa.SessionStartTime = nil
 				}
 
 				if sessionEndTime.Valid {
-					sa.SessionEndTime = sessionEndTime.Time
+					sa.SessionEndTime = &sessionEndTime.Time
 				} else {
-					// Default to zero time for NULL values
-					sa.SessionEndTime = time.Time{}
+					sa.SessionEndTime = nil
 				}
 
 				// Set other required fields
@@ -186,15 +184,21 @@ func TestGetStreamAnalytics_NullSessionTimes(t *testing.T) {
 
 			// Verify NULL handling
 			if tc.expectedStartValid {
-				assert.False(t, response.SessionStartTime.IsZero(), "Expected valid start time")
+				assert.NotNil(t, response.SessionStartTime, "Expected valid start time")
+				if response.SessionStartTime != nil {
+					assert.False(t, response.SessionStartTime.IsZero(), "Expected valid start time")
+				}
 			} else {
-				assert.True(t, response.SessionStartTime.IsZero(), "Expected zero time for NULL start time")
+				assert.Nil(t, response.SessionStartTime, "Expected nil for NULL start time")
 			}
 
 			if tc.expectedEndValid {
-				assert.False(t, response.SessionEndTime.IsZero(), "Expected valid end time")
+				assert.NotNil(t, response.SessionEndTime, "Expected valid end time")
+				if response.SessionEndTime != nil {
+					assert.False(t, response.SessionEndTime.IsZero(), "Expected valid end time")
+				}
 			} else {
-				assert.True(t, response.SessionEndTime.IsZero(), "Expected zero time for NULL end time")
+				assert.Nil(t, response.SessionEndTime, "Expected nil for NULL end time")
 			}
 		})
 	}
@@ -209,7 +213,7 @@ func TestStreamAnalyticsQueryWithCOALESCE(t *testing.T) {
 		{
 			name: "query with COALESCE for nullable fields",
 			query: `
-				SELECT sa.id, sa.tenant_id, sa.internal_name, sa.internal_name, 
+				SELECT sa.id, sa.tenant_id, sa.internal_name, 
 				       COALESCE(sa.session_start_time, '1970-01-01 00:00:00'::timestamp) as session_start_time,
 				       COALESCE(sa.session_end_time, '1970-01-01 00:00:00'::timestamp) as session_end_time,
 				       sa.total_session_duration,
@@ -384,19 +388,19 @@ func TestResponseFieldValidation(t *testing.T) {
 		ID:               "test-id",
 		TenantID:         "tenant-123",
 		InternalName:     "test-stream",
-		SessionStartTime: time.Time{}, // Zero time (was NULL)
-		SessionEndTime:   time.Time{}, // Zero time (was NULL)
-		CurrentViewers:   0,           // Was NaN, now 0
-		PeakViewers:      0,           // Was NaN, now 0
-		TotalConnections: 0,           // Was NULL, now 0
-		BandwidthIn:      0,           // Was NULL, now 0
-		BandwidthOut:     0,           // Was NULL, now 0
-		TotalBandwidthGB: 0.0,         // Was NULL, now 0.0
-		BitrateKbps:      0,           // Was NULL, now 0
-		Resolution:       "",          // Was NULL, now empty string
-		PacketsSent:      0,           // Was NULL, now 0
-		PacketsLost:      0,           // Was NULL, now 0
-		PacketsRetrans:   0,           // Was NULL, now 0
+		SessionStartTime: nil, // NULL
+		SessionEndTime:   nil, // NULL
+		CurrentViewers:   0,   // Was NaN, now 0
+		PeakViewers:      0,   // Was NaN, now 0
+		TotalConnections: 0,   // Was NULL, now 0
+		BandwidthIn:      0,   // Was NULL, now 0
+		BandwidthOut:     0,   // Was NULL, now 0
+		TotalBandwidthGB: 0.0, // Was NULL, now 0.0
+		BitrateKbps:      nil, // NULL
+		Resolution:       nil, // NULL
+		PacketsSent:      0,   // Was NULL, now 0
+		PacketsLost:      0,   // Was NULL, now 0
+		PacketsRetrans:   0,   // Was NULL, now 0
 	}
 
 	// Verify that all numeric fields are properly defaulted
@@ -407,12 +411,16 @@ func TestResponseFieldValidation(t *testing.T) {
 	assert.GreaterOrEqual(t, testResponse.BandwidthOut, int64(0))
 	assert.GreaterOrEqual(t, testResponse.TotalBandwidthGB, 0.0)
 
-	// Verify that time fields are handled
-	assert.True(t, testResponse.SessionStartTime.IsZero() || !testResponse.SessionStartTime.IsZero())
-	assert.True(t, testResponse.SessionEndTime.IsZero() || !testResponse.SessionEndTime.IsZero())
+	// Verify that time fields are handled (nullable pointers)
+	// These can be nil now, so we just check they don't crash
+	if testResponse.SessionStartTime != nil {
+		assert.True(t, testResponse.SessionStartTime.IsZero() || !testResponse.SessionStartTime.IsZero())
+	}
+	if testResponse.SessionEndTime != nil {
+		assert.True(t, testResponse.SessionEndTime.IsZero() || !testResponse.SessionEndTime.IsZero())
+	}
 
-	// Verify string fields are not nil
-	assert.NotNil(t, testResponse.Resolution)
+	// Resolution is now a nullable string pointer, can be nil
 	assert.NotNil(t, testResponse.InternalName)
 	assert.NotNil(t, testResponse.TenantID)
 }

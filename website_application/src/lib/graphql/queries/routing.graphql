@@ -1,0 +1,108 @@
+# Routing and connection event queries
+
+# Query for routing events from Helmsman
+query GetRoutingEvents($stream: String, $timeRange: TimeRangeInput) {
+  routingEvents(stream: $stream, timeRange: $timeRange) {
+    timestamp
+    streamName
+    selectedNode
+    status
+    details
+    score
+    clientIp
+    clientCountry
+    clientLatitude
+    clientLongitude
+    nodeLatitude
+    nodeLongitude
+    nodeName
+  }
+}
+
+# Query for connection events (viewer connections/disconnections)
+query GetConnectionEvents($stream: String, $timeRange: TimeRangeInput) {
+  connectionEvents(stream: $stream, timeRange: $timeRange) {
+    eventId
+    timestamp
+    tenantId
+    internalName
+    sessionId
+    connectionAddr
+    connector
+    nodeId
+    countryCode
+    city
+    latitude
+    longitude
+    eventType
+  }
+}
+
+# Query for node performance metrics
+query GetNodeMetrics($nodeId: String, $timeRange: TimeRangeInput) {
+  nodeMetrics(nodeId: $nodeId, timeRange: $timeRange) {
+    timestamp
+    nodeId
+    cpuUsage
+    memoryUsage
+    diskUsage
+    networkRx
+    networkTx
+    healthScore
+    status
+    latitude
+    longitude
+    tags
+    metadata
+  }
+}
+
+# Query for all routing events across platform (for admin view)
+query GetPlatformRoutingEvents($timeRange: TimeRangeInput) {
+  routingEvents(timeRange: $timeRange) {
+    timestamp
+    streamName
+    selectedNode
+    status
+    score
+    clientCountry
+    clientLatitude
+    clientLongitude
+    nodeLatitude
+    nodeLongitude
+    nodeName
+    details
+  }
+}
+
+# Query for connection patterns by stream
+query GetStreamConnectionEvents($stream: String!, $timeRange: TimeRangeInput) {
+  connectionEvents(stream: $stream, timeRange: $timeRange) {
+    timestamp
+    sessionId
+    connectionAddr
+    nodeId
+    countryCode
+    city
+    latitude
+    longitude
+    eventType
+  }
+}
+
+# Query for node health across all nodes
+query GetAllNodeMetrics($timeRange: TimeRangeInput) {
+  nodeMetrics(timeRange: $timeRange) {
+    timestamp
+    nodeId
+    cpuUsage
+    memoryUsage
+    diskUsage
+    networkRx
+    networkTx
+    healthScore
+    status
+    latitude
+    longitude
+  }
+}

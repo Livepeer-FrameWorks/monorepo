@@ -30,3 +30,48 @@ query ValidateStreamKey($streamKey: String!) {
     error
   }
 }
+
+# Stream keys management queries
+fragment StreamKeyInfo on StreamKey {
+  id
+  streamId
+  keyValue
+  keyName
+  isActive
+  lastUsedAt
+  createdAt
+}
+
+query GetStreamKeys($streamId: ID!) {
+  streamKeys(streamId: $streamId) {
+    ...StreamKeyInfo
+  }
+}
+
+# Recordings management queries
+fragment RecordingInfo on Recording {
+  id
+  streamId
+  title
+  duration
+  fileSizeBytes
+  playbackId
+  thumbnailUrl
+  startTime
+  endTime
+  status
+  createdAt
+  updatedAt
+}
+
+query GetRecordings($streamId: ID) {
+  recordings(streamId: $streamId) {
+    ...RecordingInfo
+  }
+}
+
+query GetStreamRecordings($streamId: ID!) {
+  recordings(streamId: $streamId) {
+    ...RecordingInfo
+  }
+}

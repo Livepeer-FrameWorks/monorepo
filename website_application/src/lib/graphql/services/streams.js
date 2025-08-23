@@ -7,6 +7,11 @@ import {
   UpdateStreamDocument, 
   DeleteStreamDocument,
   RefreshStreamKeyDocument,
+  GetStreamKeysDocument,
+  CreateStreamKeyDocument,
+  DeleteStreamKeyDocument,
+  GetRecordingsDocument,
+  GetStreamRecordingsDocument,
   StreamEventsDocument,
   ViewerMetricsStreamDocument,
   TrackListUpdatesDocument 
@@ -14,6 +19,9 @@ import {
 
 export const streamsService = {
   // Queries
+  /**
+   * @returns {Promise<Array>} List of streams
+   */
   async getStreams() {
     const result = await client.query({
       query: GetStreamsDocument,
@@ -28,6 +36,10 @@ export const streamsService = {
     return result.data?.streams || [];
   },
 
+  /**
+   * @param {string} id - Stream ID
+   * @returns {Promise<Object|null>} Stream object or null
+   */
   async getStream(id) {
     try {
       const result = await client.query({
@@ -99,6 +111,85 @@ export const streamsService = {
       ]
     });
     return result.data.refreshStreamKey;
+  },
+
+  // Stream Keys Management
+  async getStreamKeys(streamId) {
+    try {
+      const result = await client.query({
+        query: GetStreamKeysDocument,
+        variables: { streamId },
+        fetchPolicy: 'cache-first',
+        errorPolicy: 'all'
+      });
+      return result.data?.streamKeys || [];
+    } catch (error) {
+      console.error('Failed to fetch stream keys:', error);
+      return [];
+    }
+  },
+
+  async createStreamKey(streamId, input) {
+    try {
+      const result = await client.mutate({
+        mutation: CreateStreamKeyDocument,
+        variables: { streamId, input },
+        refetchQueries: [
+          { query: GetStreamKeysDocument, variables: { streamId } }
+        ]
+      });
+      return result.data.createStreamKey;
+    } catch (error) {
+      console.error('Failed to create stream key:', error);
+      throw error;
+    }
+  },
+
+  async deleteStreamKey(streamId, keyId) {
+    try {
+      const result = await client.mutate({
+        mutation: DeleteStreamKeyDocument,
+        variables: { streamId, keyId },
+        refetchQueries: [
+          { query: GetStreamKeysDocument, variables: { streamId } }
+        ]
+      });
+      return result.data.deleteStreamKey;
+    } catch (error) {
+      console.error('Failed to delete stream key:', error);
+      throw error;
+    }
+  },
+
+  // Recordings Management
+  async getRecordings(streamId = null) {
+    try {
+      const result = await client.query({
+        query: GetRecordingsDocument,
+        variables: streamId ? { streamId } : {},
+        fetchPolicy: 'cache-first',
+        errorPolicy: 'all'
+      });
+      return result.data?.recordings || [];
+    } catch (error) {
+      console.error('Failed to fetch recordings:', error);
+      return [];
+    }
+  },
+
+  async getStreamRecordings(streamId) {
+    try {
+      const result = await client.query({
+        query: GetStreamRecordingsDocument,
+        variables: { streamId },
+        fetchPolicy: 'cache-first',
+        errorPolicy: 'all'
+      });
+      return result.data?.recordings || [];
+    } catch (error) {
+      console.error('Failed to fetch stream recordings:', error);
+      return [];
+    }
   },
 
   // Subscriptions

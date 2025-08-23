@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"math"
 	"net/http"
@@ -10,9 +11,12 @@ import (
 	"sync"
 	"time"
 
+	"frameworks/pkg/api/periscope"
 	"frameworks/pkg/logging"
+	"frameworks/pkg/validation"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 )
 
 var tenantCache = struct {
@@ -186,32 +190,36 @@ func HandlePushEnd(c *gin.Context) {
 	// Get current node ID
 	nodeID := getCurrentNodeID()
 
-	// Forward push end event to API for database updates
-	go forwardEventToCommodore("push-end", map[string]interface{}{
-		"node_id":       nodeID,
-		"push_id":       pushID,
-		"stream_name":   streamName,
-		"internal_name": internalName,
-		"target_uri":    targetURIAfter,
-		"status":        pushStatus,
-		"log_messages":  logMessages,
-		"event_type":    "push_end",
-		"timestamp":     time.Now().Unix(),
-	})
+	// Note: Removed push-end Commodore call - no handler exists in Commodore
 
-	// Forward analytics event to Decklog for batched processing
-	go ForwardEventToDecklog("push-lifecycle", map[string]interface{}{
-		"push_id":       pushID,
-		"stream_name":   streamName,
-		"internal_name": internalName,
-		"target_uri":    targetURIAfter,
-		"status":        pushStatus,
-		"event_type":    "push_end",
-		"timestamp":     time.Now().Unix(),
-		"source":        "mistserver_webhook",
-		"node_id":       nodeID,
-		"tenant_id":     getTenantForInternalName(internalName),
-	})
+	// Create typed PushLifecyclePayload
+	pushPayload := &validation.PushLifecyclePayload{
+		StreamName:      streamName,
+		InternalName:    internalName,
+		NodeID:          nodeID,
+		TenantID:        getTenantForInternalName(internalName),
+		PushID:          pushID,
+		PushTarget:      targetURIAfter,
+		TargetURIBefore: targetURIBefore,
+		TargetURIAfter:  targetURIAfter,
+		Status:          pushStatus,
+		LogMessages:     logMessages,
+		Action:          "end",
+	}
+
+	// Create typed BaseEvent
+	baseEvent := &validation.BaseEvent{
+		EventID:       uuid.New().String(),
+		EventType:     validation.EventPushLifecycle,
+		Timestamp:     time.Now().UTC(),
+		Source:        "mistserver_webhook",
+		InternalName:  &internalName,
+		SchemaVersion: "2.0",
+		PushLifecycle: pushPayload,
+	}
+
+	// Forward to Decklog with typed event
+	go ForwardTypedEventToDecklog(baseEvent)
 
 	c.String(http.StatusOK, "OK")
 }
@@ -269,16 +277,29 @@ func HandlePushOutStart(c *gin.Context) {
 		"timestamp":     time.Now().Unix(),
 	})
 
-	go ForwardEventToDecklog("push-lifecycle", map[string]interface{}{
-		"node_id":       nodeID,
-		"stream_name":   streamName,
-		"internal_name": internalName,
-		"push_target":   pushTarget,
-		"event_type":    "push_out_start",
-		"timestamp":     time.Now().Unix(),
-		"source":        "mistserver_webhook",
-		"tenant_id":     getTenantForInternalName(internalName),
-	})
+	// Create typed PushLifecyclePayload
+	pushPayload := &validation.PushLifecyclePayload{
+		StreamName:   streamName,
+		InternalName: internalName,
+		NodeID:       nodeID,
+		TenantID:     getTenantForInternalName(internalName),
+		PushTarget:   pushTarget,
+		Action:       "start",
+	}
+
+	// Create typed BaseEvent
+	baseEvent := &validation.BaseEvent{
+		EventID:       uuid.New().String(),
+		EventType:     validation.EventPushLifecycle,
+		Timestamp:     time.Now().UTC(),
+		Source:        "mistserver_webhook",
+		InternalName:  &internalName,
+		SchemaVersion: "2.0",
+		PushLifecycle: pushPayload,
+	}
+
+	// Forward to Decklog with typed event
+	go ForwardTypedEventToDecklog(baseEvent)
 
 	// Return the original push target to allow the push to proceed
 	c.String(http.StatusOK, pushTarget)
@@ -398,29 +419,104 @@ func HandleStreamBuffer(c *gin.Context) {
 	}).Info("Forwarding STREAM_BUFFER to Commodore")
 	go forwardEventToCommodore("stream-status", eventData)
 
-	periscopeEventData := map[string]interface{}{
-		"node_id":       nodeID,
-		"stream_name":   streamName,
-		"internal_name": internalName,
-		"status":        "live", // Set to live when buffer is available
-		"buffer_state":  bufferState,
-		"event_type":    "stream-buffer",
-		"timestamp":     time.Now().Unix(),
-		"tenant_id":     getTenantForInternalName(internalName),
+	// Create typed StreamLifecyclePayload
+	streamPayload := &validation.StreamLifecyclePayload{
+		StreamName:   streamName,
+		InternalName: internalName,
+		NodeID:       nodeID,
+		TenantID:     getTenantForInternalName(internalName),
+		Status:       "live", // Set to live when buffer is available
+		BufferState:  bufferState,
 	}
+
 	if streamDetails != "" {
-		periscopeEventData["stream_details"] = streamDetails
+		streamPayload.StreamDetails = streamDetails
 	}
 
 	// Add parsed health metrics if available
 	if healthMetrics != nil {
-		for key, value := range healthMetrics {
-			periscopeEventData[key] = value
+		if healthScore, ok := healthMetrics["health_score"].(float64); ok {
+			streamPayload.HealthScore = healthScore
+		}
+		if hasIssues, ok := healthMetrics["has_issues"].(bool); ok {
+			streamPayload.HasIssues = hasIssues
+		}
+		if issuesDesc, ok := healthMetrics["issues_description"].(string); ok {
+			streamPayload.IssuesDesc = issuesDesc
+		}
+		if trackCount, ok := healthMetrics["track_count"].(int); ok {
+			streamPayload.TrackCount = trackCount
+		}
+		if qualityTier, ok := healthMetrics["quality_tier"].(string); ok {
+			streamPayload.QualityTier = qualityTier
+		}
+
+		// Extract frame timing and quality metrics from first track
+		if tracks, ok := healthMetrics["tracks"].([]map[string]interface{}); ok && len(tracks) > 0 {
+			primaryTrack := tracks[0] // Use first track as primary
+
+			if codec, ok := primaryTrack["codec"].(string); ok {
+				streamPayload.PrimaryCodec = codec
+			}
+			if bitrate, ok := primaryTrack["bitrate"].(int); ok {
+				streamPayload.PrimaryBitrate = bitrate
+			}
+
+			var width, height int
+			if w, ok := primaryTrack["width"].(int); ok {
+				width = w
+				streamPayload.PrimaryWidth = width
+			}
+			if h, ok := primaryTrack["height"].(int); ok {
+				height = h
+				streamPayload.PrimaryHeight = height
+			}
+
+			// Calculate resolution as "WIDTHxHEIGHT" if both width and height exist
+			if width > 0 && height > 0 {
+				streamPayload.PrimaryResolution = fmt.Sprintf("%dx%d", width, height)
+			}
+
+			if fps, ok := primaryTrack["fps"].(float64); ok {
+				streamPayload.PrimaryFPS = fps
+			}
+			if frameJitter, ok := primaryTrack["frame_jitter_ms"].(float64); ok {
+				streamPayload.FrameJitterMS = frameJitter
+			}
+			if keyframeStability, ok := primaryTrack["keyframe_stability_ms"].(float64); ok {
+				streamPayload.KeyFrameStabilityMS = keyframeStability
+			}
+			if frameMSMax, ok := primaryTrack["frame_ms_max"].(float64); ok {
+				streamPayload.FrameMSMax = frameMSMax
+			}
+			if frameMSMin, ok := primaryTrack["frame_ms_min"].(float64); ok {
+				streamPayload.FrameMSMin = frameMSMin
+			}
+			if framesMax, ok := primaryTrack["frames_max"].(int); ok {
+				streamPayload.FramesMax = framesMax
+			}
+			if framesMin, ok := primaryTrack["frames_min"].(int); ok {
+				streamPayload.FramesMin = framesMin
+			}
+			if keyframeMSMax, ok := primaryTrack["keyframe_ms_max"].(float64); ok {
+				streamPayload.KeyFrameIntervalMS = keyframeMSMax // Use max as interval
+			}
 		}
 	}
 
-	// Forward buffer event to Decklog for analytics
-	go ForwardEventToDecklog("stream-buffer", periscopeEventData)
+	// Create typed BaseEvent
+	baseEvent := &validation.BaseEvent{
+		EventID:         uuid.New().String(),
+		EventType:       validation.EventStreamLifecycle,
+		Timestamp:       time.Now().UTC(),
+		Source:          "mistserver_webhook",
+		InternalName:    &internalName,
+		SchemaVersion:   "2.0",
+		StreamLifecycle: streamPayload,
+	}
+
+	// Forward to Decklog with typed event
+	go ForwardTypedEventToDecklog(baseEvent)
 
 	c.String(http.StatusOK, "OK")
 }
@@ -513,28 +609,39 @@ func HandleStreamEnd(c *gin.Context) {
 		"timestamp":     time.Now().Unix(),
 	})
 
-	// Forward stream end event to Decklog for analytics
-	streamEndData := map[string]interface{}{
-		"stream_name":   streamName,
-		"internal_name": internalName,
-		"buffer_state":  "EMPTY",
-		"event_type":    "stream-end",
-		"timestamp":     time.Now().Unix(),
-		"source":        "mistserver_webhook",
-		"tenant_id":     getTenantForInternalName(internalName),
+	// Create typed StreamLifecyclePayload
+	streamPayload := &validation.StreamLifecyclePayload{
+		StreamName:   streamName,
+		InternalName: internalName,
+		NodeID:       nodeID,
+		TenantID:     getTenantForInternalName(internalName),
+		Status:       "offline",
+		BufferState:  "EMPTY",
 	}
 
 	// Include stream metrics if available
 	if len(params) >= 7 {
-		streamEndData["downloaded_bytes"] = downloadedBytes
-		streamEndData["uploaded_bytes"] = uploadedBytes
-		streamEndData["total_viewers"] = totalViewers
-		streamEndData["total_inputs"] = totalInputs
-		streamEndData["total_outputs"] = totalOutputs
-		streamEndData["viewer_seconds"] = viewerSeconds
+		streamPayload.DownloadedBytes = downloadedBytes
+		streamPayload.UploadedBytes = uploadedBytes
+		streamPayload.TotalViewers = totalViewers
+		streamPayload.TotalInputs = totalInputs
+		streamPayload.TotalOutputs = totalOutputs
+		streamPayload.ViewerSeconds = viewerSeconds
 	}
 
-	go ForwardEventToDecklog("stream-end", streamEndData)
+	// Create typed BaseEvent
+	baseEvent := &validation.BaseEvent{
+		EventID:         uuid.New().String(),
+		EventType:       validation.EventStreamLifecycle,
+		Timestamp:       time.Now().UTC(),
+		Source:          "mistserver_webhook",
+		InternalName:    &internalName,
+		SchemaVersion:   "2.0",
+		StreamLifecycle: streamPayload,
+	}
+
+	// Forward to Decklog with typed event
+	go ForwardTypedEventToDecklog(baseEvent)
 
 	c.String(http.StatusOK, "OK")
 }
@@ -592,35 +699,57 @@ func HandleUserNew(c *gin.Context) {
 		internalName = streamName
 	}
 
-	// Forward analytics event to Decklog for batched processing with geo enrichment
-	baseEventData := map[string]interface{}{
-		"node_id":         nodeID,
-		"stream_name":     streamName,
-		"internal_name":   internalName,
-		"connection_addr": connectionAddr,
-		"connection_id":   connectionID,
-		"connector":       connector,
-		"request_url":     requestURL,
-		"session_id":      sessionID,
-		"action":          "connect",
-		"event_type":      "user_new",
-		"timestamp":       time.Now().Unix(),
-		"source":          "mistserver_webhook",
-		"tenant_id":       getTenantForInternalName(internalName),
+	// Create typed UserConnectionPayload
+	userPayload := &validation.UserConnectionPayload{
+		ConnectionEvent: periscope.ConnectionEvent{
+			EventID:        uuid.New().String(),
+			TenantID:       getTenantForInternalName(internalName),
+			InternalName:   internalName,
+			SessionID:      sessionID,
+			ConnectionAddr: connectionAddr,
+			Connector:      connector,
+			NodeID:         nodeID,
+			EventType:      "connect",
+		},
+		Action:       "connect",
+		ConnectionID: connectionID,
+		RequestURL:   requestURL,
 	}
 
 	// Enrich with geo data using connection_addr
-	enrichedEventData := enrichEventWithGeoData(baseEventData, connectionAddr)
-	go ForwardEventToDecklog("user-connection", enrichedEventData)
+	if geoipReader != nil && connectionAddr != "" {
+		geoData := geoipReader.Lookup(connectionAddr)
+		if geoData != nil {
+			userPayload.CountryCode = geoData.CountryCode
+			userPayload.City = geoData.City
+			userPayload.Latitude = geoData.Latitude
+			userPayload.Longitude = geoData.Longitude
+		}
+	}
+
+	// Create typed BaseEvent
+	eventID := uuid.New().String()
+	baseEvent := &validation.BaseEvent{
+		EventID:        eventID,
+		EventType:      validation.EventUserConnection,
+		Timestamp:      time.Now().UTC(),
+		Source:         "mistserver_webhook",
+		InternalName:   &internalName,
+		SchemaVersion:  "2.0",
+		UserConnection: userPayload,
+	}
+
+	// Forward to Decklog with typed event
+	go ForwardTypedEventToDecklog(baseEvent)
 
 	// Return "true" to accept the session
 	c.String(http.StatusOK, "true")
 }
 
 // HandleUserEnd handles USER_END webhook
-// Payload: stream name, connection address, connection identifier, connector, request url, session identifier,
+// Payload: session identifier (hexadecimal string), stream name (string), connector (string), connection address (string),
 //
-//	down bytes, up bytes, seconds connected, unix time connected, unix time disconnected, tags
+//	duration in seconds (integer), uploaded bytes total (integer), downloaded bytes total (integer), tags (string)
 func HandleUserEnd(c *gin.Context) {
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
@@ -632,7 +761,7 @@ func HandleUserEnd(c *gin.Context) {
 	}
 
 	params := strings.Split(strings.TrimSpace(string(body)), "\n")
-	if len(params) < 12 {
+	if len(params) < 8 {
 		logger.WithFields(logging.Fields{
 			"param_count": len(params),
 		}).Error("Invalid USER_END payload")
@@ -640,18 +769,18 @@ func HandleUserEnd(c *gin.Context) {
 		return
 	}
 
-	streamName := params[0]
-	connectionAddr := params[1]
-	connectionID, _ := strconv.Atoi(params[2])
-	connector := params[3]
-	requestURL := params[4]
-	sessionID, _ := strconv.Atoi(params[5])
-	downBytes, _ := strconv.ParseInt(params[6], 10, 64)
-	upBytes, _ := strconv.ParseInt(params[7], 10, 64)
-	secondsConnected, _ := strconv.Atoi(params[8])
-	timeConnected, _ := strconv.ParseInt(params[9], 10, 64)
-	timeDisconnected, _ := strconv.ParseInt(params[10], 10, 64)
-	tags := params[11]
+	// CORRECT MistServer USER_END format:
+	sessionIdentifier := params[0]                      // session identifier (hexadecimal string)
+	streamName := params[1]                             // stream name (string)
+	connector := params[2]                              // connector (string)
+	connectionAddr := params[3]                         // connection address (string)
+	secondsConnected, _ := strconv.Atoi(params[4])      // duration in seconds (integer)
+	upBytes, _ := strconv.ParseInt(params[5], 10, 64)   // uploaded bytes total (integer)
+	downBytes, _ := strconv.ParseInt(params[6], 10, 64) // downloaded bytes total (integer)
+	tags := ""
+	if len(params) > 7 {
+		tags = params[7] // tags (string)
+	}
 
 	logger.WithFields(logging.Fields{
 		"stream_name":       streamName,
@@ -672,32 +801,50 @@ func HandleUserEnd(c *gin.Context) {
 		internalName = streamName
 	}
 
-	// Forward analytics event to Decklog for comprehensive analytics processing with geo enrichment
-	baseEventData := map[string]interface{}{
-		"node_id":           nodeID,
-		"stream_name":       streamName,
-		"internal_name":     internalName,
-		"connection_addr":   connectionAddr,
-		"connection_id":     connectionID,
-		"connector":         connector,
-		"request_url":       requestURL,
-		"session_id":        sessionID,
-		"down_bytes":        downBytes,
-		"up_bytes":          upBytes,
-		"seconds_connected": secondsConnected,
-		"time_connected":    timeConnected,
-		"time_disconnected": timeDisconnected,
-		"tags":              tags,
-		"action":            "disconnect",
-		"event_type":        "user_end",
-		"timestamp":         time.Now().Unix(),
-		"source":            "mistserver_webhook",
-		"tenant_id":         getTenantForInternalName(internalName),
+	// Create typed UserConnectionPayload
+	userPayload := &validation.UserConnectionPayload{
+		ConnectionEvent: periscope.ConnectionEvent{
+			EventID:        uuid.New().String(),
+			TenantID:       getTenantForInternalName(internalName),
+			InternalName:   internalName,
+			ConnectionAddr: connectionAddr,
+			Connector:      connector,
+			NodeID:         nodeID,
+			EventType:      "disconnect",
+		},
+		Action:            "disconnect",
+		SessionIdentifier: sessionIdentifier,
+		SecondsConnected:  secondsConnected,
+		UploadedBytes:     upBytes,
+		DownloadedBytes:   downBytes,
+		Tags:              tags,
 	}
 
 	// Enrich with geo data using connection_addr
-	enrichedEventData := enrichEventWithGeoData(baseEventData, connectionAddr)
-	go ForwardEventToDecklog("user-connection", enrichedEventData)
+	if geoipReader != nil && connectionAddr != "" {
+		geoData := geoipReader.Lookup(connectionAddr)
+		if geoData != nil {
+			userPayload.CountryCode = geoData.CountryCode
+			userPayload.City = geoData.City
+			userPayload.Latitude = geoData.Latitude
+			userPayload.Longitude = geoData.Longitude
+		}
+	}
+
+	// Create typed BaseEvent
+	eventID := uuid.New().String()
+	baseEvent := &validation.BaseEvent{
+		EventID:        eventID,
+		EventType:      validation.EventUserConnection,
+		Timestamp:      time.Now().UTC(),
+		Source:         "mistserver_webhook",
+		InternalName:   &internalName,
+		SchemaVersion:  "2.0",
+		UserConnection: userPayload,
+	}
+
+	// Forward to Decklog with typed event
+	go ForwardTypedEventToDecklog(baseEvent)
 
 	c.String(http.StatusOK, "OK")
 }
@@ -788,26 +935,71 @@ func HandleLiveTrackList(c *gin.Context) {
 	// Get current node ID
 	nodeID := getCurrentNodeID()
 
-	// Forward track list update to Decklog with parsed details
-	trackEventData := map[string]interface{}{
-		"node_id":       nodeID,
-		"stream_name":   streamName,
-		"internal_name": internalName,
-		"track_list":    trackListJSON,
-		"event_type":    "track_list_update",
-		"timestamp":     time.Now().Unix(),
-		"source":        "mistserver_webhook",
-		"tenant_id":     getTenantForInternalName(internalName),
+	// Create typed TrackListPayload
+	trackPayload := &validation.TrackListPayload{
+		StreamName:    streamName,
+		InternalName:  internalName,
+		NodeID:        nodeID,
+		TenantID:      getTenantForInternalName(internalName),
+		TrackListJSON: trackListJSON,
 	}
 
 	// Add parsed quality metrics if available
 	if qualityMetrics != nil {
-		for key, value := range qualityMetrics {
-			trackEventData[key] = value
+		if trackCount, ok := qualityMetrics["total_tracks"].(int); ok {
+			trackPayload.TrackCount = trackCount
+		}
+		if videoTrackCount, ok := qualityMetrics["video_track_count"].(int); ok {
+			trackPayload.VideoTrackCount = videoTrackCount
+		}
+		if audioTrackCount, ok := qualityMetrics["audio_track_count"].(int); ok {
+			trackPayload.AudioTrackCount = audioTrackCount
+		}
+		if qualityTier, ok := qualityMetrics["quality_tier"].(string); ok {
+			trackPayload.QualityTier = qualityTier
+		}
+		if primaryWidth, ok := qualityMetrics["primary_width"].(int); ok {
+			trackPayload.PrimaryWidth = primaryWidth
+		}
+		if primaryHeight, ok := qualityMetrics["primary_height"].(int); ok {
+			trackPayload.PrimaryHeight = primaryHeight
+		}
+		if primaryFPS, ok := qualityMetrics["primary_fps"].(float64); ok {
+			trackPayload.PrimaryFPS = primaryFPS
+		}
+		if primaryVideoBitrate, ok := qualityMetrics["primary_video_bitrate"].(int); ok {
+			trackPayload.PrimaryVideoBitrate = primaryVideoBitrate
+		}
+		if primaryVideoCodec, ok := qualityMetrics["primary_video_codec"].(string); ok {
+			trackPayload.PrimaryVideoCodec = primaryVideoCodec
+		}
+		if primaryAudioBitrate, ok := qualityMetrics["primary_audio_bitrate"].(int); ok {
+			trackPayload.PrimaryAudioBitrate = primaryAudioBitrate
+		}
+		if primaryAudioCodec, ok := qualityMetrics["primary_audio_codec"].(string); ok {
+			trackPayload.PrimaryAudioCodec = primaryAudioCodec
+		}
+		if primaryAudioChannels, ok := qualityMetrics["primary_audio_channels"].(int); ok {
+			trackPayload.PrimaryAudioChannels = primaryAudioChannels
+		}
+		if primaryAudioSampleRate, ok := qualityMetrics["primary_audio_sample_rate"].(int); ok {
+			trackPayload.PrimaryAudioSampleRate = primaryAudioSampleRate
 		}
 	}
 
-	go ForwardEventToDecklog("track-list", trackEventData)
+	// Create typed BaseEvent
+	baseEvent := &validation.BaseEvent{
+		EventID:       uuid.New().String(),
+		EventType:     validation.EventTrackList,
+		Timestamp:     time.Now().UTC(),
+		Source:        "mistserver_webhook",
+		InternalName:  &internalName,
+		SchemaVersion: "2.0",
+		TrackList:     trackPayload,
+	}
+
+	// Forward to Decklog with typed event
+	go ForwardTypedEventToDecklog(baseEvent)
 
 	c.String(http.StatusOK, "OK")
 }
@@ -866,28 +1058,37 @@ func HandleLiveBandwidth(c *gin.Context) {
 	// Get current node ID
 	nodeID := getCurrentNodeID()
 
-	// Forward bandwidth threshold event to Decklog for analytics
-	go ForwardEventToDecklog("bandwidth-threshold", map[string]interface{}{
-		"node_id":               nodeID,
-		"stream_name":           streamName,
-		"internal_name":         internalName,
-		"current_bytes_per_sec": currentBytesPerSecond,
-		"threshold_exceeded":    true,
-		"event_type":            "bandwidth-threshold",
-		"timestamp":             time.Now().Unix(),
-		"source":                "mistserver_webhook",
-		"tenant_id":             getTenantForInternalName(internalName),
-	})
+	// Create typed BandwidthThresholdPayload
+	bandwidthPayload := &validation.BandwidthThresholdPayload{
+		StreamName:         streamName,
+		InternalName:       internalName,
+		NodeID:             nodeID,
+		TenantID:           getTenantForInternalName(internalName),
+		CurrentBytesPerSec: currentBytesPerSecond,
+		ThresholdExceeded:  true,
+		// Note: MistServer doesn't send the threshold value in webhook payload
+		// ThresholdValue is left as 0 since it's not available from the webhook
+	}
+
+	// Create typed BaseEvent
+	baseEvent := &validation.BaseEvent{
+		EventID:            uuid.New().String(),
+		EventType:          validation.EventBandwidthThreshold,
+		Timestamp:          time.Now().UTC(),
+		Source:             "mistserver_webhook",
+		InternalName:       &internalName,
+		SchemaVersion:      "2.0",
+		BandwidthThreshold: bandwidthPayload,
+	}
+
+	// Forward to Decklog with typed event
+	go ForwardTypedEventToDecklog(baseEvent)
 
 	c.String(http.StatusOK, "OK")
 }
 
 // HandleRecordingEnd handles RECORDING_END webhook
-// Payload: stream name, push target, connector/filetype, bytes recorded, seconds spent recording,
-//
-//	unix time recording started, unix time recording stopped, total milliseconds of media data recorded,
-//	millisecond timestamp of first media packet, millisecond timestamp of last media packet,
-//	machine-readable reason for exit, human-readable reason for exit
+// CORRECT MistServer format: stream name, path to file, output protocol name, bytes written, seconds writing took, unix start time, unix end time, media duration (ms)
 func HandleRecordingEnd(c *gin.Context) {
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
@@ -899,34 +1100,32 @@ func HandleRecordingEnd(c *gin.Context) {
 	}
 
 	params := strings.Split(strings.TrimSpace(string(body)), "\n")
-	if len(params) < 12 {
+	if len(params) < 8 {
 		logger.WithFields(logging.Fields{
 			"param_count": len(params),
-			"expected":    12,
+			"expected":    8,
 		}).Error("Invalid RECORDING_END payload")
 		c.String(http.StatusOK, "OK")
 		return
 	}
 
-	streamName := params[0]
-	pushTarget := params[1]
-	connector := params[2]
-	bytesRecorded, _ := strconv.ParseInt(params[3], 10, 64)
-	secondsSpent, _ := strconv.Atoi(params[4])
-	timeStarted, _ := strconv.ParseInt(params[5], 10, 64)
-	timeStopped, _ := strconv.ParseInt(params[6], 10, 64)
-	totalMilliseconds, _ := strconv.ParseInt(params[7], 10, 64)
-	firstPacketTime, _ := strconv.ParseInt(params[8], 10, 64)
-	lastPacketTime, _ := strconv.ParseInt(params[9], 10, 64)
-	machineReason := params[10]
-	humanReason := params[11]
+	// CORRECT MistServer RECORDING_END format:
+	streamName := params[0]                                   // stream name
+	filePath := params[1]                                     // path to file that just finished writing
+	outputProtocol := params[2]                               // output protocol name
+	bytesWritten, _ := strconv.ParseInt(params[3], 10, 64)    // number of bytes written to file
+	secondsWriting, _ := strconv.Atoi(params[4])              // amount of seconds that writing took
+	timeStarted, _ := strconv.ParseInt(params[5], 10, 64)     // time of connection start (unix-time)
+	timeEnded, _ := strconv.ParseInt(params[6], 10, 64)       // time of connection end (unix-time)
+	mediaDurationMs, _ := strconv.ParseInt(params[7], 10, 64) // duration of stream media data (milliseconds)
 
 	logger.WithFields(logging.Fields{
-		"stream_name":    streamName,
-		"push_target":    pushTarget,
-		"seconds_spent":  secondsSpent,
-		"bytes_recorded": bytesRecorded,
-		"human_reason":   humanReason,
+		"stream_name":       streamName,
+		"file_path":         filePath,
+		"output_protocol":   outputProtocol,
+		"bytes_written":     bytesWritten,
+		"seconds_writing":   secondsWriting,
+		"media_duration_ms": mediaDurationMs,
 	}).Info("Recording ended")
 
 	// Extract internal name from wildcard stream
@@ -944,36 +1143,49 @@ func HandleRecordingEnd(c *gin.Context) {
 
 	// Forward recording end event to Commodore for database updates
 	go forwardEventToCommodore("recording-status", map[string]interface{}{
-		"node_id":            nodeID,
-		"internal_name":      internalName,
-		"is_recording":       false,
-		"push_target":        pushTarget,
-		"connector":          connector,
-		"bytes_recorded":     bytesRecorded,
-		"seconds_recording":  secondsSpent,
-		"time_started":       timeStarted,
-		"time_stopped":       timeStopped,
-		"total_milliseconds": totalMilliseconds,
-		"first_packet_time":  firstPacketTime,
-		"last_packet_time":   lastPacketTime,
-		"machine_reason":     machineReason,
-		"human_reason":       humanReason,
-		"event_type":         "recording_end",
-		"timestamp":          time.Now().Unix(),
-	})
-
-	// Forward recording end event to Decklog for analytics
-	go ForwardEventToDecklog("recording-lifecycle", map[string]interface{}{
-		"stream_name":       streamName,
+		"node_id":           nodeID,
 		"internal_name":     internalName,
-		"push_target":       pushTarget,
-		"bytes_recorded":    bytesRecorded,
-		"seconds_recording": secondsSpent,
+		"is_recording":      false,
+		"file_path":         filePath,
+		"output_protocol":   outputProtocol,
+		"bytes_written":     bytesWritten,
+		"seconds_writing":   secondsWriting,
+		"time_started":      timeStarted,
+		"time_ended":        timeEnded,
+		"media_duration_ms": mediaDurationMs,
 		"event_type":        "recording_end",
 		"timestamp":         time.Now().Unix(),
-		"source":            "mistserver_webhook",
-		"tenant_id":         getTenantForInternalName(internalName),
 	})
+
+	// Create typed RecordingPayload
+	recordingPayload := &validation.RecordingPayload{
+		StreamName:      streamName,
+		InternalName:    internalName,
+		NodeID:          nodeID,
+		TenantID:        getTenantForInternalName(internalName),
+		FilePath:        filePath,
+		OutputProtocol:  outputProtocol,
+		BytesWritten:    bytesWritten,
+		SecondsWriting:  secondsWriting,
+		TimeStarted:     timeStarted,
+		TimeEnded:       timeEnded,
+		MediaDurationMs: mediaDurationMs,
+		IsRecording:     false, // Always false for RECORDING_END
+	}
+
+	// Create typed BaseEvent
+	baseEvent := &validation.BaseEvent{
+		EventID:       uuid.New().String(),
+		EventType:     validation.EventRecordingLifecycle,
+		Timestamp:     time.Now().UTC(),
+		Source:        "mistserver_webhook",
+		InternalName:  &internalName,
+		SchemaVersion: "2.0",
+		Recording:     recordingPayload,
+	}
+
+	// Forward to Decklog with typed event
+	go ForwardTypedEventToDecklog(baseEvent)
 
 	c.String(http.StatusOK, "OK")
 }

@@ -8,11 +8,12 @@ import (
 	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/demo"
 	"frameworks/api_gateway/internal/middleware"
+	"frameworks/pkg/api/periscope"
 	"frameworks/pkg/logging"
 )
 
 // DoStreamUpdates handles real-time stream updates via WebSocket
-func (r *Resolver) DoStreamUpdates(ctx context.Context, streamID *string) (<-chan *model.StreamEvent, error) {
+func (r *Resolver) DoStreamUpdates(ctx context.Context, streamID *string) (<-chan *periscope.StreamEvent, error) {
 	if r.Metrics != nil {
 		r.Metrics.Operations.WithLabelValues("subscription_streams", "requested").Inc()
 		defer func() {
@@ -25,7 +26,7 @@ func (r *Resolver) DoStreamUpdates(ctx context.Context, streamID *string) (<-cha
 		if r.Metrics != nil {
 			r.Metrics.Operations.WithLabelValues("subscription_streams", "demo").Inc()
 		}
-		ch := make(chan *model.StreamEvent, 10)
+		ch := make(chan *periscope.StreamEvent, 10)
 		go func() {
 			defer close(ch)
 			events := demo.GenerateStreamEvents()
@@ -35,15 +36,13 @@ func (r *Resolver) DoStreamUpdates(ctx context.Context, streamID *string) (<-cha
 				case <-ctx.Done():
 					return
 				}
-				time.Sleep(2 * time.Second) // Send events every 2 seconds
+				time.Sleep(2 * time.Second)
 			}
 		}()
 		return ch, nil
 	}
 
 	r.Logger.Info("Setting up stream updates subscription")
-
-	// Get user from context - subscriptions require authentication
 	user, err := middleware.RequireAuth(ctx)
 	if err != nil {
 		if r.Metrics != nil {
@@ -52,7 +51,6 @@ func (r *Resolver) DoStreamUpdates(ctx context.Context, streamID *string) (<-cha
 		return nil, fmt.Errorf("authentication required for stream subscriptions: %w", err)
 	}
 
-	// Extract JWT token from context (this would be set by the auth middleware)
 	jwtToken := ""
 	if token := ctx.Value("jwt_token"); token != nil {
 		if tokenStr, ok := token.(string); ok {
@@ -60,14 +58,8 @@ func (r *Resolver) DoStreamUpdates(ctx context.Context, streamID *string) (<-cha
 		}
 	}
 
-	// Create connection config
-	config := ConnectionConfig{
-		UserID:   user.UserID,
-		TenantID: user.TenantID,
-		JWT:      jwtToken,
-	}
+	config := ConnectionConfig{UserID: user.UserID, TenantID: user.TenantID, JWT: jwtToken}
 
-	// Use WebSocket manager to subscribe to stream updates
 	ch, err := r.wsManager.SubscribeToStreams(ctx, config, streamID)
 	if err != nil {
 		if r.Metrics != nil {
@@ -209,161 +201,14 @@ func (r *Resolver) DoSystemUpdates(ctx context.Context) (<-chan *model.SystemHea
 }
 
 // DoTrackListUpdates handles real-time track list updates via WebSocket
-func (r *Resolver) DoTrackListUpdates(ctx context.Context, streamID string) (<-chan *model.TrackListEvent, error) {
+func (r *Resolver) DoTrackListUpdates(ctx context.Context, streamID string) (<-chan *periscope.AnalyticsTrackListEvent, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo track list subscription")
-		ch := make(chan *model.TrackListEvent, 10)
+		ch := make(chan *periscope.AnalyticsTrackListEvent, 10)
 		go func() {
 			defer close(ch)
 			events := demo.GenerateTrackListEvents()
 			for _, event := range events {
-				select {
-				case ch <- event:
-				case <-ctx.Done():
-					return
-				}
-				time.Sleep(4 * time.Second) // Send track updates every 4 seconds
-			}
-		}()
-		return ch, nil
-	}
-
-	r.Logger.Info("Setting up track list updates subscription")
-
-	// Get user from context - subscriptions require authentication
-	user, err := middleware.RequireAuth(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("authentication required for track list subscriptions: %w", err)
-	}
-
-	// Extract JWT token from context
-	jwtToken := ""
-	if token := ctx.Value("jwt_token"); token != nil {
-		if tokenStr, ok := token.(string); ok {
-			jwtToken = tokenStr
-		}
-	}
-
-	// Create connection config
-	config := ConnectionConfig{
-		UserID:   user.UserID,
-		TenantID: user.TenantID,
-		JWT:      jwtToken,
-	}
-
-	// Use WebSocket manager to subscribe to track list updates
-	return r.wsManager.SubscribeToTrackList(ctx, config, streamID)
-}
-
-// DoTenantEvents handles real-time tenant events via WebSocket
-func (r *Resolver) DoTenantEvents(ctx context.Context, tenantID string) (<-chan model.TenantEvent, error) {
-	if middleware.IsDemoMode(ctx) {
-		r.Logger.Debug("Returning demo tenant events subscription")
-		ch := make(chan model.TenantEvent, 10)
-		go func() {
-			defer close(ch)
-			// Mix different types of tenant events
-			streamEvents := demo.GenerateStreamEvents()
-			viewerEvents := demo.GenerateViewerMetricsEvents()
-			trackEvents := demo.GenerateTrackListEvents()
-
-			// Send mixed events
-			for i := 0; i < len(streamEvents) || i < len(viewerEvents) || i < len(trackEvents); i++ {
-				if i < len(streamEvents) {
-					select {
-					case ch <- streamEvents[i]:
-					case <-ctx.Done():
-						return
-					}
-					time.Sleep(2 * time.Second)
-				}
-				if i < len(viewerEvents) {
-					select {
-					case ch <- viewerEvents[i]:
-					case <-ctx.Done():
-						return
-					}
-					time.Sleep(3 * time.Second)
-				}
-				if i < len(trackEvents) {
-					select {
-					case ch <- trackEvents[i]:
-					case <-ctx.Done():
-						return
-					}
-					time.Sleep(4 * time.Second)
-				}
-			}
-		}()
-		return ch, nil
-	}
-
-	r.Logger.Info("Setting up tenant events subscription")
-
-	// Get user from context - subscriptions require authentication
-	user, err := middleware.RequireAuth(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("authentication required for tenant event subscriptions: %w", err)
-	}
-
-	// Verify user has access to the requested tenant
-	if user.TenantID != tenantID {
-		return nil, fmt.Errorf("access denied: user cannot access tenant %s", tenantID)
-	}
-
-	// Extract JWT token from context
-	jwtToken := ""
-	if token := ctx.Value("jwt_token"); token != nil {
-		if tokenStr, ok := token.(string); ok {
-			jwtToken = tokenStr
-		}
-	}
-
-	// Create connection config
-	config := ConnectionConfig{
-		UserID:   user.UserID,
-		TenantID: user.TenantID,
-		JWT:      jwtToken,
-	}
-
-	// Use WebSocket manager to subscribe to tenant events
-	return r.wsManager.SubscribeToTenantEvents(ctx, config, tenantID)
-}
-
-// DoUserEvents handles real-time user events via WebSocket (tenant determined from auth context)
-func (r *Resolver) DoUserEvents(ctx context.Context) (<-chan model.TenantEvent, error) {
-	if middleware.IsDemoMode(ctx) {
-		r.Logger.Debug("Returning demo user events subscription")
-		ch := make(chan model.TenantEvent, 10)
-		go func() {
-			defer close(ch)
-			// Mix different types of tenant events
-			streamEvents := demo.GenerateStreamEvents()
-			viewerEvents := demo.GenerateViewerMetricsEvents()
-			trackEvents := demo.GenerateTrackListEvents()
-
-			// Send stream events
-			for _, event := range streamEvents {
-				select {
-				case ch <- event:
-				case <-ctx.Done():
-					return
-				}
-				time.Sleep(2 * time.Second)
-			}
-
-			// Send viewer metrics
-			for _, event := range viewerEvents {
-				select {
-				case ch <- event:
-				case <-ctx.Done():
-					return
-				}
-				time.Sleep(3 * time.Second)
-			}
-
-			// Send track list events
-			for _, event := range trackEvents {
 				select {
 				case ch <- event:
 				case <-ctx.Done():
@@ -375,15 +220,12 @@ func (r *Resolver) DoUserEvents(ctx context.Context) (<-chan model.TenantEvent, 
 		return ch, nil
 	}
 
-	r.Logger.Info("Setting up user events subscription")
-
-	// Get user from context - subscriptions require authentication
+	r.Logger.Info("Setting up track list updates subscription")
 	user, err := middleware.RequireAuth(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("authentication required for user event subscriptions: %w", err)
+		return nil, fmt.Errorf("authentication required for track list subscriptions: %w", err)
 	}
 
-	// Extract JWT token from context
 	jwtToken := ""
 	if token := ctx.Value("jwt_token"); token != nil {
 		if tokenStr, ok := token.(string); ok {
@@ -391,13 +233,6 @@ func (r *Resolver) DoUserEvents(ctx context.Context) (<-chan model.TenantEvent, 
 		}
 	}
 
-	// Create connection config
-	config := ConnectionConfig{
-		UserID:   user.UserID,
-		TenantID: user.TenantID,
-		JWT:      jwtToken,
-	}
-
-	// Use WebSocket manager to subscribe to user's tenant events
-	return r.wsManager.SubscribeToTenantEvents(ctx, config, user.TenantID)
+	config := ConnectionConfig{UserID: user.UserID, TenantID: user.TenantID, JWT: jwtToken}
+	return r.wsManager.SubscribeToTrackList(ctx, config, streamID)
 }

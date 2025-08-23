@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"frameworks/api_gateway/graph/model"
+	"frameworks/pkg/api/periscope"
 	"frameworks/pkg/models"
 )
 
@@ -63,6 +64,9 @@ func GenerateStreams() []*models.Stream {
 func GenerateStreamAnalytics(streamID string) *models.StreamAnalytics {
 	now := time.Now()
 
+	startTime := now.Add(-2 * time.Hour)
+	endTime := now
+
 	return &models.StreamAnalytics{
 		StreamID:             streamID,
 		TotalConnections:     1247,
@@ -71,21 +75,21 @@ func GenerateStreamAnalytics(streamID string) *models.StreamAnalytics {
 		TotalSessionDuration: 18650, // seconds
 		UniqueCountries:      12,
 		UniqueCities:         28,
-		SessionStartTime:     now.Add(-2 * time.Hour),
-		SessionEndTime:       now,
+		SessionStartTime:     &startTime,
+		SessionEndTime:       &endTime,
 	}
 }
 
 // GenerateViewerMetrics creates demo viewer metrics
-func GenerateViewerMetrics() []*model.ViewerMetric {
+func GenerateViewerMetrics() []*models.AnalyticsViewerSession {
 	now := time.Now()
-	metrics := make([]*model.ViewerMetric, 20)
+	metrics := make([]*models.AnalyticsViewerSession, 20)
 
 	// Simulate viewer count over last 20 intervals (5 min each)
 	viewerCounts := []int{12, 15, 23, 34, 45, 67, 89, 85, 78, 92, 87, 76, 65, 58, 71, 69, 54, 47, 39, 31}
 
 	for i, count := range viewerCounts {
-		metrics[i] = &model.ViewerMetric{
+		metrics[i] = &models.AnalyticsViewerSession{
 			Timestamp:   now.Add(-time.Duration(19-i) * 5 * time.Minute),
 			ViewerCount: count,
 		}
@@ -103,12 +107,12 @@ func GenerateBillingTiers() []*models.BillingTier {
 			Description: "Perfect for trying out FrameWorks",
 			BasePrice:   0.00,
 			Currency:    "USD",
-			Features: map[string]interface{}{
-				"max_streams":   1,
-				"max_viewers":   10,
-				"recording":     false,
-				"analytics":     true,
-				"support_level": "community",
+			Features: models.BillingFeatures{
+				MaxStreams:   models.NewResourceLimit(1),
+				MaxViewers:   models.NewResourceLimit(10),
+				Recording:    false,
+				Analytics:    true,
+				SupportLevel: "community",
 			},
 		},
 		{
@@ -117,13 +121,13 @@ func GenerateBillingTiers() []*models.BillingTier {
 			Description: "For content creators and small businesses",
 			BasePrice:   29.99,
 			Currency:    "USD",
-			Features: map[string]interface{}{
-				"max_streams":     5,
-				"max_viewers":     100,
-				"recording":       true,
-				"analytics":       true,
-				"custom_branding": true,
-				"support_level":   "email",
+			Features: models.BillingFeatures{
+				MaxStreams:     models.NewResourceLimit(5),
+				MaxViewers:     models.NewResourceLimit(100),
+				Recording:      true,
+				Analytics:      true,
+				CustomBranding: true,
+				SupportLevel:   "email",
 			},
 		},
 		{
@@ -132,15 +136,15 @@ func GenerateBillingTiers() []*models.BillingTier {
 			Description: "For large organizations with custom needs",
 			BasePrice:   299.99,
 			Currency:    "USD",
-			Features: map[string]interface{}{
-				"max_streams":     "unlimited",
-				"max_viewers":     "unlimited",
-				"recording":       true,
-				"analytics":       true,
-				"custom_branding": true,
-				"api_access":      true,
-				"support_level":   "phone",
-				"sla":             true,
+			Features: models.BillingFeatures{
+				MaxStreams:     models.NewUnlimitedResource(),
+				MaxViewers:     models.NewUnlimitedResource(),
+				Recording:      true,
+				Analytics:      true,
+				CustomBranding: true,
+				APIAccess:      true,
+				SupportLevel:   "phone",
+				SLA:            true,
 			},
 		},
 	}
@@ -158,14 +162,16 @@ func GenerateInvoices() []*models.Invoice {
 			Status:    "paid",
 			DueDate:   now.Add(24 * time.Hour),
 			CreatedAt: now.Add(-30 * 24 * time.Hour),
-			UsageDetails: map[string]interface{}{
-				"Streaming hours": map[string]interface{}{
-					"quantity":   42.5,
-					"unit_price": 0.50,
+			UsageDetails: models.UsageDetails{
+				"Streaming hours": {
+					Quantity:  42.5,
+					UnitPrice: 0.50,
+					Unit:      "hours",
 				},
-				"Storage GB": map[string]interface{}{
-					"quantity":   15.2,
-					"unit_price": 0.25,
+				"Storage GB": {
+					Quantity:  15.2,
+					UnitPrice: 0.25,
+					Unit:      "GB",
 				},
 			},
 		},
@@ -176,14 +182,16 @@ func GenerateInvoices() []*models.Invoice {
 			Status:    "paid",
 			DueDate:   now.Add(-30 * 24 * time.Hour),
 			CreatedAt: now.Add(-60 * 24 * time.Hour),
-			UsageDetails: map[string]interface{}{
-				"Streaming hours": map[string]interface{}{
-					"quantity":   35.0,
-					"unit_price": 0.50,
+			UsageDetails: models.UsageDetails{
+				"Streaming hours": {
+					Quantity:  35.0,
+					UnitPrice: 0.50,
+					Unit:      "hours",
 				},
-				"Storage GB": map[string]interface{}{
-					"quantity":   19.0,
-					"unit_price": 0.25,
+				"Storage GB": {
+					Quantity:  19.0,
+					UnitPrice: 0.25,
+					Unit:      "GB",
 				},
 			},
 		},
@@ -232,8 +240,12 @@ func GenerateUsageRecords() []*models.UsageRecord {
 			UsageType:  usageType,
 			UsageValue: value,
 			CreatedAt:  now.Add(-time.Duration(i) * 24 * time.Hour),
-			UsageDetails: map[string]interface{}{
-				"cost": value * 0.5,
+			UsageDetails: models.UsageDetails{
+				"cost": {
+					Quantity:  value,
+					UnitPrice: 0.5,
+					Unit:      "units",
+				},
 			},
 		}
 	}
@@ -242,40 +254,39 @@ func GenerateUsageRecords() []*models.UsageRecord {
 }
 
 // GenerateDeveloperTokens creates demo API tokens
-func GenerateDeveloperTokens() []*model.DeveloperToken {
+func GenerateDeveloperTokens() []*models.APIToken {
 	now := time.Now()
 
 	// Helper function to create time pointers
 	timePtr := func(t time.Time) *time.Time { return &t }
-	tokenPtr := func(s string) *string { return &s }
 
-	return []*model.DeveloperToken{
+	return []*models.APIToken{
 		{
 			ID:          "token_demo_production",
-			Name:        "Production API Access",
-			Token:       tokenPtr("***********************************uc12"), // Masked
-			Permissions: "streams:read,streams:write,analytics:read",
-			Status:      "active",
+			TokenName:   "Production API Access",
+			TokenValue:  "", // never expose in list
+			Permissions: []string{"streams:read", "streams:write", "analytics:read"},
+			IsActive:    true,
 			LastUsedAt:  timePtr(now.Add(-2 * time.Hour)),
 			ExpiresAt:   timePtr(now.Add(365 * 24 * time.Hour)),
 			CreatedAt:   now.Add(-60 * 24 * time.Hour),
 		},
 		{
 			ID:          "token_demo_readonly",
-			Name:        "Analytics Dashboard",
-			Token:       tokenPtr("***********************************kl89"), // Masked
-			Permissions: "analytics:read,streams:read",
-			Status:      "active",
+			TokenName:   "Analytics Dashboard",
+			TokenValue:  "", // never expose in list
+			Permissions: []string{"analytics:read", "streams:read"},
+			IsActive:    true,
 			LastUsedAt:  timePtr(now.Add(-30 * time.Minute)),
 			ExpiresAt:   nil, // No expiration
 			CreatedAt:   now.Add(-30 * 24 * time.Hour),
 		},
 		{
 			ID:          "token_demo_revoked",
-			Name:        "Old Integration Token",
-			Token:       tokenPtr("***********************************xy56"), // Masked
-			Permissions: "streams:read,streams:write",
-			Status:      "revoked",
+			TokenName:   "Old Integration Token",
+			TokenValue:  "", // never expose in list
+			Permissions: []string{"streams:read", "streams:write"},
+			IsActive:    false,
 			LastUsedAt:  timePtr(now.Add(-10 * 24 * time.Hour)),
 			ExpiresAt:   timePtr(now.Add(30 * 24 * time.Hour)),
 			CreatedAt:   now.Add(-90 * 24 * time.Hour),
@@ -295,44 +306,40 @@ func GenerateTenant() *models.Tenant {
 }
 
 // GeneratePlatformOverview creates demo platform metrics
-func GeneratePlatformOverview() *model.PlatformOverview {
+func GeneratePlatformOverview() *periscope.PlatformOverviewResponse {
 	now := time.Now()
 
-	return &model.PlatformOverview{
-		TotalStreams:   42,
-		TotalViewers:   1247,
-		TotalBandwidth: 850.5, // Gbps
+	return &periscope.PlatformOverviewResponse{
+		TenantID:       "demo_tenant_frameworks",
 		TotalUsers:     156,
-		TimeRange: &model.TimeRange{
-			Start: now.Add(-24 * time.Hour),
-			End:   now,
-		},
+		ActiveUsers:    120,
+		TotalStreams:   42,
+		ActiveStreams:  7,
+		TotalViewers:   1247,
+		AverageViewers: 54.2,
+		PeakBandwidth:  850.5,
+		GeneratedAt:    now,
 	}
 }
 
 // GenerateStreamEvents creates demo stream events for subscription
-func GenerateStreamEvents() []*model.StreamEvent {
-	return []*model.StreamEvent{
+func GenerateStreamEvents() []*periscope.StreamEvent {
+	return []*periscope.StreamEvent{
 		{
-			Type:      "STREAM_START",
-			Stream:    "demo_live_stream_001",
-			Status:    "LIVE",
 			Timestamp: time.Now(),
-			Details:   func() *string { s := "Stream started successfully"; return &s }(),
+			EventID:   "evt_stream_start",
+			EventType: "STREAM_START",
+			Status:    "LIVE",
+			NodeID:    "node_demo_us_west_01",
+			EventData: "{\"internal_name\":\"demo_live_stream_001\"}",
 		},
 		{
-			Type:      "BUFFER_UPDATE",
-			Stream:    "demo_live_stream_001",
-			Status:    "LIVE",
 			Timestamp: time.Now().Add(30 * time.Second),
-			Details:   func() *string { s := "Buffer health: 95%"; return &s }(),
-		},
-		{
-			Type:      "TRACK_LIST_UPDATE",
-			Stream:    "demo_live_stream_001",
+			EventID:   "evt_buffer_update",
+			EventType: "BUFFER_UPDATE",
 			Status:    "LIVE",
-			Timestamp: time.Now().Add(60 * time.Second),
-			Details:   func() *string { s := "New track added to playlist"; return &s }(),
+			NodeID:    "node_demo_us_west_01",
+			EventData: "{\"buffer_health\":95}",
 		},
 	}
 }
@@ -362,19 +369,19 @@ func GenerateViewerMetricsEvents() []*model.ViewerMetrics {
 }
 
 // GenerateTrackListEvents creates demo track list events for subscription
-func GenerateTrackListEvents() []*model.TrackListEvent {
-	return []*model.TrackListEvent{
+func GenerateTrackListEvents() []*periscope.AnalyticsTrackListEvent {
+	return []*periscope.AnalyticsTrackListEvent{
 		{
-			Stream:     "demo_live_stream_001",
+			Timestamp:  time.Now(),
+			NodeID:     "node_demo_us_west_01",
 			TrackList:  "Track 1: Intro Music\nTrack 2: Main Content\nTrack 3: Q&A Session",
 			TrackCount: 3,
-			Timestamp:  time.Now(),
 		},
 		{
-			Stream:     "demo_live_stream_001",
+			Timestamp:  time.Now().Add(60 * time.Second),
+			NodeID:     "node_demo_us_west_01",
 			TrackList:  "Track 1: Intro Music\nTrack 2: Main Content\nTrack 3: Q&A Session\nTrack 4: Closing Remarks",
 			TrackCount: 4,
-			Timestamp:  time.Now().Add(60 * time.Second),
 		},
 	}
 }
@@ -406,58 +413,38 @@ func GenerateSystemHealthEvents() []*model.SystemHealthEvent {
 }
 
 // GenerateStreamHealthMetrics creates demo stream health metrics
-func GenerateStreamHealthMetrics() []*model.StreamHealthMetric {
+func GenerateStreamHealthMetrics() []*periscope.StreamHealthMetric {
 	now := time.Now()
-	return []*model.StreamHealthMetric{
+	return []*periscope.StreamHealthMetric{
 		{
-			Timestamp:            now.Add(-5 * time.Minute),
-			Stream:               "demo_live_stream_001",
-			NodeID:               "node_demo_us_west_01",
-			HealthScore:          0.95,
-			FrameJitterMs:        func() *float64 { f := 12.5; return &f }(),
-			KeyframeStabilityMs:  func() *float64 { f := 2000.0; return &f }(),
-			IssuesDescription:    func() *string { s := "Stream performing well"; return &s }(),
-			HasIssues:            false,
-			Bitrate:              func() *int { b := 2500000; return &b }(),
-			Fps:                  func() *float64 { f := 30.0; return &f }(),
-			Width:                func() *int { w := 1920; return &w }(),
-			Height:               func() *int { h := 1080; return &h }(),
-			Codec:                func() *string { c := "H264"; return &c }(),
-			QualityTier:          func() *string { q := "1080p30"; return &q }(),
-			PacketsSent:          func() *int { p := 15420; return &p }(),
-			PacketsLost:          func() *int { p := 12; return &p }(),
-			PacketLossPercentage: func() *float64 { p := 0.08; return &p }(),
-			BufferState:          model.BufferStateFull,
-			BufferHealth:         func() *float64 { b := 0.98; return &b }(),
-			AudioChannels:        func() *int { a := 2; return &a }(),
-			AudioSampleRate:      func() *int { a := 44100; return &a }(),
-			AudioCodec:           func() *string { a := "AAC"; return &a }(),
-			AudioBitrate:         func() *int { a := 128; return &a }(),
+			Timestamp:     now.Add(-5 * time.Minute),
+			InternalName:  "demo_live_stream_001",
+			NodeID:        "node_demo_us_west_01",
+			Bitrate:       2500000,
+			FPS:           30,
+			GOPSize:       60,
+			Width:         1920,
+			Height:        1080,
+			BufferHealth:  0.98,
+			PacketsSent:   15420,
+			PacketsLost:   12,
+			Codec:         "H264",
+			TrackMetadata: "",
 		},
 		{
-			Timestamp:            now.Add(-2 * time.Minute),
-			Stream:               "demo_live_stream_001",
-			NodeID:               "node_demo_us_west_01",
-			HealthScore:          0.87,
-			FrameJitterMs:        func() *float64 { f := 25.3; return &f }(),
-			KeyframeStabilityMs:  func() *float64 { f := 2100.0; return &f }(),
-			IssuesDescription:    func() *string { s := "Minor jitter detected"; return &s }(),
-			HasIssues:            true,
-			Bitrate:              func() *int { b := 2400000; return &b }(),
-			Fps:                  func() *float64 { f := 29.8; return &f }(),
-			Width:                func() *int { w := 1920; return &w }(),
-			Height:               func() *int { h := 1080; return &h }(),
-			Codec:                func() *string { c := "H264"; return &c }(),
-			QualityTier:          func() *string { q := "1080p30"; return &q }(),
-			PacketsSent:          func() *int { p := 15890; return &p }(),
-			PacketsLost:          func() *int { p := 45; return &p }(),
-			PacketLossPercentage: func() *float64 { p := 0.28; return &p }(),
-			BufferState:          model.BufferStateEmpty,
-			BufferHealth:         func() *float64 { b := 0.82; return &b }(),
-			AudioChannels:        func() *int { a := 2; return &a }(),
-			AudioSampleRate:      func() *int { a := 44100; return &a }(),
-			AudioCodec:           func() *string { a := "AAC"; return &a }(),
-			AudioBitrate:         func() *int { a := 128; return &a }(),
+			Timestamp:     now.Add(-2 * time.Minute),
+			InternalName:  "demo_live_stream_001",
+			NodeID:        "node_demo_us_west_01",
+			Bitrate:       2400000,
+			FPS:           29.8,
+			GOPSize:       64,
+			Width:         1920,
+			Height:        1080,
+			BufferHealth:  0.82,
+			PacketsSent:   15890,
+			PacketsLost:   45,
+			Codec:         "H264",
+			TrackMetadata: "",
 		},
 	}
 }
@@ -553,48 +540,54 @@ func GenerateRebufferingEvents() []*model.RebufferingEvent {
 }
 
 // GenerateViewerGeographics creates realistic demo viewer geographic data
-func GenerateViewerGeographics() []*model.ViewerGeographic {
+func GenerateViewerGeographics() []*periscope.ConnectionEvent {
 	now := time.Now()
 
-	return []*model.ViewerGeographic{
+	return []*periscope.ConnectionEvent{
 		{
+			EventID:        "evt_demo_1",
 			Timestamp:      now.Add(-30 * time.Minute),
-			Stream:         func() *string { s := "demo_live_stream_001"; return &s }(),
-			NodeID:         func() *string { s := "node_demo_us_west_01"; return &s }(),
-			CountryCode:    func() *string { s := "US"; return &s }(),
-			City:           func() *string { s := "San Francisco"; return &s }(),
-			Latitude:       func() *float64 { f := 37.7749; return &f }(),
-			Longitude:      func() *float64 { f := -122.4194; return &f }(),
-			ViewerCount:    func() *int { i := 1; return &i }(),
-			ConnectionAddr: func() *string { s := "192.168.1.100"; return &s }(),
-			EventType:      func() *string { s := "user_new"; return &s }(),
-			Source:         func() *string { s := "mistserver_webhook"; return &s }(),
+			TenantID:       "demo_tenant_frameworks",
+			InternalName:   "demo_live_stream_001",
+			SessionID:      "sess_demo_1",
+			ConnectionAddr: "192.168.1.100",
+			Connector:      "webrtc",
+			NodeID:         "node_demo_us_west_01",
+			CountryCode:    "US",
+			City:           "San Francisco",
+			Latitude:       37.7749,
+			Longitude:      -122.4194,
+			EventType:      "connect",
 		},
 		{
+			EventID:        "evt_demo_2",
 			Timestamp:      now.Add(-25 * time.Minute),
-			Stream:         func() *string { s := "demo_live_stream_001"; return &s }(),
-			NodeID:         func() *string { s := "node_demo_eu_west_01"; return &s }(),
-			CountryCode:    func() *string { s := "GB"; return &s }(),
-			City:           func() *string { s := "London"; return &s }(),
-			Latitude:       func() *float64 { f := 51.5074; return &f }(),
-			Longitude:      func() *float64 { f := -0.1278; return &f }(),
-			ViewerCount:    func() *int { i := 1; return &i }(),
-			ConnectionAddr: func() *string { s := "203.0.113.45"; return &s }(),
-			EventType:      func() *string { s := "user_new"; return &s }(),
-			Source:         func() *string { s := "mistserver_webhook"; return &s }(),
+			TenantID:       "demo_tenant_frameworks",
+			InternalName:   "demo_live_stream_001",
+			SessionID:      "sess_demo_2",
+			ConnectionAddr: "203.0.113.45",
+			Connector:      "webrtc",
+			NodeID:         "node_demo_eu_west_01",
+			CountryCode:    "GB",
+			City:           "London",
+			Latitude:       51.5074,
+			Longitude:      -0.1278,
+			EventType:      "connect",
 		},
 		{
+			EventID:        "evt_demo_3",
 			Timestamp:      now.Add(-20 * time.Minute),
-			Stream:         func() *string { s := "demo_live_stream_001"; return &s }(),
-			NodeID:         func() *string { s := "node_demo_ap_east_01"; return &s }(),
-			CountryCode:    func() *string { s := "JP"; return &s }(),
-			City:           func() *string { s := "Tokyo"; return &s }(),
-			Latitude:       func() *float64 { f := 35.6762; return &f }(),
-			Longitude:      func() *float64 { f := 139.6503; return &f }(),
-			ViewerCount:    func() *int { i := 1; return &i }(),
-			ConnectionAddr: func() *string { s := "198.51.100.78"; return &s }(),
-			EventType:      func() *string { s := "user_new"; return &s }(),
-			Source:         func() *string { s := "mistserver_webhook"; return &s }(),
+			TenantID:       "demo_tenant_frameworks",
+			InternalName:   "demo_live_stream_001",
+			SessionID:      "sess_demo_3",
+			ConnectionAddr: "198.51.100.78",
+			Connector:      "webrtc",
+			NodeID:         "node_demo_ap_east_01",
+			CountryCode:    "JP",
+			City:           "Tokyo",
+			Latitude:       35.6762,
+			Longitude:      139.6503,
+			EventType:      "connect",
 		},
 	}
 }

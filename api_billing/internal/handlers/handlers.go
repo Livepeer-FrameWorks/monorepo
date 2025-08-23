@@ -248,7 +248,8 @@ func GetInvoices(c *gin.Context) {
 		FROM billing_invoices
 		WHERE tenant_id = $1
 	`
-	args := []interface{}{tenantID}
+	var args []interface{}
+	args = append(args, tenantID)
 	argCount := 1
 
 	if status != "" {
@@ -304,7 +305,8 @@ func GetInvoices(c *gin.Context) {
 		FROM billing_invoices 
 		WHERE tenant_id = $1
 	`
-	countArgs := []interface{}{tenantID}
+	var countArgs []interface{}
+	countArgs = append(countArgs, tenantID)
 	if status != "" {
 		countQuery += " AND status = $2"
 		countArgs = append(countArgs, status)
@@ -625,10 +627,10 @@ func GetBillingStatus(c *gin.Context) {
 	err = db.QueryRow(`
 		SELECT 
 			json_build_object(
-				'stream_hours', COALESCE(SUM(CASE WHEN usage_type = 'stream_hours' THEN usage_value ELSE 0 END), 0),
-				'egress_gb', COALESCE(SUM(CASE WHEN usage_type = 'egress_gb' THEN usage_value ELSE 0 END), 0),
-				'recording_gb', COALESCE(SUM(CASE WHEN usage_type = 'recording_gb' THEN usage_value ELSE 0 END), 0),
-				'peak_bandwidth_mbps', COALESCE(MAX(CASE WHEN usage_type = 'peak_bandwidth_mbps' THEN usage_value ELSE 0 END), 0)
+				'stream_hours', SUM(CASE WHEN usage_type = 'stream_hours' THEN usage_value ELSE 0 END),
+				'egress_gb', SUM(CASE WHEN usage_type = 'egress_gb' THEN usage_value ELSE 0 END),
+				'recording_gb', SUM(CASE WHEN usage_type = 'recording_gb' THEN usage_value ELSE 0 END),
+				'peak_bandwidth_mbps', MAX(CASE WHEN usage_type = 'peak_bandwidth_mbps' THEN usage_value ELSE 0 END)
 			) as usage_summary
 		FROM usage_records
 		WHERE tenant_id = $1 
@@ -692,7 +694,7 @@ func createStripePayment(invoice models.Invoice) (string, string, error) {
 	// Create Stripe Payment Intent via API
 	// Stripe payment is created via direct API call
 
-	var result map[string]interface{}
+	var result purserapi.StripePaymentIntentResponse
 	resp, err := client.R().
 		SetHeader("Content-Type", "application/x-www-form-urlencoded").
 		SetHeader("Authorization", "Bearer "+stripeKey).
@@ -713,26 +715,24 @@ func createStripePayment(invoice models.Invoice) (string, string, error) {
 		return "", "", fmt.Errorf("stripe API returned status %d: %s", resp.StatusCode(), string(resp.Body()))
 	}
 
-	paymentIntentID, ok := result["id"].(string)
-	if !ok {
+	if result.ID == "" {
 		return "", "", fmt.Errorf("invalid stripe response: missing payment intent ID")
 	}
 
-	clientSecret, ok := result["client_secret"].(string)
-	if !ok {
+	if result.ClientSecret == "" {
 		return "", "", fmt.Errorf("invalid stripe response: missing client secret")
 	}
 
-	paymentURL := fmt.Sprintf("%s/payment/stripe?client_secret=%s", os.Getenv("BASE_URL"), clientSecret)
+	paymentURL := fmt.Sprintf("%s/payment/stripe?client_secret=%s", os.Getenv("BASE_URL"), result.ClientSecret)
 
 	logger.WithFields(logging.Fields{
 		"method":         "stripe",
 		"invoice_id":     invoice.ID,
-		"payment_intent": paymentIntentID,
+		"payment_intent": result.ID,
 		"amount":         invoice.Amount,
 	}).Info("Created Stripe payment")
 
-	return paymentURL, paymentIntentID, nil
+	return paymentURL, result.ID, nil
 }
 
 func createMolliePayment(invoice models.Invoice) (string, string, error) {
@@ -745,21 +745,21 @@ func createMolliePayment(invoice models.Invoice) (string, string, error) {
 	client := resty.New()
 
 	// Create Mollie Payment via API
-	payload := map[string]interface{}{
-		"amount": map[string]string{
-			"currency": invoice.Currency,
-			"value":    fmt.Sprintf("%.2f", invoice.Amount),
+	payload := purserapi.MolliePaymentRequest{
+		Amount: purserapi.MollieAmount{
+			Currency: invoice.Currency,
+			Value:    fmt.Sprintf("%.2f", invoice.Amount),
 		},
-		"description": fmt.Sprintf("Invoice %s", invoice.ID),
-		"redirectUrl": fmt.Sprintf("%s/payment/success", os.Getenv("BASE_URL")),
-		"webhookUrl":  fmt.Sprintf("%s/webhooks/mollie", os.Getenv("BASE_URL")),
-		"metadata": map[string]string{
+		Description: fmt.Sprintf("Invoice %s", invoice.ID),
+		RedirectURL: fmt.Sprintf("%s/payment/success", os.Getenv("BASE_URL")),
+		WebhookURL:  fmt.Sprintf("%s/webhooks/mollie", os.Getenv("BASE_URL")),
+		Metadata: map[string]string{
 			"invoice_id": invoice.ID,
 			"tenant_id":  invoice.TenantID,
 		},
 	}
 
-	var result map[string]interface{}
+	var result purserapi.MolliePaymentResponse
 	resp, err := client.R().
 		SetHeader("Content-Type", "application/json").
 		SetHeader("Authorization", "Bearer "+mollieKey).
@@ -775,24 +775,14 @@ func createMolliePayment(invoice models.Invoice) (string, string, error) {
 		return "", "", fmt.Errorf("mollie API returned status %d: %s", resp.StatusCode(), string(resp.Body()))
 	}
 
-	paymentID, ok := result["id"].(string)
-	if !ok {
+	paymentID := result.ID
+	if paymentID == "" {
 		return "", "", fmt.Errorf("invalid mollie response: missing payment ID")
 	}
 
 	// Get checkout URL from _links
-	links, ok := result["_links"].(map[string]interface{})
-	if !ok {
-		return "", "", fmt.Errorf("invalid mollie response: missing links")
-	}
-
-	checkout, ok := links["checkout"].(map[string]interface{})
-	if !ok {
-		return "", "", fmt.Errorf("invalid mollie response: missing checkout link")
-	}
-
-	paymentURL, ok := checkout["href"].(string)
-	if !ok {
+	paymentURL := result.Links.Checkout.Href
+	if paymentURL == "" {
 		return "", "", fmt.Errorf("invalid mollie response: missing checkout URL")
 	}
 

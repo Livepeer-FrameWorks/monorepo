@@ -3,9 +3,11 @@ package handlers
 import (
 	"database/sql"
 	"encoding/json"
-	"frameworks/pkg/models"
 	"net/http"
 	"strconv"
+
+	qmapi "frameworks/pkg/api/quartermaster"
+	"frameworks/pkg/models"
 
 	"github.com/gin-gonic/gin"
 	"github.com/lib/pq"
@@ -61,9 +63,9 @@ func GetServices(c *gin.Context) {
 		services = append(services, service)
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"services": services,
-		"count":    len(services),
+	c.JSON(http.StatusOK, qmapi.ServicesResponse{
+		Services: services,
+		Count:    len(services),
 	})
 }
 
@@ -108,7 +110,7 @@ func GetService(c *gin.Context) {
 		service.Tags = make(map[string]interface{})
 	}
 
-	c.JSON(http.StatusOK, service)
+	c.JSON(http.StatusOK, qmapi.ServiceResponse{Service: service})
 }
 
 // ============================================================================
@@ -117,7 +119,7 @@ func GetService(c *gin.Context) {
 
 // GetClusterServices returns all services assigned to a cluster
 func GetClusterServices(c *gin.Context) {
-	clusterID := c.Param("cluster_id")
+	clusterID := c.Param("id")
 
 	rows, err := db.Query(`
 		SELECT cs.id, cs.cluster_id, cs.service_id, cs.desired_state,
@@ -175,16 +177,16 @@ func GetClusterServices(c *gin.Context) {
 		clusterServices = append(clusterServices, cs)
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"cluster_id": clusterID,
-		"services":   clusterServices,
-		"count":      len(clusterServices),
+	c.JSON(http.StatusOK, qmapi.ClusterServicesResponse{
+		ClusterID: clusterID,
+		Services:  clusterServices,
+		Count:     len(clusterServices),
 	})
 }
 
 // UpdateClusterServiceState updates the desired state of a service on a cluster
 func UpdateClusterServiceState(c *gin.Context) {
-	clusterID := c.Param("cluster_id")
+	clusterID := c.Param("id")
 	serviceID := c.Param("service_id")
 
 	var req struct {
@@ -245,10 +247,10 @@ func UpdateClusterServiceState(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"message":    "Service state updated successfully",
-		"cluster_id": clusterID,
-		"service_id": serviceID,
+	c.JSON(http.StatusOK, qmapi.ClusterServiceUpdateResponse{
+		Message:   "Service state updated successfully",
+		ClusterID: clusterID,
+		ServiceID: serviceID,
 	})
 }
 
@@ -313,12 +315,12 @@ func GetServiceInstances(c *gin.Context) {
 		instances = append(instances, instance)
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"instances": instances,
-		"count":     len(instances),
-		"filters": gin.H{
-			"cluster_id": clusterID,
-			"service_id": serviceID,
+	c.JSON(http.StatusOK, qmapi.ServiceInstancesResponse{
+		Instances: instances,
+		Count:     len(instances),
+		Filters: qmapi.ServiceInstanceFilters{
+			ClusterID: clusterID,
+			ServiceID: serviceID,
 		},
 	})
 }

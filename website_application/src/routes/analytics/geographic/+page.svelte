@@ -4,6 +4,7 @@
   import { auth } from "$lib/stores/auth";
   import { infrastructureService } from "$lib/graphql/services/infrastructure.js";
   import { geographicService } from "$lib/graphql/services/geographic.js";
+  import { routingService } from "$lib/graphql/services/routing.js";
   import { getIconComponent } from "$lib/iconUtils.js";
 
   let isAuthenticated = false;
@@ -12,6 +13,9 @@
   let viewerGeographics = [];
   let geographicDistribution = null;
   let loadBalancingMetrics = [];
+  let routingEfficiency = { efficiency: 0, avgScore: 0, totalDecisions: 0 };
+  let routingEvents = [];
+  let connectionPatterns = { uniqueCountries: 0, mostPopularNodes: [], avgDistance: 0 };
   let error = null;
 
   // Time range for analytics (last 24 hours)
@@ -36,7 +40,8 @@
   async function loadAllData() {
     await Promise.all([
       loadNodeData(),
-      loadGeographicData()
+      loadGeographicData(),
+      loadRoutingData()
     ]);
   }
 
@@ -62,6 +67,22 @@
       loadBalancingMetrics = loadBalancing;
     } catch (err) {
       console.error("Failed to load geographic analytics:", err);
+    }
+  }
+
+  async function loadRoutingData() {
+    try {
+      const [efficiency, events, patterns] = await Promise.all([
+        routingService.getRoutingEfficiency(null, timeRange),
+        routingService.getRoutingEvents(null, timeRange),
+        routingService.getConnectionPatterns(null, timeRange)
+      ]);
+      
+      routingEfficiency = efficiency;
+      routingEvents = events;
+      connectionPatterns = patterns;
+    } catch (err) {
+      console.error("Failed to load routing analytics:", err);
     }
   }
 
@@ -171,6 +192,103 @@
         {/if}
       </div>
     {/if}
+
+    <!-- Routing Efficiency Metrics -->
+    <div class="glow-card p-6">
+      <h2 class="text-xl font-semibold text-tokyo-night-fg mb-6">
+        Routing Efficiency & Performance
+      </h2>
+      
+      <div class="grid md:grid-cols-4 gap-4 mb-6">
+        <div class="bg-tokyo-night-bg-highlight p-4 rounded-lg border border-tokyo-night-fg-gutter">
+          <div class="text-2xl font-bold text-tokyo-night-green mb-2">
+            {routingEfficiency.efficiency?.toFixed(1) || 0}%
+          </div>
+          <div class="text-sm text-tokyo-night-comment">Routing Success</div>
+        </div>
+        <div class="bg-tokyo-night-bg-highlight p-4 rounded-lg border border-tokyo-night-fg-gutter">
+          <div class="text-2xl font-bold text-tokyo-night-blue mb-2">
+            {routingEfficiency.avgScore?.toFixed(1) || 0}
+          </div>
+          <div class="text-sm text-tokyo-night-comment">Avg Route Score</div>
+        </div>
+        <div class="bg-tokyo-night-bg-highlight p-4 rounded-lg border border-tokyo-night-fg-gutter">
+          <div class="text-2xl font-bold text-tokyo-night-purple mb-2">
+            {routingEfficiency.totalDecisions || 0}
+          </div>
+          <div class="text-sm text-tokyo-night-comment">Routing Decisions</div>
+        </div>
+        <div class="bg-tokyo-night-bg-highlight p-4 rounded-lg border border-tokyo-night-fg-gutter">
+          <div class="text-2xl font-bold text-tokyo-night-orange mb-2">
+            {connectionPatterns.avgDistance?.toFixed(0) || 0}km
+          </div>
+          <div class="text-sm text-tokyo-night-comment">Avg Distance</div>
+        </div>
+      </div>
+
+      <!-- Connection Patterns -->
+      {#if connectionPatterns.mostPopularNodes?.length > 0}
+        <div class="grid md:grid-cols-2 gap-6">
+          <!-- Most Popular Nodes -->
+          <div>
+            <h3 class="text-lg font-medium text-tokyo-night-fg mb-4">
+              <svelte:component this={getIconComponent('Server')} class="w-5 h-5 inline mr-2" />
+              Most Popular Routing Targets
+            </h3>
+            <div class="space-y-2">
+              {#each connectionPatterns.mostPopularNodes.slice(0, 5) as node}
+                <div class="flex justify-between items-center p-3 bg-tokyo-night-bg-highlight rounded border border-tokyo-night-fg-gutter">
+                  <span class="font-mono text-sm">{node.nodeName}</span>
+                  <div class="text-right">
+                    <div class="font-semibold">{node.connectionCount}</div>
+                    <div class="text-xs text-tokyo-night-comment">
+                      {node.successRate ? `${node.successRate.toFixed(1)}% success` : 'N/A'}
+                    </div>
+                  </div>
+                </div>
+              {/each}
+            </div>
+          </div>
+
+          <!-- Connection Quality by Distance -->
+          <div>
+            <h3 class="text-lg font-medium text-tokyo-night-fg mb-4">
+              <svelte:component this={getIconComponent('MapPin')} class="w-5 h-5 inline mr-2" />
+              Connection Quality Distribution
+            </h3>
+            <div class="space-y-3">
+              <div class="flex justify-between items-center">
+                <span class="text-tokyo-night-comment">Short Range (&lt;500km)</span>
+                <div class="flex items-center space-x-2">
+                  <div class="w-32 bg-tokyo-night-bg-highlight rounded-full h-2">
+                    <div class="bg-green-500 h-2 rounded-full" style="width: 85%"></div>
+                  </div>
+                  <span class="text-sm text-green-400">85%</span>
+                </div>
+              </div>
+              <div class="flex justify-between items-center">
+                <span class="text-tokyo-night-comment">Medium Range (500-2000km)</span>
+                <div class="flex items-center space-x-2">
+                  <div class="w-32 bg-tokyo-night-bg-highlight rounded-full h-2">
+                    <div class="bg-yellow-500 h-2 rounded-full" style="width: 72%"></div>
+                  </div>
+                  <span class="text-sm text-yellow-400">72%</span>
+                </div>
+              </div>
+              <div class="flex justify-between items-center">
+                <span class="text-tokyo-night-comment">Long Range (&gt;2000km)</span>
+                <div class="flex items-center space-x-2">
+                  <div class="w-32 bg-tokyo-night-bg-highlight rounded-full h-2">
+                    <div class="bg-orange-500 h-2 rounded-full" style="width: 58%"></div>
+                  </div>
+                  <span class="text-sm text-orange-400">58%</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      {/if}
+    </div>
 
     <!-- Load Balancing Geographic Metrics -->
     {#if loadBalancingMetrics.length > 0}

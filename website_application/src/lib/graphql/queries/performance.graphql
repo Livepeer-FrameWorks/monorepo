@@ -1,0 +1,135 @@
+# Performance and aggregated analytics queries
+
+# 5-minute aggregated viewer metrics
+query GetViewerMetrics5m($stream: String, $timeRange: TimeRangeInput) {
+  viewerMetrics5m(stream: $stream, timeRange: $timeRange) {
+    timestamp
+    internalName
+    nodeId
+    peakViewers
+    avgViewers
+    uniqueCountries
+    uniqueCities
+    avgConnectionQuality
+    avgBufferHealth
+  }
+}
+
+# Service instance monitoring for performance
+query GetPerformanceServiceInstances($clusterId: String) {
+  serviceInstances(clusterId: $clusterId) {
+    id
+    instanceId
+    clusterId
+    nodeId
+    serviceId
+    version
+    port
+    processId
+    containerId
+    status
+    healthStatus
+    startedAt
+    stoppedAt
+    lastHealthCheck
+    cpuUsagePercent
+    memoryUsageMb
+  }
+}
+
+# Platform-wide performance overview
+query GetPlatformPerformance($timeRange: TimeRangeInput) {
+  viewerMetrics5m(timeRange: $timeRange) {
+    timestamp
+    internalName
+    nodeId
+    peakViewers
+    avgViewers
+    uniqueCountries
+    uniqueCities
+    avgConnectionQuality
+    avgBufferHealth
+  }
+  
+  nodeMetrics(timeRange: $timeRange) {
+    timestamp
+    nodeId
+    cpuUsage
+    memoryUsage
+    diskUsage
+    healthScore
+    status
+  }
+}
+
+# Stream performance with aggregated data
+query GetStreamPerformance($stream: String!, $timeRange: TimeRangeInput) {
+  viewerMetrics5m(stream: $stream, timeRange: $timeRange) {
+    timestamp
+    internalName
+    nodeId
+    peakViewers
+    avgViewers
+    uniqueCountries
+    uniqueCities
+    avgConnectionQuality
+    avgBufferHealth
+  }
+  
+  # Include routing performance for this stream
+  routingEvents(stream: $stream, timeRange: $timeRange) {
+    timestamp
+    selectedNode
+    score
+    status
+    clientCountry
+    nodeLatitude
+    nodeLongitude
+  }
+}
+
+# Node efficiency metrics combining performance and routing
+query GetNodeEfficiency($nodeId: String!, $timeRange: TimeRangeInput) {
+  nodeMetrics(nodeId: $nodeId, timeRange: $timeRange) {
+    timestamp
+    nodeId
+    cpuUsage
+    memoryUsage
+    diskUsage
+    networkRx
+    networkTx
+    healthScore
+    status
+  }
+  
+  # Get routing decisions made for this node
+  routingEvents(timeRange: $timeRange) {
+    timestamp
+    streamName
+    selectedNode
+    score
+    status
+    clientCountry
+  }
+}
+
+# Regional performance analysis
+query GetRegionalPerformance($timeRange: TimeRangeInput) {
+  viewerMetrics5m(timeRange: $timeRange) {
+    timestamp
+    internalName
+    nodeId
+    avgViewers
+    uniqueCountries
+    avgConnectionQuality
+    avgBufferHealth
+  }
+  
+  connectionEvents(timeRange: $timeRange) {
+    timestamp
+    nodeId
+    countryCode
+    city
+    eventType
+  }
+}

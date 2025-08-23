@@ -23,8 +23,102 @@ resolver:
 autobind:
   - frameworks/pkg/models
 
-# Existing models to reuse (map GraphQL types to Go types)
+# Map GraphQL types to existing Go models (comprehensive mapping)
 models:
+  # Analytics types
+  StreamAnalytics:
+    model:
+      - frameworks/pkg/models.StreamAnalytics
+  RoutingEvent:
+    model:
+      - frameworks/pkg/models.AnalyticsRoutingEvent
+  ViewerMetric:
+    model:
+      - frameworks/pkg/models.AnalyticsViewerSession
+  ViewerMetrics5m:
+    model:
+      - frameworks/pkg/models.AnalyticsViewerSession5m
+  ConnectionEvent:
+    model:
+      - frameworks/pkg/api/periscope.ConnectionEvent
+  StreamHealthMetric:
+    model:
+      - frameworks/pkg/api/periscope.StreamHealthMetric
+  PlatformOverview:
+    model:
+      - frameworks/pkg/api/periscope.PlatformOverviewResponse
+  ViewerGeographic:
+    model:
+      - frameworks/pkg/api/periscope.ConnectionEvent
+  StreamEvent:
+    model:
+      - frameworks/pkg/api/periscope.StreamEvent
+  TrackListEvent:
+    model:
+      - frameworks/pkg/api/periscope.AnalyticsTrackListEvent
+
+  # Stream management types
+  Stream:
+    model:
+      - frameworks/pkg/models.Stream
+  StreamKey:
+    model:
+      - frameworks/pkg/models.StreamKey
+  Recording:
+    model:
+      - frameworks/pkg/api/commodore.Recording
+  Clip:
+    model:
+      - frameworks/pkg/api/commodore.ClipResponse
+
+  # Billing types
+  BillingStatus:
+    model:
+      - frameworks/pkg/models.BillingStatus
+  BillingTier:
+    model:
+      - frameworks/pkg/models.BillingTier
+  Invoice:
+    model:
+      - frameworks/pkg/models.Invoice
+  Payment:
+    model:
+      - frameworks/pkg/models.Payment
+  UsageRecord:
+    model:
+      - frameworks/pkg/models.UsageRecord
+
+  # Infrastructure types
+  ServiceInstance:
+    model:
+      - frameworks/pkg/models.ServiceInstance
+  NodeMetric:
+    model:
+      - frameworks/pkg/api/periscope.NodeMetric
+  Cluster:
+    model:
+      - frameworks/pkg/models.InfrastructureCluster
+  Node:
+    model:
+      - frameworks/pkg/models.InfrastructureNode
+
+  # Tenant types
+  Tenant:
+    model:
+      - frameworks/pkg/models.Tenant
+  User:
+    model:
+      - frameworks/pkg/models.User
+  DeveloperToken:
+    model:
+      - frameworks/pkg/models.APIToken
+
+  Money:
+    model:
+      - github.com/99designs/gqlgen/graphql.Float
+  Currency:
+    model:
+      - github.com/99designs/gqlgen/graphql.String
 
 # Skip generation for these types (we'll implement them manually)
 skip_validation: true

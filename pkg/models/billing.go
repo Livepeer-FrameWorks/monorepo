@@ -3,10 +3,217 @@ package models
 import (
 	"database/sql/driver"
 	"encoding/json"
+	"fmt"
 	"time"
 )
 
-// JSONB is a custom type for handling JSONB fields
+// ResourceLimit represents a resource limit that can be either a number or unlimited
+type ResourceLimit struct {
+	IsUnlimited bool `json:"-"`
+	Value       int  `json:"-"`
+}
+
+// MarshalJSON implements json.Marshaler for ResourceLimit
+func (rl ResourceLimit) MarshalJSON() ([]byte, error) {
+	if rl.IsUnlimited {
+		return []byte(`"unlimited"`), nil
+	}
+	return json.Marshal(rl.Value)
+}
+
+// UnmarshalJSON implements json.Unmarshaler for ResourceLimit
+func (rl *ResourceLimit) UnmarshalJSON(data []byte) error {
+	var str string
+	if err := json.Unmarshal(data, &str); err == nil {
+		if str == "unlimited" {
+			rl.IsUnlimited = true
+			rl.Value = 0
+			return nil
+		}
+		return fmt.Errorf("invalid string value for ResourceLimit: %s", str)
+	}
+
+	var val int
+	if err := json.Unmarshal(data, &val); err == nil {
+		rl.IsUnlimited = false
+		rl.Value = val
+		return nil
+	}
+
+	return fmt.Errorf("ResourceLimit must be int or \"unlimited\"")
+}
+
+// NewResourceLimit creates a ResourceLimit with a specific value
+func NewResourceLimit(value int) ResourceLimit {
+	return ResourceLimit{IsUnlimited: false, Value: value}
+}
+
+// NewUnlimitedResource creates an unlimited ResourceLimit
+func NewUnlimitedResource() ResourceLimit {
+	return ResourceLimit{IsUnlimited: true, Value: 0}
+}
+
+// IsInt returns true if this is a numeric limit
+func (rl ResourceLimit) IsInt() bool {
+	return !rl.IsUnlimited
+}
+
+// GetInt returns the numeric value, or 0 if unlimited
+func (rl ResourceLimit) GetInt() int {
+	if rl.IsUnlimited {
+		return 0
+	}
+	return rl.Value
+}
+
+// BillingFeatures represents the features available in a billing tier
+type BillingFeatures struct {
+	MaxStreams     ResourceLimit `json:"max_streams"` // int or "unlimited"
+	MaxViewers     ResourceLimit `json:"max_viewers"` // int or "unlimited"
+	Recording      bool          `json:"recording"`
+	Analytics      bool          `json:"analytics"`
+	CustomBranding bool          `json:"custom_branding,omitempty"`
+	APIAccess      bool          `json:"api_access,omitempty"`
+	SupportLevel   string        `json:"support_level"` // "community", "email", "phone"
+	SLA            bool          `json:"sla,omitempty"`
+}
+
+// AllocationLimit represents a resource allocation limit that can be int, float64, or unlimited
+type AllocationLimit struct {
+	IsUnlimited bool    `json:"-"`
+	IntValue    int     `json:"-"`
+	FloatValue  float64 `json:"-"`
+	IsFloat     bool    `json:"-"`
+}
+
+// MarshalJSON implements json.Marshaler for AllocationLimit
+func (al AllocationLimit) MarshalJSON() ([]byte, error) {
+	if al.IsUnlimited {
+		return []byte(`"unlimited"`), nil
+	}
+	if al.IsFloat {
+		return json.Marshal(al.FloatValue)
+	}
+	return json.Marshal(al.IntValue)
+}
+
+// UnmarshalJSON implements json.Unmarshaler for AllocationLimit
+func (al *AllocationLimit) UnmarshalJSON(data []byte) error {
+	var str string
+	if err := json.Unmarshal(data, &str); err == nil {
+		if str == "unlimited" {
+			al.IsUnlimited = true
+			al.IntValue = 0
+			al.FloatValue = 0
+			al.IsFloat = false
+			return nil
+		}
+		return fmt.Errorf("invalid string value for AllocationLimit: %s", str)
+	}
+
+	var intVal int
+	if err := json.Unmarshal(data, &intVal); err == nil {
+		al.IsUnlimited = false
+		al.IntValue = intVal
+		al.FloatValue = float64(intVal)
+		al.IsFloat = false
+		return nil
+	}
+
+	var floatVal float64
+	if err := json.Unmarshal(data, &floatVal); err == nil {
+		al.IsUnlimited = false
+		al.IntValue = int(floatVal)
+		al.FloatValue = floatVal
+		al.IsFloat = true
+		return nil
+	}
+
+	return fmt.Errorf("AllocationLimit must be int, float64, or \"unlimited\"")
+}
+
+// NewAllocationLimitInt creates an AllocationLimit with an int value
+func NewAllocationLimitInt(value int) AllocationLimit {
+	return AllocationLimit{
+		IsUnlimited: false,
+		IntValue:    value,
+		FloatValue:  float64(value),
+		IsFloat:     false,
+	}
+}
+
+// NewAllocationLimitFloat creates an AllocationLimit with a float64 value
+func NewAllocationLimitFloat(value float64) AllocationLimit {
+	return AllocationLimit{
+		IsUnlimited: false,
+		IntValue:    int(value),
+		FloatValue:  value,
+		IsFloat:     true,
+	}
+}
+
+// NewUnlimitedAllocation creates an unlimited AllocationLimit
+func NewUnlimitedAllocation() AllocationLimit {
+	return AllocationLimit{IsUnlimited: true}
+}
+
+// GetInt returns the int value, or 0 if unlimited
+func (al AllocationLimit) GetInt() int {
+	if al.IsUnlimited {
+		return 0
+	}
+	return al.IntValue
+}
+
+// GetFloat returns the float64 value, or 0 if unlimited
+func (al AllocationLimit) GetFloat() float64 {
+	if al.IsUnlimited {
+		return 0
+	}
+	return al.FloatValue
+}
+
+// AllocationDetails represents resource allocation for a billing tier
+type AllocationDetails struct {
+	Limit     AllocationLimit `json:"limit"` // int, float64, or "unlimited"
+	UnitPrice float64         `json:"unit_price,omitempty"`
+	Unit      string          `json:"unit,omitempty"`
+}
+
+// OverageRates represents overage pricing rates
+type OverageRates struct {
+	Bandwidth AllocationDetails `json:"bandwidth,omitempty"`
+	Storage   AllocationDetails `json:"storage,omitempty"`
+	Compute   AllocationDetails `json:"compute,omitempty"`
+}
+
+// UsageDetail represents a single usage line item
+type UsageDetail struct {
+	Quantity  float64 `json:"quantity"`
+	UnitPrice float64 `json:"unit_price"`
+	Unit      string  `json:"unit,omitempty"`
+}
+
+// UsageDetails represents all usage details for an invoice
+type UsageDetails map[string]UsageDetail
+
+// BillingAddress represents a billing address
+type BillingAddress struct {
+	Street     string `json:"street"`
+	City       string `json:"city"`
+	State      string `json:"state,omitempty"`
+	PostalCode string `json:"postal_code"`
+	Country    string `json:"country"`
+}
+
+// CustomPricing represents custom pricing arrangements
+type CustomPricing struct {
+	BasePrice    float64      `json:"base_price,omitempty"`
+	DiscountRate float64      `json:"discount_rate,omitempty"`
+	OverageRates OverageRates `json:"overage_rates,omitempty"`
+}
+
+// JSONB is a custom type for handling JSONB fields (keeping for backward compatibility)
 type JSONB map[string]interface{}
 
 // Value implements the driver.Valuer interface for JSONB
@@ -37,6 +244,81 @@ func (j *JSONB) Scan(value interface{}) error {
 	return json.Unmarshal(bytes, j)
 }
 
+// Generic JSON field implementation for typed structs
+func valueFromJSON(v interface{}) (driver.Value, error) {
+	if v == nil {
+		return nil, nil
+	}
+	return json.Marshal(v)
+}
+
+func scanToJSON(dest interface{}, value interface{}) error {
+	if value == nil {
+		return nil
+	}
+
+	var bytes []byte
+	switch v := value.(type) {
+	case []byte:
+		bytes = v
+	case string:
+		bytes = []byte(v)
+	default:
+		return nil
+	}
+
+	return json.Unmarshal(bytes, dest)
+}
+
+// Value/Scan implementations for typed structs
+func (bf BillingFeatures) Value() (driver.Value, error) {
+	return valueFromJSON(bf)
+}
+
+func (bf *BillingFeatures) Scan(value interface{}) error {
+	return scanToJSON(bf, value)
+}
+
+func (ad AllocationDetails) Value() (driver.Value, error) {
+	return valueFromJSON(ad)
+}
+
+func (ad *AllocationDetails) Scan(value interface{}) error {
+	return scanToJSON(ad, value)
+}
+
+func (or OverageRates) Value() (driver.Value, error) {
+	return valueFromJSON(or)
+}
+
+func (or *OverageRates) Scan(value interface{}) error {
+	return scanToJSON(or, value)
+}
+
+func (ud UsageDetails) Value() (driver.Value, error) {
+	return valueFromJSON(ud)
+}
+
+func (ud *UsageDetails) Scan(value interface{}) error {
+	return scanToJSON(ud, value)
+}
+
+func (ba BillingAddress) Value() (driver.Value, error) {
+	return valueFromJSON(ba)
+}
+
+func (ba *BillingAddress) Scan(value interface{}) error {
+	return scanToJSON(ba, value)
+}
+
+func (cp CustomPricing) Value() (driver.Value, error) {
+	return valueFromJSON(cp)
+}
+
+func (cp *CustomPricing) Scan(value interface{}) error {
+	return scanToJSON(cp, value)
+}
+
 // BillingTier represents a billing tier with complex feature matrices
 type BillingTier struct {
 	ID          string `json:"id" db:"id"`
@@ -50,20 +332,20 @@ type BillingTier struct {
 	BillingPeriod string  `json:"billing_period" db:"billing_period"`
 
 	// Resource allocations per tier
-	BandwidthAllocation JSONB `json:"bandwidth_allocation" db:"bandwidth_allocation"`
-	StorageAllocation   JSONB `json:"storage_allocation" db:"storage_allocation"`
-	ComputeAllocation   JSONB `json:"compute_allocation" db:"compute_allocation"`
+	BandwidthAllocation AllocationDetails `json:"bandwidth_allocation" db:"bandwidth_allocation"`
+	StorageAllocation   AllocationDetails `json:"storage_allocation" db:"storage_allocation"`
+	ComputeAllocation   AllocationDetails `json:"compute_allocation" db:"compute_allocation"`
 
 	// Feature matrix
-	Features JSONB `json:"features" db:"features"`
+	Features BillingFeatures `json:"features" db:"features"`
 
 	// Service levels
 	SupportLevel string `json:"support_level" db:"support_level"`
 	SLALevel     string `json:"sla_level" db:"sla_level"`
 
 	// Metering configuration
-	MeteringEnabled bool  `json:"metering_enabled" db:"metering_enabled"`
-	OverageRates    JSONB `json:"overage_rates" db:"overage_rates"`
+	MeteringEnabled bool         `json:"metering_enabled" db:"metering_enabled"`
+	OverageRates    OverageRates `json:"overage_rates" db:"overage_rates"`
 
 	// Tier metadata
 	IsActive     bool `json:"is_active" db:"is_active"`
@@ -91,18 +373,18 @@ type TenantSubscription struct {
 	CancelledAt     *time.Time `json:"cancelled_at,omitempty" db:"cancelled_at"`
 
 	// Custom arrangements (for enterprise tiers)
-	CustomPricing     JSONB `json:"custom_pricing" db:"custom_pricing"`
-	CustomFeatures    JSONB `json:"custom_features" db:"custom_features"`
-	CustomAllocations JSONB `json:"custom_allocations" db:"custom_allocations"`
+	CustomPricing     CustomPricing     `json:"custom_pricing" db:"custom_pricing"`
+	CustomFeatures    BillingFeatures   `json:"custom_features" db:"custom_features"`
+	CustomAllocations AllocationDetails `json:"custom_allocations" db:"custom_allocations"`
 
 	// Payment info
 	PaymentMethod    *string `json:"payment_method,omitempty" db:"payment_method"`
 	PaymentReference *string `json:"payment_reference,omitempty" db:"payment_reference"`
 
 	// Billing address and tax
-	BillingAddress JSONB    `json:"billing_address" db:"billing_address"`
-	TaxID          *string  `json:"tax_id,omitempty" db:"tax_id"`
-	TaxRate        *float64 `json:"tax_rate,omitempty" db:"tax_rate"`
+	BillingAddress BillingAddress `json:"billing_address" db:"billing_address"`
+	TaxID          *string        `json:"tax_id,omitempty" db:"tax_id"`
+	TaxRate        *float64       `json:"tax_rate,omitempty" db:"tax_rate"`
 
 	CreatedAt time.Time `json:"created_at" db:"created_at"`
 	UpdatedAt time.Time `json:"updated_at" db:"updated_at"`
@@ -110,30 +392,30 @@ type TenantSubscription struct {
 
 // UsageRecord represents tenant usage on a specific cluster
 type UsageRecord struct {
-	ID           string    `json:"id" db:"id"`
-	TenantID     string    `json:"tenant_id" db:"tenant_id"`
-	ClusterID    string    `json:"cluster_id" db:"cluster_id"`
-	UsageType    string    `json:"usage_type" db:"usage_type"`
-	UsageValue   float64   `json:"usage_value" db:"usage_value"`
-	UsageDetails JSONB     `json:"usage_details" db:"usage_details"`
-	BillingMonth string    `json:"billing_month" db:"billing_month"`
-	CreatedAt    time.Time `json:"created_at" db:"created_at"`
+	ID           string       `json:"id" db:"id"`
+	TenantID     string       `json:"tenant_id" db:"tenant_id"`
+	ClusterID    string       `json:"cluster_id" db:"cluster_id"`
+	UsageType    string       `json:"usage_type" db:"usage_type"`
+	UsageValue   float64      `json:"usage_value" db:"usage_value"`
+	UsageDetails UsageDetails `json:"usage_details" db:"usage_details"`
+	BillingMonth string       `json:"billing_month" db:"billing_month"`
+	CreatedAt    time.Time    `json:"created_at" db:"created_at"`
 }
 
 // Invoice represents a billing invoice
 type Invoice struct {
-	ID            string     `json:"id" db:"id"`
-	TenantID      string     `json:"tenant_id" db:"tenant_id"`
-	Amount        float64    `json:"amount" db:"amount"`
-	BaseAmount    float64    `json:"base_amount" db:"base_amount"`
-	MeteredAmount float64    `json:"metered_amount" db:"metered_amount"`
-	Currency      string     `json:"currency" db:"currency"`
-	Status        string     `json:"status" db:"status"` // pending, paid, failed, cancelled
-	DueDate       time.Time  `json:"due_date" db:"due_date"`
-	PaidAt        *time.Time `json:"paid_at" db:"paid_at"`
-	UsageDetails  JSONB      `json:"usage_details" db:"usage_details"`
-	CreatedAt     time.Time  `json:"created_at" db:"created_at"`
-	UpdatedAt     time.Time  `json:"updated_at" db:"updated_at"`
+	ID            string       `json:"id" db:"id"`
+	TenantID      string       `json:"tenant_id" db:"tenant_id"`
+	Amount        float64      `json:"amount" db:"amount"`
+	BaseAmount    float64      `json:"base_amount" db:"base_amount"`
+	MeteredAmount float64      `json:"metered_amount" db:"metered_amount"`
+	Currency      string       `json:"currency" db:"currency"`
+	Status        string       `json:"status" db:"status"` // pending, paid, failed, cancelled
+	DueDate       time.Time    `json:"due_date" db:"due_date"`
+	PaidAt        *time.Time   `json:"paid_at" db:"paid_at"`
+	UsageDetails  UsageDetails `json:"usage_details" db:"usage_details"`
+	CreatedAt     time.Time    `json:"created_at" db:"created_at"`
+	UpdatedAt     time.Time    `json:"updated_at" db:"updated_at"`
 }
 
 // Payment represents a payment transaction

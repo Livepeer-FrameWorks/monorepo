@@ -1,6 +1,10 @@
 package models
 
-import "time"
+import (
+	"time"
+
+	"frameworks/pkg/geoip"
+)
 
 type DecklogEvent struct {
 	EventType string                 `json:"event_type"`
@@ -15,9 +19,10 @@ type NodeInfo struct {
 	IsHealthy  bool                   `json:"is_healthy"`
 	ErrorCount int                    `json:"error_count"`
 	LastError  string                 `json:"last_error,omitempty"`
-	Latitude   *float64               `json:"latitude,omitempty"`
-	Longitude  *float64               `json:"longitude,omitempty"`
-	Location   string                 `json:"location,omitempty"`
+
+	// Geographic data using shared structure
+	geoip.GeoData
+	Location string `json:"location,omitempty"` // Keep separate location string for descriptive name
 }
 
 type NodeUpdate struct {

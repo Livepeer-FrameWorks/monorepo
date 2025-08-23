@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 
+	purserapi "frameworks/pkg/api/purser"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/models"
 
@@ -242,18 +243,21 @@ func (jm *JobManager) generateMonthlyInvoices() {
 			status = "paid"
 		}
 
-		// Marshal usage details
-		usageJSON, err := json.Marshal(map[string]interface{}{
-			"usage_data":    usageData,
-			"billing_month": billingMonth,
-			"tier_info": map[string]interface{}{
-				"tier_id":          tierID,
-				"tier_name":        tierName,
-				"display_name":     displayName,
-				"base_price":       basePrice,
-				"metering_enabled": meteringEnabled,
+		// Create typed usage details
+		usageDetails := purserapi.UsageDetails{
+			UsageData:    usageData,
+			BillingMonth: billingMonth,
+			TierInfo: purserapi.TierInfo{
+				TierID:          tierID,
+				TierName:        tierName,
+				DisplayName:     displayName,
+				BasePrice:       basePrice,
+				MeteringEnabled: meteringEnabled,
 			},
-		})
+		}
+
+		// Marshal usage details
+		usageJSON, err := json.Marshal(usageDetails)
 		if err != nil {
 			jm.logger.WithFields(logging.Fields{
 				"error":     err,
@@ -560,17 +564,17 @@ func (jm *JobManager) sweepBitcoin(fromAddress, toAddress string, amount float64
 	}
 
 	// Create transaction payload for BlockCypher with private key for signing
-	payload := map[string]interface{}{
-		"inputs": []map[string]interface{}{
-			{"addresses": []string{fromAddress}},
+	payload := purserapi.BlockCypherTransactionRequest{
+		Inputs: []purserapi.BlockCypherTransactionInput{
+			{Addresses: []string{fromAddress}},
 		},
-		"outputs": []map[string]interface{}{
+		Outputs: []purserapi.BlockCypherTransactionOutput{
 			{
-				"addresses": []string{toAddress},
-				"value":     amountInSatoshis,
+				Addresses: []string{toAddress},
+				Value:     amountInSatoshis,
 			},
 		},
-		"private_keys": []string{privateKey}, // Include private key for signing
+		PrivateKeys: []string{privateKey}, // Include private key for signing
 	}
 
 	payloadBytes, _ := json.Marshal(payload)
@@ -596,6 +600,7 @@ func (jm *JobManager) sweepBitcoin(fromAddress, toAddress string, amount float64
 
 	var txResponse struct {
 		TxHash string `json:"tx_hash"`
+		Hash   string `json:"hash"` // BlockCypher uses "hash" field
 		Error  string `json:"error"`
 	}
 
@@ -608,14 +613,20 @@ func (jm *JobManager) sweepBitcoin(fromAddress, toAddress string, amount float64
 		return "", fmt.Errorf("Bitcoin transaction error: %s", txResponse.Error)
 	}
 
+	// Use the appropriate hash field from the response
+	txHash := txResponse.TxHash
+	if txHash == "" {
+		txHash = txResponse.Hash
+	}
+
 	jm.logger.WithFields(logging.Fields{
 		"from_address": fromAddress,
 		"to_address":   toAddress,
 		"amount_btc":   amount,
-		"tx_hash":      txResponse.TxHash,
+		"tx_hash":      txHash,
 	}).Info("Bitcoin sweep transaction created successfully")
 
-	return txResponse.TxHash, nil
+	return txHash, nil
 }
 
 func (jm *JobManager) sweepEthereum(fromAddress, toAddress string, amount float64) (string, error) {

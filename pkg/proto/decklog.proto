@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package decklog;
 
-option go_package = "frameworks/api_firehose/proto";
+option go_package = "frameworks/pkg/proto";
 
 import "google/protobuf/timestamp.proto";
 
@@ -67,6 +67,9 @@ message EventData {
     LoadBalancingData load_balancing_data = 19;
     BandwidthThresholdData bandwidth_threshold_data = 20;
     ClientLifecycleData client_lifecycle_data = 21;
+    TrackListData track_list_data = 22;
+    RecordingLifecycleData recording_lifecycle_data = 23;
+    PushLifecycleData push_lifecycle_data = 24;
   }
 }
 
@@ -77,15 +80,23 @@ message StreamIngestData {
   string ingest_url = 3;
   optional string encoder = 4;
   optional string stream_settings = 5;
+  optional string hostname = 6;
+  optional string node_id = 7;
+  optional double latitude = 8;
+  optional double longitude = 9;
+  optional string location = 10;
 }
 
 // Stream view specific data
 message StreamViewData {
-  string viewer_ip = 1;
-  string user_agent = 2;
-  optional string referrer = 3;
-  optional string player_type = 4;
-  optional string player_version = 5;
+  optional string node_id = 1;
+  optional string output_type = 2;
+  optional string request_url = 3;
+  optional string viewer_host = 4;
+  optional string country_code = 5;
+  optional string city = 6;
+  optional double latitude = 7;
+  optional double longitude = 8;
 }
 
 // Stream lifecycle specific data
@@ -100,6 +111,33 @@ message StreamLifecycleData {
   State state = 1;
   optional string reason = 2;
   optional uint64 duration_seconds = 3;
+  optional string status = 4;
+  optional string buffer_state = 5;
+  optional uint64 downloaded_bytes = 6;
+  optional uint64 uploaded_bytes = 7;
+  optional uint32 total_viewers = 8;
+  optional uint32 total_inputs = 9;
+  optional uint32 total_outputs = 10;
+  optional uint64 viewer_seconds = 11;
+  optional string stream_details = 12;
+  optional float health_score = 13;
+  optional bool has_issues = 14;
+  optional string issues_description = 15;
+  optional uint32 track_count = 16;
+  optional string quality_tier = 17;
+  optional uint32 primary_width = 18;
+  optional uint32 primary_height = 19;
+  optional float primary_fps = 20;
+  optional string primary_codec = 21;
+  optional uint32 primary_bitrate = 22;
+  optional string primary_resolution = 23;
+  optional float frame_jitter_ms = 24;
+  optional float keyframe_stability_ms = 25;
+  optional float frame_ms_max = 26;
+  optional float frame_ms_min = 27;
+  optional uint32 frames_max = 28;
+  optional uint32 frames_min = 29;
+  optional float keyframe_interval_ms = 30;
 }
 
 // User connection specific data
@@ -112,6 +150,18 @@ message UserConnectionData {
   Action action = 1;
   optional string disconnect_reason = 2;
   optional uint64 connection_duration = 3;
+  optional string node_id = 4;
+  optional string connection_addr = 5;
+  optional string session_id = 6;
+  optional string session_identifier = 7;
+  optional uint64 seconds_connected = 8;
+  optional uint64 uploaded_bytes = 9;
+  optional uint64 downloaded_bytes = 10;
+  optional string tags = 11;
+  optional string country_code = 12;
+  optional string city = 13;
+  optional double latitude = 14;
+  optional double longitude = 15;
 }
 
 // Stream metrics specific data
@@ -124,6 +174,10 @@ message StreamMetricsData {
   optional uint32 bitrate_kbps = 6;
   optional string resolution = 7;
   optional uint32 fps = 8;
+  optional float buffer_health = 9;
+  optional string buffer_state = 10;
+  optional string codec = 11;
+  optional uint32 gop_size = 12;
 }
 
 // Node monitoring specific data
@@ -137,6 +191,14 @@ message NodeMonitoringData {
   uint64 network_out_bps = 7;
   uint32 active_streams = 8;
   uint32 active_viewers = 9;
+  optional string node_id = 10;
+  optional bool is_healthy = 11;
+  optional string country_code = 12;
+  optional string city = 13;
+  optional double latitude = 14;
+  optional double longitude = 15;
+  optional string location = 16;
+  optional uint64 bandwidth_limit_bps = 17;
 }
 
 // Load balancing specific data
@@ -149,6 +211,11 @@ message LoadBalancingData {
   uint64 score = 6;
   string client_ip = 7;
   string client_country = 8;
+  double node_latitude = 9;
+  double node_longitude = 10;
+  string node_name = 11;
+  optional string selected_node_id = 12;
+  optional double routing_distance_km = 13;
 }
 
 // Client lifecycle specific data  
@@ -159,6 +226,18 @@ message ClientLifecycleData {
   optional string client_city = 4;
   optional double client_latitude = 5;
   optional double client_longitude = 6;
+  optional string protocol = 7;
+  optional string host = 8;
+  optional string session_id = 9;
+  optional float connection_time = 10;
+  optional float position = 11;
+  optional uint64 bandwidth_in_bps = 12;
+  optional uint64 bandwidth_out_bps = 13;
+  optional uint64 bytes_downloaded = 14;
+  optional uint64 bytes_uploaded = 15;
+  optional uint64 packets_sent = 16;
+  optional uint64 packets_lost = 17;
+  optional uint64 packets_retransmitted = 18;
 }
 
 // Bandwidth threshold specific data
@@ -167,6 +246,49 @@ message BandwidthThresholdData {
   bool threshold_exceeded = 2;
   optional uint64 threshold_value = 3;
   optional string node_id = 4;
+}
+
+// Push lifecycle specific data
+message PushLifecycleData {
+  string push_target = 1;
+  string action = 2; // start/end
+  optional string push_id = 3;
+  optional string target_uri_before = 4;
+  optional string target_uri_after = 5;
+  optional string status = 6; // JSON string
+  optional string log_messages = 7; // JSON array
+  optional string node_id = 8;
+}
+
+// Recording lifecycle specific data
+message RecordingLifecycleData {
+  string file_path = 1;
+  string output_protocol = 2;
+  uint64 bytes_written = 3;
+  uint64 seconds_writing = 4;
+  int64 time_started = 5;
+  int64 time_ended = 6;
+  int64 media_duration_ms = 7;
+  optional string node_id = 8;
+}
+
+// Track list events data
+message TrackListData {
+  string track_list = 1;
+  uint32 track_count = 2;
+  uint32 video_track_count = 3;
+  uint32 audio_track_count = 4;
+  uint32 primary_width = 5;
+  uint32 primary_height = 6;
+  float primary_fps = 7;
+  uint32 primary_video_bitrate = 8;
+  string primary_video_codec = 9;
+  uint32 primary_audio_bitrate = 10;
+  string primary_audio_codec = 11;
+  uint32 primary_audio_channels = 12;
+  uint32 primary_audio_sample_rate = 13;
+  string quality_tier = 14;
+  optional string node_id = 15;
 }
 
 

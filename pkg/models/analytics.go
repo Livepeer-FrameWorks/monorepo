@@ -24,15 +24,14 @@ type AnalyticsRoutingEvent struct {
 	SelectedNode    string    `json:"selected_node"`
 	Status          string    `json:"status"`
 	Details         string    `json:"details"`
-	Score           float32   `json:"score"`
+	Score           int       `json:"score"`
 	ClientIP        string    `json:"client_ip"`
 	ClientCountry   string    `json:"client_country"`
-	ClientRegion    string    `json:"client_region"`
-	ClientCity      string    `json:"client_city"`
 	ClientLatitude  float64   `json:"client_latitude"`
 	ClientLongitude float64   `json:"client_longitude"`
-	NodeScores      string    `json:"node_scores"`
-	RoutingMetadata string    `json:"routing_metadata"`
+	NodeLatitude    float64   `json:"node_latitude"`
+	NodeLongitude   float64   `json:"node_longitude"`
+	NodeName        string    `json:"node_name"`
 }
 
 // AnalyticsViewerSession5m represents a 5-minute aggregated viewer metric row

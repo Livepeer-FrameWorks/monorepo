@@ -147,7 +147,7 @@ func NewStreamIngestEvent(tenantID, streamKey, userID, internalName, streamID, i
 }
 
 // NewStreamViewEvent creates a new stream view event with typed data
-func NewStreamViewEvent(tenantID, playbackID, internalName, streamID, viewerIP, userAgent string) *pb.Event {
+func NewStreamViewEvent(tenantID, playbackID, internalName, streamID string) *pb.Event {
 	return &pb.Event{
 		Source:   "mistserver_webhook",
 		TenantId: tenantID,
@@ -163,10 +163,7 @@ func NewStreamViewEvent(tenantID, playbackID, internalName, streamID, viewerIP, 
 				Region:        os.Getenv("REGION"),
 				SchemaVersion: "1.0",
 				EventData: &pb.EventData_StreamViewData{
-					StreamViewData: &pb.StreamViewData{
-						ViewerIp:  viewerIP,
-						UserAgent: userAgent,
-					},
+					StreamViewData: &pb.StreamViewData{},
 				},
 			},
 		},
@@ -175,7 +172,7 @@ func NewStreamViewEvent(tenantID, playbackID, internalName, streamID, viewerIP, 
 }
 
 // NewLoadBalancingEvent creates a new load balancing event with typed data
-func NewLoadBalancingEvent(tenantID, streamID, selectedNode, clientIP, clientCountry, status, details string, lat, lon float64, score uint64) *pb.Event {
+func NewLoadBalancingEvent(tenantID, streamID, selectedNode, selectedNodeID, clientIP, clientCountry, status, details string, lat, lon float64, score uint64, nodeLat, nodeLon float64, nodeName string, routingDistanceKm float64) *pb.Event {
 	return &pb.Event{
 		Source:   "foghorn",
 		TenantId: tenantID,
@@ -198,6 +195,22 @@ func NewLoadBalancingEvent(tenantID, streamID, selectedNode, clientIP, clientCou
 						Score:         score,
 						ClientIp:      clientIP,
 						ClientCountry: clientCountry,
+						NodeLatitude:  nodeLat,
+						NodeLongitude: nodeLon,
+						NodeName:      nodeName,
+						SelectedNodeId: func() *string {
+							if selectedNodeID == "" {
+								return nil
+							}
+							return &selectedNodeID
+						}(),
+						RoutingDistanceKm: func() *float64 {
+							if routingDistanceKm == 0 {
+								return nil
+							}
+							v := routingDistanceKm
+							return &v
+						}(),
 					},
 				},
 			},

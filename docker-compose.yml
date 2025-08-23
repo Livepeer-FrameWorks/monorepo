@@ -72,6 +72,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      # - ./database/migrations:/docker-entrypoint-initdb.d/migrations:ro
     ports:
       - "5432:5432"
     networks:
@@ -267,15 +268,35 @@ services:
     command: |
       "
       echo 'Creating Kafka topics...'
-      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic analytics --partitions 3 --replication-factor 1
       kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic analytics_events --partitions 3 --replication-factor 1
-      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic stream-events --partitions 3 --replication-factor 1
-      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic viewer-metrics --partitions 3 --replication-factor 1
-      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic connection-events --partitions 3 --replication-factor 1
       echo 'Topics created successfully'
       "
     networks:
       - frameworks
+
+  # One-shot migration runner to apply SQL migrations
+  # db-migrate:
+  #   image: postgres:15
+  #   container_name: frameworks-db-migrate
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+  #   entrypoint: [ '/bin/sh', '-c' ]
+  #   command: |
+  #     "
+  #     set -e
+  #     echo 'Applying SQL migrations...'
+  #     for f in /migrations/*.sql; do
+  #       echo "Running migration: $f"
+  #       psql postgresql://frameworks_user:frameworks_dev@postgres:5432/frameworks -v ON_ERROR_STOP=1 -f "$f"
+  #     done
+  #     echo 'Migrations complete.'
+  #     "
+  #   volumes:
+  #     - ./database/migrations:/migrations:ro
+  #   networks:
+  #     - frameworks
+  #   restart: 'no'
 
   # Quartermaster - Tenant Management Service
   quartermaster:

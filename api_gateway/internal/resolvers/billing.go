@@ -183,9 +183,12 @@ func (r *Resolver) DoGetUsageRecords(ctx context.Context, timeRange *model.TimeR
 		}
 
 		// Store cost in usage details
-		record.UsageDetails = models.JSONB{
-			"cost":     cost,
-			"currency": usage.Currency,
+		record.UsageDetails = models.UsageDetails{
+			"cost": {
+				Quantity:  amount,
+				UnitPrice: cost / amount, // Calculate unit price
+				Unit:      usage.Currency,
+			},
 		}
 
 		records = append(records, record)
@@ -198,10 +201,14 @@ func (r *Resolver) DoGetUsageRecords(ctx context.Context, timeRange *model.TimeR
 func (r *Resolver) DoCreatePayment(ctx context.Context, input model.CreatePaymentInput) (*models.Payment, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo payment creation")
+		cur := "EUR"
+		if input.Currency != nil {
+			cur = string(*input.Currency)
+		}
 		return &models.Payment{
 			ID:        "payment_demo_" + time.Now().Format("20060102150405"),
 			Amount:    input.Amount,
-			Currency:  *input.Currency,
+			Currency:  cur,
 			Method:    string(input.Method),
 			Status:    "completed",
 			CreatedAt: time.Now(),
@@ -220,10 +227,14 @@ func (r *Resolver) DoCreatePayment(ctx context.Context, input model.CreatePaymen
 
 	// TODO: Add CreatePayment method to Purser client
 	// For now, return a mock payment
+	cur := "EUR"
+	if input.Currency != nil {
+		cur = *input.Currency
+	}
 	return &models.Payment{
 		ID:       "payment_" + tenantID,
 		Amount:   input.Amount,
-		Currency: *input.Currency,
+		Currency: cur,
 		Method:   string(input.Method),
 		Status:   "pending",
 	}, nil

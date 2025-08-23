@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"frameworks/pkg/database"
+	"frameworks/pkg/validation"
+
 	"github.com/sirupsen/logrus"
 )
 
@@ -21,24 +23,24 @@ type Event struct {
 
 // AnalyticsEvent represents a single analytics event
 type AnalyticsEvent struct {
-	EventID       string                 `json:"event_id"`
-	EventType     string                 `json:"event_type"`
-	Timestamp     time.Time              `json:"timestamp"`
-	Source        string                 `json:"source"`
-	TenantID      string                 `json:"tenant_id,omitempty"`
-	StreamID      *string                `json:"stream_id,omitempty"`
-	UserID        *string                `json:"user_id,omitempty"`
-	PlaybackID    *string                `json:"playback_id,omitempty"`
-	InternalName  *string                `json:"internal_name,omitempty"`
-	Region        string                 `json:"region"`
-	NodeURL       *string                `json:"node_url,omitempty"`
-	Data          map[string]interface{} `json:"data,omitempty"`
-	SchemaVersion string                 `json:"schema_version"`
+	EventID       string               `json:"event_id"`
+	EventType     string               `json:"event_type"`
+	Timestamp     time.Time            `json:"timestamp"`
+	Source        string               `json:"source"`
+	TenantID      string               `json:"tenant_id,omitempty"`
+	StreamID      *string              `json:"stream_id,omitempty"`
+	UserID        *string              `json:"user_id,omitempty"`
+	PlaybackID    *string              `json:"playback_id,omitempty"`
+	InternalName  *string              `json:"internal_name,omitempty"`
+	Region        string               `json:"region"`
+	NodeURL       *string              `json:"node_url,omitempty"`
+	Data          validation.EventData `json:"data"`
+	SchemaVersion string               `json:"schema_version"`
 }
 
 // EventHandler interface for handling Kafka events
 type EventHandler interface {
-	HandleEvent(event Event) error
+	HandleEvent(event AnalyticsEvent) error
 }
 
 // AnalyticsEventHandler implements EventHandler to handle analytics events
@@ -57,40 +59,9 @@ func NewAnalyticsEventHandler(ydb database.PostgresConn, handler func(database.P
 	}
 }
 
-// HandleEvent implements EventHandler by converting the event to an AnalyticsEvent
-func (h *AnalyticsEventHandler) HandleEvent(event Event) error {
-	// Convert Event to AnalyticsEvent
-	analyticsEvent := AnalyticsEvent{
-		EventID:       event.ID,
-		EventType:     event.Type,
-		Timestamp:     event.Timestamp,
-		Source:        event.Source,
-		TenantID:      event.TenantID,
-		Data:          event.Data,
-		SchemaVersion: "1.0",
-	}
-
-	// Extract optional fields from event.Data
-	if streamID, ok := event.Data["stream_id"].(string); ok {
-		analyticsEvent.StreamID = &streamID
-	}
-	if userID, ok := event.Data["user_id"].(string); ok {
-		analyticsEvent.UserID = &userID
-	}
-	if playbackID, ok := event.Data["playback_id"].(string); ok {
-		analyticsEvent.PlaybackID = &playbackID
-	}
-	if internalName, ok := event.Data["internal_name"].(string); ok {
-		analyticsEvent.InternalName = &internalName
-	}
-	if region, ok := event.Data["region"].(string); ok {
-		analyticsEvent.Region = region
-	}
-	if nodeURL, ok := event.Data["node_url"].(string); ok {
-		analyticsEvent.NodeURL = &nodeURL
-	}
-
-	return h.handler(h.yugaDB, analyticsEvent)
+// HandleEvent implements EventHandler by directly handling AnalyticsEvent
+func (h *AnalyticsEventHandler) HandleEvent(event AnalyticsEvent) error {
+	return h.handler(h.yugaDB, event)
 }
 
 // ConsumerInterface defines the interface for Kafka consumers
@@ -105,7 +76,8 @@ type ConsumerInterface interface {
 // ProducerInterface defines the interface for Kafka producers
 type ProducerInterface interface {
 	ProduceMessage(topic string, key []byte, value []byte, headers map[string]string) error
-	PublishBatch(batch interface{}) error
+	PublishTypedBatch(events []AnalyticsEvent) error // Typed method for analytics events
+	PublishTypedEvent(event *AnalyticsEvent) error   // Single typed event method
 	Close() error
 	HealthCheck() error
 	GetMetrics() (map[string]interface{}, error)

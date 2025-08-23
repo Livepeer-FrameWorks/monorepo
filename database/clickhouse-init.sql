@@ -9,34 +9,91 @@ CREATE DATABASE IF NOT EXISTS frameworks;
 USE frameworks;
 
 -- ============================================================================
--- STREAM EVENTS
+-- STREAM EVENTS (WIDE TABLE - MATCHES SOURCE DATA)
 -- ============================================================================
 
--- Stream lifecycle and operational events
+-- All stream and infrastructure events in one table
+-- Only columns for data that ACTUALLY exists in MistServer webhooks
+-- 
+-- EVENT TYPE MAPPING (which fields apply to which events):
+-- push-start:         push_target
+-- push-end:           push_id, push_target, target_uri_before, target_uri_after, push_status, log_messages
+-- stream-buffer:      buffer_state, health_score, has_issues, issues_description, track_count, quality_tier, primary_*
+-- stream-end:         downloaded_bytes, uploaded_bytes, total_viewers, total_inputs, total_outputs, viewer_seconds
+-- stream-ingest:      stream_key, user_id, hostname, push_url, protocol, latitude, longitude, location
+-- recording-end:      file_size, duration, output_file
+-- bandwidth-threshold: current_bytes_per_sec, threshold_exceeded, threshold_value  
+-- track-list:         track_list
+-- user-connection:    latitude, longitude (stored in separate connection_events table)
+--
 CREATE TABLE IF NOT EXISTS stream_events (
-    -- Event identification
+    -- ===== COMMON FIELDS (ALL EVENTS) =====
     event_id UUID,
     timestamp DateTime,
     tenant_id UUID,
     internal_name String,
-    
-    -- Event details
-    event_type LowCardinality(String),
-    status LowCardinality(String),
+    stream_id UUID MATERIALIZED toUUIDOrZero(internal_name),
     node_id LowCardinality(String),
+    event_type LowCardinality(String),
+    status Nullable(String),
     
-    -- Optional event-specific data
-    ingest_type Nullable(String),
-    protocol Nullable(String),
-    target Nullable(String),
+    -- ===== PUSH EVENTS (push-start, push-end) =====
+    push_id Nullable(String),          -- PUSH_END only
+    push_target Nullable(String),      -- Both push events
+    target_uri_before Nullable(String), -- PUSH_END only
+    target_uri_after Nullable(String),  -- PUSH_END only  
+    push_status Nullable(String),       -- PUSH_END only - JSON string
+    log_messages Nullable(String),      -- PUSH_END only - JSON array
+    
+    -- ===== STREAM LIFECYCLE (stream-buffer, stream-end) =====
+    buffer_state Nullable(String), -- FULL, EMPTY, DRY, RECOVER
+    health_score Nullable(Float32),
+    has_issues Nullable(Boolean),
+    issues_description Nullable(String),
+    track_count Nullable(UInt16),
+    quality_tier Nullable(String),
+    primary_width Nullable(UInt16),
+    primary_height Nullable(UInt16), 
+    primary_fps Nullable(Float32),
+    
+    -- Stream end metrics (STREAM_END)
+    downloaded_bytes Nullable(UInt64),
+    uploaded_bytes Nullable(UInt64),
+    total_viewers Nullable(UInt32),
+    total_inputs Nullable(UInt16),
+    total_outputs Nullable(UInt16),
+    viewer_seconds Nullable(UInt64),
+    
+    -- ===== STREAM INGEST EVENTS (stream-ingest) =====
+    stream_key Nullable(String),
+    user_id Nullable(String),
+    hostname Nullable(String),
+    push_url Nullable(String),
+    protocol Nullable(String), -- EXISTS in ingest events!
+    
+    -- ===== RECORDING EVENTS (recording-end) =====
     file_size Nullable(UInt64),
     duration Nullable(UInt32),
+    output_file Nullable(String),
     
-    -- Raw event data
-    event_data String -- JSON string
+    -- ===== BANDWIDTH THRESHOLD EVENTS =====
+    current_bytes_per_sec Nullable(UInt64),
+    threshold_exceeded Nullable(Boolean),
+    threshold_value Nullable(UInt64),
+    
+    -- ===== TRACK LIST EVENTS =====  
+    track_list Nullable(String),       -- JSON with track/codec info
+    
+    -- ===== GEOGRAPHIC DATA (various events) =====
+    latitude Nullable(Float64),
+    longitude Nullable(Float64),
+    location Nullable(String),
+    
+    -- ===== FULL EVENT DATA =====
+    event_data String -- Complete JSON for anything we missed
 ) ENGINE = MergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
-ORDER BY (timestamp, internal_name)
+ORDER BY (tenant_id, internal_name, timestamp)
 TTL timestamp + INTERVAL 90 DAY;
 
 -- ============================================================================
@@ -54,12 +111,11 @@ CREATE TABLE IF NOT EXISTS routing_events (
     score Int64,
     client_ip String,
     client_country FixedString(2),
-    client_region LowCardinality(String),
-    client_city LowCardinality(String),
     client_latitude Float64,
     client_longitude Float64,
-    node_scores String,
-    routing_metadata String
+    node_latitude Float64,
+    node_longitude Float64,
+    node_name LowCardinality(String)
 ) ENGINE = MergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (timestamp, stream_name)
@@ -75,6 +131,7 @@ CREATE TABLE IF NOT EXISTS viewer_metrics (
     timestamp DateTime,
     tenant_id UUID,
     internal_name String,
+    stream_id UUID MATERIALIZED toUUIDOrZero(internal_name),
     
     -- Core metrics
     viewer_count UInt32,
@@ -102,14 +159,14 @@ CREATE TABLE IF NOT EXISTS connection_events (
     timestamp DateTime,
     tenant_id UUID,
     internal_name String,
+    stream_id UUID MATERIALIZED toUUIDOrZero(internal_name),
     
-    -- Connection details
-    user_id String,
+    -- Connection details (ONLY fields that MistServer actually sends)
     session_id String,
     connection_addr String,
-    user_agent String,
     connector LowCardinality(String),
     node_id LowCardinality(String),
+    request_url Nullable(String), -- From USER_NEW webhook
     
     -- Geographic data
     country_code FixedString(2),
@@ -177,6 +234,7 @@ CREATE TABLE IF NOT EXISTS stream_health_metrics (
     timestamp DateTime,
     tenant_id UUID,
     internal_name String,
+    stream_id UUID MATERIALIZED toUUIDOrZero(internal_name),
     node_id LowCardinality(String),
     
     -- Video quality metrics
@@ -229,6 +287,77 @@ CREATE TABLE IF NOT EXISTS stream_health_metrics (
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (timestamp, internal_name)
 TTL timestamp + INTERVAL 30 DAY;
+
+-- ============================================================================
+-- CLIENT PERFORMANCE METRICS
+-- ============================================================================
+
+-- Per-session client performance metrics from MistServer clients API
+CREATE TABLE IF NOT EXISTS client_metrics (
+    timestamp DateTime,
+    tenant_id UUID,
+    internal_name String,
+    stream_id UUID MATERIALIZED toUUIDOrZero(internal_name),
+    session_id String,
+    node_id LowCardinality(String),
+    
+    -- Connection details
+    protocol LowCardinality(String),
+    host String,
+    connection_time Float32,
+    position Nullable(Float32),
+    
+    -- Bandwidth metrics
+    bandwidth_in UInt64,
+    bandwidth_out UInt64,
+    bytes_downloaded UInt64,
+    bytes_uploaded UInt64,
+    
+    -- Packet statistics
+    packets_sent UInt64,
+    packets_lost UInt64,
+    packets_retransmitted UInt64,
+    
+    -- Calculated quality metrics
+    connection_quality Nullable(Float32)  -- 1 - (packets_lost/packets_sent) when packets_sent > 0
+) ENGINE = MergeTree()
+PARTITION BY (toYYYYMM(timestamp), tenant_id)
+ORDER BY (tenant_id, stream_id, timestamp)
+TTL timestamp + INTERVAL 90 DAY;
+
+-- 5-minute aggregations of client metrics for efficient dashboards
+CREATE TABLE IF NOT EXISTS client_metrics_5m (
+    timestamp_5m DateTime,
+    tenant_id UUID,
+    internal_name String,
+    node_id LowCardinality(String),
+    
+    -- Aggregated metrics
+    active_sessions UInt32,
+    avg_bw_in Float64,
+    avg_bw_out Float64,
+    avg_connection_time Float32,
+    pkt_loss_rate Nullable(Float32),
+    avg_connection_quality Nullable(Float32)
+) ENGINE = MergeTree()
+PARTITION BY toYYYYMM(timestamp_5m)
+ORDER BY (timestamp_5m, tenant_id, internal_name, node_id);
+
+-- Materialized view for client metrics 5-minute aggregations
+CREATE MATERIALIZED VIEW IF NOT EXISTS client_metrics_5m_mv TO client_metrics_5m AS
+SELECT
+    toStartOfInterval(timestamp, INTERVAL 5 MINUTE) AS timestamp_5m,
+    tenant_id,
+    internal_name,
+    node_id,
+    count(DISTINCT session_id) as active_sessions,
+    avg(bandwidth_in) AS avg_bw_in,
+    avg(bandwidth_out) AS avg_bw_out,
+    avg(connection_time) AS avg_connection_time,
+    if(sum(packets_sent) > 0, sum(packets_lost) / sum(packets_sent), NULL) AS pkt_loss_rate,
+    avg(connection_quality) AS avg_connection_quality
+FROM client_metrics
+GROUP BY timestamp_5m, tenant_id, internal_name, node_id;
 
 -- ============================================================================
 -- USAGE RECORDS
@@ -384,7 +513,7 @@ SELECT
     tenant_id,
     internal_name,
     sumState(bytes_transferred) as total_bytes,
-    uniqState(user_id) as unique_viewers,
+    uniqState(session_id) as unique_viewers,
     countState() as total_sessions
 FROM connection_events
 GROUP BY hour, tenant_id, internal_name;
@@ -417,6 +546,37 @@ SELECT
     max(stream_count) as max_streams
 FROM node_metrics
 GROUP BY timestamp_5m, node_id;
+
+-- Hourly node metrics aggregation to back API queries
+CREATE TABLE IF NOT EXISTS node_metrics_1h (
+    timestamp_1h DateTime,
+    node_id LowCardinality(String),
+    avg_cpu Float32,
+    peak_cpu Float32,
+    avg_memory Float32,
+    peak_memory Float32,
+    total_bandwidth_in UInt64,
+    total_bandwidth_out UInt64,
+    avg_health_score Float32,
+    was_healthy UInt8
+) ENGINE = MergeTree()
+PARTITION BY toYYYYMM(timestamp_1h)
+ORDER BY (timestamp_1h, node_id);
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS node_metrics_1h_mv TO node_metrics_1h AS
+SELECT
+    toStartOfHour(timestamp) AS timestamp_1h,
+    node_id,
+    avg(cpu_usage) AS avg_cpu,
+    max(cpu_usage) AS peak_cpu,
+    avg(memory_usage) AS avg_memory,
+    max(memory_usage) AS peak_memory,
+    sum(bandwidth_in) AS total_bandwidth_in,
+    sum(bandwidth_out) AS total_bandwidth_out,
+    avg(health_score) AS avg_health_score,
+    if(avg(is_healthy) >= 0.5, 1, 0) AS was_healthy
+FROM node_metrics
+GROUP BY timestamp_1h, node_id;
 
 -- Daily tenant viewer metrics from viewer_metrics table
 CREATE TABLE IF NOT EXISTS tenant_viewer_daily (

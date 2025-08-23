@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"crypto/md5"
 	"encoding/hex"
 	"encoding/json"
@@ -13,10 +14,14 @@ import (
 	"sync"
 	"time"
 
+	"frameworks/pkg/clients/foghorn"
+	"frameworks/pkg/geoip"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/models"
+	"frameworks/pkg/validation"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
@@ -154,9 +159,16 @@ func (pm *PrometheusMonitor) AddNode(nodeID, baseURL string) {
 	pm.lastJSONData = make(map[string]interface{}) // Clear previous data
 
 	monitorLogger.WithFields(logging.Fields{
-		"node_id":  nodeID,
-		"base_url": baseURL,
+		"node_id":                nodeID,
+		"base_url":               baseURL,
+		"prometheus_monitor_ptr": fmt.Sprintf("%p", pm),
 	}).Info("Added MistServer node for monitoring")
+
+	// Immediately verify the nodeID was set
+	monitorLogger.WithFields(logging.Fields{
+		"stored_node_id": pm.nodeID,
+		"is_empty":       pm.nodeID == "",
+	}).Info("PrometheusMonitor nodeID verification after AddNode")
 }
 
 // RemoveNode removes a MistServer node from monitoring
@@ -190,9 +202,11 @@ func (pm *PrometheusMonitor) GetNodes() map[string]*models.NodeInfo {
 			BaseURL:   pm.baseURL,
 			LastSeen:  pm.lastSeen,
 			IsHealthy: pm.isHealthy,
-			Latitude:  pm.latitude,
-			Longitude: pm.longitude,
-			Location:  pm.location,
+			GeoData: geoip.GeoData{
+				Latitude:  getFloat64PointerValue(pm.latitude),
+				Longitude: getFloat64PointerValue(pm.longitude),
+			},
+			Location: pm.location,
 		}
 	}
 	return nodes
@@ -606,7 +620,7 @@ func (pm *PrometheusMonitor) processActiveStreamData(nodeID, streamName string, 
 		downbytes = int64(db)
 	}
 
-	// Get packet statistics
+	// Get packet statistics for health calculation
 	var packetsSent, packetsLost int64
 	if ps, ok := streamData["packsent"].(float64); ok {
 		packetsSent = int64(ps)
@@ -615,7 +629,13 @@ func (pm *PrometheusMonitor) processActiveStreamData(nodeID, streamName string, 
 		packetsLost = int64(pl)
 	}
 
-	// Get timing data
+	// Calculate packet loss ratio for health scoring
+	packetLossRatio := 0.0
+	if packetsSent > 0 {
+		packetLossRatio = float64(packetsLost) / float64(packetsSent)
+	}
+
+	// Get timing data (for potential future use in health calculations)
 	var firstMs, lastMs int64
 	if fm, ok := streamData["firstms"].(float64); ok {
 		firstMs = int64(fm)
@@ -623,6 +643,8 @@ func (pm *PrometheusMonitor) processActiveStreamData(nodeID, streamName string, 
 	if lm, ok := streamData["lastms"].(float64); ok {
 		lastMs = int64(lm)
 	}
+	_ = firstMs // Available for future timing calculations
+	_ = lastMs  // Available for future timing calculations
 
 	// Parse health data for detailed track information
 	var healthData map[string]interface{}
@@ -749,12 +771,20 @@ func (pm *PrometheusMonitor) processActiveStreamData(nodeID, streamName string, 
 		}).WithField("stream_name", streamName).Warn("No health data found for stream")
 	}
 
-	// Get node geographic information
+	// Get node geographic information for logging context
 	pm.mutex.RLock()
 	latitude := pm.latitude
 	longitude := pm.longitude
 	location := pm.location
 	pm.mutex.RUnlock()
+
+	// Log stream location context (geographic data not included in StreamLifecycle payload)
+	geoContext := "unknown"
+	if location != "" {
+		geoContext = location
+	} else if latitude != nil && longitude != nil {
+		geoContext = fmt.Sprintf("%.2f,%.2f", *latitude, *longitude)
+	}
 
 	monitorLogger.WithFields(logging.Fields{
 		"node_id":       nodeID,
@@ -767,7 +797,8 @@ func (pm *PrometheusMonitor) processActiveStreamData(nodeID, streamName string, 
 		"upbytes":       upbytes,
 		"downbytes":     downbytes,
 		"health_tracks": len(trackDetails),
-	}).WithField("stream_name", streamName).Info("Active stream")
+		"location":      geoContext,
+	}).Info("Processing active stream")
 
 	// Forward essential stream state to Data API (for business logic)
 	go forwardEventToCommodore("stream-status", map[string]interface{}{
@@ -779,32 +810,132 @@ func (pm *PrometheusMonitor) processActiveStreamData(nodeID, streamName string, 
 		"source":        "mistserver_api",
 	})
 
+	// Create typed StreamLifecyclePayload from polling data
+	streamPayload := &validation.StreamLifecyclePayload{
+		StreamName:   streamName,
+		InternalName: internalName,
+		NodeID:       nodeID,
+		TenantID:     getTenantForInternalName(internalName),
+		Status:       "live",
+		// Note: This is monitoring polling, not a webhook, so no BufferState
+
+		// Bandwidth metrics (in bytes)
+		UploadedBytes:   upbytes,
+		DownloadedBytes: downbytes,
+
+		// Stream metadata
+		TotalViewers: viewers,
+		TotalInputs:  inputs,
+		TotalOutputs: outputs,
+		TrackCount:   trackCount,
+	}
+
+	// Extract quality metrics from parsed track details
+	if len(trackDetails) > 0 {
+		// Convert health data to JSON for StreamDetails field
+		if healthDataBytes, err := json.Marshal(healthData); err == nil {
+			streamPayload.StreamDetails = string(healthDataBytes)
+		}
+
+		// Find primary video track and extract quality metrics
+		for _, track := range trackDetails {
+			if trackType, ok := track["type"].(string); ok && trackType == "video" {
+				// Extract video resolution
+				if width, ok := track["width"].(int); ok {
+					streamPayload.PrimaryWidth = width
+				}
+				if height, ok := track["height"].(int); ok {
+					streamPayload.PrimaryHeight = height
+				}
+				// Extract video frame rate
+				if fps, ok := track["fps"].(float64); ok {
+					streamPayload.PrimaryFPS = fps
+				}
+				// Determine quality tier based on resolution
+				if streamPayload.PrimaryWidth > 0 && streamPayload.PrimaryHeight > 0 {
+					if streamPayload.PrimaryHeight >= 2160 {
+						streamPayload.QualityTier = "4K"
+					} else if streamPayload.PrimaryHeight >= 1080 {
+						streamPayload.QualityTier = "1080p"
+					} else if streamPayload.PrimaryHeight >= 720 {
+						streamPayload.QualityTier = "720p"
+					} else if streamPayload.PrimaryHeight >= 480 {
+						streamPayload.QualityTier = "480p"
+					} else {
+						streamPayload.QualityTier = "SD"
+					}
+				}
+				// Use first video track as primary
+				break
+			}
+		}
+
+		// Calculate health score based on track quality and packet loss
+		healthScore := 100.0
+		hasIssues := false
+		var issuesDesc []string
+
+		// Factor in packet loss
+		if packetLossRatio > 0.05 { // >5% packet loss is concerning
+			healthScore -= 30
+			hasIssues = true
+			issuesDesc = append(issuesDesc, fmt.Sprintf("High packet loss: %.2f%%", packetLossRatio*100))
+		} else if packetLossRatio > 0.01 { // >1% packet loss is noticeable
+			healthScore -= 10
+			hasIssues = true
+			issuesDesc = append(issuesDesc, fmt.Sprintf("Moderate packet loss: %.2f%%", packetLossRatio*100))
+		}
+
+		for _, track := range trackDetails {
+			// Check for high jitter (quality issue)
+			if jitter, ok := track["jitter"].(int); ok && jitter > 100 {
+				healthScore -= 20
+				hasIssues = true
+				issuesDesc = append(issuesDesc, fmt.Sprintf("High jitter on track %v", track["track_name"]))
+			}
+			// Check for low buffer (quality issue)
+			if buffer, ok := track["buffer"].(int); ok && buffer < 50 {
+				healthScore -= 15
+				hasIssues = true
+				issuesDesc = append(issuesDesc, fmt.Sprintf("Low buffer on track %v", track["track_name"]))
+			}
+		}
+
+		// Ensure health score doesn't go below 0
+		if healthScore < 0 {
+			healthScore = 0
+		}
+
+		streamPayload.HealthScore = healthScore
+		streamPayload.HasIssues = hasIssues
+		if len(issuesDesc) > 0 {
+			streamPayload.IssuesDesc = strings.Join(issuesDesc, "; ")
+		}
+		// Log final quality metrics
+		monitorLogger.WithFields(logging.Fields{
+			"node_id":      nodeID,
+			"stream_name":  streamName,
+			"quality_tier": streamPayload.QualityTier,
+			"health_score": streamPayload.HealthScore,
+			"has_issues":   streamPayload.HasIssues,
+			"primary_res":  fmt.Sprintf("%dx%d", streamPayload.PrimaryWidth, streamPayload.PrimaryHeight),
+			"primary_fps":  streamPayload.PrimaryFPS,
+		}).Info("Stream quality metrics extracted")
+	}
+
+	// Create typed BaseEvent for monitoring data
+	baseEvent := &validation.BaseEvent{
+		EventID:         uuid.New().String(),
+		EventType:       validation.EventStreamLifecycle,
+		Timestamp:       time.Now().UTC(),
+		Source:          "mistserver_api",
+		InternalName:    &internalName,
+		SchemaVersion:   "2.0",
+		StreamLifecycle: streamPayload,
+	}
+
 	// Forward comprehensive analytics data to Decklog (for analytics)
-	go ForwardEventToDecklog("stream-lifecycle", map[string]interface{}{
-		"node_id":       nodeID,
-		"stream_name":   streamName,
-		"internal_name": internalName,
-		"bandwidth_in":  upbytes,
-		"bandwidth_out": downbytes,
-		"packets_sent":  packetsSent,
-		"packets_lost":  packetsLost,
-		"viewers":       viewers,
-		"clients":       clients,
-		"track_count":   trackCount,
-		"inputs":        inputs,
-		"outputs":       outputs,
-		"first_ms":      firstMs,
-		"last_ms":       lastMs,
-		"status":        "live",
-		"timestamp":     time.Now().Unix(),
-		"source":        "mistserver_api",
-		"latitude":      latitude,
-		"longitude":     longitude,
-		"location":      location,
-		"health_data":   healthData,
-		"track_details": trackDetails,
-		"tenant_id":     getTenantForInternalName(internalName),
-	})
+	go ForwardTypedEventToDecklog(baseEvent)
 }
 
 // processUpdates processes node updates from the update channel
@@ -833,7 +964,22 @@ func (pm *PrometheusMonitor) processUpdates() {
 
 			// Extract geographic coordinates from JSON data (only update if changed)
 			if jsonData := update.JSONData; jsonData != nil {
+				monitorLogger.WithFields(logging.Fields{
+					"node_id":       update.NodeID,
+					"has_json_data": true,
+					"json_keys":     getMapKeys(jsonData),
+				}).Debug("Processing JSON data from koekjes endpoint")
+
 				if locData, ok := jsonData["loc"].(map[string]interface{}); ok {
+					monitorLogger.WithFields(logging.Fields{
+						"node_id":  update.NodeID,
+						"loc_data": locData,
+					}).Info("Found location data in koekjes JSON")
+
+					oldLat := pm.latitude
+					oldLon := pm.longitude
+					oldLoc := pm.location
+
 					if lat, ok := locData["lat"].(float64); ok {
 						pm.latitude = &lat
 					}
@@ -843,12 +989,28 @@ func (pm *PrometheusMonitor) processUpdates() {
 					if name, ok := locData["name"].(string); ok && name != "" {
 						pm.location = name
 					}
-				} else {
-					// If no location data from MistServer, log it
+
 					monitorLogger.WithFields(logging.Fields{
-						"node_id": update.NodeID,
+						"node_id":      update.NodeID,
+						"old_lat":      oldLat,
+						"new_lat":      pm.latitude,
+						"old_lon":      oldLon,
+						"new_lon":      pm.longitude,
+						"old_location": oldLoc,
+						"new_location": pm.location,
+					}).Info("Updated PrometheusMonitor location data")
+				} else {
+					// If no location data from MistServer, log it with details
+					monitorLogger.WithFields(logging.Fields{
+						"node_id":     update.NodeID,
+						"json_keys":   getMapKeys(jsonData),
+						"has_loc_key": jsonData["loc"] != nil,
 					}).Warn("No location data from MistServer for node")
 				}
+			} else {
+				monitorLogger.WithFields(logging.Fields{
+					"node_id": update.NodeID,
+				}).Error("No JSON data received from koekjes endpoint")
 			}
 		}
 
@@ -859,7 +1021,7 @@ func (pm *PrometheusMonitor) processUpdates() {
 	}
 }
 
-// forwardNodeMetrics forwards node metrics to API and analytics services
+// forwardNodeMetrics forwards node metrics to API and analytics services - TYPED VERSION
 func (pm *PrometheusMonitor) forwardNodeMetrics(nodeID string) {
 	pm.mutex.RLock()
 	baseURL := pm.baseURL
@@ -869,70 +1031,109 @@ func (pm *PrometheusMonitor) forwardNodeMetrics(nodeID string) {
 	isHealthy := pm.isHealthy
 	pm.mutex.RUnlock()
 
-	// Forward to Foghorn for load balancing
-	foghorn := os.Getenv("FOGHORN_URL")
-	if foghorn == "" {
-		foghorn = "http://localhost:18008"
-	}
+	// Convert stream metrics to typed format
+	streamsData := pm.getStreamMetrics()
+	typedStreams := make(map[string]validation.FoghornStreamData)
+	for streamName, streamMetrics := range streamsData {
+		if metrics, ok := streamMetrics.(map[string]interface{}); ok {
+			streamData := validation.FoghornStreamData{}
 
-	// Prepare metrics for Foghorn
-	metrics := map[string]interface{}{
-		"cpu":         pm.getCPUUsage(),
-		"ram_max":     pm.getRAMMax(),
-		"ram_current": pm.getRAMCurrent(),
-		"up_speed":    pm.getUpSpeed(),
-		"down_speed":  pm.getDownSpeed(),
-		"bwlimit":     pm.getBandwidthLimit(),
-		"streams":     pm.getStreamMetrics(),
-	}
-
-	update := map[string]interface{}{
-		"node_id":    nodeID,
-		"base_url":   baseURL,
-		"is_healthy": isHealthy,
-		"latitude":   latitude,
-		"longitude":  longitude,
-		"location":   location,
-		"event_type": "node_metrics",
-		"timestamp":  time.Now().Unix(),
-		"metrics":    metrics,
-	}
-
-	jsonData, err := json.Marshal(update)
-	if err != nil {
-		monitorLogger.WithError(err).Error("Failed to marshal Foghorn update")
-	} else {
-		resp, err := http.Post(foghorn+"/node/update", "application/json", bytes.NewBuffer(jsonData))
-		if err != nil {
-			monitorLogger.WithError(err).Error("Failed to send update to Foghorn")
-		} else {
-			resp.Body.Close()
-			if resp.StatusCode != http.StatusOK {
-				monitorLogger.WithField("status", resp.StatusCode).Error("Foghorn returned non-200 status")
+			if total, ok := metrics["total"].(uint64); ok {
+				streamData.Total = total
 			}
+			if inputs, ok := metrics["inputs"].(uint32); ok {
+				streamData.Inputs = inputs
+			}
+			if bytesUp, ok := metrics["bytes_up"].(uint64); ok {
+				streamData.BytesUp = bytesUp
+				// Add bandwidth calculation per viewer (like C++)
+				if streamData.Total > 0 {
+					streamData.Bandwidth = uint32((streamData.BytesUp + streamData.BytesDown) / streamData.Total)
+				}
+			}
+			if bytesDown, ok := metrics["bytes_down"].(uint64); ok {
+				streamData.BytesDown = bytesDown
+				// Update bandwidth calculation per viewer (like C++)
+				if streamData.Total > 0 {
+					streamData.Bandwidth = uint32((streamData.BytesUp + streamData.BytesDown) / streamData.Total)
+				}
+			}
+
+			typedStreams[streamName] = streamData
 		}
 	}
 
-	// Forward to Decklog for analytics
-	if err := ForwardEventToDecklog("node-lifecycle", map[string]interface{}{
-		"node_id":      nodeID,
-		"base_url":     baseURL,
-		"is_healthy":   isHealthy,
-		"latitude":     latitude,
-		"longitude":    longitude,
-		"location":     location,
-		"event_type":   "node-lifecycle",
-		"timestamp":    time.Now().Unix(),
-		"cpu_usage":    metrics["cpu"],
-		"ram_max":      metrics["ram_max"],
-		"ram_current":  metrics["ram_current"],
-		"up_speed":     metrics["up_speed"],
-		"down_speed":   metrics["down_speed"],
-		"bw_limit":     metrics["bwlimit"],
-		"stream_count": len(metrics["streams"].(map[string]interface{})),
-	}); err != nil {
-		monitorLogger.WithError(err).Error("Failed to forward event to Decklog")
+	// Create typed node metrics for Foghorn
+	nodeMetrics := &validation.FoghornNodeUpdate{
+		CPU:        pm.getCPUUsage(),                // Raw CPU (tenths of percentage)
+		RAMMax:     float64(pm.getRAMMax()),         // Raw RAM max (MiB)
+		RAMCurrent: float64(pm.getRAMCurrent()),     // Raw RAM current (MiB)
+		UpSpeed:    float64(pm.getUpSpeed()),        // Raw upload speed (bytes/sec)
+		DownSpeed:  float64(pm.getDownSpeed()),      // Raw download speed (bytes/sec)
+		BWLimit:    float64(pm.getBandwidthLimit()), // Raw bandwidth limit (bytes/sec)
+		Location: validation.FoghornLocationData{
+			Latitude:  getFloat64Value(latitude),
+			Longitude: getFloat64Value(longitude),
+			Name:      location,
+		},
+		Streams: typedStreams,
 	}
+
+	// Forward to Foghorn using typed client
+	if foghornClient != nil {
+		req := &foghorn.NodeUpdateRequest{
+			NodeID:    nodeID,
+			BaseURL:   baseURL,
+			IsHealthy: isHealthy,
+			Latitude:  latitude,
+			Longitude: longitude,
+			Location:  location,
+			EventType: "node_metrics",
+			Timestamp: time.Now().Unix(),
+			Metrics:   nodeMetrics,
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		if err := foghornClient.UpdateNode(ctx, req); err != nil {
+			monitorLogger.WithError(err).Error("Failed to send typed node update to Foghorn")
+		} else {
+			monitorLogger.WithField("node_id", nodeID).Debug("Successfully sent typed node update to Foghorn")
+		}
+	}
+
+	// Create typed NodeLifecyclePayload
+	nodePayload := &validation.NodeLifecyclePayload{
+		NodeID:    nodeID,
+		BaseURL:   baseURL,
+		IsHealthy: isHealthy,
+		GeoData: geoip.GeoData{
+			Latitude:  getFloat64Value(latitude),
+			Longitude: getFloat64Value(longitude),
+		},
+		Location:       location,
+		CPUUsage:       pm.getCPUUsage(),
+		RAMMax:         pm.getRAMMax(),
+		RAMCurrent:     pm.getRAMCurrent(),
+		BandwidthUp:    pm.getUpSpeed(),
+		BandwidthDown:  pm.getDownSpeed(),
+		BandwidthLimit: pm.getBandwidthLimit(),
+		ActiveStreams:  len(typedStreams),
+	}
+
+	// Create typed BaseEvent
+	baseEvent := &validation.BaseEvent{
+		EventID:       uuid.New().String(),
+		EventType:     validation.EventNodeLifecycle,
+		Timestamp:     time.Now().UTC(),
+		Source:        "prometheus_polling",
+		SchemaVersion: "2.0",
+		NodeLifecycle: nodePayload,
+	}
+
+	// Forward typed event to Decklog for analytics
+	go ForwardTypedEventToDecklog(baseEvent)
 }
 
 // extractStreamMetrics extracts per-stream metrics from MistServer JSON data
@@ -1102,6 +1303,58 @@ func RemovePrometheusNode(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "Node removed successfully"})
 }
 
+// getFloat64Value safely dereferences a *float64, returning 0 if nil
+func getFloat64Value(f *float64) float64 {
+	if f == nil {
+		return 0
+	}
+	return *f
+}
+
+// getFloat64PointerValue safely dereferences a *float64, returning 0 if nil (for embedded structs)
+func getFloat64PointerValue(f *float64) float64 {
+	if f == nil {
+		return 0
+	}
+	return *f
+}
+
+// getFloat64 safely converts interface{} to float64
+func getFloat64(v interface{}) float64 {
+	if f, ok := v.(float64); ok {
+		return f
+	}
+	return 0
+}
+
+// getInt64 safely converts interface{} to int64
+func getInt64(v interface{}) int64 {
+	if f, ok := v.(float64); ok {
+		return int64(f)
+	}
+	if i, ok := v.(int64); ok {
+		return i
+	}
+	return 0
+}
+
+// getString safely converts interface{} to string
+func getString(v interface{}) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return ""
+}
+
+// getMapKeys returns the keys of a map[string]interface{} for debugging
+func getMapKeys(m map[string]interface{}) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
 func (pm *PrometheusMonitor) emitClientLifecycle(nodeID, mistURL string) error {
 	// Query MistServer clients API for detailed metrics
 	clientsPayload := map[string]interface{}{
@@ -1154,21 +1407,63 @@ func (pm *PrometheusMonitor) emitClientLifecycle(nodeID, mistURL string) error {
 	// Process client metrics
 	if clients, ok := result["clients"].(map[string]interface{}); ok {
 		if data, ok := clients["data"].([]interface{}); ok {
-			fields := clients["fields"].([]interface{})
+			fields, ok := clients["fields"].([]interface{})
+			if !ok {
+				monitorLogger.Error("Failed to parse client fields as []interface{}")
+				return err
+			}
 
 			// Map field names to indices
 			fieldMap := make(map[string]int)
 			for i, field := range fields {
-				fieldMap[field.(string)] = i
+				fieldStr, ok := field.(string)
+				if !ok {
+					monitorLogger.WithField("field", field).Error("Failed to parse field name as string")
+					continue
+				}
+				fieldMap[fieldStr] = i
 			}
 
 			// Process each client connection
 			for _, clientData := range data {
-				client := clientData.([]interface{})
+				client, ok := clientData.([]interface{})
+				if !ok {
+					monitorLogger.WithField("clientData", clientData).Error("Failed to parse client data as []interface{}")
+					continue
+				}
 
-				streamName := client[fieldMap["stream"]].(string)
-				protocol := client[fieldMap["protocol"]].(string)
-				host := client[fieldMap["host"]].(string)
+				// Safely extract required fields with bounds checking
+				streamIdx, hasStream := fieldMap["stream"]
+				protocolIdx, hasProtocol := fieldMap["protocol"]
+				hostIdx, hasHost := fieldMap["host"]
+
+				if !hasStream || !hasProtocol || !hasHost {
+					monitorLogger.Error("Missing required fields in client data")
+					continue
+				}
+
+				if streamIdx >= len(client) || protocolIdx >= len(client) || hostIdx >= len(client) {
+					monitorLogger.Error("Client data array too short for required indices")
+					continue
+				}
+
+				streamName, ok := client[streamIdx].(string)
+				if !ok {
+					monitorLogger.WithField("streamData", client[streamIdx]).Error("Failed to parse stream name as string")
+					continue
+				}
+
+				protocol, ok := client[protocolIdx].(string)
+				if !ok {
+					monitorLogger.WithField("protocolData", client[protocolIdx]).Error("Failed to parse protocol as string")
+					continue
+				}
+
+				host, ok := client[hostIdx].(string)
+				if !ok {
+					monitorLogger.WithField("hostData", client[hostIdx]).Error("Failed to parse host as string")
+					continue
+				}
 
 				// Update Prometheus metrics
 				streamViewers.WithLabelValues(streamName).Inc()
@@ -1197,35 +1492,46 @@ func (pm *PrometheusMonitor) emitClientLifecycle(nodeID, mistURL string) error {
 					streamPacketsRetransmitted.WithLabelValues(streamName, protocol, host).Set(pktRetransmit)
 				}
 
-				// Forward detailed metrics to Decklog
+				// Extract internal name from stream name
 				internalName := streamName
 				if idx := strings.Index(streamName, "+"); idx != -1 && idx+1 < len(streamName) {
 					internalName = streamName[idx+1:]
 				}
 
-				event := map[string]interface{}{
-					"event_type":            "client-lifecycle",
-					"stream_name":           streamName,
-					"internal_name":         internalName,
-					"protocol":              protocol,
-					"host":                  host,
-					"node_id":               nodeID,
-					"bandwidth_in":          client[fieldMap["upbps"]],
-					"bandwidth_out":         client[fieldMap["downbps"]],
-					"timestamp":             time.Now().Unix(),
-					"source":                "mist_clients_api",
-					"conn_time":             client[fieldMap["conntime"]],
-					"position":              client[fieldMap["position"]],
-					"bytes_down":            client[fieldMap["down"]],
-					"bytes_up":              client[fieldMap["up"]],
-					"packets_sent":          client[fieldMap["pktcount"]],
-					"packets_lost":          client[fieldMap["pktlost"]],
-					"packets_retransmitted": client[fieldMap["pktretransmit"]],
-					"session_id":            client[fieldMap["sessid"]],
-					"tenant_id":             getTenantForInternalName(internalName),
+				// Create typed ClientLifecyclePayload from actual API data
+				clientPayload := &validation.ClientLifecyclePayload{
+					StreamName:   streamName,
+					InternalName: internalName,
+					NodeID:       nodeID,
+					TenantID:     getTenantForInternalName(internalName),
+					Protocol:     protocol,
+					Host:         host,
+					// Extract values from the client API response
+					SessionID:            getString(client[fieldMap["sessid"]]),
+					ConnectionTime:       getFloat64(client[fieldMap["conntime"]]),
+					Position:             getFloat64(client[fieldMap["position"]]),
+					BandwidthIn:          getFloat64(client[fieldMap["upbps"]]),
+					BandwidthOut:         getFloat64(client[fieldMap["downbps"]]),
+					BytesDown:            getInt64(client[fieldMap["down"]]),
+					BytesUp:              getInt64(client[fieldMap["up"]]),
+					PacketsSent:          getInt64(client[fieldMap["pktcount"]]),
+					PacketsLost:          getInt64(client[fieldMap["pktlost"]]),
+					PacketsRetransmitted: getInt64(client[fieldMap["pktretransmit"]]),
 				}
 
-				if err := ForwardEventToDecklog(event); err != nil {
+				// Create typed BaseEvent for client lifecycle metrics
+				baseEvent := &validation.BaseEvent{
+					EventID:         uuid.New().String(),
+					EventType:       validation.EventClientLifecycle,
+					Timestamp:       time.Now().UTC(),
+					Source:          "mist_clients_api",
+					InternalName:    &internalName,
+					SchemaVersion:   "2.0",
+					ClientLifecycle: clientPayload,
+				}
+
+				// Forward typed event to Decklog
+				if err := ForwardTypedEventToDecklog(baseEvent); err != nil {
 					monitorLogger.WithFields(logging.Fields{
 						"error":  err,
 						"stream": streamName,
@@ -1241,13 +1547,13 @@ func (pm *PrometheusMonitor) emitClientLifecycle(nodeID, mistURL string) error {
 
 // Helper functions to get metrics from MistServer data
 func (pm *PrometheusMonitor) getCPUUsage() float64 {
-	// Get CPU usage from MistServer metrics (0-1000 scale)
+	// Get raw CPU usage from MistServer (tenths of percentage)
 	if jsonData := pm.getLastJSONData(); jsonData != nil {
 		if cpu, ok := jsonData["cpu"].(float64); ok {
-			return cpu * 10 // Convert to 0-1000 scale
+			return cpu // Return raw value from MistServer (tenths of percentage)
 		}
 	}
-	return 1000 // Default to max load like C++
+	return 1000.0 // Default to 100% (1000 tenths) if unavailable
 }
 
 func (pm *PrometheusMonitor) getRAMMax() uint64 {

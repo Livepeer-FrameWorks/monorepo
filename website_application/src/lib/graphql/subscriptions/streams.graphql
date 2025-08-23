@@ -35,31 +35,3 @@ subscription TrackListUpdates($stream: String!) {
   }
 }
 
-# Subscribe to all events for current tenant (tenant determined from auth context)
-subscription TenantEvents {
-  userEvents {
-    ... on StreamEvent {
-      type
-      stream
-      status
-      timestamp
-      details
-    }
-    ... on ViewerMetrics {
-      stream
-      currentViewers
-      viewerCount
-      peakViewers
-      bandwidth
-      connectionQuality
-      bufferHealth
-      timestamp
-    }
-    ... on TrackListEvent {
-      stream
-      trackList
-      trackCount
-      timestamp
-    }
-  }
-}

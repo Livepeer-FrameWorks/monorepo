@@ -21,54 +21,69 @@ func (f *DatabaseFixtures) StreamAnalyticsWithNulls() *models.StreamAnalytics {
 		ID:               "stream-null-test",
 		TenantID:         "tenant-123",
 		InternalName:     "test-stream",
-		SessionStartTime: time.Time{}, // Zero time represents NULL
-		SessionEndTime:   time.Time{}, // Zero time represents NULL
-		CurrentViewers:   0,           // 0 represents NULL
-		PeakViewers:      0,           // 0 represents NULL
-		TotalConnections: 0,           // 0 represents NULL
-		BandwidthIn:      0,           // 0 represents NULL
-		BandwidthOut:     0,           // 0 represents NULL
-		TotalBandwidthGB: 0.0,         // 0.0 represents NULL
-		BitrateKbps:      0,           // 0 represents NULL
-		Resolution:       "",          // Empty string represents NULL
-		PacketsSent:      0,           // 0 represents NULL
-		PacketsLost:      0,           // 0 represents NULL
-		PacketsRetrans:   0,           // 0 represents NULL
+		SessionStartTime: nil, // NULL pointer
+		SessionEndTime:   nil, // NULL pointer
+		CurrentViewers:   0,   // 0 represents NULL
+		PeakViewers:      0,   // 0 represents NULL
+		TotalConnections: 0,   // 0 represents NULL
+		BandwidthIn:      0,   // 0 represents NULL
+		BandwidthOut:     0,   // 0 represents NULL
+		TotalBandwidthGB: 0.0, // 0.0 represents NULL
+		BitrateKbps:      nil, // NULL pointer
+		Resolution:       nil, // NULL pointer
+		PacketsSent:      0,   // 0 represents NULL
+		PacketsLost:      0,   // 0 represents NULL
+		PacketsRetrans:   0,   // 0 represents NULL
+		FirstMs:          nil, // NULL pointer
+		LastMs:           nil, // NULL pointer
 	}
 }
 
 // StreamAnalyticsValid creates valid test data
 func (f *DatabaseFixtures) StreamAnalyticsValid() *models.StreamAnalytics {
+	startTime := time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC)
+	endTime := time.Date(2024, 1, 15, 11, 0, 0, 0, time.UTC)
+	bitrateKbps := 2000
+	resolution := "1920x1080"
+	firstMs := 100
+	lastMs := 200
+	nodeID := "node-123"
+	nodeName := "Test Node"
+	latitude := 40.7128
+	longitude := -74.0060
+	location := "New York"
+	status := "active"
+
 	return &models.StreamAnalytics{
 		ID:               "stream-valid-test",
 		TenantID:         "tenant-123",
 		InternalName:     "test-stream",
-		SessionStartTime: time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC),
-		SessionEndTime:   time.Date(2024, 1, 15, 11, 0, 0, 0, time.UTC),
+		SessionStartTime: &startTime,
+		SessionEndTime:   &endTime,
 		CurrentViewers:   150,
 		PeakViewers:      200,
 		TotalConnections: 300,
 		BandwidthIn:      1000,
 		BandwidthOut:     2000,
 		TotalBandwidthGB: 1.5,
-		BitrateKbps:      2000,
-		Resolution:       "1920x1080",
+		BitrateKbps:      &bitrateKbps,
+		Resolution:       &resolution,
 		PacketsSent:      10000,
 		PacketsLost:      50,
 		PacketsRetrans:   5,
 		Upbytes:          500000,
 		Downbytes:        400000,
-		FirstMs:          100,
-		LastMs:           200,
+		FirstMs:          &firstMs,
+		LastMs:           &lastMs,
 		TrackCount:       2,
-		Inputs:           "input1,input2",
-		Outputs:          "output1,output2",
-		NodeID:           "node-123",
-		NodeName:         "Test Node",
-		Latitude:         40.7128,
-		Longitude:        -74.0060,
-		Location:         "New York",
-		Status:           "active",
+		Inputs:           2,
+		Outputs:          2,
+		NodeID:           &nodeID,
+		NodeName:         &nodeName,
+		Latitude:         &latitude,
+		Longitude:        &longitude,
+		Location:         &location,
+		Status:           &status,
 		LastUpdated:      time.Now(),
 		CreatedAt:        time.Now().Add(-1 * time.Hour),
 	}
@@ -76,23 +91,28 @@ func (f *DatabaseFixtures) StreamAnalyticsValid() *models.StreamAnalytics {
 
 // StreamAnalyticsPartialNulls creates test data with some NULL fields
 func (f *DatabaseFixtures) StreamAnalyticsPartialNulls() *models.StreamAnalytics {
+	startTime := time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC)
+	bitrateKbps := 2000
+
 	return &models.StreamAnalytics{
 		ID:               "stream-partial-test",
 		TenantID:         "tenant-123",
 		InternalName:     "test-stream",
-		SessionStartTime: time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC), // Valid
-		SessionEndTime:   time.Time{},                                   // NULL
-		CurrentViewers:   150,                                           // Valid
-		PeakViewers:      0,                                             // NULL
-		TotalConnections: 200,                                           // Valid
-		BandwidthIn:      0,                                             // NULL
-		BandwidthOut:     1500,                                          // Valid
-		TotalBandwidthGB: 0.0,                                           // NULL
-		BitrateKbps:      2000,                                          // Valid
-		Resolution:       "",                                            // NULL
-		PacketsSent:      5000,                                          // Valid
-		PacketsLost:      0,                                             // NULL
-		PacketsRetrans:   2,                                             // Valid
+		SessionStartTime: &startTime,   // Valid
+		SessionEndTime:   nil,          // NULL
+		CurrentViewers:   150,          // Valid
+		PeakViewers:      0,            // NULL
+		TotalConnections: 200,          // Valid
+		BandwidthIn:      0,            // NULL
+		BandwidthOut:     1500,         // Valid
+		TotalBandwidthGB: 0.0,          // NULL
+		BitrateKbps:      &bitrateKbps, // Valid
+		Resolution:       nil,          // NULL
+		PacketsSent:      5000,         // Valid
+		PacketsLost:      0,            // NULL
+		PacketsRetrans:   2,            // Valid
+		FirstMs:          nil,          // NULL
+		LastMs:           nil,          // NULL
 	}
 }
 

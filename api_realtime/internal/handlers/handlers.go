@@ -11,6 +11,7 @@ import (
 	"frameworks/pkg/api/signalman"
 	"frameworks/pkg/kafka"
 	"frameworks/pkg/logging"
+	"frameworks/pkg/validation"
 
 	"github.com/gin-gonic/gin"
 )
@@ -97,10 +98,8 @@ func (h *SignalmanHandlers) HandleMetrics(c *gin.Context) {
 
 	// Add WebSocket hub metrics
 	hubStats := h.hub.GetStats()
-	if connections, ok := hubStats["connections"].(int); ok {
-		metricsOutput += "# HELP signalman_websocket_connections Current WebSocket connections\n# TYPE signalman_websocket_connections gauge\n"
-		metricsOutput += fmt.Sprintf("signalman_websocket_connections %d\n", connections)
-	}
+	metricsOutput += "# HELP signalman_websocket_connections Current WebSocket connections\n# TYPE signalman_websocket_connections gauge\n"
+	metricsOutput += fmt.Sprintf("signalman_websocket_connections %d\n", hubStats.Connections)
 
 	c.String(http.StatusOK, metricsOutput)
 }
@@ -128,60 +127,138 @@ func mapEventTypeToChannel(eventType string) string {
 	}
 }
 
+// convertAnalyticsEventToTyped converts a kafka.AnalyticsEvent to a validation.KafkaEvent with typed data
+func (h *SignalmanHandlers) convertAnalyticsEventToTyped(event kafka.AnalyticsEvent) (*validation.KafkaEvent, error) {
+	// Convert kafka.AnalyticsEvent to validation.KafkaEvent structure
+	typedEvent := validation.KafkaEvent{
+		EventID:       event.EventID,
+		EventType:     event.EventType,
+		Timestamp:     event.Timestamp,
+		Source:        event.Source,
+		SchemaVersion: event.SchemaVersion,
+		Data:          event.Data, // Already typed, no conversion needed
+	}
+
+	return &typedEvent, nil
+}
+
 // HandleEvent processes incoming events and broadcasts them via WebSocket
-func (h *SignalmanHandlers) HandleEvent(event kafka.Event) error {
+func (h *SignalmanHandlers) HandleEvent(event kafka.AnalyticsEvent) error {
 	start := time.Now()
 
 	// Track Kafka message processing
 	if h.metrics != nil {
-		h.metrics.KafkaMessages.WithLabelValues(event.Type, "consume", "received").Inc()
+		h.metrics.KafkaMessages.WithLabelValues(event.EventType, "consume", "received").Inc()
 	}
 
-	channel := mapEventTypeToChannel(event.Type)
+	// Convert to typed event with validation
+	typedEvent, err := h.convertAnalyticsEventToTyped(event)
+	if err != nil {
+		h.logger.WithError(err).WithFields(logging.Fields{
+			"event_type": event.EventType,
+			"source":     event.Source,
+		}).Error("Failed to convert event to typed structure")
 
-	// Prefer header-provided tenant, fallback to payload data
-	tenantID := event.TenantID
-	if tenantID == "" {
-		if v, ok := event.Data["tenant_id"].(string); ok && v != "" {
-			tenantID = v
+		// Track validation failures
+		if h.metrics != nil {
+			h.metrics.KafkaMessages.WithLabelValues(event.EventType, "consume", "validation_failed").Inc()
 		}
+		return err
 	}
 
+	channel := mapEventTypeToChannel(event.EventType)
+	tenantID := h.extractTenantID(typedEvent, event.TenantID)
+
+	// Broadcast typed event
 	if channel == "system" {
 		if tenantID != "" {
 			// Tenant-scoped system message (e.g., tenant's cluster/node events)
-			h.hub.BroadcastToTenant(tenantID, event.Type, channel, event.Data)
+			h.hub.BroadcastTypedToTenant(tenantID, event.EventType, channel, typedEvent.Data)
 		} else {
 			// Global infrastructure message (e.g., platform-wide events)
-			h.hub.BroadcastInfrastructure(event.Type, event.Data)
+			h.hub.BroadcastTypedInfrastructure(event.EventType, typedEvent.Data)
 		}
 	} else if tenantID != "" {
-		h.hub.BroadcastToTenant(tenantID, event.Type, channel, event.Data)
+		h.hub.BroadcastTypedToTenant(tenantID, event.EventType, channel, typedEvent.Data)
 	} else {
 		// No tenant context; drop to avoid cross-tenant leakage
 		h.logger.WithFields(logging.Fields{
-			"event_type": event.Type,
+			"event_type": event.EventType,
 			"channel":    channel,
 		}).Warn("Dropping event without tenant_id for non-system channel")
 
 		// Track dropped messages
 		if h.metrics != nil {
-			h.metrics.KafkaMessages.WithLabelValues(event.Type, "consume", "dropped").Inc()
+			h.metrics.KafkaMessages.WithLabelValues(event.EventType, "consume", "dropped").Inc()
 		}
 	}
 
 	// Track Kafka processing duration and success
 	if h.metrics != nil {
-		h.metrics.KafkaDuration.WithLabelValues(event.Type).Observe(time.Since(start).Seconds())
-		h.metrics.KafkaMessages.WithLabelValues(event.Type, "consume", "processed").Inc()
+		h.metrics.KafkaDuration.WithLabelValues(event.EventType).Observe(time.Since(start).Seconds())
+		h.metrics.KafkaMessages.WithLabelValues(event.EventType, "consume", "processed").Inc()
 	}
 
 	h.logger.WithFields(logging.Fields{
-		"event_type": event.Type,
+		"event_type": event.EventType,
 		"source":     event.Source,
 		"channel":    channel,
 		"tenant_id":  tenantID,
 	}).Debug("Processed Kafka event for WebSocket broadcast")
 
 	return nil
+}
+
+// extractTenantID extracts tenant ID from typed event data, with header fallback
+func (h *SignalmanHandlers) extractTenantID(typedEvent *validation.KafkaEvent, headerTenantID string) string {
+	// Prefer header-provided tenant ID
+	if headerTenantID != "" {
+		return headerTenantID
+	}
+
+	// Extract from typed event data based on event type
+	switch validation.EventType(typedEvent.EventType) {
+	case validation.EventStreamIngest:
+		if typedEvent.Data.StreamIngest != nil {
+			return typedEvent.Data.StreamIngest.TenantID
+		}
+	case validation.EventStreamView:
+		if typedEvent.Data.StreamView != nil {
+			return typedEvent.Data.StreamView.TenantID
+		}
+	case validation.EventStreamLifecycle:
+		if typedEvent.Data.StreamLifecycle != nil {
+			return typedEvent.Data.StreamLifecycle.TenantID
+		}
+	case validation.EventUserConnection:
+		if typedEvent.Data.UserConnection != nil {
+			return typedEvent.Data.UserConnection.TenantID
+		}
+	case validation.EventClientLifecycle:
+		if typedEvent.Data.ClientLifecycle != nil {
+			return typedEvent.Data.ClientLifecycle.TenantID
+		}
+	case validation.EventTrackList:
+		if typedEvent.Data.TrackList != nil {
+			return typedEvent.Data.TrackList.TenantID
+		}
+	case validation.EventRecordingLifecycle:
+		if typedEvent.Data.Recording != nil {
+			return typedEvent.Data.Recording.TenantID
+		}
+	case validation.EventPushLifecycle:
+		if typedEvent.Data.PushLifecycle != nil {
+			return typedEvent.Data.PushLifecycle.TenantID
+		}
+	case validation.EventBandwidthThreshold:
+		if typedEvent.Data.BandwidthThreshold != nil {
+			return typedEvent.Data.BandwidthThreshold.TenantID
+		}
+	case validation.EventLoadBalancing:
+		if typedEvent.Data.LoadBalancing != nil {
+			return typedEvent.Data.LoadBalancing.TenantID
+		}
+	}
+
+	return ""
 }

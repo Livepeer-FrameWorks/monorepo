@@ -29,20 +29,19 @@ type ErrorResponse = common.ErrorResponse
 
 // StreamEventRequest represents a request to forward stream events
 type StreamEventRequest struct {
-	NodeID       string      `json:"node_id"`
-	StreamKey    string      `json:"stream_key,omitempty"`
-	InternalName string      `json:"internal_name,omitempty"`
-	Hostname     string      `json:"hostname,omitempty"`
-	PushURL      string      `json:"push_url,omitempty"`
-	EventType    string      `json:"event_type"`
-	Timestamp    int64       `json:"timestamp"`
-	ClusterID    string      `json:"cluster_id,omitempty"`
-	FoghornURI   string      `json:"foghorn_uri,omitempty"`
-	NodeName     string      `json:"node_name,omitempty"`
-	Latitude     *float64    `json:"latitude,omitempty"`
-	Longitude    *float64    `json:"longitude,omitempty"`
-	Location     string      `json:"location,omitempty"`
-	ExtraData    interface{} `json:"-"` // For any additional fields
+	NodeID       string   `json:"node_id"`
+	StreamKey    string   `json:"stream_key,omitempty"`
+	InternalName string   `json:"internal_name,omitempty"`
+	Hostname     string   `json:"hostname,omitempty"`
+	PushURL      string   `json:"push_url,omitempty"`
+	EventType    string   `json:"event_type"`
+	Timestamp    int64    `json:"timestamp"`
+	ClusterID    string   `json:"cluster_id,omitempty"`
+	FoghornURI   string   `json:"foghorn_uri,omitempty"`
+	NodeName     string   `json:"node_name,omitempty"`
+	Latitude     *float64 `json:"latitude,omitempty"`
+	Longitude    *float64 `json:"longitude,omitempty"`
+	Location     string   `json:"location,omitempty"`
 }
 
 // Authentication requests and responses
@@ -251,4 +250,61 @@ type RevokeAPITokenResponse struct {
 	TokenID   string    `json:"token_id"`
 	TokenName string    `json:"token_name"`
 	RevokedAt time.Time `json:"revoked_at"`
+}
+
+// === STREAM KEYS MANAGEMENT ===
+
+// StreamKey represents a stream key
+type StreamKey struct {
+	ID         string     `json:"id"`
+	TenantID   string     `json:"tenant_id"`
+	UserID     string     `json:"user_id"`
+	StreamID   string     `json:"stream_id"`
+	KeyValue   string     `json:"key_value"`
+	KeyName    string     `json:"key_name"`
+	IsActive   bool       `json:"is_active"`
+	LastUsedAt *time.Time `json:"last_used_at"`
+	CreatedAt  time.Time  `json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
+}
+
+// CreateStreamKeyRequest represents a request to create a new stream key
+type CreateStreamKeyRequest struct {
+	KeyName string `json:"key_name" binding:"required"`
+}
+
+// StreamKeyResponse represents a single stream key response
+type StreamKeyResponse struct {
+	StreamKey StreamKey `json:"stream_key"`
+	Message   string    `json:"message"`
+}
+
+// StreamKeysResponse represents a list of stream keys
+type StreamKeysResponse struct {
+	StreamKeys []StreamKey `json:"stream_keys"`
+	Count      int         `json:"count"`
+}
+
+// === RECORDINGS MANAGEMENT ===
+
+// Recording represents a stream recording
+type Recording struct {
+	ID           string     `json:"id"`
+	StreamID     string     `json:"stream_id"`
+	Filename     string     `json:"filename"`
+	FileSize     *int64     `json:"file_size"`
+	Duration     *int       `json:"duration"`
+	Status       string     `json:"status"`
+	PlaybackID   *string    `json:"playback_id"`
+	StartTime    *time.Time `json:"start_time"`
+	EndTime      *time.Time `json:"end_time"`
+	ThumbnailURL *string    `json:"thumbnail_url"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
+}
+
+// RecordingsResponse represents a list of recordings
+type RecordingsResponse struct {
+	Recordings []Recording `json:"recordings"`
+	Count      int         `json:"count"`
 }

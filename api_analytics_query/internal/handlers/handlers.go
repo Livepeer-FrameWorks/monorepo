@@ -2,8 +2,11 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"math"
 	"net/http"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -30,6 +33,64 @@ func Init(ydb database.PostgresConn, ch database.ClickHouseConn, log logging.Log
 	serviceMetrics = m
 }
 
+// Validation helpers
+
+var streamNameRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+
+// validateStreamName validates stream internal name format
+func validateStreamName(name string) bool {
+	if name == "" || len(name) > 255 {
+		return false
+	}
+	return streamNameRegex.MatchString(name)
+}
+
+// validateTimeRange validates time range parameters and returns defaults if needed
+func validateTimeRange(startTimeStr, endTimeStr string) (time.Time, time.Time, error) {
+	var startTime, endTime time.Time
+	var err error
+
+	// Use defaults if not provided
+	if startTimeStr == "" {
+		startTime = time.Now().Add(-24 * time.Hour)
+	} else {
+		startTime, err = time.Parse(time.RFC3339, startTimeStr)
+		if err != nil {
+			return time.Time{}, time.Time{}, err
+		}
+	}
+
+	if endTimeStr == "" {
+		endTime = time.Now()
+	} else {
+		endTime, err = time.Parse(time.RFC3339, endTimeStr)
+		if err != nil {
+			return time.Time{}, time.Time{}, err
+		}
+	}
+
+	// Validate time range constraints
+	if endTime.Before(startTime) {
+		return time.Time{}, time.Time{}, fmt.Errorf("end time must be after start time")
+	}
+
+	// Limit to maximum 90 days
+	if endTime.Sub(startTime) > 90*24*time.Hour {
+		return time.Time{}, time.Time{}, fmt.Errorf("time range cannot exceed 90 days")
+	}
+
+	return startTime, endTime, nil
+}
+
+// sanitizeQueryParam sanitizes string parameters to prevent injection
+func sanitizeQueryParam(param string) string {
+	// Remove any null or undefined strings
+	if param == "null" || param == "undefined" || param == "" {
+		return ""
+	}
+	return strings.TrimSpace(param)
+}
+
 // GetStreamAnalytics returns analytics for all streams with recent activity (tenant-scoped)
 func GetStreamAnalytics(c *gin.Context) {
 	start := time.Now()
@@ -52,61 +113,60 @@ func GetStreamAnalytics(c *gin.Context) {
 		return
 	}
 
-	// Parse optional query parameters
-	streamInternalName := c.Query("stream_id") // Note: still using "stream_id" param for backward compatibility
-	startTime := c.DefaultQuery("start_time", time.Now().Add(-24*time.Hour).Format(time.RFC3339))
-	endTime := c.DefaultQuery("end_time", time.Now().Format(time.RFC3339))
-
-	// Parse time parameters
-	startParsed, err := time.Parse(time.RFC3339, startTime)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Invalid start_time format"})
-		return
-	}
-	endParsed, err := time.Parse(time.RFC3339, endTime)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Invalid end_time format"})
+	// Parse and validate query parameters
+	streamInternalName := sanitizeQueryParam(c.Query("stream_id")) // Note: still using "stream_id" param for backward compatibility
+	if streamInternalName != "" && !validateStreamName(streamInternalName) {
+		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Invalid stream name format"})
 		return
 	}
 
-	// Build query with COALESCE for NULL handling
+	// Validate time range parameters
+	startTimeStr := c.Query("start_time")
+	endTimeStr := c.Query("end_time")
+	startParsed, endParsed, err := validateTimeRange(startTimeStr, endTimeStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: fmt.Sprintf("Invalid time range: %v", err)})
+		return
+	}
+
+	// Query stream analytics without excessive COALESCE defaults
 	query := `
-		SELECT sa.id, sa.tenant_id, sa.internal_name, sa.internal_name, 
-		       COALESCE(sa.session_start_time, '1970-01-01 00:00:00'::timestamp) as session_start_time,
-		       COALESCE(sa.session_end_time, '1970-01-01 00:00:00'::timestamp) as session_end_time, 
-		       COALESCE(sa.total_session_duration, 0) as total_session_duration,
-		       COALESCE(sa.current_viewers, 0) as current_viewers, 
-		       COALESCE(sa.peak_viewers, 0) as peak_viewers, 
-		       COALESCE(sa.total_connections, 0) as total_connections, 
-		       COALESCE(sa.bandwidth_in, 0) as bandwidth_in, 
-		       COALESCE(sa.bandwidth_out, 0) as bandwidth_out, 
+		SELECT sa.id, sa.tenant_id, sa.internal_name, 
+		       sa.session_start_time,
+		       sa.session_end_time, 
+		       sa.total_session_duration,
+		       sa.current_viewers, 
+		       sa.peak_viewers, 
+		       sa.total_connections, 
+		       sa.bandwidth_in, 
+		       sa.bandwidth_out, 
 		       COALESCE(sa.total_bandwidth_gb, 0.0) as total_bandwidth_gb,
-		       COALESCE(sa.bitrate_kbps, 0) as bitrate_kbps, 
-		       COALESCE(sa.resolution, '') as resolution, 
-		       COALESCE(sa.packets_sent, 0) as packets_sent, 
-		       COALESCE(sa.packets_lost, 0) as packets_lost,
-		       COALESCE(sa.packets_retrans, 0) as packets_retrans, 
-		       COALESCE(sa.upbytes, 0) as upbytes, 
-		       COALESCE(sa.downbytes, 0) as downbytes, 
-		       COALESCE(sa.first_ms, 0) as first_ms, 
-		       COALESCE(sa.last_ms, 0) as last_ms,
-		       COALESCE(sa.track_count, 0) as track_count, 
-		       COALESCE(sa.inputs, '') as inputs, 
-		       COALESCE(sa.outputs, '') as outputs, 
-		       COALESCE(sa.node_id, '') as node_id, 
-		       COALESCE(sa.node_name, '') as node_name, 
-		       COALESCE(sa.latitude, 0.0) as latitude,
-		       COALESCE(sa.longitude, 0.0) as longitude, 
-		       COALESCE(sa.location, '') as location, 
-		       COALESCE(sa.status, '') as status, 
+		       sa.bitrate_kbps, 
+		       sa.resolution, 
+		       sa.packets_sent, 
+		       sa.packets_lost,
+		       sa.packets_retrans, 
+		       sa.upbytes, 
+		       sa.downbytes, 
+		       sa.first_ms, 
+		       sa.last_ms,
+		       sa.track_count, 
+		       sa.inputs, 
+		       sa.outputs, 
+		       sa.node_id, 
+		       sa.node_name, 
+		       sa.latitude,
+		       sa.longitude, 
+		       sa.location, 
+		       sa.status, 
 		       sa.last_updated, sa.created_at
 		FROM stream_analytics sa
 		WHERE sa.tenant_id = $1 AND sa.last_updated >= $2 AND sa.last_updated <= $3`
 
 	args := []interface{}{tenantID, startParsed, endParsed}
 
-	// Only filter by stream if streamInternalName is provided and not empty
-	if streamInternalName != "" && streamInternalName != "null" && streamInternalName != "undefined" {
+	// Only filter by stream if streamInternalName is provided and valid
+	if streamInternalName != "" {
 		query += " AND sa.internal_name = $4"
 		args = append(args, streamInternalName)
 	}
@@ -129,8 +189,7 @@ func GetStreamAnalytics(c *gin.Context) {
 	var analytics []models.StreamAnalytics
 	for rows.Next() {
 		var sa models.StreamAnalytics
-		var discard string
-		if err := rows.Scan(&sa.ID, &sa.TenantID, &discard, &sa.InternalName,
+		if err := rows.Scan(&sa.ID, &sa.TenantID, &sa.InternalName,
 			&sa.SessionStartTime, &sa.SessionEndTime, &sa.TotalSessionDuration,
 			&sa.CurrentViewers, &sa.PeakViewers, &sa.TotalConnections,
 			&sa.BandwidthIn, &sa.BandwidthOut, &sa.TotalBandwidthGB,
@@ -351,12 +410,11 @@ func GetRoutingEvents(c *gin.Context) {
 			score,
 			client_ip,
 			client_country,
-			client_region,
-			client_city,
 			client_latitude,
 			client_longitude,
-			node_scores,
-			routing_metadata
+			node_latitude,
+			node_longitude,
+			node_name
 		FROM routing_events
 		WHERE tenant_id = ?
 		AND timestamp BETWEEN ? AND ?
@@ -385,12 +443,11 @@ func GetRoutingEvents(c *gin.Context) {
 			&e.Score,
 			&e.ClientIP,
 			&e.ClientCountry,
-			&e.ClientRegion,
-			&e.ClientCity,
 			&e.ClientLatitude,
 			&e.ClientLongitude,
-			&e.NodeScores,
-			&e.RoutingMetadata,
+			&e.NodeLatitude,
+			&e.NodeLongitude,
+			&e.NodeName,
 		); err != nil {
 			logger.WithError(err).Error("Failed to scan routing event")
 			continue
@@ -491,41 +548,40 @@ func GetStreamDetails(c *gin.Context) {
 
 	// Get state data from YugaDB
 	var sa models.StreamAnalytics
-	var discard string
 	err := yugaDB.QueryRowContext(c.Request.Context(), `
-		SELECT sa.id, sa.tenant_id, sa.internal_name, sa.internal_name, 
-		       COALESCE(sa.session_start_time, '1970-01-01 00:00:00'::timestamp) as session_start_time,
-		       COALESCE(sa.session_end_time, '1970-01-01 00:00:00'::timestamp) as session_end_time, 
-		       COALESCE(sa.total_session_duration, 0) as total_session_duration,
-		       COALESCE(sa.current_viewers, 0) as current_viewers, 
-		       COALESCE(sa.peak_viewers, 0) as peak_viewers, 
-		       COALESCE(sa.total_connections, 0) as total_connections, 
-		       COALESCE(sa.bandwidth_in, 0) as bandwidth_in, 
-		       COALESCE(sa.bandwidth_out, 0) as bandwidth_out, 
+		SELECT sa.id, sa.tenant_id, sa.internal_name, 
+		       sa.session_start_time,
+		       sa.session_end_time, 
+		       sa.total_session_duration,
+		       sa.current_viewers, 
+		       sa.peak_viewers, 
+		       sa.total_connections, 
+		       sa.bandwidth_in, 
+		       sa.bandwidth_out, 
 		       COALESCE(sa.total_bandwidth_gb, 0.0) as total_bandwidth_gb,
-		       COALESCE(sa.bitrate_kbps, 0) as bitrate_kbps, 
-		       COALESCE(sa.resolution, '') as resolution, 
-		       COALESCE(sa.packets_sent, 0) as packets_sent, 
-		       COALESCE(sa.packets_lost, 0) as packets_lost,
-		       COALESCE(sa.packets_retrans, 0) as packets_retrans, 
-		       COALESCE(sa.upbytes, 0) as upbytes, 
-		       COALESCE(sa.downbytes, 0) as downbytes, 
-		       COALESCE(sa.first_ms, 0) as first_ms, 
-		       COALESCE(sa.last_ms, 0) as last_ms,
-		       COALESCE(sa.track_count, 0) as track_count, 
-		       COALESCE(sa.inputs, '') as inputs, 
-		       COALESCE(sa.outputs, '') as outputs, 
-		       COALESCE(sa.node_id, '') as node_id, 
-		       COALESCE(sa.node_name, '') as node_name, 
-		       COALESCE(sa.latitude, 0.0) as latitude,
-		       COALESCE(sa.longitude, 0.0) as longitude, 
-		       COALESCE(sa.location, '') as location, 
-		       COALESCE(sa.status, '') as status, 
+		       sa.bitrate_kbps, 
+		       sa.resolution, 
+		       sa.packets_sent, 
+		       sa.packets_lost,
+		       sa.packets_retrans, 
+		       sa.upbytes, 
+		       sa.downbytes, 
+		       sa.first_ms, 
+		       sa.last_ms,
+		       sa.track_count, 
+		       sa.inputs, 
+		       sa.outputs, 
+		       sa.node_id, 
+		       sa.node_name, 
+		       sa.latitude,
+		       sa.longitude, 
+		       sa.location, 
+		       sa.status, 
 		       sa.last_updated, sa.created_at
 		FROM stream_analytics sa
 		WHERE sa.tenant_id = $1 AND sa.internal_name = $2
 	`, tenantID, internalName).Scan(
-		&sa.ID, &sa.TenantID, &discard, &sa.InternalName,
+		&sa.ID, &sa.TenantID, &sa.InternalName,
 		&sa.SessionStartTime, &sa.SessionEndTime, &sa.TotalSessionDuration,
 		&sa.CurrentViewers, &sa.PeakViewers, &sa.TotalConnections,
 		&sa.BandwidthIn, &sa.BandwidthOut, &sa.TotalBandwidthGB,
@@ -606,7 +662,7 @@ func GetStreamEvents(c *gin.Context) {
 
 	// Get events from ClickHouse
 	rows, err := clickhouse.QueryContext(c.Request.Context(), `
-		SELECT timestamp, event_id, event_type, status, node_id, event_data
+		SELECT timestamp, event_id, event_type, status, node_id, event_data, internal_name
 		FROM stream_events 
 		WHERE tenant_id = ? AND internal_name = ?
 		ORDER BY timestamp DESC 
@@ -623,20 +679,21 @@ func GetStreamEvents(c *gin.Context) {
 	var events []periscope.StreamEvent
 	for rows.Next() {
 		var timestamp time.Time
-		var eventID, eventType, status, nodeID, eventData string
+		var eventID, eventType, status, nodeID, eventData, internalNameSel string
 
-		if err := rows.Scan(&timestamp, &eventID, &eventType, &status, &nodeID, &eventData); err != nil {
+		if err := rows.Scan(&timestamp, &eventID, &eventType, &status, &nodeID, &eventData, &internalNameSel); err != nil {
 			logger.WithError(err).Error("Failed to scan stream event")
 			continue
 		}
 
 		events = append(events, periscope.StreamEvent{
-			Timestamp: timestamp,
-			EventID:   eventID,
-			EventType: eventType,
-			Status:    status,
-			NodeID:    nodeID,
-			EventData: eventData,
+			Timestamp:    timestamp,
+			EventID:      eventID,
+			EventType:    eventType,
+			Status:       status,
+			NodeID:       nodeID,
+			EventData:    eventData,
+			InternalName: internalNameSel,
 		})
 	}
 
@@ -670,7 +727,7 @@ func GetTrackListEvents(c *gin.Context) {
 	}
 
 	rows, err := clickhouse.QueryContext(c.Request.Context(), `
-		SELECT timestamp, node_id, track_list, track_count
+		SELECT timestamp, node_id, track_list, track_count, internal_name
 		FROM track_list_events
 		WHERE tenant_id = ? AND internal_name = ?
 		AND timestamp BETWEEN ? AND ?
@@ -686,9 +743,9 @@ func GetTrackListEvents(c *gin.Context) {
 	var events []periscope.AnalyticsTrackListEvent
 	for rows.Next() {
 		var ts time.Time
-		var nodeID, trackList string
+		var nodeID, trackList, internalNameSel string
 		var trackCount int
-		if err := rows.Scan(&ts, &nodeID, &trackList, &trackCount); err != nil {
+		if err := rows.Scan(&ts, &nodeID, &trackList, &trackCount, &internalNameSel); err != nil {
 			logger.WithError(err).Error("Failed to scan track list event")
 			continue
 		}
@@ -697,6 +754,7 @@ func GetTrackListEvents(c *gin.Context) {
 			NodeID:     nodeID,
 			TrackList:  trackList,
 			TrackCount: trackCount,
+			Stream:     internalNameSel,
 		})
 	}
 
@@ -756,26 +814,15 @@ func GetViewerStats(c *gin.Context) {
 	}
 	defer rows.Close()
 
-	var viewerHistory []map[string]interface{}
+	var viewerHistory []periscope.ViewerHistoryEntry
 	for rows.Next() {
-		var timestamp time.Time
-		var viewerCount int
-		var connectionType, countryCode, city string
-		var bufferHealth, connQuality float32
+		var entry periscope.ViewerHistoryEntry
 
-		if err := rows.Scan(&timestamp, &viewerCount, &connectionType, &bufferHealth, &connQuality, &countryCode, &city); err != nil {
+		if err := rows.Scan(&entry.Timestamp, &entry.ViewerCount, &entry.ConnectionType, &entry.BufferHealth, &entry.ConnectionQuality, &entry.CountryCode, &entry.City); err != nil {
 			continue
 		}
 
-		viewerHistory = append(viewerHistory, map[string]interface{}{
-			"timestamp":          timestamp,
-			"viewer_count":       viewerCount,
-			"connection_type":    connectionType,
-			"buffer_health":      bufferHealth,
-			"connection_quality": connQuality,
-			"country_code":       countryCode,
-			"city":               city,
-		})
+		viewerHistory = append(viewerHistory, entry)
 	}
 
 	// Get geographic distribution from ClickHouse
@@ -807,20 +854,6 @@ func GetViewerStats(c *gin.Context) {
 		logger.WithError(err).Error("Failed to fetch geographic stats from ClickHouse")
 	}
 
-	// Convert viewer history to typed format
-	var typedViewerHistory []periscope.ViewerHistoryEntry
-	for _, entry := range viewerHistory {
-		typedViewerHistory = append(typedViewerHistory, periscope.ViewerHistoryEntry{
-			Timestamp:         entry["timestamp"].(time.Time),
-			ViewerCount:       entry["viewer_count"].(int),
-			ConnectionType:    entry["connection_type"].(string),
-			BufferHealth:      entry["buffer_health"].(float32),
-			ConnectionQuality: entry["connection_quality"].(float32),
-			CountryCode:       entry["country_code"].(string),
-			City:              entry["city"].(string),
-		})
-	}
-
 	// Create typed geo stats
 	typedGeoStats := periscope.ViewerGeographicStats{
 		UniqueCountries:  geoStats.UniqueCountries,
@@ -833,7 +866,7 @@ func GetViewerStats(c *gin.Context) {
 		CurrentViewers:   currentViewers,
 		PeakViewers:      peakViewers,
 		TotalConnections: totalConnections,
-		ViewerHistory:    typedViewerHistory,
+		ViewerHistory:    viewerHistory,
 		GeoStats:         typedGeoStats,
 	}
 	c.JSON(http.StatusOK, response)
@@ -876,8 +909,8 @@ func GetPlatformOverview(c *gin.Context) {
 	// Get user counts from ClickHouse analytics for the specified time range
 	err = clickhouse.QueryRowContext(c.Request.Context(), `
 		SELECT 
-			uniq(user_id) as total_users,
-			uniq(user_id) as active_users
+			uniq(session_id) as total_users,
+			uniq(session_id) as active_users
 		FROM connection_events 
 		WHERE tenant_id = ? 
 		AND timestamp BETWEEN ? AND ?
@@ -1138,7 +1171,7 @@ func GetRealtimeEvents(c *gin.Context) {
 		return
 	}
 
-	var events []interface{}
+	var events []periscope.RealtimeEvent
 
 	// Fetch recent stream_events from ClickHouse
 	rows, err := clickhouse.QueryContext(c.Request.Context(), `
@@ -1158,13 +1191,17 @@ func GetRealtimeEvents(c *gin.Context) {
 			if err := rows.Scan(&ts, &internalName, &eventType, &status, &nodeID, &eventData); err != nil {
 				continue
 			}
-			events = append(events, map[string]interface{}{
-				"timestamp":     ts,
-				"internal_name": internalName,
-				"event_type":    eventType,
-				"status":        status,
-				"node_id":       nodeID,
-				"event_data":    eventData,
+			events = append(events, periscope.RealtimeEvent{
+				Timestamp: ts,
+				EventType: eventType,
+				StreamEvent: &periscope.StreamEvent{
+					Timestamp: ts,
+					EventID:   "", // Not provided in this query
+					EventType: eventType,
+					Status:    status,
+					NodeID:    nodeID,
+					EventData: eventData,
+				},
 			})
 		}
 	}
@@ -1214,15 +1251,18 @@ func GetRealtimeEvents(c *gin.Context) {
 			); err != nil {
 				continue
 			}
-			events = append(events, map[string]interface{}{
-				"timestamp":          e.Timestamp,
-				"internal_name":      e.InternalName,
-				"viewer_count":       e.ViewerCount,
-				"connection_type":    e.ConnectionType,
-				"buffer_health":      e.BufferHealth,
-				"connection_quality": e.ConnQuality,
-				"country_code":       e.CountryCode,
-				"city":               e.City,
+			events = append(events, periscope.RealtimeEvent{
+				Timestamp: e.Timestamp,
+				EventType: "viewer_metrics",
+				ViewerMetrics: &periscope.ViewerHistoryEntry{
+					Timestamp:         e.Timestamp,
+					ViewerCount:       e.ViewerCount,
+					ConnectionType:    e.ConnectionType,
+					BufferHealth:      e.BufferHealth,
+					ConnectionQuality: e.ConnQuality,
+					CountryCode:       e.CountryCode,
+					City:              e.City,
+				},
 			})
 		}
 	}
@@ -1266,19 +1306,15 @@ func GetConnectionEvents(c *gin.Context) {
 			timestamp,
 			tenant_id,
 			internal_name,
-			user_id,
 			session_id,
 			connection_addr,
-			user_agent,
 			connector,
 			node_id,
 			country_code,
 			city,
 			latitude,
 			longitude,
-			event_type,
-			session_duration,
-			bytes_transferred
+			event_type
 		FROM connection_events
 		WHERE tenant_id = ?
 		AND timestamp BETWEEN ? AND ?
@@ -1298,23 +1334,19 @@ func GetConnectionEvents(c *gin.Context) {
 	var events []periscope.ConnectionEvent
 	for rows.Next() {
 		var e struct {
-			EventID          string    `json:"event_id"`
-			Timestamp        time.Time `json:"timestamp"`
-			TenantID         string    `json:"tenant_id"`
-			InternalName     string    `json:"internal_name"`
-			UserID           string    `json:"user_id"`
-			SessionID        string    `json:"session_id"`
-			ConnectionAddr   string    `json:"connection_addr"`
-			UserAgent        string    `json:"user_agent"`
-			Connector        string    `json:"connector"`
-			NodeID           string    `json:"node_id"`
-			CountryCode      string    `json:"country_code"`
-			City             string    `json:"city"`
-			Latitude         float64   `json:"latitude"`
-			Longitude        float64   `json:"longitude"`
-			EventType        string    `json:"event_type"`
-			SessionDuration  int       `json:"session_duration"`
-			BytesTransferred int64     `json:"bytes_transferred"`
+			EventID        string    `json:"event_id"`
+			Timestamp      time.Time `json:"timestamp"`
+			TenantID       string    `json:"tenant_id"`
+			InternalName   string    `json:"internal_name"`
+			SessionID      string    `json:"session_id"`
+			ConnectionAddr string    `json:"connection_addr"`
+			Connector      string    `json:"connector"`
+			NodeID         string    `json:"node_id"`
+			CountryCode    string    `json:"country_code"`
+			City           string    `json:"city"`
+			Latitude       float64   `json:"latitude"`
+			Longitude      float64   `json:"longitude"`
+			EventType      string    `json:"event_type"`
 		}
 
 		if err := rows.Scan(
@@ -1322,10 +1354,8 @@ func GetConnectionEvents(c *gin.Context) {
 			&e.Timestamp,
 			&e.TenantID,
 			&e.InternalName,
-			&e.UserID,
 			&e.SessionID,
 			&e.ConnectionAddr,
-			&e.UserAgent,
 			&e.Connector,
 			&e.NodeID,
 			&e.CountryCode,
@@ -1333,31 +1363,25 @@ func GetConnectionEvents(c *gin.Context) {
 			&e.Latitude,
 			&e.Longitude,
 			&e.EventType,
-			&e.SessionDuration,
-			&e.BytesTransferred,
 		); err != nil {
 			logger.WithError(err).Error("Failed to scan connection event")
 			continue
 		}
 
 		events = append(events, periscope.ConnectionEvent{
-			EventID:          e.EventID,
-			Timestamp:        e.Timestamp,
-			TenantID:         e.TenantID,
-			InternalName:     e.InternalName,
-			UserID:           e.UserID,
-			SessionID:        e.SessionID,
-			ConnectionAddr:   e.ConnectionAddr,
-			UserAgent:        e.UserAgent,
-			Connector:        e.Connector,
-			NodeID:           e.NodeID,
-			CountryCode:      e.CountryCode,
-			City:             e.City,
-			Latitude:         e.Latitude,
-			Longitude:        e.Longitude,
-			EventType:        e.EventType,
-			SessionDuration:  e.SessionDuration,
-			BytesTransferred: e.BytesTransferred,
+			EventID:        e.EventID,
+			Timestamp:      e.Timestamp,
+			TenantID:       e.TenantID,
+			InternalName:   e.InternalName,
+			SessionID:      e.SessionID,
+			ConnectionAddr: e.ConnectionAddr,
+			Connector:      e.Connector,
+			NodeID:         e.NodeID,
+			CountryCode:    e.CountryCode,
+			City:           e.City,
+			Latitude:       e.Latitude,
+			Longitude:      e.Longitude,
+			EventType:      e.EventType,
 		})
 	}
 
@@ -1429,29 +1453,9 @@ func GetNodeMetrics(c *gin.Context) {
 	}
 	defer rows.Close()
 
-	var metrics []map[string]interface{}
+	var metrics []periscope.NodeMetric
 	for rows.Next() {
-		var m struct {
-			Timestamp          time.Time `json:"timestamp"`
-			NodeID             string    `json:"node_id"`
-			CPUUsage           float32   `json:"cpu_usage"`
-			MemoryUsage        float32   `json:"memory_usage"`
-			DiskUsage          float32   `json:"disk_usage"`
-			RAMMax             uint64    `json:"ram_max"`
-			RAMCurrent         uint64    `json:"ram_current"`
-			BandwidthIn        int64     `json:"bandwidth_in"`
-			BandwidthOut       int64     `json:"bandwidth_out"`
-			UpSpeed            uint64    `json:"up_speed"`
-			DownSpeed          uint64    `json:"down_speed"`
-			ConnectionsCurrent int       `json:"connections_current"`
-			StreamCount        int       `json:"stream_count"`
-			HealthScore        float32   `json:"health_score"`
-			IsHealthy          bool      `json:"is_healthy"`
-			Latitude           float64   `json:"latitude"`
-			Longitude          float64   `json:"longitude"`
-			Tags               []string  `json:"tags"`
-			Metadata           string    `json:"metadata"`
-		}
+		var m periscope.NodeMetric
 
 		if err := rows.Scan(
 			&m.Timestamp,
@@ -1478,58 +1482,12 @@ func GetNodeMetrics(c *gin.Context) {
 			continue
 		}
 
-		metrics = append(metrics, map[string]interface{}{
-			"timestamp":           m.Timestamp,
-			"node_id":             m.NodeID,
-			"cpu_usage":           m.CPUUsage,
-			"memory_usage":        m.MemoryUsage,
-			"disk_usage":          m.DiskUsage,
-			"ram_max":             m.RAMMax,
-			"ram_current":         m.RAMCurrent,
-			"bandwidth_in":        m.BandwidthIn,
-			"bandwidth_out":       m.BandwidthOut,
-			"up_speed":            m.UpSpeed,
-			"down_speed":          m.DownSpeed,
-			"connections_current": m.ConnectionsCurrent,
-			"stream_count":        m.StreamCount,
-			"health_score":        m.HealthScore,
-			"is_healthy":          m.IsHealthy,
-			"latitude":            m.Latitude,
-			"longitude":           m.Longitude,
-			"tags":                m.Tags,
-			"metadata":            m.Metadata,
-		})
-	}
-
-	// Convert to typed response
-	var typedMetrics []periscope.NodeMetric
-	for _, m := range metrics {
-		typedMetrics = append(typedMetrics, periscope.NodeMetric{
-			Timestamp:          m["timestamp"].(time.Time),
-			NodeID:             m["node_id"].(string),
-			CPUUsage:           m["cpu_usage"].(float32),
-			MemoryUsage:        m["memory_usage"].(float32),
-			DiskUsage:          m["disk_usage"].(float32),
-			RAMMax:             m["ram_max"].(uint64),
-			RAMCurrent:         m["ram_current"].(uint64),
-			BandwidthIn:        m["bandwidth_in"].(int64),
-			BandwidthOut:       m["bandwidth_out"].(int64),
-			UpSpeed:            m["up_speed"].(uint64),
-			DownSpeed:          m["down_speed"].(uint64),
-			ConnectionsCurrent: m["connections_current"].(int),
-			StreamCount:        m["stream_count"].(int),
-			HealthScore:        m["health_score"].(float32),
-			IsHealthy:          m["is_healthy"].(bool),
-			Latitude:           m["latitude"].(float64),
-			Longitude:          m["longitude"].(float64),
-			Tags:               m["tags"].([]string),
-			Metadata:           m["metadata"].(string),
-		})
+		metrics = append(metrics, m)
 	}
 
 	response := periscope.NodeMetricsResponse{
-		Metrics:   typedMetrics,
-		Count:     len(typedMetrics),
+		Metrics:   metrics,
+		Count:     len(metrics),
 		StartTime: startTime.Format(time.RFC3339),
 		EndTime:   endTime.Format(time.RFC3339),
 	}
@@ -1766,6 +1724,63 @@ func GetStreamHealthMetrics(c *gin.Context) {
 			continue
 		}
 
+		// Compute derived fields
+		health := m.BufferHealth
+		if m.PacketsSent > 0 {
+			loss := float64(m.PacketsLost) / float64(m.PacketsSent)
+			health -= float32(loss)
+		}
+		if health < 0 {
+			health = 0
+		}
+		if health > 1 {
+			health = 1
+		}
+		var jitter *float64
+		if m.FPS > 0 {
+			v := (1000.0 / float64(m.FPS)) / 2
+			jitter = &v
+		}
+		var keyframeMs *float64
+		if m.GOPSize > 0 && m.FPS > 0 {
+			v := float64(m.GOPSize) * (1000.0 / float64(m.FPS))
+			keyframeMs = &v
+		}
+		var lossPerc *float64
+		if m.PacketsSent > 0 {
+			v := (float64(m.PacketsLost) / float64(m.PacketsSent)) * 100
+			lossPerc = &v
+		}
+		var issues *string
+		if m.BufferHealth < 0.5 || (lossPerc != nil && *lossPerc > 2.0) {
+			i := ""
+			if m.BufferHealth < 0.5 {
+				i = "low_buffer_health"
+			}
+			if lossPerc != nil && *lossPerc > 2.0 {
+				if i != "" {
+					i += ","
+				}
+				i += "packet_loss"
+			}
+			issues = &i
+		}
+		var quality *string
+		if m.Width > 0 && m.Height > 0 && m.FPS > 0 {
+			qs := fmt.Sprintf("%dp%v", m.Height, int(m.FPS))
+			quality = &qs
+		}
+		bufferState := "RECOVER"
+		if m.BufferHealth > 0.9 {
+			bufferState = "FULL"
+		} else if m.BufferHealth > 0.5 {
+			bufferState = "RECOVER"
+		} else if m.BufferHealth > 0.1 {
+			bufferState = "EMPTY"
+		} else {
+			bufferState = "DRY"
+		}
+
 		metrics = append(metrics, periscope.StreamHealthMetric{
 			Timestamp:            m.Timestamp,
 			TenantID:             m.TenantID,
@@ -1787,6 +1802,14 @@ func GetStreamHealthMetrics(c *gin.Context) {
 			Codec:                m.Codec,
 			Profile:              m.Profile,
 			TrackMetadata:        m.TrackMetadata,
+			HealthScore:          health,
+			FrameJitterMs:        jitter,
+			KeyframeStabilityMs:  keyframeMs,
+			IssuesDescription:    issues,
+			HasIssues:            m.BufferHealth < 0.5 || (lossPerc != nil && *lossPerc > 2.0),
+			PacketLossPercentage: lossPerc,
+			QualityTier:          quality,
+			BufferState:          bufferState,
 		})
 	}
 

@@ -260,3 +260,141 @@ type UsageReportRequest struct {
 	BillingMonth      string       `json:"billing_month" binding:"required"`
 	UsageDetails      models.JSONB `json:"usage_details,omitempty"`
 }
+
+// UsageRecord represents a single usage record for API responses
+type UsageRecord struct {
+	ID           string       `json:"id"`
+	TenantID     string       `json:"tenant_id"`
+	ClusterID    string       `json:"cluster_id"`
+	ClusterName  *string      `json:"cluster_name"`
+	UsageType    string       `json:"usage_type"`
+	UsageValue   float64      `json:"usage_value"`
+	UsageDetails models.JSONB `json:"usage_details"`
+	BillingMonth string       `json:"billing_month"`
+	CreatedAt    time.Time    `json:"created_at"`
+}
+
+// UsageRecordsResponse represents the response from GetUsageRecords
+type UsageRecordsResponse struct {
+	UsageRecords []UsageRecord `json:"usage_records"`
+	TenantID     string        `json:"tenant_id"`
+	Filters      UsageFilters  `json:"filters"`
+}
+
+// UsageFilters represents the filters applied to usage records
+type UsageFilters struct {
+	ClusterID    string `json:"cluster_id"`
+	UsageType    string `json:"usage_type"`
+	BillingMonth string `json:"billing_month"`
+}
+
+// UsageDetails represents structured usage details for JSONB storage
+type UsageDetails struct {
+	UsageData    map[string]float64 `json:"usage_data"`
+	BillingMonth string             `json:"billing_month"`
+	TierInfo     TierInfo           `json:"tier_info"`
+}
+
+// TierInfo represents tier information within usage details
+type TierInfo struct {
+	TierID          string  `json:"tier_id"`
+	TierName        string  `json:"tier_name"`
+	DisplayName     string  `json:"display_name"`
+	BasePrice       float64 `json:"base_price"`
+	MeteringEnabled bool    `json:"metering_enabled"`
+}
+
+// === MOLLIE PAYMENT INTEGRATION ===
+
+// MollieWebhookPayload represents a webhook payload from Mollie
+type MollieWebhookPayload struct {
+	ID       string `json:"id"`
+	Resource string `json:"resource"`
+	Status   string `json:"status"`
+}
+
+// MolliePaymentRequest represents a payment request to Mollie API
+type MolliePaymentRequest struct {
+	Amount      MollieAmount      `json:"amount"`
+	Description string            `json:"description"`
+	RedirectURL string            `json:"redirectUrl"`
+	WebhookURL  string            `json:"webhookUrl"`
+	Metadata    map[string]string `json:"metadata"`
+}
+
+// MollieAmount represents amount structure for Mollie API
+type MollieAmount struct {
+	Currency string `json:"currency"`
+	Value    string `json:"value"`
+}
+
+// MolliePaymentResponse represents a payment response from Mollie API
+type MolliePaymentResponse struct {
+	ID          string             `json:"id"`
+	Status      string             `json:"status"`
+	Amount      MollieAmount       `json:"amount"`
+	Description string             `json:"description"`
+	CreatedAt   time.Time          `json:"createdAt"`
+	Links       MolliePaymentLinks `json:"_links"`
+	Metadata    map[string]string  `json:"metadata"`
+}
+
+// MolliePaymentLinks represents the _links section of Mollie response
+type MolliePaymentLinks struct {
+	Self     MollieLink `json:"self"`
+	Checkout MollieLink `json:"checkout"`
+}
+
+// MollieLink represents a single link in Mollie response
+type MollieLink struct {
+	Href string `json:"href"`
+	Type string `json:"type"`
+}
+
+// === STRIPE PAYMENT INTEGRATION ===
+
+// StripePaymentIntentResponse represents the response from Stripe's payment intent API
+type StripePaymentIntentResponse struct {
+	ID           string `json:"id"`
+	ClientSecret string `json:"client_secret"`
+	Status       string `json:"status"`
+	Amount       int64  `json:"amount"`
+	Currency     string `json:"currency"`
+	Metadata     struct {
+		InvoiceID string `json:"invoice_id"`
+		TenantID  string `json:"tenant_id"`
+	} `json:"metadata"`
+}
+
+// === BLOCKCYPHER BITCOIN INTEGRATION ===
+
+// BlockCypherTransactionInput represents a transaction input for BlockCypher API
+type BlockCypherTransactionInput struct {
+	Addresses []string `json:"addresses"`
+}
+
+// BlockCypherTransactionOutput represents a transaction output for BlockCypher API
+type BlockCypherTransactionOutput struct {
+	Addresses []string `json:"addresses"`
+	Value     int64    `json:"value"`
+}
+
+// BlockCypherTransactionRequest represents a transaction request to BlockCypher API
+type BlockCypherTransactionRequest struct {
+	Inputs      []BlockCypherTransactionInput  `json:"inputs"`
+	Outputs     []BlockCypherTransactionOutput `json:"outputs"`
+	PrivateKeys []string                       `json:"private_keys"`
+}
+
+// BlockCypherTransactionResponse represents a transaction response from BlockCypher API
+type BlockCypherTransactionResponse struct {
+	Hash        string `json:"hash"`
+	Total       int64  `json:"total"`
+	Fees        int64  `json:"fees"`
+	Size        int    `json:"size"`
+	Preference  string `json:"preference"`
+	RelayedBy   string `json:"relayed_by"`
+	Received    string `json:"received"`
+	Confirmed   string `json:"confirmed"`
+	DoubleSpend bool   `json:"double_spend"`
+}

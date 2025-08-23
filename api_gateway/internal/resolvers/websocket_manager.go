@@ -7,9 +7,11 @@ import (
 	"time"
 
 	"frameworks/api_gateway/graph/model"
+	"frameworks/pkg/api/periscope"
 	signalmanapi "frameworks/pkg/api/signalman"
 	signalmanclient "frameworks/pkg/clients/signalman"
 	"frameworks/pkg/logging"
+	"frameworks/pkg/validation"
 )
 
 // WebSocketManager manages WebSocket connections to Signalman for GraphQL subscriptions
@@ -108,23 +110,18 @@ func (wm *WebSocketManager) GetOrCreateConnection(ctx context.Context, config Co
 }
 
 // SubscribeToStreams subscribes to stream events and returns a channel of updates
-func (wm *WebSocketManager) SubscribeToStreams(ctx context.Context, config ConnectionConfig, streamID *string) (<-chan *model.StreamEvent, error) {
+func (wm *WebSocketManager) SubscribeToStreams(ctx context.Context, config ConnectionConfig, streamID *string) (<-chan *periscope.StreamEvent, error) {
 	client, err := wm.GetOrCreateConnection(ctx, config)
 	if err != nil {
 		return nil, err
 	}
 
-	// Subscribe to streams channel
 	if err := client.SubscribeToStreams(); err != nil {
 		return nil, fmt.Errorf("failed to subscribe to streams: %w", err)
 	}
 
-	// Create output channel
-	updates := make(chan *model.StreamEvent, 10)
-
-	// Start message processing goroutine
+	updates := make(chan *periscope.StreamEvent, 10)
 	go wm.processStreamMessages(ctx, client, updates, streamID)
-
 	return updates, nil
 }
 
@@ -171,55 +168,23 @@ func (wm *WebSocketManager) SubscribeToSystem(ctx context.Context, config Connec
 }
 
 // SubscribeToTrackList subscribes to track list events and returns a channel of updates
-func (wm *WebSocketManager) SubscribeToTrackList(ctx context.Context, config ConnectionConfig, streamID string) (<-chan *model.TrackListEvent, error) {
+func (wm *WebSocketManager) SubscribeToTrackList(ctx context.Context, config ConnectionConfig, streamID string) (<-chan *periscope.AnalyticsTrackListEvent, error) {
 	client, err := wm.GetOrCreateConnection(ctx, config)
 	if err != nil {
 		return nil, err
 	}
 
-	// Subscribe to streams channel (track list events come through streams)
 	if err := client.SubscribeToStreams(); err != nil {
 		return nil, fmt.Errorf("failed to subscribe to track list updates: %w", err)
 	}
 
-	// Create output channel
-	updates := make(chan *model.TrackListEvent, 10)
-
-	// Start message processing goroutine
+	updates := make(chan *periscope.AnalyticsTrackListEvent, 10)
 	go wm.processTrackListMessages(ctx, client, updates, streamID)
-
 	return updates, nil
 }
 
-// SubscribeToTenantEvents subscribes to tenant events and returns a channel of updates
-func (wm *WebSocketManager) SubscribeToTenantEvents(ctx context.Context, config ConnectionConfig, tenantID string) (<-chan model.TenantEvent, error) {
-	client, err := wm.GetOrCreateConnection(ctx, config)
-	if err != nil {
-		return nil, err
-	}
-
-	// Subscribe to all channels to get various tenant events
-	if err := client.SubscribeToStreams(); err != nil {
-		return nil, fmt.Errorf("failed to subscribe to tenant events (streams): %w", err)
-	}
-	if err := client.SubscribeToAnalytics(); err != nil {
-		return nil, fmt.Errorf("failed to subscribe to tenant events (analytics): %w", err)
-	}
-	if err := client.SubscribeToSystem(); err != nil {
-		return nil, fmt.Errorf("failed to subscribe to tenant events (system): %w", err)
-	}
-
-	// Create output channel
-	updates := make(chan model.TenantEvent, 10)
-
-	// Start message processing goroutine
-	go wm.processTenantEventMessages(ctx, client, updates, tenantID)
-
-	return updates, nil
-}
-
-// processStreamMessages processes stream messages from Signalman and converts them to GraphQL types
-func (wm *WebSocketManager) processStreamMessages(ctx context.Context, client *signalmanclient.Client, output chan<- *model.StreamEvent, streamID *string) {
+// processStreamMessages processes stream messages from Signalman and converts them to periscope DTOs
+func (wm *WebSocketManager) processStreamMessages(ctx context.Context, client *signalmanclient.Client, output chan<- *periscope.StreamEvent, streamID *string) {
 	defer close(output)
 
 	messages := client.GetMessages()
@@ -232,15 +197,19 @@ func (wm *WebSocketManager) processStreamMessages(ctx context.Context, client *s
 				return
 			}
 
-			// Filter by stream ID if specified
+			// Filter out WebSocket protocol messages (not actual stream events)
+			if wm.isProtocolMessage(msg.Type) {
+				continue
+			}
+
 			if streamID != nil {
-				if msgStreamID, exists := msg.Data["stream_id"].(string); exists && msgStreamID != *streamID {
+				msgStreamID := getStreamIDFromEventData(msg.Data)
+				if msgStreamID != "" && msgStreamID != *streamID {
 					continue
 				}
 			}
 
-			// Convert to GraphQL model
-			if update := wm.convertToStreamEvent(msg); update != nil {
+			if update := wm.convertToPeriscopeStreamEvent(msg); update != nil {
 				select {
 				case output <- update:
 				case <-ctx.Done():
@@ -303,33 +272,37 @@ func (wm *WebSocketManager) processSystemMessages(ctx context.Context, client *s
 	}
 }
 
-// convertToStreamEvent converts a Signalman message to a GraphQL StreamEvent
-func (wm *WebSocketManager) convertToStreamEvent(msg signalmanapi.Message) *model.StreamEvent {
-	streamID, _ := msg.Data["stream_id"].(string)
-	var detailsPtr *string
+// processTrackListMessages processes track list messages to periscope DTOs
+func (wm *WebSocketManager) processTrackListMessages(ctx context.Context, client *signalmanclient.Client, output chan<- *periscope.AnalyticsTrackListEvent, streamID string) {
+	defer close(output)
 
-	// Ensure timestamp is not zero - GraphQL schema requires non-null timestamp
-	timestamp := msg.Timestamp
-	if timestamp.IsZero() {
-		timestamp = time.Now()
-		wm.logger.Warn("Received message with zero timestamp, using current time",
-			"message_type", msg.Type,
-			"stream_id", streamID)
-	}
+	messages := client.GetMessages()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case msg, ok := <-messages:
+			if !ok {
+				return
+			}
 
-	switch msg.Type {
-	case signalmanapi.TypeStreamStart:
-		return &model.StreamEvent{Type: model.StreamEventTypeStreamStart, Stream: streamID, Status: model.StreamStatusLive, Timestamp: timestamp, Details: detailsPtr}
-	case signalmanapi.TypeStreamEnd:
-		return &model.StreamEvent{Type: model.StreamEventTypeStreamEnd, Stream: streamID, Status: model.StreamStatusEnded, Timestamp: timestamp, Details: detailsPtr}
-	case signalmanapi.TypeStreamError:
-		return &model.StreamEvent{Type: model.StreamEventTypeStreamError, Stream: streamID, Status: model.StreamStatusOffline, Timestamp: timestamp, Details: detailsPtr}
-	case signalmanapi.TypeStreamBuffer:
-		return &model.StreamEvent{Type: model.StreamEventTypeBufferUpdate, Stream: streamID, Status: model.StreamStatusLive, Timestamp: timestamp, Details: detailsPtr}
-	case signalmanapi.TypeTrackList:
-		return &model.StreamEvent{Type: model.StreamEventTypeTrackListUpdate, Stream: streamID, Status: model.StreamStatusLive, Timestamp: timestamp, Details: detailsPtr}
-	default:
-		return &model.StreamEvent{Type: model.StreamEventTypeStreamStart, Stream: streamID, Status: model.StreamStatusLive, Timestamp: timestamp, Details: detailsPtr}
+			if msg.Type != signalmanapi.TypeTrackList {
+				continue
+			}
+
+			msgStreamID := getStreamIDFromEventData(msg.Data)
+			if msgStreamID != "" && msgStreamID != streamID {
+				continue
+			}
+
+			if update := wm.convertToPeriscopeTrackListEvent(msg); update != nil {
+				select {
+				case output <- update:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
 	}
 }
 
@@ -338,26 +311,22 @@ func (wm *WebSocketManager) convertToViewerMetrics(msg signalmanapi.Message) *mo
 	if msg.Type != signalmanapi.TypeViewerMetrics {
 		return nil
 	}
-	streamID, _ := msg.Data["stream_id"].(string)
+
+	streamID := getStreamIDFromEventData(msg.Data)
 	currentViewers := 0
-	if v, ok := msg.Data["viewer_count"].(float64); ok {
-		currentViewers = int(v)
-	}
-	peakViewers := 0
-	if pv, ok := msg.Data["peak_viewers"].(float64); ok {
-		peakViewers = int(pv)
-	}
 	bandwidth := 0.0
-	if b, ok := msg.Data["bandwidth"].(float64); ok {
-		bandwidth = b
-	}
-	var connectionQuality *float64
-	if cq, ok := msg.Data["connection_quality"].(float64); ok {
-		connectionQuality = &cq
-	}
-	var bufferHealth *float64
-	if bh, ok := msg.Data["buffer_health"].(float64); ok {
-		bufferHealth = &bh
+
+	// Extract viewer metrics from ClientLifecycle payload
+	if msg.Data.ClientLifecycle != nil {
+		// Use bandwidth_out as the main bandwidth metric
+		bandwidth = msg.Data.ClientLifecycle.BandwidthOut
+		// For viewer count, we assume 1 viewer per client lifecycle event
+		currentViewers = 1
+
+		// Update streamID if not found by helper (ClientLifecycle has InternalName)
+		if streamID == "" {
+			streamID = msg.Data.ClientLifecycle.InternalName
+		}
 	}
 
 	// Ensure timestamp is not zero - GraphQL schema requires non-null timestamp
@@ -369,45 +338,45 @@ func (wm *WebSocketManager) convertToViewerMetrics(msg signalmanapi.Message) *mo
 	}
 
 	return &model.ViewerMetrics{
-		Stream:            streamID,
-		CurrentViewers:    currentViewers,
-		ViewerCount:       currentViewers, // Add the viewerCount field that was added to schema
-		PeakViewers:       peakViewers,
-		Bandwidth:         bandwidth,
-		ConnectionQuality: connectionQuality,
-		BufferHealth:      bufferHealth,
-		Timestamp:         timestamp,
+		Stream:         streamID,
+		CurrentViewers: currentViewers,
+		ViewerCount:    currentViewers,
+		PeakViewers:    currentViewers, // For single client events, peak equals current
+		Bandwidth:      bandwidth,
+		Timestamp:      timestamp,
 	}
 }
 
 // convertToSystemHealthEvent converts a Signalman message to a GraphQL SystemHealthEvent
 func (wm *WebSocketManager) convertToSystemHealthEvent(msg signalmanapi.Message) *model.SystemHealthEvent {
-	nodeID, _ := msg.Data["node_id"].(string)
-	clusterID, _ := msg.Data["cluster_id"].(string)
+	nodeID := ""
+	clusterID := ""
 	cpu := 0.0
-	if v, ok := msg.Data["cpu_usage"].(float64); ok {
-		cpu = v
-	}
 	mem := 0.0
-	if v, ok := msg.Data["memory_usage"].(float64); ok {
-		mem = v
-	}
 	disk := 0.0
-	if v, ok := msg.Data["disk_usage"].(float64); ok {
-		disk = v
-	}
 	health := 0.0
-	if v, ok := msg.Data["health_score"].(float64); ok {
-		health = v
-	}
 	status := model.NodeStatusHealthy
-	if s, ok := msg.Data["status"].(string); ok {
-		switch s {
-		case "HEALTHY", "healthy":
+
+	// Extract from NodeLifecycle payload which HAS all the data
+	if msg.Data.NodeLifecycle != nil {
+		nodeID = msg.Data.NodeLifecycle.NodeID
+		clusterID = msg.Data.NodeLifecycle.NodeID    // Use NodeID as cluster for now
+		cpu = msg.Data.NodeLifecycle.CPUUsage / 10.0 // Convert from tenths to percentage
+
+		// Calculate memory usage percentage
+		if msg.Data.NodeLifecycle.RAMMax > 0 {
+			mem = float64(msg.Data.NodeLifecycle.RAMCurrent) / float64(msg.Data.NodeLifecycle.RAMMax) * 100
+		}
+
+		// NodeLifecycle doesn't include disk metrics
+		disk = 0.0
+
+		// Health score based on IsHealthy flag
+		if msg.Data.NodeLifecycle.IsHealthy {
+			health = 100.0
 			status = model.NodeStatusHealthy
-		case "DEGRADED", "degraded":
-			status = model.NodeStatusDegraded
-		case "UNHEALTHY", "unhealthy":
+		} else {
+			health = 0.0
 			status = model.NodeStatusUnhealthy
 		}
 	}
@@ -433,99 +402,20 @@ func (wm *WebSocketManager) convertToSystemHealthEvent(msg signalmanapi.Message)
 	}
 }
 
-// processTrackListMessages processes track list messages from Signalman
-func (wm *WebSocketManager) processTrackListMessages(ctx context.Context, client *signalmanclient.Client, output chan<- *model.TrackListEvent, streamID string) {
-	defer close(output)
-
-	messages := client.GetMessages()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case msg, ok := <-messages:
-			if !ok {
-				return
-			}
-
-			// Only process track list events
-			if msg.Type != signalmanapi.TypeTrackList {
-				continue
-			}
-
-			// Filter by stream ID
-			if msgStreamID, exists := msg.Data["stream_id"].(string); exists && msgStreamID != streamID {
-				continue
-			}
-
-			// Convert to GraphQL model
-			if update := wm.convertToTrackListEvent(msg); update != nil {
-				select {
-				case output <- update:
-				case <-ctx.Done():
-					return
-				}
-			}
-		}
-	}
-}
-
-// processTenantEventMessages processes tenant event messages from Signalman
-func (wm *WebSocketManager) processTenantEventMessages(ctx context.Context, client *signalmanclient.Client, output chan<- model.TenantEvent, tenantID string) {
-	defer close(output)
-
-	messages := client.GetMessages()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case msg, ok := <-messages:
-			if !ok {
-				return
-			}
-
-			// Only process messages for the requested tenant
-			if msg.TenantID == nil || *msg.TenantID != tenantID {
-				continue
-			}
-
-			// Convert to GraphQL model based on message type
-			var tenantEvent model.TenantEvent
-			switch msg.Type {
-			case signalmanapi.TypeStreamStart, signalmanapi.TypeStreamEnd, signalmanapi.TypeStreamError, signalmanapi.TypeStreamBuffer, signalmanapi.TypeTrackList:
-				tenantEvent = wm.convertToStreamEvent(msg)
-			case signalmanapi.TypeViewerMetrics:
-				tenantEvent = wm.convertToViewerMetrics(msg)
-				// Note: SystemHealthEvent doesn't implement TenantEvent interface,
-				// so we don't include it in tenant events for now
-			}
-
-			if tenantEvent != nil {
-				select {
-				case output <- tenantEvent:
-				case <-ctx.Done():
-					return
-				}
-			}
-		}
-	}
-}
-
 // convertToTrackListEvent converts a Signalman message to a GraphQL TrackListEvent
-func (wm *WebSocketManager) convertToTrackListEvent(msg signalmanapi.Message) *model.TrackListEvent {
+func (wm *WebSocketManager) convertToTrackListEvent(msg signalmanapi.Message) *periscope.AnalyticsTrackListEvent {
 	if msg.Type != signalmanapi.TypeTrackList {
 		return nil
 	}
 
-	streamID, _ := msg.Data["stream_id"].(string)
-
+	streamID := getStreamIDFromEventData(msg.Data)
 	trackList := ""
-	if tl, ok := msg.Data["track_list"].(string); ok {
-		trackList = tl
-	}
-
 	trackCount := 0
-	if tc, ok := msg.Data["track_count"].(float64); ok {
-		trackCount = int(tc)
+
+	// Extract track list data from TrackList payload
+	if msg.Data.TrackList != nil {
+		trackList = msg.Data.TrackList.TrackListJSON
+		trackCount = msg.Data.TrackList.TrackCount
 	}
 
 	// Ensure timestamp is not zero - GraphQL schema requires non-null timestamp
@@ -536,7 +426,7 @@ func (wm *WebSocketManager) convertToTrackListEvent(msg signalmanapi.Message) *m
 			"stream_id", streamID)
 	}
 
-	return &model.TrackListEvent{
+	return &periscope.AnalyticsTrackListEvent{
 		Stream:     streamID,
 		TrackList:  trackList,
 		TrackCount: trackCount,
@@ -628,4 +518,87 @@ func (wm *WebSocketManager) Shutdown() error {
 
 	wm.logger.Info("WebSocket manager shutdown completed")
 	return nil
+}
+
+// getStreamIDFromEventData extracts stream ID from typed EventData struct
+func getStreamIDFromEventData(data validation.EventData) string {
+	if data.StreamIngest != nil && data.StreamIngest.InternalName != "" {
+		return data.StreamIngest.InternalName
+	}
+	if data.StreamLifecycle != nil && data.StreamLifecycle.InternalName != "" {
+		return data.StreamLifecycle.InternalName
+	}
+	if data.LoadBalancing != nil && data.LoadBalancing.StreamID != "" {
+		return data.LoadBalancing.StreamID
+	}
+	if data.ClientLifecycle != nil && data.ClientLifecycle.InternalName != "" {
+		return data.ClientLifecycle.InternalName
+	}
+	if data.TrackList != nil && data.TrackList.InternalName != "" {
+		return data.TrackList.InternalName
+	}
+	return ""
+}
+
+// isProtocolMessage checks if the message type is a WebSocket protocol message
+func (wm *WebSocketManager) isProtocolMessage(msgType string) bool {
+	switch msgType {
+	case signalmanapi.TypeSubscriptionConfirmed, signalmanapi.TypeUnsubscriptionConfirmed:
+		return true
+	default:
+		return false
+	}
+}
+
+func (wm *WebSocketManager) convertToPeriscopeStreamEvent(msg signalmanapi.Message) *periscope.StreamEvent {
+	if msg.Timestamp.IsZero() {
+		msg.Timestamp = time.Now()
+	}
+	streamID := getStreamIDFromEventData(msg.Data)
+	status := ""
+	switch msg.Type {
+	case signalmanapi.TypeStreamStart:
+		status = "LIVE"
+	case signalmanapi.TypeStreamEnd:
+		status = "ENDED"
+	case signalmanapi.TypeStreamError:
+		status = "OFFLINE"
+	case signalmanapi.TypeStreamBuffer, signalmanapi.TypeTrackList:
+		status = "LIVE"
+	default:
+		// Unknown message type - return nil to filter out
+		return nil
+	}
+	return &periscope.StreamEvent{
+		Timestamp:    msg.Timestamp,
+		EventID:      "",
+		EventType:    string(msg.Type),
+		Status:       status,
+		NodeID:       "",
+		EventData:    "",
+		InternalName: streamID,
+	}
+}
+
+func (wm *WebSocketManager) convertToPeriscopeTrackListEvent(msg signalmanapi.Message) *periscope.AnalyticsTrackListEvent {
+	if msg.Type != signalmanapi.TypeTrackList {
+		return nil
+	}
+	if msg.Timestamp.IsZero() {
+		msg.Timestamp = time.Now()
+	}
+	count := 0
+	tracks := ""
+	if msg.Data.TrackList != nil {
+		count = msg.Data.TrackList.TrackCount
+		tracks = msg.Data.TrackList.TrackListJSON
+	}
+	streamID := getStreamIDFromEventData(msg.Data)
+	return &periscope.AnalyticsTrackListEvent{
+		Timestamp:  msg.Timestamp,
+		NodeID:     "",
+		TrackList:  tracks,
+		TrackCount: count,
+		Stream:     streamID,
+	}
 }

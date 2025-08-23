@@ -162,6 +162,7 @@ func main() {
 	graphqlGroup.Use(middleware.DemoMode(logger))                  // Demo mode detection (must be before auth)
 	graphqlGroup.Use(pkgauth.JWTAuthMiddleware([]byte(jwtSecret))) // Standard auth with WebSocket support
 	graphqlGroup.Use(middleware.GraphQLContextMiddleware())        // Bridge user context to GraphQL
+	graphqlGroup.Use(middleware.GraphQLAttachLoaders(serviceClients))
 	{
 		// GraphQL endpoint
 		graphqlGroup.POST("/", gin.WrapH(gqlHandler))

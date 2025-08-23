@@ -2,6 +2,7 @@
   import { onMount, onDestroy } from "svelte";
   import { auth } from "$lib/stores/auth";
   import { infrastructureService } from "$lib/graphql/services/infrastructure.js";
+  import { performanceService } from "$lib/graphql/services/performance.js";
   import { toast } from "$lib/stores/toast.js";
   import LoadingCard from "$lib/components/LoadingCard.svelte";
   import SkeletonLoader from "$lib/components/SkeletonLoader.svelte";
@@ -20,6 +21,16 @@
   
   // Real-time system health data
   let systemHealth = {};
+  
+  // Performance analytics
+  let nodePerformanceMetrics = [];
+  let platformSummary = { totalActiveNodes: 0, avgCpuUsage: 0, avgMemoryUsage: 0, avgHealthScore: 0 };
+  
+  // Time range for performance metrics (last 24 hours)
+  const timeRange = {
+    start: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+    end: new Date().toISOString()
+  };
 
   // Subscribe to auth store
   auth.subscribe((authState) => {
@@ -32,6 +43,7 @@
       await auth.checkAuth();
     }
     await loadInfrastructureData();
+    await loadPerformanceData();
     startSystemHealthSubscription();
   });
 
@@ -62,6 +74,20 @@
       toast.error("Failed to load infrastructure data. Please refresh the page.");
     } finally {
       loading = false;
+    }
+  }
+
+  async function loadPerformanceData() {
+    try {
+      const [metrics, summary] = await Promise.all([
+        performanceService.getNodePerformanceMetrics(null, timeRange),
+        performanceService.getPlatformSummary(timeRange)
+      ]);
+      
+      nodePerformanceMetrics = metrics || [];
+      platformSummary = summary || platformSummary;
+    } catch (error) {
+      console.error("Failed to load performance data:", error);
     }
   }
 
@@ -187,6 +213,85 @@
           </div>
         </div>
       {/if}
+
+      <!-- Platform Performance Overview -->
+      <div class="bg-tokyo-night-surface rounded-lg p-6 mb-8">
+        <h2 class="text-xl font-semibold mb-6 text-tokyo-night-cyan">Platform Performance (Last 24 Hours)</h2>
+        
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+          <div class="bg-tokyo-night-bg rounded-lg p-4 border border-tokyo-night-selection">
+            <div class="text-2xl font-bold text-tokyo-night-green mb-2">
+              {platformSummary.totalActiveNodes || 0}
+            </div>
+            <div class="text-sm text-tokyo-night-comment">Active Nodes</div>
+          </div>
+          <div class="bg-tokyo-night-bg rounded-lg p-4 border border-tokyo-night-selection">
+            <div class="text-2xl font-bold text-tokyo-night-blue mb-2">
+              {platformSummary.avgCpuUsage?.toFixed(1) || 0}%
+            </div>
+            <div class="text-sm text-tokyo-night-comment">Avg CPU Usage</div>
+          </div>
+          <div class="bg-tokyo-night-bg rounded-lg p-4 border border-tokyo-night-selection">
+            <div class="text-2xl font-bold text-tokyo-night-purple mb-2">
+              {platformSummary.avgMemoryUsage?.toFixed(1) || 0}%
+            </div>
+            <div class="text-sm text-tokyo-night-comment">Avg Memory Usage</div>
+          </div>
+          <div class="bg-tokyo-night-bg rounded-lg p-4 border border-tokyo-night-selection">
+            <div class="text-2xl font-bold text-tokyo-night-orange mb-2">
+              {Math.round(platformSummary.avgHealthScore * 100) || 0}%
+            </div>
+            <div class="text-sm text-tokyo-night-comment">Avg Health Score</div>
+          </div>
+        </div>
+
+        {#if nodePerformanceMetrics.length > 0}
+          <div class="overflow-x-auto">
+            <h3 class="text-lg font-medium mb-4 text-tokyo-night-fg">Node Performance Details</h3>
+            <table class="w-full text-sm">
+              <thead>
+                <tr class="border-b border-tokyo-night-selection">
+                  <th class="text-left py-2 text-tokyo-night-comment">Node</th>
+                  <th class="text-left py-2 text-tokyo-night-comment">CPU</th>
+                  <th class="text-left py-2 text-tokyo-night-comment">Memory</th>
+                  <th class="text-left py-2 text-tokyo-night-comment">Health Score</th>
+                  <th class="text-left py-2 text-tokyo-night-comment">Peak Streams</th>
+                  <th class="text-left py-2 text-tokyo-night-comment">Avg Load</th>
+                </tr>
+              </thead>
+              <tbody>
+                {#each nodePerformanceMetrics.slice(0, 10) as metric}
+                  <tr class="border-b border-tokyo-night-selection/30">
+                    <td class="py-2 font-mono text-xs">{metric.nodeId}</td>
+                    <td class="py-2">
+                      <span class="{metric.avgCpuUsage > 80 ? 'text-red-400' : metric.avgCpuUsage > 60 ? 'text-yellow-400' : 'text-green-400'}">
+                        {metric.avgCpuUsage?.toFixed(1) || 0}%
+                      </span>
+                    </td>
+                    <td class="py-2">
+                      <span class="{metric.avgMemoryUsage > 80 ? 'text-red-400' : metric.avgMemoryUsage > 60 ? 'text-yellow-400' : 'text-green-400'}">
+                        {metric.avgMemoryUsage?.toFixed(1) || 0}%
+                      </span>
+                    </td>
+                    <td class="py-2">
+                      <span class="{metric.avgHealthScore > 0.8 ? 'text-green-400' : metric.avgHealthScore > 0.6 ? 'text-yellow-400' : 'text-red-400'}">
+                        {Math.round(metric.avgHealthScore * 100) || 0}%
+                      </span>
+                    </td>
+                    <td class="py-2 font-semibold">{metric.peakActiveStreams || 0}</td>
+                    <td class="py-2 text-tokyo-night-comment">{metric.avgStreamLoad?.toFixed(2) || '0.00'}</td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+        {:else}
+          <div class="text-center py-8">
+            <svelte:component this={getIconComponent('BarChart')} class="w-12 h-12 text-tokyo-night-comment mx-auto mb-4" />
+            <p class="text-tokyo-night-comment">No performance data available</p>
+          </div>
+        {/if}
+      </div>
 
       <!-- Clusters Overview -->
       <div class="bg-tokyo-night-surface rounded-lg p-6 mb-8">

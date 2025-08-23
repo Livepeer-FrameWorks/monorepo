@@ -5,6 +5,8 @@
   import { streamsService } from "$lib/graphql/services/streams.js";
   import { analyticsService } from "$lib/graphql/services/analytics.js";
   import { infrastructureService } from "$lib/graphql/services/infrastructure.js";
+  import { routingService } from "$lib/graphql/services/routing.js";
+  import { performanceService } from "$lib/graphql/services/performance.js";
   import { subscribeToSystemHealth } from "$lib/stores/realtime.js";
   import { toast } from "$lib/stores/toast.js";
   import { getIconComponent } from "$lib/iconUtils.js";
@@ -39,6 +41,13 @@
   /** @type {Array<any>} */
   let nodeData = [];
 
+  // Routing and performance data
+  /** @type {Array<any>} */
+  let routingEvents = [];
+  let routingEfficiency = { efficiency: 0, avgScore: 0, totalDecisions: 0 };
+  let nodeHealth = { healthy: 0, degraded: 0, unhealthy: 0, total: 0 };
+  let platformPerformance = { totalViewers: 0, avgViewers: 0, avgConnectionQuality: 0 };
+
   // Subscribe to auth store
   auth.subscribe((/** @type {any} */ authState) => {
     isAuthenticated = authState.isAuthenticated;
@@ -52,6 +61,8 @@
     }
     await loadRealStreams();
     await loadNodeData();
+    await loadRoutingData();
+    await loadPerformanceData();
     await updateRealTimeMetrics();
     startRealTimeUpdates();
     // Subscribe to system health for self-hosted infrastructure monitoring
@@ -116,6 +127,43 @@
       console.error("Error loading node data:", error);
       toast.warning("Failed to load infrastructure data. Node information may be unavailable.");
       nodeData = [];
+    }
+  }
+
+  async function loadRoutingData() {
+    try {
+      const timeRange = {
+        start: new Date(Date.now() - 60 * 60 * 1000).toISOString(), // Last hour
+        end: new Date().toISOString()
+      };
+      
+      // Load recent routing events and efficiency data
+      const [events, efficiency, health] = await Promise.all([
+        routingService.getPlatformRoutingEvents(timeRange),
+        routingService.getRoutingEfficiency(null, timeRange), // All streams
+        routingService.getNodeHealthSummary(timeRange)
+      ]);
+      
+      routingEvents = events;
+      routingEfficiency = efficiency;
+      nodeHealth = health;
+    } catch (error) {
+      console.error("Failed to load routing data:", error);
+      toast.warning("Failed to load routing data. Load balancing information may be unavailable.");
+    }
+  }
+
+  async function loadPerformanceData() {
+    try {
+      const timeRange = {
+        start: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+        end: new Date().toISOString()
+      };
+      
+      platformPerformance = await performanceService.getPlatformSummary(timeRange);
+    } catch (error) {
+      console.error("Failed to load performance data:", error);
+      toast.warning("Failed to load performance data. Platform metrics may be incomplete.");
     }
   }
 

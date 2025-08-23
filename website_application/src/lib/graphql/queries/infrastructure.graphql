@@ -89,3 +89,50 @@ query GetNode($id: ID!) {
     location
   }
 }
+
+# Service Instances queries
+fragment ServiceInstanceInfo on ServiceInstance {
+  id
+  instanceId
+  clusterId
+  nodeId
+  serviceId
+  version
+  port
+  processId
+  containerId
+  status
+  healthStatus
+  startedAt
+  stoppedAt
+  lastHealthCheck
+}
+
+query GetServiceInstances($clusterId: String) {
+  serviceInstances(clusterId: $clusterId) {
+    ...ServiceInstanceInfo
+  }
+}
+
+# Tenant Cluster Assignments queries
+fragment TenantClusterAssignmentInfo on TenantClusterAssignment {
+  id
+  tenantId
+  clusterId
+  deploymentTier
+  priority
+  isPrimary
+  isActive
+  maxStreamsOnCluster
+  maxViewersOnCluster
+  maxBandwidthMbpsOnCluster
+  fallbackWhenFull
+  createdAt
+  updatedAt
+}
+
+query GetTenantClusterAssignments {
+  tenantClusterAssignments {
+    ...TenantClusterAssignmentInfo
+  }
+}

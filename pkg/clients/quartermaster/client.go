@@ -269,3 +269,251 @@ func (c *Client) CreateTenant(ctx context.Context, req *quartermaster.CreateTena
 
 	return &createResp, nil
 }
+
+// === INFRASTRUCTURE METHODS ===
+
+// GetClusters retrieves all infrastructure clusters
+func (c *Client) GetClusters(ctx context.Context) (*quartermaster.ClustersResponse, error) {
+	url := c.baseURL + "/clusters"
+
+	httpReq, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	if c.serviceToken != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.serviceToken)
+	}
+
+	resp, err := clients.DoWithRetry(ctx, c.httpClient, httpReq, c.retryConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call Quartermaster: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("get clusters failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var response quartermaster.ClustersResponse
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return &response, nil
+}
+
+// GetCluster retrieves a specific infrastructure cluster
+func (c *Client) GetCluster(ctx context.Context, clusterID string) (*quartermaster.ClusterResponse, error) {
+	url := fmt.Sprintf("%s/clusters/%s", c.baseURL, url.PathEscape(clusterID))
+
+	httpReq, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	if c.serviceToken != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.serviceToken)
+	}
+
+	resp, err := clients.DoWithRetry(ctx, c.httpClient, httpReq, c.retryConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call Quartermaster: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("get cluster failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var response quartermaster.ClusterResponse
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return &response, nil
+}
+
+// GetNodes retrieves all infrastructure nodes with optional filtering
+func (c *Client) GetNodes(ctx context.Context, filters map[string]string) (*quartermaster.NodesResponse, error) {
+	urlBuilder := c.baseURL + "/nodes"
+
+	// Add query parameters for filtering
+	params := url.Values{}
+	for key, value := range filters {
+		if value != "" {
+			params.Add(key, value)
+		}
+	}
+	if len(params) > 0 {
+		urlBuilder += "?" + params.Encode()
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, "GET", urlBuilder, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	if c.serviceToken != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.serviceToken)
+	}
+
+	resp, err := clients.DoWithRetry(ctx, c.httpClient, httpReq, c.retryConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call Quartermaster: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("get nodes failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var response quartermaster.NodesResponse
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return &response, nil
+}
+
+// GetNode retrieves a specific infrastructure node
+func (c *Client) GetNode(ctx context.Context, nodeID string) (*quartermaster.NodeResponse, error) {
+	url := fmt.Sprintf("%s/nodes/%s", c.baseURL, url.PathEscape(nodeID))
+
+	httpReq, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	if c.serviceToken != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.serviceToken)
+	}
+
+	resp, err := clients.DoWithRetry(ctx, c.httpClient, httpReq, c.retryConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call Quartermaster: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("get node failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var response quartermaster.NodeResponse
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return &response, nil
+}
+
+// GetServices retrieves all services from the service catalog
+func (c *Client) GetServices(ctx context.Context) (*quartermaster.ServicesResponse, error) {
+	url := c.baseURL + "/services"
+
+	httpReq, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	if c.serviceToken != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.serviceToken)
+	}
+
+	resp, err := clients.DoWithRetry(ctx, c.httpClient, httpReq, c.retryConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call Quartermaster: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("get services failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var response quartermaster.ServicesResponse
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return &response, nil
+}
+
+// GetClusterServices retrieves services assigned to a specific cluster
+func (c *Client) GetClusterServices(ctx context.Context, clusterID string) (*quartermaster.ClusterServicesResponse, error) {
+	url := fmt.Sprintf("%s/clusters/%s/services", c.baseURL, url.PathEscape(clusterID))
+
+	httpReq, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	if c.serviceToken != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.serviceToken)
+	}
+
+	resp, err := clients.DoWithRetry(ctx, c.httpClient, httpReq, c.retryConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call Quartermaster: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("get cluster services failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var response quartermaster.ClusterServicesResponse
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return &response, nil
+}
+
+// GetServiceInstances retrieves running service instances with optional filtering
+func (c *Client) GetServiceInstances(ctx context.Context, filters map[string]string) (*quartermaster.ServiceInstancesResponse, error) {
+	urlBuilder := c.baseURL + "/service-instances"
+
+	// Add query parameters for filtering
+	params := url.Values{}
+	for key, value := range filters {
+		if value != "" {
+			params.Add(key, value)
+		}
+	}
+	if len(params) > 0 {
+		urlBuilder += "?" + params.Encode()
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, "GET", urlBuilder, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	if c.serviceToken != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.serviceToken)
+	}
+
+	resp, err := clients.DoWithRetry(ctx, c.httpClient, httpReq, c.retryConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call Quartermaster: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("get service instances failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var response quartermaster.ServiceInstancesResponse
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return &response, nil
+}

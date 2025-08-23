@@ -88,30 +88,3 @@ func (f *FoghornClient) MakeNodeRequest(nodeURL, path string) (*http.Response, e
 
 	return resp, nil
 }
-
-// GetStreamInfo gets stream information from the appropriate MistServer node
-func (f *FoghornClient) GetStreamInfo(streamName string) (map[string]interface{}, error) {
-	nodeURL, err := f.DiscoverStreamNode(streamName)
-	if err != nil {
-		return nil, fmt.Errorf("failed to discover stream node: %w", err)
-	}
-
-	// Make request to the node's API
-	path := fmt.Sprintf("/api/streams/%s", url.QueryEscape(streamName))
-	resp, err := f.MakeNodeRequest(nodeURL, path)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get stream info: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("node returned status %d", resp.StatusCode)
-	}
-
-	// For now, return basic info - would parse JSON in real implementation
-	return map[string]interface{}{
-		"node_url":    nodeURL,
-		"stream_name": streamName,
-		"status":      "discovered",
-	}, nil
-}

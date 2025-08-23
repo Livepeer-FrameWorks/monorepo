@@ -7,6 +7,7 @@ import (
 	"os"
 	"time"
 
+	"frameworks/pkg/api/periscope"
 	"frameworks/pkg/api/purser"
 	pclient "frameworks/pkg/clients/purser"
 	qmclient "frameworks/pkg/clients/quartermaster"
@@ -409,19 +410,9 @@ func GetPlatformEvents(c *gin.Context) {
 	}
 	defer rows.Close()
 
-	var events []map[string]interface{}
+	var events []periscope.PlatformEvent
 	for rows.Next() {
-		var e struct {
-			Timestamp      time.Time `json:"timestamp"`
-			InternalName   string    `json:"internal_name"`
-			NodeID         string    `json:"node_id"`
-			ViewerCount    int       `json:"viewer_count"`
-			ConnectionType string    `json:"connection_type"`
-			BufferHealth   float32   `json:"buffer_health"`
-			ConnQuality    float32   `json:"connection_quality"`
-			CountryCode    string    `json:"country_code"`
-			City           string    `json:"city"`
-		}
+		var e periscope.PlatformEvent
 
 		if err := rows.Scan(
 			&e.Timestamp,
@@ -430,7 +421,7 @@ func GetPlatformEvents(c *gin.Context) {
 			&e.ViewerCount,
 			&e.ConnectionType,
 			&e.BufferHealth,
-			&e.ConnQuality,
+			&e.ConnectionQuality,
 			&e.CountryCode,
 			&e.City,
 		); err != nil {
@@ -438,23 +429,14 @@ func GetPlatformEvents(c *gin.Context) {
 			continue
 		}
 
-		events = append(events, map[string]interface{}{
-			"timestamp":          e.Timestamp,
-			"internal_name":      e.InternalName,
-			"node_id":            e.NodeID,
-			"viewer_count":       e.ViewerCount,
-			"connection_type":    e.ConnectionType,
-			"buffer_health":      e.BufferHealth,
-			"connection_quality": e.ConnQuality,
-			"country_code":       e.CountryCode,
-			"city":               e.City,
-		})
+		events = append(events, e)
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"events": events,
-		"count":  len(events),
-	})
+	response := periscope.PlatformEventsResponse{
+		Events: events,
+		Count:  len(events),
+	}
+	c.JSON(http.StatusOK, response)
 }
 
 // GetUsageSummary returns usage summary for the tenant

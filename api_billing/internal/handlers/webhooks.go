@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	purserapi "frameworks/pkg/api/purser"
 	qmclient "frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/config"
 	"frameworks/pkg/logging"
@@ -22,11 +23,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// Mollie webhook payload structure
-type MollieWebhookPayload struct {
-	ID     string `json:"id"`
-	Status string `json:"status"` // open, cancelled, pending, authorized, expired, failed, paid
-}
+// MollieWebhookPayload is imported from purserapi package to avoid duplication
 
 // Stripe webhook payload structure
 type StripeWebhookPayload struct {
@@ -327,7 +324,7 @@ func sendPaymentStatusEmail(invoiceID, paymentID, provider, status string) {
 
 // HandleMollieWebhook handles webhook notifications from Mollie payment processor
 func HandleMollieWebhook(c *gin.Context) {
-	var payload map[string]interface{}
+	var payload purserapi.MollieWebhookPayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
 		logger.WithFields(logging.Fields{
 			"error": err.Error(),
@@ -347,12 +344,12 @@ func HandleMollieWebhook(c *gin.Context) {
 		SELECT id, invoice_id, status 
 		FROM billing_payments 
 		WHERE tx_id = $1 AND method = 'mollie'
-	`, payload["id"]).Scan(&paymentID, &invoiceID, &currentStatus)
+	`, payload.ID).Scan(&paymentID, &invoiceID, &currentStatus)
 
 	if err != nil {
 		logger.WithFields(logging.Fields{
 			"error":    err.Error(),
-			"tx_id":    payload["id"],
+			"tx_id":    payload.ID,
 			"provider": "mollie",
 		}).Error("Payment not found for webhook")
 		c.JSON(http.StatusNotFound, gin.H{"error": "Payment not found"})
@@ -364,7 +361,7 @@ func HandleMollieWebhook(c *gin.Context) {
 	var confirmedAt *time.Time
 	now := time.Now()
 
-	switch payload["status"].(string) {
+	switch payload.Status {
 	case "paid":
 		newStatus = "confirmed"
 		confirmedAt = &now
@@ -374,7 +371,7 @@ func HandleMollieWebhook(c *gin.Context) {
 		newStatus = "pending"
 	default:
 		logger.WithFields(logging.Fields{
-			"mollie_status": payload["status"],
+			"mollie_status": payload.Status,
 			"payment_id":    paymentID,
 		}).Warn("Unknown Mollie payment status")
 		c.JSON(http.StatusOK, gin.H{"status": "received"})

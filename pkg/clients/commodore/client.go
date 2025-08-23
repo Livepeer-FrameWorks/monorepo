@@ -702,3 +702,169 @@ func (c *Client) RevokeAPIToken(ctx context.Context, userToken, tokenID string) 
 
 	return &revokeResp, nil
 }
+
+// === STREAM KEYS MANAGEMENT ===
+
+// GetStreamKeys retrieves all stream keys for a specific stream
+func (c *Client) GetStreamKeys(ctx context.Context, userToken, streamID string) (*commodore.StreamKeysResponse, error) {
+	url := fmt.Sprintf("%s/streams/%s/keys", c.baseURL, url.PathEscape(streamID))
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+userToken)
+
+	resp, err := clients.DoWithRetry(ctx, c.httpClient, req, c.retryConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call Commodore: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		var errorResp commodore.ErrorResponse
+		if err := json.Unmarshal(body, &errorResp); err != nil {
+			return nil, fmt.Errorf("failed to get stream keys with status %d: %s", resp.StatusCode, string(body))
+		}
+		return nil, fmt.Errorf("failed to get stream keys: %s", errorResp.Error)
+	}
+
+	var keysResp commodore.StreamKeysResponse
+	if err := json.Unmarshal(body, &keysResp); err != nil {
+		return nil, fmt.Errorf("failed to parse stream keys response: %w", err)
+	}
+
+	return &keysResp, nil
+}
+
+// CreateStreamKey creates a new stream key for a specific stream
+func (c *Client) CreateStreamKey(ctx context.Context, userToken, streamID string, req *commodore.CreateStreamKeyRequest) (*commodore.StreamKeyResponse, error) {
+	jsonBody, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/streams/%s/keys", c.baseURL, url.PathEscape(streamID))
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+userToken)
+
+	resp, err := clients.DoWithRetry(ctx, c.httpClient, httpReq, c.retryConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call Commodore: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusCreated {
+		var errorResp commodore.ErrorResponse
+		if err := json.Unmarshal(body, &errorResp); err != nil {
+			return nil, fmt.Errorf("failed to create stream key with status %d: %s", resp.StatusCode, string(body))
+		}
+		return nil, fmt.Errorf("failed to create stream key: %s", errorResp.Error)
+	}
+
+	var keyResp commodore.StreamKeyResponse
+	if err := json.Unmarshal(body, &keyResp); err != nil {
+		return nil, fmt.Errorf("failed to parse stream key response: %w", err)
+	}
+
+	return &keyResp, nil
+}
+
+// DeactivateStreamKey deactivates a specific stream key
+func (c *Client) DeactivateStreamKey(ctx context.Context, userToken, streamID, keyID string) (*commodore.SuccessResponse, error) {
+	url := fmt.Sprintf("%s/streams/%s/keys/%s", c.baseURL, url.PathEscape(streamID), url.PathEscape(keyID))
+	req, err := http.NewRequestWithContext(ctx, "DELETE", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+userToken)
+
+	resp, err := clients.DoWithRetry(ctx, c.httpClient, req, c.retryConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call Commodore: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		var errorResp commodore.ErrorResponse
+		if err := json.Unmarshal(body, &errorResp); err != nil {
+			return nil, fmt.Errorf("failed to deactivate stream key with status %d: %s", resp.StatusCode, string(body))
+		}
+		return nil, fmt.Errorf("failed to deactivate stream key: %s", errorResp.Error)
+	}
+
+	var successResp commodore.SuccessResponse
+	if err := json.Unmarshal(body, &successResp); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return &successResp, nil
+}
+
+// === RECORDINGS MANAGEMENT ===
+
+// GetRecordings retrieves all recordings for the authenticated user
+func (c *Client) GetRecordings(ctx context.Context, userToken string, streamID *string) (*commodore.RecordingsResponse, error) {
+	urlBuilder := c.baseURL + "/recordings"
+
+	// Add optional stream_id filter
+	if streamID != nil && *streamID != "" {
+		params := url.Values{}
+		params.Add("stream_id", *streamID)
+		urlBuilder += "?" + params.Encode()
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "GET", urlBuilder, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+userToken)
+
+	resp, err := clients.DoWithRetry(ctx, c.httpClient, req, c.retryConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call Commodore: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		var errorResp commodore.ErrorResponse
+		if err := json.Unmarshal(body, &errorResp); err != nil {
+			return nil, fmt.Errorf("failed to get recordings with status %d: %s", resp.StatusCode, string(body))
+		}
+		return nil, fmt.Errorf("failed to get recordings: %s", errorResp.Error)
+	}
+
+	var recordingsResp commodore.RecordingsResponse
+	if err := json.Unmarshal(body, &recordingsResp); err != nil {
+		return nil, fmt.Errorf("failed to parse recordings response: %w", err)
+	}
+
+	return &recordingsResp, nil
+}
