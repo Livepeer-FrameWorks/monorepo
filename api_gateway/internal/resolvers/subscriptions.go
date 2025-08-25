@@ -60,7 +60,7 @@ func (r *Resolver) DoStreamUpdates(ctx context.Context, streamID *string) (<-cha
 
 	config := ConnectionConfig{UserID: user.UserID, TenantID: user.TenantID, JWT: jwtToken}
 
-	ch, err := r.wsManager.SubscribeToStreams(ctx, config, streamID)
+	ch, err := r.WSManager.SubscribeToStreams(ctx, config, streamID)
 	if err != nil {
 		if r.Metrics != nil {
 			r.Metrics.Operations.WithLabelValues("subscription_streams", "error").Inc()
@@ -130,7 +130,7 @@ func (r *Resolver) DoAnalyticsUpdates(ctx context.Context, streamID string) (<-c
 
 	// Use WebSocket manager to subscribe to analytics updates
 	// TODO: Update SubscribeToAnalytics to accept stream filter parameter
-	ch, err := r.wsManager.SubscribeToAnalytics(ctx, config)
+	ch, err := r.WSManager.SubscribeToAnalytics(ctx, config)
 	if err != nil {
 		r.Logger.WithError(err).WithFields(logging.Fields{
 			"user_id":   user.UserID,
@@ -197,7 +197,7 @@ func (r *Resolver) DoSystemUpdates(ctx context.Context) (<-chan *model.SystemHea
 	}
 
 	// Use WebSocket manager to subscribe to system updates
-	return r.wsManager.SubscribeToSystem(ctx, config)
+	return r.WSManager.SubscribeToSystem(ctx, config)
 }
 
 // DoTrackListUpdates handles real-time track list updates via WebSocket
@@ -234,5 +234,5 @@ func (r *Resolver) DoTrackListUpdates(ctx context.Context, streamID string) (<-c
 	}
 
 	config := ConnectionConfig{UserID: user.UserID, TenantID: user.TenantID, JWT: jwtToken}
-	return r.wsManager.SubscribeToTrackList(ctx, config, streamID)
+	return r.WSManager.SubscribeToTrackList(ctx, config, streamID)
 }

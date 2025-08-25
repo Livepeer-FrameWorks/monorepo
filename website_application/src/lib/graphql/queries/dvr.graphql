@@ -1,0 +1,39 @@
+# DVR query operations
+fragment DVRRequestInfo on DVRRequest {
+  dvrHash
+  internalName
+  storageNodeId
+  status
+  startedAt
+  endedAt
+  durationSeconds
+  sizeBytes
+  manifestPath
+  errorMessage
+  createdAt
+  updatedAt
+}
+
+fragment RecordingConfigInfo on RecordingConfig {
+  enabled
+  retentionDays
+  format
+  segmentDuration
+}
+
+query GetDVRRequests($internalName: String, $status: String, $pagination: PaginationInput) {
+  dvrRequests(internalName: $internalName, status: $status, pagination: $pagination) {
+    dvrRecordings {
+      ...DVRRequestInfo
+    }
+    total
+    page
+    limit
+  }
+}
+
+query GetRecordingConfig($internalName: String!) {
+  recordingConfig(internalName: $internalName) {
+    ...RecordingConfigInfo
+  }
+}

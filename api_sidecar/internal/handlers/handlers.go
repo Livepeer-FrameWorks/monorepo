@@ -11,12 +11,14 @@ import (
 	"strings"
 	"time"
 
+	"frameworks/api_sidecar/internal/control"
 	commodoreapi "frameworks/pkg/api/commodore"
 	"frameworks/pkg/clients/commodore"
 	"frameworks/pkg/clients/foghorn"
 	"frameworks/pkg/geoip"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/validation"
+
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/gin-gonic/gin"
@@ -361,6 +363,19 @@ func HandlePushRewrite(c *gin.Context) {
 	// Forward to Decklog with typed event
 	go ForwardTypedEventToDecklog(baseEvent)
 
+	// Check if DVR recording is enabled for this stream
+	if streamKeyValidation.Recording != nil && streamKeyValidation.Recording.Enabled {
+		logger.WithFields(logging.Fields{
+			"internal_name":    streamKeyValidation.InternalName,
+			"retention_days":   streamKeyValidation.Recording.RetentionDays,
+			"format":           streamKeyValidation.Recording.Format,
+			"segment_duration": streamKeyValidation.Recording.SegmentDuration,
+		}).Info("DVR recording enabled for stream, requesting DVR start")
+
+		// Start DVR recording via Foghorn
+		go requestDVRStart(streamKeyValidation)
+	}
+
 	// Create wildcard stream name for MistServer routing
 	wildcardStreamName := fmt.Sprintf("live+%s", streamKeyValidation.InternalName)
 
@@ -381,8 +396,32 @@ func HandlePushRewrite(c *gin.Context) {
 	c.String(http.StatusOK, wildcardStreamName)
 }
 
+// getClipFromArtifactIndex performs fast O(1) lookup in the artifact index
+func getClipFromArtifactIndex(clipHash string) *ClipInfo {
+	if prometheusMonitor == nil {
+		return nil
+	}
+	prometheusMonitor.mutex.RLock()
+	defer prometheusMonitor.mutex.RUnlock()
+	return prometheusMonitor.artifactIndex[clipHash]
+}
+
+// isDVRHash checks if a string looks like a DVR hash (32-character hex)
+func isDVRHash(hash string) bool {
+	if len(hash) != 32 {
+		return false
+	}
+	for _, char := range hash {
+		if !((char >= '0' && char <= '9') || (char >= 'a' && char <= 'f') || (char >= 'A' && char <= 'F')) {
+			return false
+		}
+	}
+	return true
+}
+
 // HandleDefaultStream handles the DEFAULT_STREAM trigger from MistServer
-// This maps playback IDs to internal stream names for viewing
+// This maps playback IDs to internal stream names for viewing (live streams)
+// or clip hashes to VOD streams for clip viewing
 func HandleDefaultStream(c *gin.Context) {
 	start := time.Now()
 
@@ -441,6 +480,60 @@ func HandleDefaultStream(c *gin.Context) {
 		"request_url":      requestURL,
 	}).Info("DEFAULT_STREAM trigger")
 
+	// FIRST: Check if this is a clip hash we have locally (VOD content)
+	if clipInfo := getClipFromArtifactIndex(defaultStream); clipInfo != nil {
+		vodStreamName := fmt.Sprintf("vod+%s", defaultStream)
+
+		logger.WithFields(logging.Fields{
+			"clip_hash":       defaultStream,
+			"vod_stream_name": vodStreamName,
+			"clip_path":       clipInfo.FilePath,
+			"stream_name":     clipInfo.StreamName,
+		}).Info("Clip hash resolved to VOD stream")
+
+		// Track VOD access
+		if metrics != nil {
+			metrics.NodeOperations.WithLabelValues("default_stream", "vod_success").Inc()
+			metrics.ResourceAllocationDuration.WithLabelValues("clip_resolution").Observe(time.Since(start).Seconds())
+			metrics.InfrastructureEvents.WithLabelValues("clip_resolved").Inc()
+		}
+
+		// TODO: Forward clip view analytics to Decklog
+		// This would track clip viewing events similar to stream views
+
+		c.String(http.StatusOK, vodStreamName)
+		return
+	}
+
+	// SECOND: Check if this is a DVR hash we have locally (also VOD content)
+	// DVR hashes are 32-character hex strings, same as clip hashes but point to m3u8 manifests
+	if len(defaultStream) == 32 && isDVRHash(defaultStream) {
+		if dvrInfo := getClipFromArtifactIndex(defaultStream); dvrInfo != nil && dvrInfo.Format == "m3u8" {
+			vodStreamName := fmt.Sprintf("vod+%s", defaultStream)
+
+			logger.WithFields(logging.Fields{
+				"dvr_hash":        defaultStream,
+				"vod_stream_name": vodStreamName,
+				"dvr_path":        dvrInfo.FilePath,
+				"stream_name":     dvrInfo.StreamName,
+			}).Info("DVR hash resolved to VOD stream")
+
+			// Track DVR VOD access
+			if metrics != nil {
+				metrics.NodeOperations.WithLabelValues("default_stream", "dvr_vod_success").Inc()
+				metrics.ResourceAllocationDuration.WithLabelValues("dvr_resolution").Observe(time.Since(start).Seconds())
+				metrics.InfrastructureEvents.WithLabelValues("dvr_resolved").Inc()
+			}
+
+			// TODO: Forward DVR view analytics to Decklog
+			// This would track DVR viewing events similar to stream views
+
+			c.String(http.StatusOK, vodStreamName)
+			return
+		}
+	}
+
+	// THIRD: Fall back to existing live stream resolution via Commodore
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -525,6 +618,112 @@ func HandleDefaultStream(c *gin.Context) {
 	c.String(http.StatusOK, wildcardStreamName)
 }
 
+// HandleStreamSource handles the STREAM_SOURCE trigger from MistServer
+// This resolves VOD stream names (vod+{artifact_hash}) to actual file paths for playback
+// Supports both clip hashes (mp4 files) and DVR hashes (m3u8 manifests)
+func HandleStreamSource(c *gin.Context) {
+	start := time.Now()
+
+	// Track node operations
+	if metrics != nil {
+		metrics.NodeOperations.WithLabelValues("stream_source", "requested").Inc()
+	}
+
+	// Read the raw body - MistServer sends parameters as raw text, not JSON
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		logger.WithFields(logging.Fields{
+			"error": err,
+		}).Error("Failed to read STREAM_SOURCE body")
+
+		if metrics != nil {
+			metrics.NodeOperations.WithLabelValues("stream_source", "error").Inc()
+		}
+
+		c.String(http.StatusOK, "") // Empty response will cause MistServer to use default source
+		return
+	}
+
+	// Parse the parameters - they come as newline-separated values
+	params := strings.Split(strings.TrimSpace(string(body)), "\n")
+	if len(params) < 1 {
+		logger.WithFields(logging.Fields{
+			"param_count": len(params),
+			"expected":    "at least 1",
+		}).Error("Invalid STREAM_SOURCE payload")
+		c.String(http.StatusOK, "") // Empty response will cause MistServer to use default source
+		return
+	}
+
+	streamName := params[0]
+
+	logger.WithFields(logging.Fields{
+		"stream_name": streamName,
+		"params":      params,
+	}).Info("STREAM_SOURCE trigger")
+
+	// Check if this is a VOD stream (vod+{artifact_hash})
+	if strings.HasPrefix(streamName, "vod+") {
+		artifactHash := strings.TrimPrefix(streamName, "vod+")
+
+		// Look up artifact (clip or DVR) in artifact index
+		if artifactInfo := getClipFromArtifactIndex(artifactHash); artifactInfo != nil {
+			// Determine artifact type based on format
+			artifactType := "clip"
+			if artifactInfo.Format == "m3u8" {
+				artifactType = "dvr"
+			}
+
+			logger.WithFields(logging.Fields{
+				"artifact_hash":   artifactHash,
+				"artifact_type":   artifactType,
+				"stream_name":     streamName,
+				"artifact_path":   artifactInfo.FilePath,
+				"original_stream": artifactInfo.StreamName,
+				"format":          artifactInfo.Format,
+				"size_bytes":      artifactInfo.SizeBytes,
+			}).Info("VOD artifact resolved to file path")
+
+			// Track successful VOD resolution
+			if metrics != nil {
+				metrics.NodeOperations.WithLabelValues("stream_source", "vod_success").Inc()
+				metrics.ResourceAllocationDuration.WithLabelValues("vod_resolution").Observe(time.Since(start).Seconds())
+				if artifactType == "dvr" {
+					metrics.InfrastructureEvents.WithLabelValues("dvr_source_resolved").Inc()
+				} else {
+					metrics.InfrastructureEvents.WithLabelValues("clip_source_resolved").Inc()
+				}
+			}
+
+			// Return the file path for MistServer to read
+			c.String(http.StatusOK, artifactInfo.FilePath)
+			return
+		}
+
+		// Artifact not found in artifact index
+		logger.WithFields(logging.Fields{
+			"artifact_hash": artifactHash,
+			"stream_name":   streamName,
+		}).Warn("VOD artifact not found in artifact index")
+
+		if metrics != nil {
+			metrics.NodeOperations.WithLabelValues("stream_source", "vod_not_found").Inc()
+		}
+	} else {
+		// Not a VOD stream - log for debugging
+		logger.WithFields(logging.Fields{
+			"stream_name": streamName,
+		}).Debug("STREAM_SOURCE called for non-VOD stream")
+
+		if metrics != nil {
+			metrics.NodeOperations.WithLabelValues("stream_source", "non_vod").Inc()
+		}
+	}
+
+	// Empty response - MistServer will use the default source configured for this stream
+	c.String(http.StatusOK, "")
+}
+
 // enrichEventWithClusterMetadata adds cluster and node metadata to events
 func enrichEventWithClusterMetadata(eventData map[string]interface{}) map[string]interface{} {
 	nodeID := getCurrentNodeID()
@@ -557,10 +756,8 @@ func enrichEventWithClusterMetadata(eventData map[string]interface{}) map[string
 	return enriched
 }
 
-// updateFoghornStreamHealth immediately updates Foghorn with stream health status - TYPED VERSION
+// updateFoghornStreamHealth immediately updates Foghorn with stream health status via gRPC
 func updateFoghornStreamHealth(streamName string, isHealthy bool, details map[string]interface{}) error {
-	nodeID := getCurrentNodeID()
-
 	// Extract internal name from wildcard stream
 	var internalName string
 	if plusIndex := strings.Index(streamName, "+"); plusIndex != -1 {
@@ -569,57 +766,22 @@ func updateFoghornStreamHealth(streamName string, isHealthy bool, details map[st
 		internalName = streamName
 	}
 
-	// Convert untyped details to typed FoghornStreamHealth structure
-	var typedDetails *validation.FoghornStreamHealth
-	if len(details) > 0 {
-		typedDetails = &validation.FoghornStreamHealth{}
-
-		// Extract buffer state if present
-		if bufferState, ok := details["buffer_state"].(string); ok {
-			typedDetails.BufferState = bufferState
-		}
-
-		// Extract bandwidth data if present (may be JSON string)
-		if bandwidthData, ok := details["bandwidth_data"].(string); ok {
-			typedDetails.BandwidthData = bandwidthData
-		}
-
-		// Extract health score if present
-		if healthScore, ok := details["health_score"].(float64); ok {
-			typedDetails.HealthScore = healthScore
-		}
-
-		// Extract issues information
-		if hasIssues, ok := details["has_issues"].(bool); ok {
-			typedDetails.HasIssues = hasIssues
-		}
-		if issuesDesc, ok := details["issues_desc"].(string); ok {
-			typedDetails.IssuesDesc = issuesDesc
-		}
-	}
-
-	// Send to Foghorn using typed client
-	req := &foghorn.StreamHealthRequest{
-		NodeID:       nodeID,
-		StreamName:   streamName,
-		InternalName: internalName,
-		IsHealthy:    isHealthy,
-		Timestamp:    time.Now().Unix(),
-		Details:      typedDetails,
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	if err := foghornClient.UpdateStreamHealth(ctx, req); err != nil {
-		return fmt.Errorf("failed to send stream health update to Foghorn: %w", err)
+	// Send stream health update via gRPC control channel
+	if err := control.SendStreamHealth(streamName, internalName, isHealthy, details); err != nil {
+		logger.WithFields(logging.Fields{
+			"stream_name":   streamName,
+			"internal_name": internalName,
+			"is_healthy":    isHealthy,
+			"error":         err,
+		}).Error("Failed to send stream health update via gRPC control channel")
+		return fmt.Errorf("failed to send stream health update: %w", err)
 	}
 
 	logger.WithFields(logging.Fields{
-		"stream_name": streamName,
-		"is_healthy":  isHealthy,
-		"node_id":     nodeID,
-	}).Info("Updated Foghorn with stream health status")
+		"stream_name":   streamName,
+		"internal_name": internalName,
+		"is_healthy":    isHealthy,
+	}).Debug("Sent stream health update via gRPC control channel")
 
 	return nil
 }
@@ -686,4 +848,31 @@ func enrichEventWithGeoData(eventData map[string]interface{}, ipAddress string) 
 	}
 
 	return enriched
+}
+
+// requestDVRStart requests Foghorn to start DVR recording for a stream via gRPC
+func requestDVRStart(streamValidation *commodoreapi.ValidateStreamKeyResponse) {
+	if err := control.SendDVRStartRequest(
+		streamValidation.TenantID,
+		streamValidation.InternalName,
+		streamValidation.UserID,
+		streamValidation.Recording.RetentionDays,
+		streamValidation.Recording.Format,
+		streamValidation.Recording.SegmentDuration,
+	); err != nil {
+		logger.WithFields(logging.Fields{
+			"internal_name": streamValidation.InternalName,
+			"tenant_id":     streamValidation.TenantID,
+			"error":         err,
+		}).Error("Failed to send DVR start request via gRPC control channel")
+		return
+	}
+
+	logger.WithFields(logging.Fields{
+		"internal_name":    streamValidation.InternalName,
+		"tenant_id":        streamValidation.TenantID,
+		"retention_days":   streamValidation.Recording.RetentionDays,
+		"format":           streamValidation.Recording.Format,
+		"segment_duration": streamValidation.Recording.SegmentDuration,
+	}).Info("Successfully sent DVR start request via gRPC control channel")
 }

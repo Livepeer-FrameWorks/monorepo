@@ -4,16 +4,18 @@ import (
 	"time"
 
 	"frameworks/pkg/api/common"
+	fapi "frameworks/pkg/api/foghorn"
 	"frameworks/pkg/models"
 )
 
 // ValidateStreamKeyResponse represents the response from the validate stream key API
 type ValidateStreamKeyResponse struct {
-	Valid        bool   `json:"valid"`
-	UserID       string `json:"user_id,omitempty"`
-	TenantID     string `json:"tenant_id,omitempty"`
-	InternalName string `json:"internal_name,omitempty"`
-	Error        string `json:"error,omitempty"`
+	Valid        bool             `json:"valid"`
+	UserID       string           `json:"user_id,omitempty"`
+	TenantID     string           `json:"tenant_id,omitempty"`
+	InternalName string           `json:"internal_name,omitempty"`
+	Error        string           `json:"error,omitempty"`
+	Recording    *RecordingConfig `json:"recording,omitempty"`
 }
 
 // ResolvePlaybackIDResponse represents the response from the resolve playback ID API
@@ -107,6 +109,18 @@ type ClipResponse struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
+// ClipCreateRequest is an alias to Foghorn's typed CreateClipRequest to avoid duplication
+type ClipCreateRequest = fapi.CreateClipRequest
+
+// ClipCreateResponse is a type alias to Foghorn's typed response
+type ClipCreateResponse = fapi.CreateClipResponse
+
+// DVR types (aliases to Foghorn API)
+type StartDVRRequest = fapi.StartDVRRequest
+type StartDVRResponse = fapi.StartDVRResponse
+type DVRInfo = fapi.DVRInfo
+type DVRListResponse = fapi.DVRListResponse
+
 // Stream responses
 type StreamsResponse = []models.Stream
 type StreamResponse = models.Stream
@@ -194,9 +208,18 @@ type EmailVerificationResponse struct {
 
 // Internal name resolution response
 type InternalNameResponse struct {
-	InternalName string `json:"internal_name"`
-	TenantID     string `json:"tenant_id"`
-	UserID       string `json:"user_id"`
+	InternalName string           `json:"internal_name"`
+	TenantID     string           `json:"tenant_id"`
+	UserID       string           `json:"user_id"`
+	Recording    *RecordingConfig `json:"recording,omitempty"`
+}
+
+// RecordingConfig represents DVR recording configuration
+type RecordingConfig struct {
+	Enabled         bool   `json:"enabled"`
+	RetentionDays   int    `json:"retention_days"`
+	Format          string `json:"format"`           // "ts" for MPEG-TS
+	SegmentDuration int    `json:"segment_duration"` // seconds
 }
 
 // Kafka config response
@@ -308,3 +331,48 @@ type RecordingsResponse struct {
 	Recordings []Recording `json:"recordings"`
 	Count      int         `json:"count"`
 }
+
+// === CLIPS MANAGEMENT ===
+
+// Enhanced ClipResponse that matches the database schema
+type ClipFullResponse struct {
+	ID          string    `json:"id"`
+	ClipHash    string    `json:"clip_hash"`
+	StreamName  string    `json:"stream_name"`
+	Title       string    `json:"title"`
+	StartTime   int64     `json:"start_time"`
+	Duration    int64     `json:"duration"`
+	NodeID      string    `json:"node_id"`
+	StoragePath string    `json:"storage_path"`
+	SizeBytes   *int64    `json:"size_bytes"`
+	Status      string    `json:"status"`
+	AccessCount int       `json:"access_count"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+// ClipsListResponse represents a paginated list of clips
+type ClipsListResponse struct {
+	Clips []ClipFullResponse `json:"clips"`
+	Total int                `json:"total"`
+	Page  int                `json:"page"`
+	Limit int                `json:"limit"`
+}
+
+// ClipViewingURLs represents available viewing URLs for a clip
+type ClipViewingURLs struct {
+	URLs      map[string]string `json:"urls"`
+	ExpiresAt *time.Time        `json:"expires_at,omitempty"`
+}
+
+// === VIEWER ENDPOINT RESOLUTION ===
+
+// ViewerEndpointRequest represents the Gateway request for viewer endpoint resolution
+type ViewerEndpointRequest struct {
+	ContentType string `json:"content_type"`
+	ContentID   string `json:"content_id"`
+	ViewerIP    string `json:"viewer_ip,omitempty"`
+}
+
+// ViewerEndpoint and ViewerEndpointResponse are aliases to Foghorn types to avoid duplication
+type ViewerEndpoint = fapi.ViewerEndpoint
+type ViewerEndpointResponse = fapi.ViewerEndpointResponse

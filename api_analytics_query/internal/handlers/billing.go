@@ -191,6 +191,28 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 		uniqueUsers = 0
 	}
 
+	// Derive clip storage additions from clip_events (stage='done')
+	var clipStorageAddedGB float64
+	var clipsAdded int
+	err = bs.clickhouse.QueryRowContext(ctx, `
+		SELECT 
+			COALESCE(sumIf(size_bytes, stage = 'done') / (1024*1024*1024), 0) as clip_storage_added_gb,
+			COALESCE(countIf(stage = 'done'), 0) as clips_added
+		FROM clip_events 
+		WHERE tenant_id = $1 
+		AND timestamp BETWEEN $2 AND $3
+	`, tenantID, startTime, endTime).Scan(&clipStorageAddedGB, &clipsAdded)
+	if err != nil && err != database.ErrNoRows {
+		bs.logger.WithError(err).Debug("Failed to query clip events for storage additions, defaulting to 0")
+		clipStorageAddedGB = 0
+		clipsAdded = 0
+	}
+
+	// Clip deletions and current storage footprint require delete events or storage index; default to 0 when absent
+	clipsDeleted := 0
+	clipStorageDeletedGB := float64(0)
+	storageGB := float64(0)
+
 	// Derive recording usage from stream_events (recording_lifecycle) in ClickHouse
 	var recordingGB float64
 	err = bs.clickhouse.QueryRowContext(ctx, `
@@ -222,7 +244,13 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 		PeakBandwidthMbps: peakBandwidth,
 		UniqueUsers:       uniqueUsers,
 		RecordingGB:       recordingGB,
-		Timestamp:         time.Now(),
+		// Storage and clip lifecycle
+		StorageGB:            storageGB,
+		ClipsAdded:           clipsAdded,
+		ClipsDeleted:         clipsDeleted,
+		ClipStorageAddedGB:   clipStorageAddedGB,
+		ClipStorageDeletedGB: clipStorageDeletedGB,
+		Timestamp:            time.Now(),
 	}
 
 	bs.logger.WithFields(logging.Fields{

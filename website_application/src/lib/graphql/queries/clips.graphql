@@ -1,0 +1,36 @@
+# Clip management queries
+
+fragment ClipInfo on Clip {
+  id
+  stream
+  title
+  description
+  startTime
+  endTime
+  duration
+  playbackId
+  status
+  createdAt
+  updatedAt
+}
+
+query GetClips($streamId: ID) {
+  clips(streamId: $streamId) {
+    ...ClipInfo
+  }
+}
+
+query GetClip($id: ID!) {
+  clip(id: $id) {
+    ...ClipInfo
+  }
+}
+
+query GetClipViewingUrls($clipId: ID!) {
+  clipViewingUrls(clipId: $clipId) {
+    hls
+    dash
+    mp4
+    webm
+  }
+}

@@ -9,6 +9,7 @@ import (
 
 	"github.com/joho/godotenv"
 
+	"frameworks/api_sidecar/internal/control"
 	"frameworks/api_sidecar/internal/handlers"
 	fclient "frameworks/pkg/clients/foghorn"
 	"frameworks/pkg/logging"
@@ -98,6 +99,15 @@ func main() {
 	// Initialize Prometheus monitoring
 	handlers.InitPrometheusMonitor(logger)
 
+	// Initialize cleanup monitor for storage management (reuse existing storage path)
+	storagePath := os.Getenv("HELMSMAN_STORAGE_LOCAL_PATH")
+	if storagePath != "" {
+		handlers.InitCleanupMonitor(logger, storagePath)
+	}
+
+	// Start control client to Foghorn
+	control.Start(logger)
+
 	// Add the local MistServer node to monitoring with default location
 	if mistServerURL == "" {
 		mistServerURL = "http://localhost:4242"
@@ -124,6 +134,7 @@ func main() {
 		// MistServer Triggers (for stream routing and validation)
 		webhooks.POST("/mist/push_rewrite", handlers.HandlePushRewrite)
 		webhooks.POST("/mist/default_stream", handlers.HandleDefaultStream)
+		webhooks.POST("/mist/stream_source", handlers.HandleStreamSource)
 
 		// MistServer Webhooks (for event forwarding)
 		webhooks.POST("/mist/push_end", handlers.HandlePushEnd)
@@ -147,6 +158,9 @@ func main() {
 
 		// Shutdown Decklog client first
 		handlers.ShutdownDecklogClient()
+
+		// Stop cleanup monitor
+		handlers.StopCleanupMonitor()
 
 		// Try to notify Foghorn
 		if err := notifyFoghornShutdown(); err != nil {

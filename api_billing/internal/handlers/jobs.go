@@ -125,8 +125,8 @@ func (jm *JobManager) generateMonthlyInvoices() {
 		       bt.tier_name, bt.display_name, bt.base_price, bt.currency, bt.billing_period,
 		       bt.metering_enabled, bt.overage_rates,
 		       ts.custom_pricing, ts.custom_features, ts.custom_allocations
-		FROM tenant_subscriptions ts
-		JOIN billing_tiers bt ON ts.tier_id = bt.id
+		FROM purser.tenant_subscriptions ts
+		JOIN purser.billing_tiers bt ON ts.tier_id = bt.id
 		WHERE ts.status = 'active' 
 		  AND bt.is_active = true
 		  AND (ts.next_billing_date IS NULL OR ts.next_billing_date <= $1)
@@ -162,7 +162,7 @@ func (jm *JobManager) generateMonthlyInvoices() {
 		// Check if invoice already exists for this month
 		var existingCount int
 		err = jm.db.QueryRow(`
-			SELECT COUNT(*) FROM billing_invoices
+			SELECT COUNT(*) FROM purser.billing_invoices
 			WHERE tenant_id = $1 AND created_at >= $2
 		`, tenantID, firstOfMonth).Scan(&existingCount)
 
@@ -184,7 +184,7 @@ func (jm *JobManager) generateMonthlyInvoices() {
 
 		usageRows, err := jm.db.Query(`
 			SELECT usage_type, SUM(usage_value) as total_usage
-			FROM usage_records
+			FROM purser.usage_records
 			WHERE tenant_id = $1 AND billing_month = $2
 			GROUP BY usage_type
 		`, tenantID, billingMonth)
@@ -268,7 +268,7 @@ func (jm *JobManager) generateMonthlyInvoices() {
 
 		// Store the invoice with usage details
 		_, err = jm.db.Exec(`
-			INSERT INTO billing_invoices (
+			INSERT INTO purser.billing_invoices (
 				id, tenant_id, amount, currency, status, due_date,
 				base_amount, metered_amount,
 				usage_details,
@@ -290,7 +290,7 @@ func (jm *JobManager) generateMonthlyInvoices() {
 		// Update subscription next billing date
 		nextBillingDate := now.AddDate(0, 1, 0) // Next month
 		_, err = jm.db.Exec(`
-			UPDATE tenant_subscriptions 
+			UPDATE purser.tenant_subscriptions 
 			SET next_billing_date = $1, updated_at = NOW()
 			WHERE tenant_id = $2
 		`, nextBillingDate, tenantID)
@@ -376,8 +376,8 @@ func (jm *JobManager) sendPaymentReminders() {
 	rows, err := jm.db.Query(`
 		SELECT bi.id, bi.tenant_id, bi.amount, bi.currency, bi.due_date,
 		       ts.billing_email
-		FROM billing_invoices bi
-		JOIN tenant_subscriptions ts ON bi.tenant_id = ts.tenant_id
+		FROM purser.billing_invoices bi
+		JOIN purser.tenant_subscriptions ts ON bi.tenant_id = ts.tenant_id
 		WHERE bi.status = 'pending' 
 		  AND bi.due_date < NOW()
 		  AND bi.due_date > NOW() - INTERVAL '30 days'
@@ -457,8 +457,8 @@ func (jm *JobManager) sweepCryptoFunds() {
 	// Get used crypto wallets that haven't been swept
 	rows, err := jm.db.Query(`
 		SELECT cw.id, cw.asset, cw.wallet_address, bp.amount, bp.tx_id
-		FROM crypto_wallets cw
-		JOIN billing_payments bp ON bp.invoice_id = cw.invoice_id
+		FROM purser.crypto_wallets cw
+		JOIN purser.billing_payments bp ON bp.invoice_id = cw.invoice_id
 		WHERE cw.status = 'used' 
 		  AND bp.status = 'confirmed'
 		  AND bp.method LIKE 'crypto_%'
@@ -497,7 +497,7 @@ func (jm *JobManager) sweepCryptoFunds() {
 
 		// Mark wallet as swept with transaction ID
 		_, err = jm.db.Exec(`
-			UPDATE crypto_wallets 
+			UPDATE purser.crypto_wallets 
 			SET status = 'swept', updated_at = NOW()
 			WHERE id = $1
 		`, walletID)
@@ -909,7 +909,7 @@ func (jm *JobManager) runWalletCleanup(ctx context.Context) {
 // cleanupExpiredWallets marks expired crypto wallets as inactive
 func (jm *JobManager) cleanupExpiredWallets() {
 	result, err := jm.db.Exec(`
-		UPDATE crypto_wallets 
+		UPDATE purser.crypto_wallets 
 		SET status = 'expired', updated_at = NOW()
 		WHERE status = 'active' 
 		  AND expires_at < NOW()

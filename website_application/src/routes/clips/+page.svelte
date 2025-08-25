@@ -7,6 +7,7 @@
   import LoadingCard from "$lib/components/LoadingCard.svelte";
   import LoadingSpinner from "$lib/components/LoadingSpinner.svelte";
   import EmptyState from "$lib/components/EmptyState.svelte";
+  import ClipModal from "$lib/components/ClipModal.svelte";
   import { getIconComponent } from "$lib/iconUtils.js";
 
   let isAuthenticated = false;
@@ -26,6 +27,9 @@
   let startTime = 0;
   let endTime = 300; // 5 minutes default
 
+  // Clip viewing
+  let selectedClip = null;
+
   // Subscribe to auth store
   auth.subscribe((authState) => {
     isAuthenticated = authState.isAuthenticated;
@@ -43,8 +47,7 @@
     try {
       loading = true;
       streams = await streamsService.getStreams();
-      // Note: We would need a getClips query in the schema to load existing clips
-      clips = []; // For now, start with empty clips array
+      clips = await clipsService.getClips(); // Load all clips
     } catch (error) {
       console.error("Failed to load data:", error);
       toast.error("Failed to load clips data. Please refresh the page.");
@@ -108,7 +111,19 @@
 
   function getStreamName(streamId) {
     const stream = streams.find(s => s.id === streamId);
-    return stream ? stream.name : 'Unknown Stream';
+    return stream ? stream.name : streamId || 'Unknown Stream';
+  }
+
+  function openClip(clip) {
+    // Add stream name to clip for modal display
+    selectedClip = {
+      ...clip,
+      streamName: getStreamName(clip.streamId || clip.stream)
+    };
+  }
+
+  function closeClip() {
+    selectedClip = null;
   }
 </script>
 
@@ -173,7 +188,7 @@
                 <div class="mb-3">
                   <h3 class="font-semibold text-lg mb-1">{clip.title}</h3>
                   <p class="text-sm text-tokyo-night-comment">
-                    From: {getStreamName(clip.streamId)}
+                    From: {getStreamName(clip.stream)}
                   </p>
                 </div>
                 
@@ -207,9 +222,11 @@
                 <div class="mt-4 pt-4 border-t border-tokyo-night-selection">
                   <button
                     type="button"
-                    class="text-tokyo-night-blue hover:text-blue-400 text-sm font-medium bg-transparent border-none cursor-pointer"
+                    on:click={() => openClip(clip)}
+                    class="flex items-center space-x-2 text-tokyo-night-cyan hover:text-tokyo-night-blue text-sm font-medium bg-transparent border-none cursor-pointer transition-colors"
                   >
-                    View Clip →
+                    <svelte:component this={getIconComponent('Play')} class="w-4 h-4" />
+                    <span>Play Clip</span>
                   </button>
                 </div>
               </div>
@@ -318,6 +335,12 @@
     </div>
   </div>
 {/if}
+
+<!-- Clip Player Modal -->
+<ClipModal 
+  clip={selectedClip}
+  onClose={closeClip}
+/>
 
 <style>
   .line-clamp-2 {

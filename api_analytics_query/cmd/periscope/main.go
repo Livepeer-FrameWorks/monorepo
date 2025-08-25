@@ -96,6 +96,7 @@ func main() {
 			protected.GET("/analytics/connection-events", handlers.GetConnectionEvents)
 			protected.GET("/analytics/node-metrics", handlers.GetNodeMetrics)
 			protected.GET("/analytics/routing-events", handlers.GetRoutingEvents)
+			protected.GET("/analytics/clip-events", handlers.GetClipEvents)
 			protected.GET("/analytics/stream-health", handlers.GetStreamHealthMetrics)
 
 			// Aggregated analytics endpoints

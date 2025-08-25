@@ -39,6 +39,8 @@ const (
 	EventType_EVENT_TYPE_STREAM_BUFFER       EventType = 11
 	EventType_EVENT_TYPE_STREAM_END          EventType = 12
 	EventType_EVENT_TYPE_BANDWIDTH_THRESHOLD EventType = 13
+	EventType_EVENT_TYPE_CLIP_LIFECYCLE      EventType = 14
+	EventType_EVENT_TYPE_DVR_LIFECYCLE       EventType = 15
 )
 
 // Enum value maps for EventType.
@@ -58,6 +60,8 @@ var (
 		11: "EVENT_TYPE_STREAM_BUFFER",
 		12: "EVENT_TYPE_STREAM_END",
 		13: "EVENT_TYPE_BANDWIDTH_THRESHOLD",
+		14: "EVENT_TYPE_CLIP_LIFECYCLE",
+		15: "EVENT_TYPE_DVR_LIFECYCLE",
 	}
 	EventType_value = map[string]int32{
 		"EVENT_TYPE_UNSPECIFIED":         0,
@@ -74,6 +78,8 @@ var (
 		"EVENT_TYPE_STREAM_BUFFER":       11,
 		"EVENT_TYPE_STREAM_END":          12,
 		"EVENT_TYPE_BANDWIDTH_THRESHOLD": 13,
+		"EVENT_TYPE_CLIP_LIFECYCLE":      14,
+		"EVENT_TYPE_DVR_LIFECYCLE":       15,
 	}
 )
 
@@ -208,6 +214,125 @@ func (UserConnectionData_Action) EnumDescriptor() ([]byte, []int) {
 	return file_decklog_proto_rawDescGZIP(), []int{5, 0}
 }
 
+type ClipLifecycleData_Stage int32
+
+const (
+	ClipLifecycleData_STAGE_UNSPECIFIED ClipLifecycleData_Stage = 0
+	ClipLifecycleData_STAGE_REQUESTED   ClipLifecycleData_Stage = 1
+	ClipLifecycleData_STAGE_QUEUED      ClipLifecycleData_Stage = 2
+	ClipLifecycleData_STAGE_PROGRESS    ClipLifecycleData_Stage = 3
+	ClipLifecycleData_STAGE_DONE        ClipLifecycleData_Stage = 4
+	ClipLifecycleData_STAGE_FAILED      ClipLifecycleData_Stage = 5
+)
+
+// Enum value maps for ClipLifecycleData_Stage.
+var (
+	ClipLifecycleData_Stage_name = map[int32]string{
+		0: "STAGE_UNSPECIFIED",
+		1: "STAGE_REQUESTED",
+		2: "STAGE_QUEUED",
+		3: "STAGE_PROGRESS",
+		4: "STAGE_DONE",
+		5: "STAGE_FAILED",
+	}
+	ClipLifecycleData_Stage_value = map[string]int32{
+		"STAGE_UNSPECIFIED": 0,
+		"STAGE_REQUESTED":   1,
+		"STAGE_QUEUED":      2,
+		"STAGE_PROGRESS":    3,
+		"STAGE_DONE":        4,
+		"STAGE_FAILED":      5,
+	}
+)
+
+func (x ClipLifecycleData_Stage) Enum() *ClipLifecycleData_Stage {
+	p := new(ClipLifecycleData_Stage)
+	*p = x
+	return p
+}
+
+func (x ClipLifecycleData_Stage) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ClipLifecycleData_Stage) Descriptor() protoreflect.EnumDescriptor {
+	return file_decklog_proto_enumTypes[3].Descriptor()
+}
+
+func (ClipLifecycleData_Stage) Type() protoreflect.EnumType {
+	return &file_decklog_proto_enumTypes[3]
+}
+
+func (x ClipLifecycleData_Stage) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ClipLifecycleData_Stage.Descriptor instead.
+func (ClipLifecycleData_Stage) EnumDescriptor() ([]byte, []int) {
+	return file_decklog_proto_rawDescGZIP(), []int{13, 0}
+}
+
+type DVRLifecycleData_Stage int32
+
+const (
+	DVRLifecycleData_STAGE_UNSPECIFIED DVRLifecycleData_Stage = 0
+	DVRLifecycleData_STAGE_REQUESTED   DVRLifecycleData_Stage = 1
+	DVRLifecycleData_STAGE_RECORDING   DVRLifecycleData_Stage = 2
+	DVRLifecycleData_STAGE_PROGRESS    DVRLifecycleData_Stage = 3
+	DVRLifecycleData_STAGE_STOPPING    DVRLifecycleData_Stage = 4
+	DVRLifecycleData_STAGE_COMPLETED   DVRLifecycleData_Stage = 5
+	DVRLifecycleData_STAGE_FAILED      DVRLifecycleData_Stage = 6
+)
+
+// Enum value maps for DVRLifecycleData_Stage.
+var (
+	DVRLifecycleData_Stage_name = map[int32]string{
+		0: "STAGE_UNSPECIFIED",
+		1: "STAGE_REQUESTED",
+		2: "STAGE_RECORDING",
+		3: "STAGE_PROGRESS",
+		4: "STAGE_STOPPING",
+		5: "STAGE_COMPLETED",
+		6: "STAGE_FAILED",
+	}
+	DVRLifecycleData_Stage_value = map[string]int32{
+		"STAGE_UNSPECIFIED": 0,
+		"STAGE_REQUESTED":   1,
+		"STAGE_RECORDING":   2,
+		"STAGE_PROGRESS":    3,
+		"STAGE_STOPPING":    4,
+		"STAGE_COMPLETED":   5,
+		"STAGE_FAILED":      6,
+	}
+)
+
+func (x DVRLifecycleData_Stage) Enum() *DVRLifecycleData_Stage {
+	p := new(DVRLifecycleData_Stage)
+	*p = x
+	return p
+}
+
+func (x DVRLifecycleData_Stage) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (DVRLifecycleData_Stage) Descriptor() protoreflect.EnumDescriptor {
+	return file_decklog_proto_enumTypes[4].Descriptor()
+}
+
+func (DVRLifecycleData_Stage) Type() protoreflect.EnumType {
+	return &file_decklog_proto_enumTypes[4]
+}
+
+func (x DVRLifecycleData_Stage) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use DVRLifecycleData_Stage.Descriptor instead.
+func (DVRLifecycleData_Stage) EnumDescriptor() ([]byte, []int) {
+	return file_decklog_proto_rawDescGZIP(), []int{15, 0}
+}
+
 type Event struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	BatchId       string                 `protobuf:"bytes,1,opt,name=batch_id,json=batchId,proto3" json:"batch_id,omitempty"`
@@ -321,6 +446,8 @@ type EventData struct {
 	//	*EventData_TrackListData
 	//	*EventData_RecordingLifecycleData
 	//	*EventData_PushLifecycleData
+	//	*EventData_ClipLifecycleData
+	//	*EventData_DvrLifecycleData
 	EventData     isEventData_EventData `protobuf_oneof:"event_data"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -548,6 +675,24 @@ func (x *EventData) GetPushLifecycleData() *PushLifecycleData {
 	return nil
 }
 
+func (x *EventData) GetClipLifecycleData() *ClipLifecycleData {
+	if x != nil {
+		if x, ok := x.EventData.(*EventData_ClipLifecycleData); ok {
+			return x.ClipLifecycleData
+		}
+	}
+	return nil
+}
+
+func (x *EventData) GetDvrLifecycleData() *DVRLifecycleData {
+	if x != nil {
+		if x, ok := x.EventData.(*EventData_DvrLifecycleData); ok {
+			return x.DvrLifecycleData
+		}
+	}
+	return nil
+}
+
 type isEventData_EventData interface {
 	isEventData_EventData()
 }
@@ -600,6 +745,14 @@ type EventData_PushLifecycleData struct {
 	PushLifecycleData *PushLifecycleData `protobuf:"bytes,24,opt,name=push_lifecycle_data,json=pushLifecycleData,proto3,oneof"`
 }
 
+type EventData_ClipLifecycleData struct {
+	ClipLifecycleData *ClipLifecycleData `protobuf:"bytes,25,opt,name=clip_lifecycle_data,json=clipLifecycleData,proto3,oneof"`
+}
+
+type EventData_DvrLifecycleData struct {
+	DvrLifecycleData *DVRLifecycleData `protobuf:"bytes,26,opt,name=dvr_lifecycle_data,json=dvrLifecycleData,proto3,oneof"`
+}
+
 func (*EventData_StreamIngestData) isEventData_EventData() {}
 
 func (*EventData_StreamViewData) isEventData_EventData() {}
@@ -623,6 +776,10 @@ func (*EventData_TrackListData) isEventData_EventData() {}
 func (*EventData_RecordingLifecycleData) isEventData_EventData() {}
 
 func (*EventData_PushLifecycleData) isEventData_EventData() {}
+
+func (*EventData_ClipLifecycleData) isEventData_EventData() {}
+
+func (*EventData_DvrLifecycleData) isEventData_EventData() {}
 
 // Stream ingest specific data
 type StreamIngestData struct {
@@ -2175,6 +2332,187 @@ func (x *RecordingLifecycleData) GetNodeId() string {
 	return ""
 }
 
+// Clip lifecycle specific data
+type ClipLifecycleData struct {
+	state             protoimpl.MessageState  `protogen:"open.v1"`
+	Stage             ClipLifecycleData_Stage `protobuf:"varint,1,opt,name=stage,proto3,enum=decklog.ClipLifecycleData_Stage" json:"stage,omitempty"`
+	RequestId         string                  `protobuf:"bytes,2,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	Title             *string                 `protobuf:"bytes,3,opt,name=title,proto3,oneof" json:"title,omitempty"`
+	Format            *string                 `protobuf:"bytes,4,opt,name=format,proto3,oneof" json:"format,omitempty"`
+	StartUnix         *int64                  `protobuf:"varint,5,opt,name=start_unix,json=startUnix,proto3,oneof" json:"start_unix,omitempty"`
+	StopUnix          *int64                  `protobuf:"varint,6,opt,name=stop_unix,json=stopUnix,proto3,oneof" json:"stop_unix,omitempty"`
+	StartMs           *int64                  `protobuf:"varint,7,opt,name=start_ms,json=startMs,proto3,oneof" json:"start_ms,omitempty"`
+	StopMs            *int64                  `protobuf:"varint,8,opt,name=stop_ms,json=stopMs,proto3,oneof" json:"stop_ms,omitempty"`
+	DurationSec       *int64                  `protobuf:"varint,9,opt,name=duration_sec,json=durationSec,proto3,oneof" json:"duration_sec,omitempty"`
+	IngestNodeId      *string                 `protobuf:"bytes,10,opt,name=ingest_node_id,json=ingestNodeId,proto3,oneof" json:"ingest_node_id,omitempty"`
+	StorageNodeId     *string                 `protobuf:"bytes,11,opt,name=storage_node_id,json=storageNodeId,proto3,oneof" json:"storage_node_id,omitempty"`
+	RoutingDistanceKm *float64                `protobuf:"fixed64,12,opt,name=routing_distance_km,json=routingDistanceKm,proto3,oneof" json:"routing_distance_km,omitempty"`
+	Percent           *uint32                 `protobuf:"varint,13,opt,name=percent,proto3,oneof" json:"percent,omitempty"`
+	Message           *string                 `protobuf:"bytes,14,opt,name=message,proto3,oneof" json:"message,omitempty"`
+	FilePath          *string                 `protobuf:"bytes,15,opt,name=file_path,json=filePath,proto3,oneof" json:"file_path,omitempty"`
+	S3Url             *string                 `protobuf:"bytes,16,opt,name=s3_url,json=s3Url,proto3,oneof" json:"s3_url,omitempty"`
+	SizeBytes         *uint64                 `protobuf:"varint,17,opt,name=size_bytes,json=sizeBytes,proto3,oneof" json:"size_bytes,omitempty"`
+	Error             *string                 `protobuf:"bytes,18,opt,name=error,proto3,oneof" json:"error,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *ClipLifecycleData) Reset() {
+	*x = ClipLifecycleData{}
+	mi := &file_decklog_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ClipLifecycleData) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ClipLifecycleData) ProtoMessage() {}
+
+func (x *ClipLifecycleData) ProtoReflect() protoreflect.Message {
+	mi := &file_decklog_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ClipLifecycleData.ProtoReflect.Descriptor instead.
+func (*ClipLifecycleData) Descriptor() ([]byte, []int) {
+	return file_decklog_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *ClipLifecycleData) GetStage() ClipLifecycleData_Stage {
+	if x != nil {
+		return x.Stage
+	}
+	return ClipLifecycleData_STAGE_UNSPECIFIED
+}
+
+func (x *ClipLifecycleData) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *ClipLifecycleData) GetTitle() string {
+	if x != nil && x.Title != nil {
+		return *x.Title
+	}
+	return ""
+}
+
+func (x *ClipLifecycleData) GetFormat() string {
+	if x != nil && x.Format != nil {
+		return *x.Format
+	}
+	return ""
+}
+
+func (x *ClipLifecycleData) GetStartUnix() int64 {
+	if x != nil && x.StartUnix != nil {
+		return *x.StartUnix
+	}
+	return 0
+}
+
+func (x *ClipLifecycleData) GetStopUnix() int64 {
+	if x != nil && x.StopUnix != nil {
+		return *x.StopUnix
+	}
+	return 0
+}
+
+func (x *ClipLifecycleData) GetStartMs() int64 {
+	if x != nil && x.StartMs != nil {
+		return *x.StartMs
+	}
+	return 0
+}
+
+func (x *ClipLifecycleData) GetStopMs() int64 {
+	if x != nil && x.StopMs != nil {
+		return *x.StopMs
+	}
+	return 0
+}
+
+func (x *ClipLifecycleData) GetDurationSec() int64 {
+	if x != nil && x.DurationSec != nil {
+		return *x.DurationSec
+	}
+	return 0
+}
+
+func (x *ClipLifecycleData) GetIngestNodeId() string {
+	if x != nil && x.IngestNodeId != nil {
+		return *x.IngestNodeId
+	}
+	return ""
+}
+
+func (x *ClipLifecycleData) GetStorageNodeId() string {
+	if x != nil && x.StorageNodeId != nil {
+		return *x.StorageNodeId
+	}
+	return ""
+}
+
+func (x *ClipLifecycleData) GetRoutingDistanceKm() float64 {
+	if x != nil && x.RoutingDistanceKm != nil {
+		return *x.RoutingDistanceKm
+	}
+	return 0
+}
+
+func (x *ClipLifecycleData) GetPercent() uint32 {
+	if x != nil && x.Percent != nil {
+		return *x.Percent
+	}
+	return 0
+}
+
+func (x *ClipLifecycleData) GetMessage() string {
+	if x != nil && x.Message != nil {
+		return *x.Message
+	}
+	return ""
+}
+
+func (x *ClipLifecycleData) GetFilePath() string {
+	if x != nil && x.FilePath != nil {
+		return *x.FilePath
+	}
+	return ""
+}
+
+func (x *ClipLifecycleData) GetS3Url() string {
+	if x != nil && x.S3Url != nil {
+		return *x.S3Url
+	}
+	return ""
+}
+
+func (x *ClipLifecycleData) GetSizeBytes() uint64 {
+	if x != nil && x.SizeBytes != nil {
+		return *x.SizeBytes
+	}
+	return 0
+}
+
+func (x *ClipLifecycleData) GetError() string {
+	if x != nil && x.Error != nil {
+		return *x.Error
+	}
+	return ""
+}
+
 // Track list events data
 type TrackListData struct {
 	state                  protoimpl.MessageState `protogen:"open.v1"`
@@ -2199,7 +2537,7 @@ type TrackListData struct {
 
 func (x *TrackListData) Reset() {
 	*x = TrackListData{}
-	mi := &file_decklog_proto_msgTypes[13]
+	mi := &file_decklog_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2211,7 +2549,7 @@ func (x *TrackListData) String() string {
 func (*TrackListData) ProtoMessage() {}
 
 func (x *TrackListData) ProtoReflect() protoreflect.Message {
-	mi := &file_decklog_proto_msgTypes[13]
+	mi := &file_decklog_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2224,7 +2562,7 @@ func (x *TrackListData) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TrackListData.ProtoReflect.Descriptor instead.
 func (*TrackListData) Descriptor() ([]byte, []int) {
-	return file_decklog_proto_rawDescGZIP(), []int{13}
+	return file_decklog_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *TrackListData) GetTrackList() string {
@@ -2332,6 +2670,107 @@ func (x *TrackListData) GetNodeId() string {
 	return ""
 }
 
+// DVR lifecycle specific data
+type DVRLifecycleData struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Stage         DVRLifecycleData_Stage `protobuf:"varint,1,opt,name=stage,proto3,enum=decklog.DVRLifecycleData_Stage" json:"stage,omitempty"`
+	RequestId     string                 `protobuf:"bytes,2,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	IngestNodeId  *string                `protobuf:"bytes,3,opt,name=ingest_node_id,json=ingestNodeId,proto3,oneof" json:"ingest_node_id,omitempty"`
+	StorageNodeId *string                `protobuf:"bytes,4,opt,name=storage_node_id,json=storageNodeId,proto3,oneof" json:"storage_node_id,omitempty"`
+	DurationSec   *int64                 `protobuf:"varint,5,opt,name=duration_sec,json=durationSec,proto3,oneof" json:"duration_sec,omitempty"`
+	SizeBytes     *uint64                `protobuf:"varint,6,opt,name=size_bytes,json=sizeBytes,proto3,oneof" json:"size_bytes,omitempty"`
+	ManifestPath  *string                `protobuf:"bytes,7,opt,name=manifest_path,json=manifestPath,proto3,oneof" json:"manifest_path,omitempty"`
+	Error         *string                `protobuf:"bytes,8,opt,name=error,proto3,oneof" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DVRLifecycleData) Reset() {
+	*x = DVRLifecycleData{}
+	mi := &file_decklog_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DVRLifecycleData) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DVRLifecycleData) ProtoMessage() {}
+
+func (x *DVRLifecycleData) ProtoReflect() protoreflect.Message {
+	mi := &file_decklog_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DVRLifecycleData.ProtoReflect.Descriptor instead.
+func (*DVRLifecycleData) Descriptor() ([]byte, []int) {
+	return file_decklog_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *DVRLifecycleData) GetStage() DVRLifecycleData_Stage {
+	if x != nil {
+		return x.Stage
+	}
+	return DVRLifecycleData_STAGE_UNSPECIFIED
+}
+
+func (x *DVRLifecycleData) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *DVRLifecycleData) GetIngestNodeId() string {
+	if x != nil && x.IngestNodeId != nil {
+		return *x.IngestNodeId
+	}
+	return ""
+}
+
+func (x *DVRLifecycleData) GetStorageNodeId() string {
+	if x != nil && x.StorageNodeId != nil {
+		return *x.StorageNodeId
+	}
+	return ""
+}
+
+func (x *DVRLifecycleData) GetDurationSec() int64 {
+	if x != nil && x.DurationSec != nil {
+		return *x.DurationSec
+	}
+	return 0
+}
+
+func (x *DVRLifecycleData) GetSizeBytes() uint64 {
+	if x != nil && x.SizeBytes != nil {
+		return *x.SizeBytes
+	}
+	return 0
+}
+
+func (x *DVRLifecycleData) GetManifestPath() string {
+	if x != nil && x.ManifestPath != nil {
+		return *x.ManifestPath
+	}
+	return ""
+}
+
+func (x *DVRLifecycleData) GetError() string {
+	if x != nil && x.Error != nil {
+		return *x.Error
+	}
+	return ""
+}
+
 type EventResponse struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	Status         string                 `protobuf:"bytes,1,opt,name=status,proto3" json:"status,omitempty"`
@@ -2343,7 +2782,7 @@ type EventResponse struct {
 
 func (x *EventResponse) Reset() {
 	*x = EventResponse{}
-	mi := &file_decklog_proto_msgTypes[14]
+	mi := &file_decklog_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2355,7 +2794,7 @@ func (x *EventResponse) String() string {
 func (*EventResponse) ProtoMessage() {}
 
 func (x *EventResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_decklog_proto_msgTypes[14]
+	mi := &file_decklog_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2368,7 +2807,7 @@ func (x *EventResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EventResponse.ProtoReflect.Descriptor instead.
 func (*EventResponse) Descriptor() ([]byte, []int) {
-	return file_decklog_proto_rawDescGZIP(), []int{14}
+	return file_decklog_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *EventResponse) GetStatus() string {
@@ -2400,7 +2839,7 @@ type HealthRequest struct {
 
 func (x *HealthRequest) Reset() {
 	*x = HealthRequest{}
-	mi := &file_decklog_proto_msgTypes[15]
+	mi := &file_decklog_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2412,7 +2851,7 @@ func (x *HealthRequest) String() string {
 func (*HealthRequest) ProtoMessage() {}
 
 func (x *HealthRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_decklog_proto_msgTypes[15]
+	mi := &file_decklog_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2425,7 +2864,7 @@ func (x *HealthRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HealthRequest.ProtoReflect.Descriptor instead.
 func (*HealthRequest) Descriptor() ([]byte, []int) {
-	return file_decklog_proto_rawDescGZIP(), []int{15}
+	return file_decklog_proto_rawDescGZIP(), []int{17}
 }
 
 type HealthResponse struct {
@@ -2439,7 +2878,7 @@ type HealthResponse struct {
 
 func (x *HealthResponse) Reset() {
 	*x = HealthResponse{}
-	mi := &file_decklog_proto_msgTypes[16]
+	mi := &file_decklog_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2451,7 +2890,7 @@ func (x *HealthResponse) String() string {
 func (*HealthResponse) ProtoMessage() {}
 
 func (x *HealthResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_decklog_proto_msgTypes[16]
+	mi := &file_decklog_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2464,7 +2903,7 @@ func (x *HealthResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HealthResponse.ProtoReflect.Descriptor instead.
 func (*HealthResponse) Descriptor() ([]byte, []int) {
-	return file_decklog_proto_rawDescGZIP(), []int{16}
+	return file_decklog_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *HealthResponse) GetStatus() string {
@@ -2502,7 +2941,7 @@ const file_decklog_proto_rawDesc = "" +
 	"\ttimestamp\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xb1\v\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xca\f\n" +
 	"\tEventData\x12\x19\n" +
 	"\bevent_id\x18\x01 \x01(\tR\aeventId\x121\n" +
 	"\n" +
@@ -2529,7 +2968,9 @@ const file_decklog_proto_rawDesc = "" +
 	"\x15client_lifecycle_data\x18\x15 \x01(\v2\x1c.decklog.ClientLifecycleDataH\x00R\x13clientLifecycleData\x12@\n" +
 	"\x0ftrack_list_data\x18\x16 \x01(\v2\x16.decklog.TrackListDataH\x00R\rtrackListData\x12[\n" +
 	"\x18recording_lifecycle_data\x18\x17 \x01(\v2\x1f.decklog.RecordingLifecycleDataH\x00R\x16recordingLifecycleData\x12L\n" +
-	"\x13push_lifecycle_data\x18\x18 \x01(\v2\x1a.decklog.PushLifecycleDataH\x00R\x11pushLifecycleDataB\f\n" +
+	"\x13push_lifecycle_data\x18\x18 \x01(\v2\x1a.decklog.PushLifecycleDataH\x00R\x11pushLifecycleData\x12L\n" +
+	"\x13clip_lifecycle_data\x18\x19 \x01(\v2\x1a.decklog.ClipLifecycleDataH\x00R\x11clipLifecycleData\x12I\n" +
+	"\x12dvr_lifecycle_data\x18\x1a \x01(\v2\x19.decklog.DVRLifecycleDataH\x00R\x10dvrLifecycleDataB\f\n" +
 	"\n" +
 	"event_dataB\f\n" +
 	"\n" +
@@ -2853,7 +3294,60 @@ const file_decklog_proto_rawDesc = "" +
 	"\x11media_duration_ms\x18\a \x01(\x03R\x0fmediaDurationMs\x12\x1c\n" +
 	"\anode_id\x18\b \x01(\tH\x00R\x06nodeId\x88\x01\x01B\n" +
 	"\n" +
-	"\b_node_id\"\x9a\x05\n" +
+	"\b_node_id\"\xf8\a\n" +
+	"\x11ClipLifecycleData\x126\n" +
+	"\x05stage\x18\x01 \x01(\x0e2 .decklog.ClipLifecycleData.StageR\x05stage\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x02 \x01(\tR\trequestId\x12\x19\n" +
+	"\x05title\x18\x03 \x01(\tH\x00R\x05title\x88\x01\x01\x12\x1b\n" +
+	"\x06format\x18\x04 \x01(\tH\x01R\x06format\x88\x01\x01\x12\"\n" +
+	"\n" +
+	"start_unix\x18\x05 \x01(\x03H\x02R\tstartUnix\x88\x01\x01\x12 \n" +
+	"\tstop_unix\x18\x06 \x01(\x03H\x03R\bstopUnix\x88\x01\x01\x12\x1e\n" +
+	"\bstart_ms\x18\a \x01(\x03H\x04R\astartMs\x88\x01\x01\x12\x1c\n" +
+	"\astop_ms\x18\b \x01(\x03H\x05R\x06stopMs\x88\x01\x01\x12&\n" +
+	"\fduration_sec\x18\t \x01(\x03H\x06R\vdurationSec\x88\x01\x01\x12)\n" +
+	"\x0eingest_node_id\x18\n" +
+	" \x01(\tH\aR\fingestNodeId\x88\x01\x01\x12+\n" +
+	"\x0fstorage_node_id\x18\v \x01(\tH\bR\rstorageNodeId\x88\x01\x01\x123\n" +
+	"\x13routing_distance_km\x18\f \x01(\x01H\tR\x11routingDistanceKm\x88\x01\x01\x12\x1d\n" +
+	"\apercent\x18\r \x01(\rH\n" +
+	"R\apercent\x88\x01\x01\x12\x1d\n" +
+	"\amessage\x18\x0e \x01(\tH\vR\amessage\x88\x01\x01\x12 \n" +
+	"\tfile_path\x18\x0f \x01(\tH\fR\bfilePath\x88\x01\x01\x12\x1a\n" +
+	"\x06s3_url\x18\x10 \x01(\tH\rR\x05s3Url\x88\x01\x01\x12\"\n" +
+	"\n" +
+	"size_bytes\x18\x11 \x01(\x04H\x0eR\tsizeBytes\x88\x01\x01\x12\x19\n" +
+	"\x05error\x18\x12 \x01(\tH\x0fR\x05error\x88\x01\x01\"{\n" +
+	"\x05Stage\x12\x15\n" +
+	"\x11STAGE_UNSPECIFIED\x10\x00\x12\x13\n" +
+	"\x0fSTAGE_REQUESTED\x10\x01\x12\x10\n" +
+	"\fSTAGE_QUEUED\x10\x02\x12\x12\n" +
+	"\x0eSTAGE_PROGRESS\x10\x03\x12\x0e\n" +
+	"\n" +
+	"STAGE_DONE\x10\x04\x12\x10\n" +
+	"\fSTAGE_FAILED\x10\x05B\b\n" +
+	"\x06_titleB\t\n" +
+	"\a_formatB\r\n" +
+	"\v_start_unixB\f\n" +
+	"\n" +
+	"_stop_unixB\v\n" +
+	"\t_start_msB\n" +
+	"\n" +
+	"\b_stop_msB\x0f\n" +
+	"\r_duration_secB\x11\n" +
+	"\x0f_ingest_node_idB\x12\n" +
+	"\x10_storage_node_idB\x16\n" +
+	"\x14_routing_distance_kmB\n" +
+	"\n" +
+	"\b_percentB\n" +
+	"\n" +
+	"\b_messageB\f\n" +
+	"\n" +
+	"_file_pathB\t\n" +
+	"\a_s3_urlB\r\n" +
+	"\v_size_bytesB\b\n" +
+	"\x06_error\"\x9a\x05\n" +
 	"\rTrackListData\x12\x1d\n" +
 	"\n" +
 	"track_list\x18\x01 \x01(\tR\ttrackList\x12\x1f\n" +
@@ -2875,7 +3369,32 @@ const file_decklog_proto_rawDesc = "" +
 	"\fquality_tier\x18\x0e \x01(\tR\vqualityTier\x12\x1c\n" +
 	"\anode_id\x18\x0f \x01(\tH\x00R\x06nodeId\x88\x01\x01B\n" +
 	"\n" +
-	"\b_node_id\"j\n" +
+	"\b_node_id\"\xce\x04\n" +
+	"\x10DVRLifecycleData\x125\n" +
+	"\x05stage\x18\x01 \x01(\x0e2\x1f.decklog.DVRLifecycleData.StageR\x05stage\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x02 \x01(\tR\trequestId\x12)\n" +
+	"\x0eingest_node_id\x18\x03 \x01(\tH\x00R\fingestNodeId\x88\x01\x01\x12+\n" +
+	"\x0fstorage_node_id\x18\x04 \x01(\tH\x01R\rstorageNodeId\x88\x01\x01\x12&\n" +
+	"\fduration_sec\x18\x05 \x01(\x03H\x02R\vdurationSec\x88\x01\x01\x12\"\n" +
+	"\n" +
+	"size_bytes\x18\x06 \x01(\x04H\x03R\tsizeBytes\x88\x01\x01\x12(\n" +
+	"\rmanifest_path\x18\a \x01(\tH\x04R\fmanifestPath\x88\x01\x01\x12\x19\n" +
+	"\x05error\x18\b \x01(\tH\x05R\x05error\x88\x01\x01\"\x97\x01\n" +
+	"\x05Stage\x12\x15\n" +
+	"\x11STAGE_UNSPECIFIED\x10\x00\x12\x13\n" +
+	"\x0fSTAGE_REQUESTED\x10\x01\x12\x13\n" +
+	"\x0fSTAGE_RECORDING\x10\x02\x12\x12\n" +
+	"\x0eSTAGE_PROGRESS\x10\x03\x12\x12\n" +
+	"\x0eSTAGE_STOPPING\x10\x04\x12\x13\n" +
+	"\x0fSTAGE_COMPLETED\x10\x05\x12\x10\n" +
+	"\fSTAGE_FAILED\x10\x06B\x11\n" +
+	"\x0f_ingest_node_idB\x12\n" +
+	"\x10_storage_node_idB\x0f\n" +
+	"\r_duration_secB\r\n" +
+	"\v_size_bytesB\x10\n" +
+	"\x0e_manifest_pathB\b\n" +
+	"\x06_error\"j\n" +
 	"\rEventResponse\x12\x16\n" +
 	"\x06status\x18\x01 \x01(\tR\x06status\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\x12'\n" +
@@ -2884,7 +3403,7 @@ const file_decklog_proto_rawDesc = "" +
 	"\x0eHealthResponse\x12\x16\n" +
 	"\x06status\x18\x01 \x01(\tR\x06status\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\tR\aversion\x128\n" +
-	"\ttimestamp\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp*\xbc\x03\n" +
+	"\ttimestamp\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp*\xf9\x03\n" +
 	"\tEventType\x12\x1a\n" +
 	"\x16EVENT_TYPE_UNSPECIFIED\x10\x00\x12\x1c\n" +
 	"\x18EVENT_TYPE_STREAM_INGEST\x10\x01\x12\x1a\n" +
@@ -2900,7 +3419,9 @@ const file_decklog_proto_rawDesc = "" +
 	"\x12\x1c\n" +
 	"\x18EVENT_TYPE_STREAM_BUFFER\x10\v\x12\x19\n" +
 	"\x15EVENT_TYPE_STREAM_END\x10\f\x12\"\n" +
-	"\x1eEVENT_TYPE_BANDWIDTH_THRESHOLD\x10\r2\xc1\x01\n" +
+	"\x1eEVENT_TYPE_BANDWIDTH_THRESHOLD\x10\r\x12\x1d\n" +
+	"\x19EVENT_TYPE_CLIP_LIFECYCLE\x10\x0e\x12\x1c\n" +
+	"\x18EVENT_TYPE_DVR_LIFECYCLE\x10\x0f2\xc1\x01\n" +
 	"\x0eDecklogService\x12:\n" +
 	"\fStreamEvents\x12\x0e.decklog.Event\x1a\x16.decklog.EventResponse(\x010\x01\x123\n" +
 	"\tSendEvent\x12\x0e.decklog.Event\x1a\x16.decklog.EventResponse\x12>\n" +
@@ -2918,64 +3439,72 @@ func file_decklog_proto_rawDescGZIP() []byte {
 	return file_decklog_proto_rawDescData
 }
 
-var file_decklog_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_decklog_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
+var file_decklog_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
+var file_decklog_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
 var file_decklog_proto_goTypes = []any{
 	(EventType)(0),                 // 0: decklog.EventType
 	(StreamLifecycleData_State)(0), // 1: decklog.StreamLifecycleData.State
 	(UserConnectionData_Action)(0), // 2: decklog.UserConnectionData.Action
-	(*Event)(nil),                  // 3: decklog.Event
-	(*EventData)(nil),              // 4: decklog.EventData
-	(*StreamIngestData)(nil),       // 5: decklog.StreamIngestData
-	(*StreamViewData)(nil),         // 6: decklog.StreamViewData
-	(*StreamLifecycleData)(nil),    // 7: decklog.StreamLifecycleData
-	(*UserConnectionData)(nil),     // 8: decklog.UserConnectionData
-	(*StreamMetricsData)(nil),      // 9: decklog.StreamMetricsData
-	(*NodeMonitoringData)(nil),     // 10: decklog.NodeMonitoringData
-	(*LoadBalancingData)(nil),      // 11: decklog.LoadBalancingData
-	(*ClientLifecycleData)(nil),    // 12: decklog.ClientLifecycleData
-	(*BandwidthThresholdData)(nil), // 13: decklog.BandwidthThresholdData
-	(*PushLifecycleData)(nil),      // 14: decklog.PushLifecycleData
-	(*RecordingLifecycleData)(nil), // 15: decklog.RecordingLifecycleData
-	(*TrackListData)(nil),          // 16: decklog.TrackListData
-	(*EventResponse)(nil),          // 17: decklog.EventResponse
-	(*HealthRequest)(nil),          // 18: decklog.HealthRequest
-	(*HealthResponse)(nil),         // 19: decklog.HealthResponse
-	nil,                            // 20: decklog.Event.MetadataEntry
-	(*timestamppb.Timestamp)(nil),  // 21: google.protobuf.Timestamp
+	(ClipLifecycleData_Stage)(0),   // 3: decklog.ClipLifecycleData.Stage
+	(DVRLifecycleData_Stage)(0),    // 4: decklog.DVRLifecycleData.Stage
+	(*Event)(nil),                  // 5: decklog.Event
+	(*EventData)(nil),              // 6: decklog.EventData
+	(*StreamIngestData)(nil),       // 7: decklog.StreamIngestData
+	(*StreamViewData)(nil),         // 8: decklog.StreamViewData
+	(*StreamLifecycleData)(nil),    // 9: decklog.StreamLifecycleData
+	(*UserConnectionData)(nil),     // 10: decklog.UserConnectionData
+	(*StreamMetricsData)(nil),      // 11: decklog.StreamMetricsData
+	(*NodeMonitoringData)(nil),     // 12: decklog.NodeMonitoringData
+	(*LoadBalancingData)(nil),      // 13: decklog.LoadBalancingData
+	(*ClientLifecycleData)(nil),    // 14: decklog.ClientLifecycleData
+	(*BandwidthThresholdData)(nil), // 15: decklog.BandwidthThresholdData
+	(*PushLifecycleData)(nil),      // 16: decklog.PushLifecycleData
+	(*RecordingLifecycleData)(nil), // 17: decklog.RecordingLifecycleData
+	(*ClipLifecycleData)(nil),      // 18: decklog.ClipLifecycleData
+	(*TrackListData)(nil),          // 19: decklog.TrackListData
+	(*DVRLifecycleData)(nil),       // 20: decklog.DVRLifecycleData
+	(*EventResponse)(nil),          // 21: decklog.EventResponse
+	(*HealthRequest)(nil),          // 22: decklog.HealthRequest
+	(*HealthResponse)(nil),         // 23: decklog.HealthResponse
+	nil,                            // 24: decklog.Event.MetadataEntry
+	(*timestamppb.Timestamp)(nil),  // 25: google.protobuf.Timestamp
 }
 var file_decklog_proto_depIdxs = []int32{
-	4,  // 0: decklog.Event.events:type_name -> decklog.EventData
-	20, // 1: decklog.Event.metadata:type_name -> decklog.Event.MetadataEntry
-	21, // 2: decklog.Event.timestamp:type_name -> google.protobuf.Timestamp
+	6,  // 0: decklog.Event.events:type_name -> decklog.EventData
+	24, // 1: decklog.Event.metadata:type_name -> decklog.Event.MetadataEntry
+	25, // 2: decklog.Event.timestamp:type_name -> google.protobuf.Timestamp
 	0,  // 3: decklog.EventData.event_type:type_name -> decklog.EventType
-	21, // 4: decklog.EventData.timestamp:type_name -> google.protobuf.Timestamp
-	5,  // 5: decklog.EventData.stream_ingest_data:type_name -> decklog.StreamIngestData
-	6,  // 6: decklog.EventData.stream_view_data:type_name -> decklog.StreamViewData
-	7,  // 7: decklog.EventData.stream_lifecycle_data:type_name -> decklog.StreamLifecycleData
-	8,  // 8: decklog.EventData.user_connection_data:type_name -> decklog.UserConnectionData
-	9,  // 9: decklog.EventData.stream_metrics_data:type_name -> decklog.StreamMetricsData
-	10, // 10: decklog.EventData.node_monitoring_data:type_name -> decklog.NodeMonitoringData
-	11, // 11: decklog.EventData.load_balancing_data:type_name -> decklog.LoadBalancingData
-	13, // 12: decklog.EventData.bandwidth_threshold_data:type_name -> decklog.BandwidthThresholdData
-	12, // 13: decklog.EventData.client_lifecycle_data:type_name -> decklog.ClientLifecycleData
-	16, // 14: decklog.EventData.track_list_data:type_name -> decklog.TrackListData
-	15, // 15: decklog.EventData.recording_lifecycle_data:type_name -> decklog.RecordingLifecycleData
-	14, // 16: decklog.EventData.push_lifecycle_data:type_name -> decklog.PushLifecycleData
-	1,  // 17: decklog.StreamLifecycleData.state:type_name -> decklog.StreamLifecycleData.State
-	2,  // 18: decklog.UserConnectionData.action:type_name -> decklog.UserConnectionData.Action
-	21, // 19: decklog.HealthResponse.timestamp:type_name -> google.protobuf.Timestamp
-	3,  // 20: decklog.DecklogService.StreamEvents:input_type -> decklog.Event
-	3,  // 21: decklog.DecklogService.SendEvent:input_type -> decklog.Event
-	18, // 22: decklog.DecklogService.CheckHealth:input_type -> decklog.HealthRequest
-	17, // 23: decklog.DecklogService.StreamEvents:output_type -> decklog.EventResponse
-	17, // 24: decklog.DecklogService.SendEvent:output_type -> decklog.EventResponse
-	19, // 25: decklog.DecklogService.CheckHealth:output_type -> decklog.HealthResponse
-	23, // [23:26] is the sub-list for method output_type
-	20, // [20:23] is the sub-list for method input_type
-	20, // [20:20] is the sub-list for extension type_name
-	20, // [20:20] is the sub-list for extension extendee
-	0,  // [0:20] is the sub-list for field type_name
+	25, // 4: decklog.EventData.timestamp:type_name -> google.protobuf.Timestamp
+	7,  // 5: decklog.EventData.stream_ingest_data:type_name -> decklog.StreamIngestData
+	8,  // 6: decklog.EventData.stream_view_data:type_name -> decklog.StreamViewData
+	9,  // 7: decklog.EventData.stream_lifecycle_data:type_name -> decklog.StreamLifecycleData
+	10, // 8: decklog.EventData.user_connection_data:type_name -> decklog.UserConnectionData
+	11, // 9: decklog.EventData.stream_metrics_data:type_name -> decklog.StreamMetricsData
+	12, // 10: decklog.EventData.node_monitoring_data:type_name -> decklog.NodeMonitoringData
+	13, // 11: decklog.EventData.load_balancing_data:type_name -> decklog.LoadBalancingData
+	15, // 12: decklog.EventData.bandwidth_threshold_data:type_name -> decklog.BandwidthThresholdData
+	14, // 13: decklog.EventData.client_lifecycle_data:type_name -> decklog.ClientLifecycleData
+	19, // 14: decklog.EventData.track_list_data:type_name -> decklog.TrackListData
+	17, // 15: decklog.EventData.recording_lifecycle_data:type_name -> decklog.RecordingLifecycleData
+	16, // 16: decklog.EventData.push_lifecycle_data:type_name -> decklog.PushLifecycleData
+	18, // 17: decklog.EventData.clip_lifecycle_data:type_name -> decklog.ClipLifecycleData
+	20, // 18: decklog.EventData.dvr_lifecycle_data:type_name -> decklog.DVRLifecycleData
+	1,  // 19: decklog.StreamLifecycleData.state:type_name -> decklog.StreamLifecycleData.State
+	2,  // 20: decklog.UserConnectionData.action:type_name -> decklog.UserConnectionData.Action
+	3,  // 21: decklog.ClipLifecycleData.stage:type_name -> decklog.ClipLifecycleData.Stage
+	4,  // 22: decklog.DVRLifecycleData.stage:type_name -> decklog.DVRLifecycleData.Stage
+	25, // 23: decklog.HealthResponse.timestamp:type_name -> google.protobuf.Timestamp
+	5,  // 24: decklog.DecklogService.StreamEvents:input_type -> decklog.Event
+	5,  // 25: decklog.DecklogService.SendEvent:input_type -> decklog.Event
+	22, // 26: decklog.DecklogService.CheckHealth:input_type -> decklog.HealthRequest
+	21, // 27: decklog.DecklogService.StreamEvents:output_type -> decklog.EventResponse
+	21, // 28: decklog.DecklogService.SendEvent:output_type -> decklog.EventResponse
+	23, // 29: decklog.DecklogService.CheckHealth:output_type -> decklog.HealthResponse
+	27, // [27:30] is the sub-list for method output_type
+	24, // [24:27] is the sub-list for method input_type
+	24, // [24:24] is the sub-list for extension type_name
+	24, // [24:24] is the sub-list for extension extendee
+	0,  // [0:24] is the sub-list for field type_name
 }
 
 func init() { file_decklog_proto_init() }
@@ -2996,6 +3525,8 @@ func file_decklog_proto_init() {
 		(*EventData_TrackListData)(nil),
 		(*EventData_RecordingLifecycleData)(nil),
 		(*EventData_PushLifecycleData)(nil),
+		(*EventData_ClipLifecycleData)(nil),
+		(*EventData_DvrLifecycleData)(nil),
 	}
 	file_decklog_proto_msgTypes[2].OneofWrappers = []any{}
 	file_decklog_proto_msgTypes[3].OneofWrappers = []any{}
@@ -3009,13 +3540,15 @@ func file_decklog_proto_init() {
 	file_decklog_proto_msgTypes[11].OneofWrappers = []any{}
 	file_decklog_proto_msgTypes[12].OneofWrappers = []any{}
 	file_decklog_proto_msgTypes[13].OneofWrappers = []any{}
+	file_decklog_proto_msgTypes[14].OneofWrappers = []any{}
+	file_decklog_proto_msgTypes[15].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_decklog_proto_rawDesc), len(file_decklog_proto_rawDesc)),
-			NumEnums:      3,
-			NumMessages:   18,
+			NumEnums:      5,
+			NumMessages:   20,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

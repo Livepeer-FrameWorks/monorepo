@@ -14,3 +14,7 @@ mutation CreateClip($input: CreateClipInput!) {
     updatedAt
   }
 }
+
+mutation DeleteClip($id: ID!) {
+  deleteClip(id: $id)
+}

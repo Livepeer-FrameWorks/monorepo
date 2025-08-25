@@ -160,7 +160,7 @@ func GetStreamAnalytics(c *gin.Context) {
 		       sa.location, 
 		       sa.status, 
 		       sa.last_updated, sa.created_at
-		FROM stream_analytics sa
+		FROM periscope.stream_analytics sa
 		WHERE sa.tenant_id = $1 AND sa.last_updated >= $2 AND sa.last_updated <= $3`
 
 	args := []interface{}{tenantID, startParsed, endParsed}
@@ -578,7 +578,7 @@ func GetStreamDetails(c *gin.Context) {
 		       sa.location, 
 		       sa.status, 
 		       sa.last_updated, sa.created_at
-		FROM stream_analytics sa
+		FROM periscope.stream_analytics sa
 		WHERE sa.tenant_id = $1 AND sa.internal_name = $2
 	`, tenantID, internalName).Scan(
 		&sa.ID, &sa.TenantID, &sa.InternalName,
@@ -776,7 +776,7 @@ func GetViewerStats(c *gin.Context) {
 	var currentViewers, peakViewers, totalConnections int
 	err := yugaDB.QueryRowContext(c.Request.Context(), `
 		SELECT current_viewers, peak_viewers, total_connections
-		FROM stream_analytics
+		FROM periscope.stream_analytics
 		WHERE tenant_id = $1 AND internal_name = $2
 	`, tenantID, internalName).Scan(&currentViewers, &peakViewers, &totalConnections)
 
@@ -927,7 +927,7 @@ func GetPlatformOverview(c *gin.Context) {
 		SELECT 
 			COUNT(DISTINCT internal_name) as total_streams,
 			COUNT(DISTINCT CASE WHEN status = 'live' THEN internal_name END) as active_streams
-		FROM stream_analytics 
+		FROM periscope.stream_analytics 
 		WHERE tenant_id = $1 
 		AND last_updated > NOW() - INTERVAL '24 hours'
 	`, tenantID).Scan(&metrics.TotalStreams, &metrics.ActiveStreams)
@@ -1017,7 +1017,7 @@ func GetRealtimeStreams(c *gin.Context) {
 	rows, err := yugaDB.QueryContext(c.Request.Context(), `
 		SELECT sa.internal_name, sa.current_viewers, sa.bandwidth_in, 
 		       sa.bandwidth_out, sa.status, sa.node_id, sa.location
-		FROM stream_analytics sa
+		FROM periscope.stream_analytics sa
 		WHERE sa.tenant_id = $1 AND sa.status = 'live' 
 		AND sa.last_updated > NOW() - INTERVAL '5 minutes'
 		ORDER BY sa.current_viewers DESC
@@ -1929,4 +1929,122 @@ func GetStreamEndEvents(c *gin.Context) {
 	}
 	response := periscope.EndEventsResponse(events)
 	c.JSON(http.StatusOK, response)
+}
+
+// GetClipEvents returns clip lifecycle events from ClickHouse
+func GetClipEvents(c *gin.Context) {
+	tenantID := c.GetString("tenant_id")
+	if tenantID == "" {
+		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Tenant context required"})
+		return
+	}
+
+	internalName := c.Query("internal_name")
+	stage := c.Query("stage")
+	startTimeStr := c.DefaultQuery("start_time", time.Now().Add(-24*time.Hour).Format(time.RFC3339))
+	endTimeStr := c.DefaultQuery("end_time", time.Now().Format(time.RFC3339))
+	offset := c.DefaultQuery("offset", "0")
+	limit := c.DefaultQuery("limit", "100")
+
+	startTime, err := time.Parse(time.RFC3339, startTimeStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Invalid start_time format. Use RFC3339."})
+		return
+	}
+	endTime, err := time.Parse(time.RFC3339, endTimeStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Invalid end_time format. Use RFC3339."})
+		return
+	}
+
+	query := `
+		SELECT timestamp, internal_name, request_id, stage, content_type, title, format,
+		       start_unix, stop_unix, start_ms, stop_ms, duration_sec,
+		       ingest_node_id, storage_node_id, routing_distance_km,
+		       percent, message, file_path, s3_url, size_bytes
+		FROM clip_events
+		WHERE tenant_id = ? AND timestamp BETWEEN ? AND ?`
+	args := []interface{}{tenantID, startTime, endTime}
+	if internalName != "" {
+		query += " AND internal_name = ?"
+		args = append(args, internalName)
+	}
+	if stage != "" {
+		query += " AND stage = ?"
+		args = append(args, stage)
+	}
+	// Optional filter by content_type
+	if ct := c.Query("content_type"); ct != "" {
+		query += " AND content_type = ?"
+		args = append(args, ct)
+	}
+	query += " ORDER BY timestamp DESC LIMIT ? OFFSET ?"
+	// ClickHouse expects UInt64 for limit/offset; driver will coerce from string if needed
+	args = append(args, limit, offset)
+
+	rows, err := clickhouse.QueryContext(c.Request.Context(), query, args...)
+	if err != nil {
+		logger.WithError(err).Error("Failed to fetch clip events from ClickHouse")
+		c.JSON(http.StatusInternalServerError, periscope.ErrorResponse{Error: "Failed to fetch clip events"})
+		return
+	}
+	defer rows.Close()
+
+	type ClipEvent struct {
+		Timestamp         time.Time `json:"timestamp"`
+		InternalName      string    `json:"internal_name"`
+		RequestID         string    `json:"request_id"`
+		Stage             string    `json:"stage"`
+		ContentType       *string   `json:"content_type,omitempty"`
+		Title             *string   `json:"title,omitempty"`
+		Format            *string   `json:"format,omitempty"`
+		StartUnix         *int64    `json:"start_unix,omitempty"`
+		StopUnix          *int64    `json:"stop_unix,omitempty"`
+		StartMs           *int64    `json:"start_ms,omitempty"`
+		StopMs            *int64    `json:"stop_ms,omitempty"`
+		DurationSec       *int64    `json:"duration_sec,omitempty"`
+		IngestNodeID      *string   `json:"ingest_node_id,omitempty"`
+		StorageNodeID     *string   `json:"storage_node_id,omitempty"`
+		RoutingDistanceKm *float64  `json:"routing_distance_km,omitempty"`
+		Percent           *uint32   `json:"percent,omitempty"`
+		Message           *string   `json:"message,omitempty"`
+		FilePath          *string   `json:"file_path,omitempty"`
+		S3URL             *string   `json:"s3_url,omitempty"`
+		SizeBytes         *uint64   `json:"size_bytes,omitempty"`
+	}
+
+	var events []ClipEvent
+	for rows.Next() {
+		var ev ClipEvent
+		if err := rows.Scan(
+			&ev.Timestamp,
+			&ev.InternalName,
+			&ev.RequestID,
+			&ev.Stage,
+			&ev.ContentType,
+			&ev.Title,
+			&ev.Format,
+			&ev.StartUnix,
+			&ev.StopUnix,
+			&ev.StartMs,
+			&ev.StopMs,
+			&ev.DurationSec,
+			&ev.IngestNodeID,
+			&ev.StorageNodeID,
+			&ev.RoutingDistanceKm,
+			&ev.Percent,
+			&ev.Message,
+			&ev.FilePath,
+			&ev.S3URL,
+			&ev.SizeBytes,
+		); err != nil {
+			logger.WithError(err).Error("Error scanning clip event row")
+			continue
+		}
+		events = append(events, ev)
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"events": events,
+	})
 }

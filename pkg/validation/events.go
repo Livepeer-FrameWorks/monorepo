@@ -39,6 +39,8 @@ const (
 	EventStreamEnd EventType = "stream-end"
 	// Emitted by Helmsman on MistServer LIVE_BANDWIDTH webhook
 	EventBandwidthThreshold EventType = "bandwidth-threshold"
+	// Emitted across Commodore→Foghorn→Helmsman during server-side clip pulls
+	EventClipLifecycle EventType = "clip-lifecycle"
 )
 
 // BaseEvent is the normalized envelope for a single analytics event as received
@@ -67,6 +69,7 @@ type BaseEvent struct {
 	NodeLifecycle      *NodeLifecyclePayload      `json:"node_lifecycle,omitempty"`
 	ClientLifecycle    *ClientLifecyclePayload    `json:"client_lifecycle,omitempty"`
 	LoadBalancing      *LoadBalancingPayload      `json:"load_balancing,omitempty"`
+	ClipLifecycle      *ClipLifecyclePayload      `json:"clip_lifecycle,omitempty"`
 }
 
 // BatchedEvents matches Decklog's gRPC batch envelope. All contained events are
@@ -136,6 +139,8 @@ func (v *EventValidator) validateEventData(event BaseEvent) error {
 		return v.validateLoadBalancingEvent(event)
 	case EventBandwidthThreshold:
 		return v.validateBandwidthThresholdEvent(event)
+	case EventClipLifecycle:
+		return v.validateClipLifecycleEvent(event)
 	default:
 		return fmt.Errorf("unknown event type: %s", event.EventType)
 	}
@@ -306,6 +311,22 @@ func (v *EventValidator) validateBandwidthThresholdEvent(event BaseEvent) error 
 		return fmt.Errorf("bandwidth_threshold payload with threshold_exceeded=true is required")
 	}
 	return nil
+}
+
+// validateClipLifecycleEvent validates clip lifecycle events.
+func (v *EventValidator) validateClipLifecycleEvent(event BaseEvent) error {
+	if event.ClipLifecycle == nil {
+		return fmt.Errorf("clip_lifecycle payload is required")
+	}
+	if event.ClipLifecycle.RequestID == "" {
+		return fmt.Errorf("request_id is required for clip_lifecycle events")
+	}
+	switch event.ClipLifecycle.Stage {
+	case "requested", "queued", "progress", "done", "failed":
+		return nil
+	default:
+		return fmt.Errorf("invalid stage: %s", event.ClipLifecycle.Stage)
+	}
 }
 
 // EnrichEvent fills commonly missing metadata (timestamp, schema version) and

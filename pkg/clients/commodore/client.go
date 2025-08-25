@@ -582,6 +582,361 @@ func (c *Client) CreateClip(ctx context.Context, userToken string, req *commodor
 	return &clip, nil
 }
 
+// GetClips retrieves all clips for the authenticated user
+func (c *Client) GetClips(ctx context.Context, userToken string, streamID *string) (*commodore.ClipsListResponse, error) {
+	urlBuilder := c.baseURL + "/clips"
+
+	// Add optional stream_id filter
+	if streamID != nil && *streamID != "" {
+		params := url.Values{}
+		params.Add("stream_id", *streamID)
+		urlBuilder += "?" + params.Encode()
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "GET", urlBuilder, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+userToken)
+
+	resp, err := clients.DoWithRetry(ctx, c.httpClient, req, c.retryConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call Commodore: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		var errorResp commodore.ErrorResponse
+		if err := json.Unmarshal(body, &errorResp); err != nil {
+			return nil, fmt.Errorf("failed to get clips with status %d: %s", resp.StatusCode, string(body))
+		}
+		return nil, fmt.Errorf("failed to get clips: %s", errorResp.Error)
+	}
+
+	var clipsResp commodore.ClipsListResponse
+	if err := json.Unmarshal(body, &clipsResp); err != nil {
+		return nil, fmt.Errorf("failed to parse clips response: %w", err)
+	}
+
+	return &clipsResp, nil
+}
+
+// GetClip retrieves a specific clip by ID
+func (c *Client) GetClip(ctx context.Context, userToken string, clipID string) (*commodore.ClipFullResponse, error) {
+	url := fmt.Sprintf("%s/clips/%s", c.baseURL, url.PathEscape(clipID))
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+userToken)
+
+	resp, err := clients.DoWithRetry(ctx, c.httpClient, req, c.retryConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call Commodore: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		var errorResp commodore.ErrorResponse
+		if err := json.Unmarshal(body, &errorResp); err != nil {
+			return nil, fmt.Errorf("failed to get clip with status %d: %s", resp.StatusCode, string(body))
+		}
+		return nil, fmt.Errorf("failed to get clip: %s", errorResp.Error)
+	}
+
+	var clip commodore.ClipFullResponse
+	if err := json.Unmarshal(body, &clip); err != nil {
+		return nil, fmt.Errorf("failed to parse clip response: %w", err)
+	}
+
+	return &clip, nil
+}
+
+// GetClipURLs retrieves viewing URLs for a specific clip
+func (c *Client) GetClipURLs(ctx context.Context, userToken string, clipID string) (*commodore.ClipViewingURLs, error) {
+	url := fmt.Sprintf("%s/clips/%s/urls", c.baseURL, url.PathEscape(clipID))
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+userToken)
+
+	resp, err := clients.DoWithRetry(ctx, c.httpClient, req, c.retryConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call Commodore: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		var errorResp commodore.ErrorResponse
+		if err := json.Unmarshal(body, &errorResp); err != nil {
+			return nil, fmt.Errorf("failed to get clip URLs with status %d: %s", resp.StatusCode, string(body))
+		}
+		return nil, fmt.Errorf("failed to get clip URLs: %s", errorResp.Error)
+	}
+
+	var clipURLs commodore.ClipViewingURLs
+	if err := json.Unmarshal(body, &clipURLs); err != nil {
+		return nil, fmt.Errorf("failed to parse clip URLs response: %w", err)
+	}
+
+	return &clipURLs, nil
+}
+
+// DeleteClip deletes a clip by ID
+func (c *Client) DeleteClip(ctx context.Context, userToken string, clipID string) error {
+	url := fmt.Sprintf("%s/clips/%s", c.baseURL, url.PathEscape(clipID))
+	req, err := http.NewRequestWithContext(ctx, "DELETE", url, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+userToken)
+
+	resp, err := clients.DoWithRetry(ctx, c.httpClient, req, c.retryConfig)
+	if err != nil {
+		return fmt.Errorf("failed to call Commodore: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(resp.Body)
+		var errorResp commodore.ErrorResponse
+		if err := json.Unmarshal(body, &errorResp); err != nil {
+			return fmt.Errorf("failed to delete clip with status %d: %s", resp.StatusCode, string(body))
+		}
+		return fmt.Errorf("failed to delete clip: %s", errorResp.Error)
+	}
+
+	return nil
+}
+
+// === DVR MANAGEMENT ===
+
+// StartDVR starts a DVR recording via Commodore -> Foghorn proxy
+func (c *Client) StartDVR(ctx context.Context, userToken string, req *commodore.StartDVRRequest) (*commodore.StartDVRResponse, error) {
+	bodyBytes, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal DVR start request: %w", err)
+	}
+	url := c.baseURL + "/dvr/start"
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(bodyBytes))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+userToken)
+
+	resp, err := clients.DoWithRetry(ctx, c.httpClient, httpReq, c.retryConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call Commodore: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		var errorResp commodore.ErrorResponse
+		if err := json.Unmarshal(body, &errorResp); err != nil {
+			return nil, fmt.Errorf("Commodore returned error status %d: %s", resp.StatusCode, string(body))
+		}
+		return nil, fmt.Errorf("Commodore returned error: %s", errorResp.Error)
+	}
+	var out commodore.StartDVRResponse
+	if err := json.Unmarshal(body, &out); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+	return &out, nil
+}
+
+// StopDVR stops an active DVR recording via Commodore
+func (c *Client) StopDVR(ctx context.Context, userToken, dvrHash string) error {
+	url := c.baseURL + "/dvr/stop"
+	body := map[string]string{"dvr_hash": dvrHash}
+	b, _ := json.Marshal(body)
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(b))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+userToken)
+	resp, err := clients.DoWithRetry(ctx, c.httpClient, httpReq, c.retryConfig)
+	if err != nil {
+		return fmt.Errorf("failed to call Commodore: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		var errorResp commodore.ErrorResponse
+		if err := json.Unmarshal(body, &errorResp); err != nil {
+			return fmt.Errorf("Commodore returned error status %d: %s", resp.StatusCode, string(body))
+		}
+		return fmt.Errorf("Commodore returned error: %s", errorResp.Error)
+	}
+	return nil
+}
+
+// GetRecordingConfig fetches a stream's recording configuration
+func (c *Client) GetRecordingConfig(ctx context.Context, userToken, internalName string) (*commodore.RecordingConfig, error) {
+	url := fmt.Sprintf("%s/streams/%s/recording-config", c.baseURL, url.PathEscape(internalName))
+	httpReq, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+userToken)
+	resp, err := clients.DoWithRetry(ctx, c.httpClient, httpReq, c.retryConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call Commodore: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		var errorResp commodore.ErrorResponse
+		if err := json.Unmarshal(body, &errorResp); err != nil {
+			return nil, fmt.Errorf("Commodore returned error status %d: %s", resp.StatusCode, string(body))
+		}
+		return nil, fmt.Errorf("Commodore returned error: %s", errorResp.Error)
+	}
+	var cfg commodore.RecordingConfig
+	if err := json.Unmarshal(body, &cfg); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+	return &cfg, nil
+}
+
+// SetRecordingConfig updates a stream's recording configuration
+func (c *Client) SetRecordingConfig(ctx context.Context, userToken, internalName string, cfg commodore.RecordingConfig) (*commodore.RecordingConfig, error) {
+	url := fmt.Sprintf("%s/streams/%s/recording-config", c.baseURL, url.PathEscape(internalName))
+	body, _ := json.Marshal(cfg)
+	httpReq, err := http.NewRequestWithContext(ctx, "PUT", url, bytes.NewBuffer(body))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+userToken)
+	resp, err := clients.DoWithRetry(ctx, c.httpClient, httpReq, c.retryConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call Commodore: %w", err)
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		var errorResp commodore.ErrorResponse
+		if err := json.Unmarshal(respBody, &errorResp); err != nil {
+			return nil, fmt.Errorf("Commodore returned error status %d: %s", resp.StatusCode, string(respBody))
+		}
+		return nil, fmt.Errorf("Commodore returned error: %s", errorResp.Error)
+	}
+	var out commodore.RecordingConfig
+	if err := json.Unmarshal(respBody, &out); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+	return &out, nil
+}
+
+// ListDVRRequests lists DVR recordings via Commodore proxy
+func (c *Client) ListDVRRequests(ctx context.Context, userToken string, internalName *string, status *string, page, limit *int) (*commodore.DVRListResponse, error) {
+	v := url.Values{}
+	if internalName != nil && *internalName != "" {
+		v.Set("internal_name", *internalName)
+	}
+	if status != nil && *status != "" {
+		v.Set("status", *status)
+	}
+	if page != nil {
+		v.Set("page", fmt.Sprintf("%d", *page))
+	}
+	if limit != nil {
+		v.Set("limit", fmt.Sprintf("%d", *limit))
+	}
+	endpoint := c.baseURL + "/dvr/requests"
+	if len(v) > 0 {
+		endpoint += "?" + v.Encode()
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+userToken)
+	resp, err := clients.DoWithRetry(ctx, c.httpClient, httpReq, c.retryConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call Commodore: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		var errorResp commodore.ErrorResponse
+		if err := json.Unmarshal(body, &errorResp); err != nil {
+			return nil, fmt.Errorf("Commodore returned error status %d: %s", resp.StatusCode, string(body))
+		}
+		return nil, fmt.Errorf("Commodore returned error: %s", errorResp.Error)
+	}
+	var out commodore.DVRListResponse
+	if err := json.Unmarshal(body, &out); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+	return &out, nil
+}
+
+// GetDVRStatus fetches DVR status details for a given hash via Commodore
+func (c *Client) GetDVRStatus(ctx context.Context, userToken, dvrHash string) (*commodore.DVRInfo, error) {
+	endpoint := fmt.Sprintf("%s/dvr/status/%s", c.baseURL, url.PathEscape(dvrHash))
+	httpReq, err := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+userToken)
+	resp, err := clients.DoWithRetry(ctx, c.httpClient, httpReq, c.retryConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call Commodore: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		var errorResp commodore.ErrorResponse
+		if err := json.Unmarshal(body, &errorResp); err != nil {
+			return nil, fmt.Errorf("Commodore returned error status %d: %s", resp.StatusCode, string(body))
+		}
+		return nil, fmt.Errorf("Commodore returned error: %s", errorResp.Error)
+	}
+	var out commodore.DVRInfo
+	if err := json.Unmarshal(body, &out); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+	return &out, nil
+}
+
 // CreateAPIToken creates a new API token for the authenticated user
 func (c *Client) CreateAPIToken(ctx context.Context, userToken string, req *models.CreateAPITokenRequest) (*commodore.CreateAPITokenResponse, error) {
 	url := c.baseURL + "/developer/tokens"
@@ -867,4 +1222,90 @@ func (c *Client) GetRecordings(ctx context.Context, userToken string, streamID *
 	}
 
 	return &recordingsResp, nil
+}
+
+// === VIEWER ENDPOINT RESOLUTION ===
+
+// ViewerEndpointRequest represents the request for viewer endpoint resolution
+type ViewerEndpointRequest struct {
+	ContentType string `json:"content_type"`
+	ContentID   string `json:"content_id"`
+	ViewerIP    string `json:"viewer_ip,omitempty"`
+}
+
+// ViewerEndpointResponse represents the response from viewer endpoint resolution
+type ViewerEndpointResponse struct {
+	Primary   ViewerEndpoint         `json:"primary"`
+	Fallbacks []ViewerEndpoint       `json:"fallbacks"`
+	Metadata  map[string]interface{} `json:"metadata"`
+}
+
+// ViewerEndpoint represents a single viewer endpoint
+type ViewerEndpoint struct {
+	NodeID      string  `json:"node_id"`
+	BaseURL     string  `json:"base_url"`
+	Protocol    string  `json:"protocol"`
+	URL         string  `json:"url"`
+	GeoDistance float64 `json:"geo_distance"`
+	LoadScore   float64 `json:"load_score"`
+	HealthScore float64 `json:"health_score"`
+}
+
+// ResolveViewerEndpoint calls Commodore to resolve viewer endpoints (which then calls Foghorn)
+func (c *Client) ResolveViewerEndpoint(ctx context.Context, contentType, contentID string, viewerIP *string) ([]ViewerEndpoint, error) {
+	req := ViewerEndpointRequest{
+		ContentType: contentType,
+		ContentID:   contentID,
+	}
+
+	if viewerIP != nil {
+		req.ViewerIP = *viewerIP
+	}
+
+	jsonData, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	url := c.baseURL + "/viewer/resolve-endpoint"
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+	// Use service token for viewer endpoint resolution
+	if c.serviceToken != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.serviceToken)
+	}
+
+	resp, err := clients.DoWithRetry(ctx, c.httpClient, httpReq, c.retryConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call Commodore: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		var errorResp commodore.ErrorResponse
+		if err := json.Unmarshal(body, &errorResp); err != nil {
+			return nil, fmt.Errorf("failed to resolve viewer endpoints with status %d: %s", resp.StatusCode, string(body))
+		}
+		return nil, fmt.Errorf("failed to resolve viewer endpoints: %s", errorResp.Error)
+	}
+
+	var viewerResp ViewerEndpointResponse
+	if err := json.Unmarshal(body, &viewerResp); err != nil {
+		return nil, fmt.Errorf("failed to parse viewer endpoint response: %w", err)
+	}
+
+	// Combine primary and fallbacks into a single slice
+	endpoints := []ViewerEndpoint{viewerResp.Primary}
+	endpoints = append(endpoints, viewerResp.Fallbacks...)
+
+	return endpoints, nil
 }

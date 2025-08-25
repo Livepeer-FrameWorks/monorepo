@@ -98,7 +98,7 @@ func GetTiers(c *gin.Context) {
 		       billing_period, bandwidth_allocation, storage_allocation, compute_allocation,
 		       features, support_level, sla_level, metering_enabled, overage_rates,
 		       is_active, sort_order, is_enterprise, created_at, updated_at
-		FROM billing_tiers
+		FROM purser.billing_tiers
 		WHERE is_active = true
 		ORDER BY sort_order ASC
 	`)
@@ -171,7 +171,7 @@ func GetInvoice(c *gin.Context) {
 	err := db.QueryRow(`
 		SELECT id, tenant_id, amount, base_amount, metered_amount, currency, status, 
 		       due_date, paid_at, usage_details, created_at
-		FROM billing_invoices
+		FROM purser.billing_invoices
 		WHERE id = $1 AND tenant_id = $2
 	`, invoiceID, tenantID).Scan(
 		&invoice.ID,
@@ -203,8 +203,8 @@ func GetInvoice(c *gin.Context) {
 
 	err = db.QueryRow(`
 		SELECT bt.tier_name, bt.display_name, bt.metering_enabled, bt.overage_rates
-		FROM billing_tiers bt
-		JOIN tenant_subscriptions ts ON ts.tier_id = bt.id
+		FROM purser.billing_tiers bt
+		JOIN purser.tenant_subscriptions ts ON ts.tier_id = bt.id
 		WHERE ts.tenant_id = $1
 		AND ts.created_at <= $2
 		ORDER BY ts.created_at DESC
@@ -245,7 +245,7 @@ func GetInvoices(c *gin.Context) {
 	query := `
 		SELECT id, tenant_id, amount, base_amount, metered_amount, currency, status, 
 		       due_date, paid_at, usage_details, created_at
-		FROM billing_invoices
+		FROM purser.billing_invoices
 		WHERE tenant_id = $1
 	`
 	var args []interface{}
@@ -302,7 +302,7 @@ func GetInvoices(c *gin.Context) {
 	var totalCount int
 	countQuery := `
 		SELECT COUNT(*) 
-		FROM billing_invoices 
+		FROM purser.billing_invoices 
 		WHERE tenant_id = $1
 	`
 	var countArgs []interface{}
@@ -368,7 +368,7 @@ func CreatePayment(c *gin.Context) {
 	var invoice models.Invoice
 	err := db.QueryRow(`
 		SELECT id, tenant_id, amount, currency, status, due_date, created_at
-		FROM billing_invoices 
+		FROM purser.billing_invoices 
 		WHERE id = $1 AND tenant_id = $2 AND status = 'pending'
 	`, req.InvoiceID, tenantID).Scan(&invoice.ID, &invoice.TenantID,
 		&invoice.Amount, &invoice.Currency, &invoice.Status,
@@ -415,7 +415,7 @@ func CreatePayment(c *gin.Context) {
 
 		// Store payment record
 		_, err = db.Exec(`
-			INSERT INTO billing_payments (id, invoice_id, method, amount, currency, tx_id, status, created_at, updated_at)
+			INSERT INTO purser.billing_payments (id, invoice_id, method, amount, currency, tx_id, status, created_at, updated_at)
 			VALUES ($1, $2, $3, $4, $5, $6, 'pending', NOW(), NOW())
 		`, paymentID, req.InvoiceID, req.Method, invoice.Amount, invoice.Currency, txID)
 
@@ -455,7 +455,7 @@ func CreatePayment(c *gin.Context) {
 
 		// Store payment record
 		_, err = db.Exec(`
-			INSERT INTO billing_payments (id, invoice_id, method, amount, currency, status, created_at, updated_at)
+			INSERT INTO purser.billing_payments (id, invoice_id, method, amount, currency, status, created_at, updated_at)
 			VALUES ($1, $2, $3, $4, $5, 'pending', NOW(), NOW())
 		`, paymentID, req.InvoiceID, req.Method, invoice.Amount, invoice.Currency)
 
@@ -531,8 +531,8 @@ func GetBillingStatus(c *gin.Context) {
 			bt.features, bt.support_level, bt.sla_level,
 			bt.metering_enabled, bt.overage_rates, bt.is_active,
 			bt.sort_order, bt.is_enterprise, bt.created_at, bt.updated_at
-		FROM tenant_subscriptions ts
-		JOIN billing_tiers bt ON ts.tier_id = bt.id
+		FROM purser.tenant_subscriptions ts
+		JOIN purser.billing_tiers bt ON ts.tier_id = bt.id
 		WHERE ts.tenant_id = $1 AND ts.status != 'cancelled'
 		ORDER BY ts.created_at DESC
 		LIMIT 1
@@ -578,7 +578,7 @@ func GetBillingStatus(c *gin.Context) {
 	// Get pending invoices
 	pendingRows, err := db.Query(`
 		SELECT id, tenant_id, amount, currency, status, due_date, created_at, updated_at
-		FROM billing_invoices 
+		FROM purser.billing_invoices 
 		WHERE tenant_id = $1 AND status = 'pending'
 		ORDER BY due_date ASC
 	`, tenantID)
@@ -601,8 +601,8 @@ func GetBillingStatus(c *gin.Context) {
 	paymentRows, err := db.Query(`
 		SELECT bp.id, bp.invoice_id, bp.method, bp.amount, bp.currency, 
 			   bp.tx_id, bp.status, bp.confirmed_at, bp.created_at, bp.updated_at
-		FROM billing_payments bp
-		JOIN billing_invoices bi ON bp.invoice_id = bi.id
+		FROM purser.billing_payments bp
+		JOIN purser.billing_invoices bi ON bp.invoice_id = bi.id
 		WHERE bi.tenant_id = $1
 		ORDER BY bp.created_at DESC
 		LIMIT 5
@@ -632,7 +632,7 @@ func GetBillingStatus(c *gin.Context) {
 				'recording_gb', SUM(CASE WHEN usage_type = 'recording_gb' THEN usage_value ELSE 0 END),
 				'peak_bandwidth_mbps', MAX(CASE WHEN usage_type = 'peak_bandwidth_mbps' THEN usage_value ELSE 0 END)
 			) as usage_summary
-		FROM usage_records
+		FROM purser.usage_records
 		WHERE tenant_id = $1 
 		AND billing_month = to_char(CURRENT_DATE, 'YYYY-MM')
 	`, tenantID).Scan(&usageSummary)
@@ -807,7 +807,7 @@ func createCryptoPayment(asset string, invoice models.Invoice) (string, time.Tim
 
 	// Store crypto wallet record
 	_, err = db.Exec(`
-		INSERT INTO crypto_wallets (id, tenant_id, invoice_id, asset, wallet_address, status, expires_at, created_at, updated_at)
+		INSERT INTO purser.crypto_wallets (id, tenant_id, invoice_id, asset, wallet_address, status, expires_at, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, 'active', $6, NOW(), NOW())
 		ON CONFLICT (invoice_id, asset) DO UPDATE SET
 			wallet_address = EXCLUDED.wallet_address,

@@ -73,6 +73,7 @@ Endpoints (local)
 | Data | ClickHouse (Native) | 9000 | Analytics database |
 | Media | Helmsman | 18007 | Edge API |
 | Media | Foghorn | 18008 | Balancer |
+| Media | Foghorn (control) | 18019 | gRPC control API |
 | Media | MistServer (control) | 4242 | Control API |
 | Media | MistServer (RTMP) | 1935 | Ingest |
 | Media | MistServer (HTTP) | 8080 | HLS/WebRTC delivery |

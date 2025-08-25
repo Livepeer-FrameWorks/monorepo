@@ -102,6 +102,20 @@ func main() {
 
 			// Clipping
 			protected.POST("/clips", handlers.CreateClip)
+			protected.GET("/clips", handlers.GetClips)
+			protected.GET("/clips/:id", handlers.GetClip)
+			protected.GET("/clips/:id/urls", handlers.GetClipURLs)
+			protected.DELETE("/clips/:id", handlers.DeleteClip)
+
+			// DVR
+			protected.POST("/dvr/start", handlers.StartDVR)
+			protected.POST("/dvr/stop", handlers.StopDVR)
+			protected.GET("/dvr/status/:dvr_hash", handlers.GetDVRStatus)
+			protected.GET("/dvr/requests", handlers.ListDVRRequests)
+
+			// Recording config
+			protected.GET("/streams/:internal_name/recording-config", handlers.GetRecordingConfig)
+			protected.PUT("/streams/:internal_name/recording-config", handlers.UpdateRecordingConfig)
 
 			// API tokens
 			protected.POST("/developer/tokens", handlers.CreateAPIToken)
@@ -120,6 +134,7 @@ func main() {
 			webhooks.GET("/validate-stream-key/:stream_key", handlers.ValidateStreamKey)
 			webhooks.GET("/resolve-playback-id/:playback_id", handlers.ResolvePlaybackID)
 			webhooks.GET("/resolve-internal-name/:internal_name", handlers.ResolveInternalName)
+			webhooks.POST("/viewer/resolve-endpoint", handlers.ResolveViewerEndpoint)
 		}
 
 		// Stream node discovery (cluster-aware)

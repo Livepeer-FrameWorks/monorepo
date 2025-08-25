@@ -29,6 +29,7 @@ FrameWorks is a distributed microservices platform for multi-tenant video stream
 | Decklog (metrics) | 18026 | Central | Prometheus metrics |
 | **Media Plane** | | | |
 | Foghorn | 18008 | Central | Load balancer |
+| Foghorn (control) | 18019 | Central | gRPC control API |
 | Helmsman | 18007 | Edge | MistServer sidecar |
 | **Support & Interfaces** | | | |
 | Signalman | 18009 | Central | Real-time updates & WebSocket hub |

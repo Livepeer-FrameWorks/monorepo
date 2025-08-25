@@ -56,6 +56,9 @@ models:
   TrackListEvent:
     model:
       - frameworks/pkg/api/periscope.AnalyticsTrackListEvent
+  ClipEvent:
+    model:
+      - frameworks/pkg/api/periscope.ClipEvent
 
   # Stream management types
   Stream:

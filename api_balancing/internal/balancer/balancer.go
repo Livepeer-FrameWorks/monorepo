@@ -56,6 +56,27 @@ type Node struct {
 	LastUpdate     time.Time         `json:"last_update"`
 	Streams        map[string]Stream `json:"streams"`
 	ConfigStreams  []string          `json:"config_streams"` // streams this node can serve
+
+	// Capabilities and storage info (advertised by Helmsman)
+	CapIngest     bool     `json:"cap_ingest"`
+	CapEdge       bool     `json:"cap_edge"`
+	CapStorage    bool     `json:"cap_storage"`
+	CapProcessing bool     `json:"cap_processing"`
+	Roles         []string `json:"roles,omitempty"`
+	GPUVendor     string   `json:"gpu_vendor,omitempty"`
+	GPUCount      int      `json:"gpu_count,omitempty"`
+	GPUMemMB      int      `json:"gpu_mem_mb,omitempty"`
+	GPUCC         string   `json:"gpu_cc,omitempty"`
+	StorageLocal  string   `json:"storage_local"`
+	StorageBucket string   `json:"storage_bucket"`
+	StoragePrefix string   `json:"storage_prefix"`
+
+	// Limits and artifacts
+	MaxTranscodes        int                                `json:"max_transcodes,omitempty"`
+	CurrentTranscodes    int                                `json:"current_transcodes,omitempty"`
+	StorageCapacityBytes uint64                             `json:"storage_capacity_bytes,omitempty"`
+	StorageUsedBytes     uint64                             `json:"storage_used_bytes,omitempty"`
+	Artifacts            []validation.FoghornStoredArtifact `json:"artifacts,omitempty"`
 }
 
 // Stream represents stream information on a node (matches C++ streamDetails)
@@ -240,6 +261,34 @@ func (lb *LoadBalancer) UpdateNodeMetrics(host string, data *validation.FoghornN
 	node.Tags = make([]string, len(data.Tags))
 	copy(node.Tags, data.Tags)
 
+	// Update capabilities and storage info
+	node.CapIngest = data.Capabilities.Ingest
+	node.CapEdge = data.Capabilities.Edge
+	node.CapStorage = data.Capabilities.Storage
+	node.CapProcessing = data.Capabilities.Processing
+	node.Roles = append([]string(nil), data.Capabilities.Roles...)
+	if len(data.Capabilities.GPUs) > 0 {
+		// store summary in primary GPU fields (first GPU)
+		g := data.Capabilities.GPUs[0]
+		node.GPUVendor = g.Vendor
+		node.GPUCount = len(data.Capabilities.GPUs)
+		node.GPUMemMB = g.MemMB
+		node.GPUCC = g.ComputeCapability
+	} else {
+		node.GPUVendor, node.GPUCount, node.GPUMemMB, node.GPUCC = "", 0, 0, ""
+	}
+	node.StorageLocal = data.Storage.LocalPath
+	node.StorageBucket = data.Storage.S3Bucket
+	node.StoragePrefix = data.Storage.S3Prefix
+
+	if data.Limits != nil {
+		node.MaxTranscodes = data.Limits.MaxTranscodes
+		node.CurrentTranscodes = data.Limits.CurrentTranscodes
+		node.StorageCapacityBytes = data.Limits.StorageCapacityBytes
+		node.StorageUsedBytes = data.Limits.StorageUsedBytes
+	}
+	node.Artifacts = append([]validation.FoghornStoredArtifact(nil), data.Artifacts...)
+
 	// Update streams from typed data
 	node.Streams = make(map[string]Stream)
 	for streamName, streamData := range data.Streams {
@@ -331,13 +380,94 @@ func (lb *LoadBalancer) GetBestNode(ctx context.Context, streamName string, lat,
 	return host, err
 }
 
+// NodeWithScore contains node info with its score
+type NodeWithScore struct {
+	Host         string
+	NodeID       string
+	Score        uint64
+	GeoLatitude  float64
+	GeoLongitude float64
+	LocationName string
+}
+
 // GetBestNodeWithScore finds the best node and returns both node and score
 func (lb *LoadBalancer) GetBestNodeWithScore(ctx context.Context, streamName string, lat, lon float64, tagAdjust map[string]int, clientIP string) (string, uint64, float64, float64, string, error) {
+	nodes, err := lb.GetTopNodesWithScores(ctx, streamName, lat, lon, tagAdjust, clientIP, 1)
+	if err != nil {
+		return "", 0, 0, 0, "", err
+	}
+	if len(nodes) == 0 {
+		return "", 0, 0, 0, "", fmt.Errorf("no suitable nodes found")
+	}
+	best := nodes[0]
+
+	// Add viewer (like C++)
+	lb.mu.Lock()
+	if node, exists := lb.nodes[best.Host]; exists {
+		lb.addViewer(node, streamName)
+	}
+	lb.mu.Unlock()
+
+	return best.Host, best.Score, best.GeoLatitude, best.GeoLongitude, best.LocationName, nil
+}
+
+// GetTopNodesWithScores finds the top N nodes and returns them with scores (for fallbacks)
+func (lb *LoadBalancer) GetTopNodesWithScores(ctx context.Context, streamName string, lat, lon float64, tagAdjust map[string]int, clientIP string, maxNodes int) ([]NodeWithScore, error) {
 	lb.mu.RLock()
 	defer lb.mu.RUnlock()
 
-	var bestHost *Node
-	var bestScore uint64 = 0
+	type scoredNode struct {
+		node  *Node
+		score uint64
+	}
+	var scoredNodes []scoredNode
+
+	// Optional capability filter via context value "cap"
+	requireCap, _ := ctx.Value("cap").(string)
+	var reqs []string
+	if requireCap != "" {
+		for _, p := range strings.Split(requireCap, ",") {
+			v := strings.TrimSpace(p)
+			if v != "" {
+				reqs = append(reqs, v)
+			}
+		}
+	}
+	skipForCap := func(n *Node) bool {
+		if len(reqs) == 0 {
+			return false
+		}
+		roleSet := make(map[string]bool, len(n.Roles))
+		for _, r := range n.Roles {
+			roleSet[r] = true
+		}
+		for _, r := range reqs {
+			switch r {
+			case "ingest":
+				if !n.CapIngest && !roleSet["ingest"] {
+					return true
+				}
+			case "edge":
+				if !n.CapEdge && !roleSet["edge"] {
+					return true
+				}
+			case "storage":
+				if !n.CapStorage && !roleSet["storage"] {
+					return true
+				}
+			case "processing":
+				if !n.CapProcessing && !roleSet["processing"] {
+					return true
+				}
+			default:
+				// treat as arbitrary role name
+				if !roleSet[r] {
+					return true
+				}
+			}
+		}
+		return false
+	}
 
 	// Get client's binary IP for same-host detection
 	var clientBinHost [16]byte
@@ -347,6 +477,9 @@ func (lb *LoadBalancer) GetBestNodeWithScore(ctx context.Context, streamName str
 
 	for _, node := range lb.nodes {
 		if !node.IsActive {
+			continue
+		}
+		if requireCap != "" && skipForCap(node) {
 			continue
 		}
 
@@ -362,28 +495,63 @@ func (lb *LoadBalancer) GetBestNodeWithScore(ctx context.Context, streamName str
 
 		// Calculate score using EXACT C++ rate() method
 		score := lb.rateNode(node, streamName, lat, lon, tagAdjust)
-		if score > bestScore {
-			bestHost = node
-			bestScore = score
+		if score == 0 {
+			continue
+		}
+
+		// Same-host bonus for viewing (not source)
+		if clientIP != "" && streamName == "" && lb.compareBinaryHosts(node.BinHost, clientBinHost) {
+			score = score * 5
+		}
+
+		scoredNodes = append(scoredNodes, scoredNode{
+			node:  node,
+			score: score,
+		})
+	}
+
+	if len(scoredNodes) == 0 {
+		return nil, fmt.Errorf("all servers seem to be out of bandwidth")
+	}
+
+	// Sort by score (highest first)
+	for i := 0; i < len(scoredNodes); i++ {
+		for j := i + 1; j < len(scoredNodes); j++ {
+			if scoredNodes[j].score > scoredNodes[i].score {
+				scoredNodes[i], scoredNodes[j] = scoredNodes[j], scoredNodes[i]
+			}
 		}
 	}
 
-	if bestScore == 0 || bestHost == nil {
-		return "", 0, 0, 0, "", fmt.Errorf("all servers seem to be out of bandwidth")
+	// Limit to requested number of nodes
+	if maxNodes > 0 && len(scoredNodes) > maxNodes {
+		scoredNodes = scoredNodes[:maxNodes]
+	}
+
+	// Convert to return type
+	var result []NodeWithScore
+	for _, sn := range scoredNodes {
+		nodeID := lb.revIDMap[sn.node.Host]
+		result = append(result, NodeWithScore{
+			Host:         sn.node.Host,
+			NodeID:       nodeID,
+			Score:        sn.score,
+			GeoLatitude:  sn.node.GeoLatitude,
+			GeoLongitude: sn.node.GeoLongitude,
+			LocationName: sn.node.LocationName,
+		})
 	}
 
 	lb.logger.WithFields(logging.Fields{
-		"stream": streamName,
-		"winner": bestHost.Host,
-		"score":  bestScore,
-		"lat":    lat,
-		"lon":    lon,
+		"stream":    streamName,
+		"num_nodes": len(result),
+		"winner":    result[0].Host,
+		"score":     result[0].Score,
+		"lat":       lat,
+		"lon":       lon,
 	}).Info("Load balancing decision")
 
-	// Add viewer (like C++)
-	lb.addViewer(bestHost, streamName)
-
-	return bestHost.Host, bestScore, bestHost.GeoLatitude, bestHost.GeoLongitude, bestHost.LocationName, nil
+	return result, nil
 }
 
 // rateNode implements the EXACT C++ rate() method

@@ -104,7 +104,7 @@ func handleStripePaymentIntent(payload StripeWebhookPayload) error {
 	var currentStatus string
 	err := db.QueryRow(`
 		SELECT id, status 
-		FROM billing_payments 
+		FROM purser.billing_payments 
 		WHERE tx_id = $1 AND method = 'stripe'
 	`, paymentIntentID).Scan(&paymentID, &currentStatus)
 
@@ -140,7 +140,7 @@ func handleStripePaymentIntent(payload StripeWebhookPayload) error {
 
 	// Update payment status
 	_, err = db.Exec(`
-		UPDATE billing_payments 
+		UPDATE purser.billing_payments 
 		SET status = $1, confirmed_at = $2, updated_at = NOW()
 		WHERE id = $3
 	`, newStatus, confirmedAt, paymentID)
@@ -157,7 +157,7 @@ func handleStripePaymentIntent(payload StripeWebhookPayload) error {
 	// If payment is confirmed, mark invoice as paid
 	if newStatus == "confirmed" && invoiceID != "" {
 		_, err = db.Exec(`
-			UPDATE billing_invoices 
+			UPDATE purser.billing_invoices 
 			SET status = 'paid', paid_at = $1, updated_at = NOW()
 			WHERE id = $2
 		`, now, invoiceID)
@@ -270,8 +270,8 @@ func sendPaymentStatusEmail(invoiceID, paymentID, provider, status string) {
 	var currency, billingEmail, tenantName string
 	err := db.QueryRow(`
 		SELECT bi.tenant_id, bi.amount, bi.currency, ts.billing_email
-		FROM billing_invoices bi
-		JOIN tenant_subscriptions ts ON bi.tenant_id = ts.tenant_id
+		FROM purser.billing_invoices bi
+		JOIN purser.tenant_subscriptions ts ON bi.tenant_id = ts.tenant_id
 		WHERE bi.id = $1
 	`, invoiceID).Scan(&tenantID, &amount, &currency, &billingEmail)
 
@@ -342,7 +342,7 @@ func HandleMollieWebhook(c *gin.Context) {
 	var currentStatus string
 	err := db.QueryRow(`
 		SELECT id, invoice_id, status 
-		FROM billing_payments 
+		FROM purser.billing_payments 
 		WHERE tx_id = $1 AND method = 'mollie'
 	`, payload.ID).Scan(&paymentID, &invoiceID, &currentStatus)
 
@@ -380,7 +380,7 @@ func HandleMollieWebhook(c *gin.Context) {
 
 	// Update payment status
 	_, err = db.Exec(`
-		UPDATE billing_payments 
+		UPDATE purser.billing_payments 
 		SET status = $1, confirmed_at = $2, updated_at = NOW()
 		WHERE id = $3
 	`, newStatus, confirmedAt, paymentID)
@@ -398,7 +398,7 @@ func HandleMollieWebhook(c *gin.Context) {
 	// If payment is confirmed, mark invoice as paid
 	if newStatus == "confirmed" {
 		_, err = db.Exec(`
-			UPDATE billing_invoices 
+			UPDATE purser.billing_invoices 
 			SET status = 'paid', paid_at = $1, updated_at = NOW()
 			WHERE id = $2
 		`, now, invoiceID)

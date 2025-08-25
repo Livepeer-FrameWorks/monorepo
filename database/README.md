@@ -130,7 +130,7 @@ CREATE USER IF NOT EXISTS frameworks IDENTIFIED WITH sha256_password BY 'framewo
 GRANT ALL ON frameworks.* TO frameworks;
 
 # Initialize schema
-cat database/clickhouse-init.sql | clickhouse-client --host localhost --port 8123 --user frameworks --password frameworks_dev
+cat database/init_clickhouse_periscope.sql | clickhouse-client --host localhost --port 8123 --user frameworks --password frameworks_dev
 ```
 
 ## 🔧 Configuration
@@ -177,7 +177,7 @@ services:
       CLICKHOUSE_PASSWORD: frameworks_dev
     volumes:
       - clickhouse_data:/var/lib/clickhouse
-      - ./database/clickhouse-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ./database/init_clickhouse_periscope.sql:/docker-entrypoint-initdb.d/init.sql:ro
     ports:
       - "8123:8123"   # HTTP interface
       - "9000:9000"   # Native interface
@@ -204,7 +204,7 @@ Notes:
 
 ### ClickHouse Schema (Time‑Series Analytics)
 
-High‑volume facts for analytics. See `database/clickhouse-init.sql`.
+High‑volume facts for analytics. See `database/init_clickhouse_periscope.sql`.
 
 Tables:
 - `viewer_metrics`

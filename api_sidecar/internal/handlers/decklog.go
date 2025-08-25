@@ -1240,16 +1240,16 @@ func convertBaseEventToProto(event *validation.BaseEvent) (*pb.EventData, string
 		if p := event.NodeLifecycle; p != nil {
 			ed.EventData = &pb.EventData_NodeMonitoringData{
 				NodeMonitoringData: &pb.NodeMonitoringData{
-					NodeId:    &p.NodeID,
-					IsHealthy: &p.IsHealthy,
-					CpuLoad:   float32(p.CPUUsage),
-					MemoryUsed: p.RAMCurrent,
-					MemoryTotal: p.RAMMax,
-					NetworkInBps: p.BandwidthDown,
+					NodeId:        &p.NodeID,
+					IsHealthy:     &p.IsHealthy,
+					CpuLoad:       float32(p.CPUUsage),
+					MemoryUsed:    p.RAMCurrent,
+					MemoryTotal:   p.RAMMax,
+					NetworkInBps:  p.BandwidthDown,
 					NetworkOutBps: p.BandwidthUp,
 					ActiveStreams: uint32(p.ActiveStreams),
-					CountryCode: &p.GeoData.CountryCode,
-					City: &p.GeoData.City,
+					CountryCode:   &p.GeoData.CountryCode,
+					City:          &p.GeoData.City,
 					Latitude: func() *float64 {
 						if p.GeoData.Latitude != 0 {
 							v := p.GeoData.Latitude

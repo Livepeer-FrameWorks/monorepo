@@ -519,3 +519,299 @@ func (r *Resolver) DoGetRecordings(ctx context.Context, streamID *string) ([]*co
 
 	return recordings, nil
 }
+
+// === CLIPS MANAGEMENT ===
+
+// DoGetClips retrieves all clips for the authenticated user
+func (r *Resolver) DoGetClips(ctx context.Context, streamID *string) ([]*commodore.ClipResponse, error) {
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Returning demo clips")
+		now := time.Now()
+		return []*commodore.ClipResponse{
+			{
+				ID:          "clip_demo_1",
+				StreamID:    "stream_demo_1",
+				Title:       "Demo Highlight Reel #1",
+				Description: "Amazing gameplay highlights from last night's stream",
+				StartTime:   1640995200, // Jan 1, 2022 00:00:00 UTC
+				EndTime:     1640995800, // Jan 1, 2022 00:10:00 UTC
+				Duration:    600,        // 10 minutes
+				PlaybackID:  "pb_clip_demo_1",
+				Status:      "ready",
+				CreatedAt:   now.Add(-24 * time.Hour),
+				UpdatedAt:   now.Add(-23 * time.Hour),
+			},
+			{
+				ID:          "clip_demo_2",
+				StreamID:    "stream_demo_2",
+				Title:       "Best Moments Compilation",
+				Description: "Top 5 moments from this week's streams",
+				StartTime:   1641081600, // Jan 2, 2022 00:00:00 UTC
+				EndTime:     1641083400, // Jan 2, 2022 00:30:00 UTC
+				Duration:    1800,       // 30 minutes
+				PlaybackID:  "pb_clip_demo_2",
+				Status:      "processing",
+				CreatedAt:   now.Add(-6 * time.Hour),
+				UpdatedAt:   now.Add(-5 * time.Hour),
+			},
+		}, nil
+	}
+
+	// Extract JWT token from context
+	userToken, ok := ctx.Value("jwt_token").(string)
+	if !ok {
+		return nil, fmt.Errorf("user not authenticated")
+	}
+
+	// Get clips from Commodore
+	clipsResp, err := r.Clients.Commodore.GetClips(ctx, userToken, streamID)
+	if err != nil {
+		r.Logger.WithError(err).Error("Failed to get clips")
+		return nil, fmt.Errorf("failed to get clips: %w", err)
+	}
+
+	// Convert ClipFullResponse to ClipResponse
+	clips := make([]*commodore.ClipResponse, len(clipsResp.Clips))
+	for i, clip := range clipsResp.Clips {
+		clips[i] = &commodore.ClipResponse{
+			ID:          clip.ID,
+			StreamID:    clip.StreamName, // Map stream_name to stream_id
+			Title:       clip.Title,
+			Description: "", // ClipFullResponse doesn't include description
+			StartTime:   clip.StartTime,
+			EndTime:     0, // Calculate from StartTime + Duration
+			Duration:    clip.Duration,
+			PlaybackID:  "", // ClipFullResponse doesn't include playback_id
+			Status:      clip.Status,
+			CreatedAt:   clip.CreatedAt,
+			UpdatedAt:   clip.CreatedAt, // Use CreatedAt as UpdatedAt since ClipFullResponse doesn't have UpdatedAt
+		}
+		// Calculate EndTime from StartTime + Duration
+		clips[i].EndTime = clip.StartTime + clip.Duration
+	}
+
+	return clips, nil
+}
+
+// DoGetClip retrieves a specific clip by ID
+func (r *Resolver) DoGetClip(ctx context.Context, id string) (*commodore.ClipResponse, error) {
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Returning demo clip")
+		now := time.Now()
+		return &commodore.ClipResponse{
+			ID:          id,
+			StreamID:    "stream_demo_1",
+			Title:       "Demo Clip Details",
+			Description: "This is a detailed view of a demo clip with all metadata",
+			StartTime:   1640995200, // Jan 1, 2022 00:00:00 UTC
+			EndTime:     1640995800, // Jan 1, 2022 00:10:00 UTC
+			Duration:    600,        // 10 minutes
+			PlaybackID:  "pb_clip_" + id,
+			Status:      "ready",
+			CreatedAt:   now.Add(-12 * time.Hour),
+			UpdatedAt:   now.Add(-11 * time.Hour),
+		}, nil
+	}
+
+	// Extract JWT token from context
+	userToken, ok := ctx.Value("jwt_token").(string)
+	if !ok {
+		return nil, fmt.Errorf("user not authenticated")
+	}
+
+	// Get clip from Commodore
+	clipFull, err := r.Clients.Commodore.GetClip(ctx, userToken, id)
+	if err != nil {
+		r.Logger.WithError(err).Error("Failed to get clip")
+		return nil, fmt.Errorf("failed to get clip: %w", err)
+	}
+
+	// Convert ClipFullResponse to ClipResponse
+	clip := &commodore.ClipResponse{
+		ID:          clipFull.ID,
+		StreamID:    clipFull.StreamName, // Map stream_name to stream_id
+		Title:       clipFull.Title,
+		Description: "", // ClipFullResponse doesn't include description
+		StartTime:   clipFull.StartTime,
+		EndTime:     clipFull.StartTime + clipFull.Duration,
+		Duration:    clipFull.Duration,
+		PlaybackID:  "", // ClipFullResponse doesn't include playbook_id
+		Status:      clipFull.Status,
+		CreatedAt:   clipFull.CreatedAt,
+		UpdatedAt:   clipFull.CreatedAt, // Use CreatedAt as UpdatedAt
+	}
+
+	return clip, nil
+}
+
+// DoGetClipViewingUrls retrieves viewing URLs for a specific clip
+func (r *Resolver) DoGetClipViewingUrls(ctx context.Context, clipID string) (*model.ClipViewingUrls, error) {
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Returning demo clip viewing URLs")
+		return &model.ClipViewingUrls{
+			Hls:  stringPtr("https://demo-clips.example.com/clips/" + clipID + "/playlist.m3u8"),
+			Dash: stringPtr("https://demo-clips.example.com/clips/" + clipID + "/manifest.mpd"),
+			Mp4:  stringPtr("https://demo-clips.example.com/clips/" + clipID + "/clip.mp4"),
+			Webm: stringPtr("https://demo-clips.example.com/clips/" + clipID + "/clip.webm"),
+		}, nil
+	}
+
+	// Extract JWT token from context
+	userToken, ok := ctx.Value("jwt_token").(string)
+	if !ok {
+		return nil, fmt.Errorf("user not authenticated")
+	}
+
+	// Get clip URLs from Commodore
+	clipURLs, err := r.Clients.Commodore.GetClipURLs(ctx, userToken, clipID)
+	if err != nil {
+		r.Logger.WithError(err).Error("Failed to get clip viewing URLs")
+		return nil, fmt.Errorf("failed to get clip viewing URLs: %w", err)
+	}
+
+	// Convert Commodore response to GraphQL model
+	urls := &model.ClipViewingUrls{
+		Hls:  getStringFromMap(clipURLs.URLs, "hls"),
+		Dash: getStringFromMap(clipURLs.URLs, "dash"),
+		Mp4:  getStringFromMap(clipURLs.URLs, "mp4"),
+		Webm: getStringFromMap(clipURLs.URLs, "webm"),
+	}
+
+	return urls, nil
+}
+
+// DoDeleteClip deletes a clip by ID
+func (r *Resolver) DoDeleteClip(ctx context.Context, id string) (bool, error) {
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Demo mode: simulating clip deletion")
+		return true, nil
+	}
+
+	// Extract JWT token from context
+	userToken, ok := ctx.Value("jwt_token").(string)
+	if !ok {
+		return false, fmt.Errorf("user not authenticated")
+	}
+
+	// Delete clip via Commodore
+	err := r.Clients.Commodore.DeleteClip(ctx, userToken, id)
+	if err != nil {
+		r.Logger.WithError(err).Error("Failed to delete clip")
+		return false, fmt.Errorf("failed to delete clip: %w", err)
+	}
+
+	return true, nil
+}
+
+// Helper functions
+
+// stringPtr returns a pointer to the string value
+func stringPtr(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
+// getStringFromMap safely extracts a string value from a map and returns a pointer
+func getStringFromMap(m map[string]string, key string) *string {
+	if value, exists := m[key]; exists && value != "" {
+		return &value
+	}
+	return nil
+}
+
+// === DVR & Recording Config ===
+
+// DoStartDVR starts a DVR recording
+func (r *Resolver) DoStartDVR(ctx context.Context, internalName string, streamID *string) (*commodore.StartDVRResponse, error) {
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Demo: start DVR")
+		return &commodore.StartDVRResponse{Status: "started", DVRHash: "dvr_demo_hash"}, nil
+	}
+	userToken, ok := ctx.Value("jwt_token").(string)
+	if !ok {
+		return nil, fmt.Errorf("user not authenticated")
+	}
+	req := &commodore.StartDVRRequest{InternalName: internalName}
+	if streamID != nil {
+		req.StreamID = *streamID
+	}
+	res, err := r.Clients.Commodore.StartDVR(ctx, userToken, req)
+	if err != nil {
+		r.Logger.WithError(err).Error("Failed to start DVR")
+		return nil, fmt.Errorf("failed to start DVR: %w", err)
+	}
+	return res, nil
+}
+
+// DoStopDVR stops an ongoing DVR recording
+func (r *Resolver) DoStopDVR(ctx context.Context, dvrHash string) (bool, error) {
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Demo: stop DVR")
+		return true, nil
+	}
+	userToken, ok := ctx.Value("jwt_token").(string)
+	if !ok {
+		return false, fmt.Errorf("user not authenticated")
+	}
+	if err := r.Clients.Commodore.StopDVR(ctx, userToken, dvrHash); err != nil {
+		r.Logger.WithError(err).Error("Failed to stop DVR")
+		return false, fmt.Errorf("failed to stop DVR: %w", err)
+	}
+	return true, nil
+}
+
+// DoGetRecordingConfig retrieves recording configuration for a stream
+func (r *Resolver) DoGetRecordingConfig(ctx context.Context, internalName string) (*commodore.RecordingConfig, error) {
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Demo: get recording config")
+		return &commodore.RecordingConfig{Enabled: false, RetentionDays: 30, Format: "ts", SegmentDuration: 6}, nil
+	}
+	userToken, ok := ctx.Value("jwt_token").(string)
+	if !ok {
+		return nil, fmt.Errorf("user not authenticated")
+	}
+	cfg, err := r.Clients.Commodore.GetRecordingConfig(ctx, userToken, internalName)
+	if err != nil {
+		r.Logger.WithError(err).Error("Failed to get recording config")
+		return nil, fmt.Errorf("failed to get recording config: %w", err)
+	}
+	return cfg, nil
+}
+
+// DoSetRecordingConfig updates recording configuration for a stream
+func (r *Resolver) DoSetRecordingConfig(ctx context.Context, internalName string, cfg commodore.RecordingConfig) (*commodore.RecordingConfig, error) {
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Demo: set recording config")
+		return &cfg, nil
+	}
+	userToken, ok := ctx.Value("jwt_token").(string)
+	if !ok {
+		return nil, fmt.Errorf("user not authenticated")
+	}
+	out, err := r.Clients.Commodore.SetRecordingConfig(ctx, userToken, internalName, cfg)
+	if err != nil {
+		r.Logger.WithError(err).Error("Failed to set recording config")
+		return nil, fmt.Errorf("failed to set recording config: %w", err)
+	}
+	return out, nil
+}
+
+// DoListDVRRequests lists DVR recordings
+func (r *Resolver) DoListDVRRequests(ctx context.Context, internalName *string, status *string, page, limit *int) (*commodore.DVRListResponse, error) {
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Demo: list DVR requests")
+		return &commodore.DVRListResponse{DVRRecordings: []commodore.DVRInfo{}, Total: 0, Page: 1, Limit: 20}, nil
+	}
+	userToken, ok := ctx.Value("jwt_token").(string)
+	if !ok {
+		return nil, fmt.Errorf("user not authenticated")
+	}
+	out, err := r.Clients.Commodore.ListDVRRequests(ctx, userToken, internalName, status, page, limit)
+	if err != nil {
+		r.Logger.WithError(err).Error("Failed to list DVR requests")
+		return nil, fmt.Errorf("failed to list DVR requests: %w", err)
+	}
+	return out, nil
+}

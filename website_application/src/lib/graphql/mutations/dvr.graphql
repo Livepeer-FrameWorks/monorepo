@@ -1,0 +1,36 @@
+# DVR management mutations
+mutation StartDVR($internalName: String!, $streamId: ID) {
+  startDVR(internalName: $internalName, streamId: $streamId) {
+    dvrHash
+    internalName
+    storageNodeId
+    status
+    startedAt
+    endedAt
+    durationSeconds
+    sizeBytes
+    manifestPath
+    errorMessage
+    createdAt
+    updatedAt
+  }
+}
+
+mutation StopDVR($dvrHash: ID!) {
+  stopDVR(dvrHash: $dvrHash)
+}
+
+mutation SetStreamRecordingConfig($internalName: String!, $enabled: Boolean!, $retentionDays: Int, $format: String, $segmentDuration: Int) {
+  setStreamRecordingConfig(
+    internalName: $internalName
+    enabled: $enabled
+    retentionDays: $retentionDays
+    format: $format
+    segmentDuration: $segmentDuration
+  ) {
+    enabled
+    retentionDays
+    format
+    segmentDuration
+  }
+}

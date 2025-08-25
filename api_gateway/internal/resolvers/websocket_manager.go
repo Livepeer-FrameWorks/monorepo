@@ -183,6 +183,20 @@ func (wm *WebSocketManager) SubscribeToTrackList(ctx context.Context, config Con
 	return updates, nil
 }
 
+// SubscribeToLifecycle subscribes to lifecycle events (clip/dvr) and returns a channel of periscope.ClipEvent
+func (wm *WebSocketManager) SubscribeToLifecycle(ctx context.Context, config ConnectionConfig, streamID string) (<-chan *periscope.ClipEvent, error) {
+	client, err := wm.GetOrCreateConnection(ctx, config)
+	if err != nil {
+		return nil, err
+	}
+	if err := client.SubscribeToStreams(); err != nil {
+		return nil, fmt.Errorf("failed to subscribe to lifecycle: %w", err)
+	}
+	updates := make(chan *periscope.ClipEvent, 10)
+	go wm.processLifecycleMessages(ctx, client, updates, streamID)
+	return updates, nil
+}
+
 // processStreamMessages processes stream messages from Signalman and converts them to periscope DTOs
 func (wm *WebSocketManager) processStreamMessages(ctx context.Context, client *signalmanclient.Client, output chan<- *periscope.StreamEvent, streamID *string) {
 	defer close(output)
@@ -301,6 +315,36 @@ func (wm *WebSocketManager) processTrackListMessages(ctx context.Context, client
 				case <-ctx.Done():
 					return
 				}
+			}
+		}
+	}
+}
+
+func (wm *WebSocketManager) processLifecycleMessages(ctx context.Context, client *signalmanclient.Client, output chan<- *periscope.ClipEvent, streamID string) {
+	defer close(output)
+	messages := client.GetMessages()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case msg, ok := <-messages:
+			if !ok {
+				return
+			}
+			if wm.isProtocolMessage(msg.Type) {
+				continue
+			}
+			ce := wm.convertToClipEvent(msg)
+			if ce == nil {
+				continue
+			}
+			if streamID != "" && ce.InternalName != streamID {
+				continue
+			}
+			select {
+			case output <- ce:
+			case <-ctx.Done():
+				return
 			}
 		}
 	}
@@ -601,4 +645,61 @@ func (wm *WebSocketManager) convertToPeriscopeTrackListEvent(msg signalmanapi.Me
 		TrackCount: count,
 		Stream:     streamID,
 	}
+}
+
+func (wm *WebSocketManager) convertToClipEvent(msg signalmanapi.Message) *periscope.ClipEvent {
+	if msg.Timestamp.IsZero() {
+		msg.Timestamp = time.Now()
+	}
+	// Clip lifecycle
+	if msg.Data.ClipLifecycle != nil {
+		ct := "clip"
+		return &periscope.ClipEvent{
+			Timestamp:         msg.Timestamp,
+			InternalName:      msg.Data.ClipLifecycle.InternalName,
+			RequestID:         msg.Data.ClipLifecycle.RequestID,
+			Stage:             msg.Data.ClipLifecycle.Stage,
+			ContentType:       &ct,
+			Title:             &msg.Data.ClipLifecycle.Title,
+			Format:            &msg.Data.ClipLifecycle.Format,
+			StartUnix:         int64PtrFrom(&msg.Data.ClipLifecycle.StartUnix),
+			StopUnix:          int64PtrFrom(&msg.Data.ClipLifecycle.StopUnix),
+			StartMs:           int64PtrFrom(&msg.Data.ClipLifecycle.StartMs),
+			StopMs:            int64PtrFrom(&msg.Data.ClipLifecycle.StopMs),
+			DurationSec:       int64PtrFrom(&msg.Data.ClipLifecycle.DurationSec),
+			IngestNodeID:      &msg.Data.ClipLifecycle.IngestNodeID,
+			StorageNodeID:     &msg.Data.ClipLifecycle.StorageNodeID,
+			RoutingDistanceKm: &msg.Data.ClipLifecycle.RoutingDistanceKm,
+			Percent:           uint32PtrFrom(&msg.Data.ClipLifecycle.Percent),
+			Message:           &msg.Data.ClipLifecycle.Message,
+			FilePath:          &msg.Data.ClipLifecycle.FilePath,
+			S3URL:             &msg.Data.ClipLifecycle.S3URL,
+			SizeBytes:         uint64PtrFrom(&msg.Data.ClipLifecycle.SizeBytes),
+		}
+	}
+	// DVR lifecycle events are handled through ClipLifecycle for now
+	// DVR events would be added to EventData when DVR lifecycle is implemented
+	return nil
+}
+
+func int64PtrFrom(v *int64) *int64 {
+	if v == nil {
+		return nil
+	}
+	x := *v
+	return &x
+}
+func uint32PtrFrom(v *uint32) *uint32 {
+	if v == nil {
+		return nil
+	}
+	x := *v
+	return &x
+}
+func uint64PtrFrom(v *uint64) *uint64 {
+	if v == nil {
+		return nil
+	}
+	x := *v
+	return &x
 }

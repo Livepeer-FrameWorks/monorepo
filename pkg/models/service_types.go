@@ -47,20 +47,26 @@ type BillingStatus struct {
 
 // UsageSummary represents usage summary for billing
 type UsageSummary struct {
-	TenantID          string    `json:"tenant_id"`
-	ClusterID         string    `json:"cluster_id"`
-	Period            string    `json:"period"`
-	StreamHours       float64   `json:"stream_hours"`
-	EgressGB          float64   `json:"egress_gb"`
-	RecordingGB       float64   `json:"recording_gb"`
-	PeakBandwidthMbps float64   `json:"peak_bandwidth_mbps"`
-	TotalStreams      int       `json:"total_streams"`
-	TotalViewers      int       `json:"total_viewers"`
-	PeakViewers       int       `json:"peak_viewers"`
-	MaxViewers        int       `json:"max_viewers"`
-	UniqueUsers       int       `json:"unique_users"`
-	BillingMonth      string    `json:"billing_month"`
-	Timestamp         time.Time `json:"timestamp"`
+	TenantID          string  `json:"tenant_id"`
+	ClusterID         string  `json:"cluster_id"`
+	Period            string  `json:"period"`
+	StreamHours       float64 `json:"stream_hours"`
+	EgressGB          float64 `json:"egress_gb"`
+	RecordingGB       float64 `json:"recording_gb"`
+	PeakBandwidthMbps float64 `json:"peak_bandwidth_mbps"`
+	// Storage and clip lifecycle metrics for billing
+	StorageGB            float64   `json:"storage_gb"`
+	ClipsAdded           int       `json:"clips_added"`
+	ClipsDeleted         int       `json:"clips_deleted"`
+	ClipStorageAddedGB   float64   `json:"clip_storage_added_gb"`
+	ClipStorageDeletedGB float64   `json:"clip_storage_deleted_gb"`
+	TotalStreams         int       `json:"total_streams"`
+	TotalViewers         int       `json:"total_viewers"`
+	PeakViewers          int       `json:"peak_viewers"`
+	MaxViewers           int       `json:"max_viewers"`
+	UniqueUsers          int       `json:"unique_users"`
+	BillingMonth         string    `json:"billing_month"`
+	Timestamp            time.Time `json:"timestamp"`
 
 	// Additional metrics from ClickHouse
 	AvgViewers      float64 `json:"avg_viewers"`

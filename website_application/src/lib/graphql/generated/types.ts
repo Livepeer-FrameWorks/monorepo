@@ -12,7 +12,9 @@ export type Scalars = {
   Boolean: { input: boolean; output: boolean; }
   Int: { input: number; output: number; }
   Float: { input: number; output: number; }
+  Currency: { input: any; output: any; }
   JSON: { input: any; output: any; }
+  Money: { input: any; output: any; }
   Time: { input: string; output: string; }
 };
 
@@ -79,6 +81,39 @@ export type Clip = {
   stream: Scalars['String']['output'];
   title: Scalars['String']['output'];
   updatedAt: Scalars['Time']['output'];
+  viewingUrls?: Maybe<ClipViewingUrls>;
+};
+
+export type ClipEvent = {
+  __typename?: 'ClipEvent';
+  contentType?: Maybe<Scalars['String']['output']>;
+  durationSec?: Maybe<Scalars['Int']['output']>;
+  filePath?: Maybe<Scalars['String']['output']>;
+  format?: Maybe<Scalars['String']['output']>;
+  ingestNodeId?: Maybe<Scalars['String']['output']>;
+  internalName: Scalars['String']['output'];
+  message?: Maybe<Scalars['String']['output']>;
+  percent?: Maybe<Scalars['Int']['output']>;
+  requestId: Scalars['String']['output'];
+  routingDistanceKm?: Maybe<Scalars['Float']['output']>;
+  s3Url?: Maybe<Scalars['String']['output']>;
+  sizeBytes?: Maybe<Scalars['Int']['output']>;
+  stage: Scalars['String']['output'];
+  startMs?: Maybe<Scalars['Int']['output']>;
+  startUnix?: Maybe<Scalars['Int']['output']>;
+  stopMs?: Maybe<Scalars['Int']['output']>;
+  stopUnix?: Maybe<Scalars['Int']['output']>;
+  storageNodeId?: Maybe<Scalars['String']['output']>;
+  timestamp: Scalars['Time']['output'];
+  title?: Maybe<Scalars['String']['output']>;
+};
+
+export type ClipViewingUrls = {
+  __typename?: 'ClipViewingUrls';
+  dash?: Maybe<Scalars['String']['output']>;
+  hls?: Maybe<Scalars['String']['output']>;
+  mp4?: Maybe<Scalars['String']['output']>;
+  webm?: Maybe<Scalars['String']['output']>;
 };
 
 export type Cluster = {
@@ -88,7 +123,14 @@ export type Cluster = {
   name: Scalars['String']['output'];
   nodes: Array<Node>;
   region: Scalars['String']['output'];
+  serviceInstances: Array<ServiceInstance>;
   status: NodeStatus;
+};
+
+
+export type ClusterServiceInstancesArgs = {
+  nodeId?: InputMaybe<Scalars['String']['input']>;
+  status?: InputMaybe<InstanceStatus>;
 };
 
 export type ConnectionEvent = {
@@ -138,8 +180,8 @@ export type CreateDeveloperTokenInput = {
 };
 
 export type CreatePaymentInput = {
-  amount: Scalars['Float']['input'];
-  currency?: InputMaybe<Scalars['String']['input']>;
+  amount: Scalars['Money']['input'];
+  currency?: InputMaybe<Scalars['Currency']['input']>;
   method: PaymentMethod;
 };
 
@@ -151,6 +193,30 @@ export type CreateStreamInput = {
 
 export type CreateStreamKeyInput = {
   name: Scalars['String']['input'];
+};
+
+export type DvrRequest = {
+  __typename?: 'DVRRequest';
+  createdAt: Scalars['Time']['output'];
+  durationSeconds?: Maybe<Scalars['Int']['output']>;
+  dvrHash: Scalars['ID']['output'];
+  endedAt?: Maybe<Scalars['Time']['output']>;
+  errorMessage?: Maybe<Scalars['String']['output']>;
+  internalName: Scalars['String']['output'];
+  manifestPath?: Maybe<Scalars['String']['output']>;
+  sizeBytes?: Maybe<Scalars['Int']['output']>;
+  startedAt?: Maybe<Scalars['Time']['output']>;
+  status: Scalars['String']['output'];
+  storageNodeId?: Maybe<Scalars['String']['output']>;
+  updatedAt: Scalars['Time']['output'];
+};
+
+export type DvrRequestList = {
+  __typename?: 'DVRRequestList';
+  dvrRecordings: Array<DvrRequest>;
+  limit: Scalars['Int']['output'];
+  page: Scalars['Int']['output'];
+  total: Scalars['Int']['output'];
 };
 
 export type DeveloperToken = {
@@ -177,11 +243,20 @@ export type GeographicDistribution = {
   viewersByCountry: Array<CountryTimeSeries>;
 };
 
+export enum InstanceStatus {
+  Error = 'ERROR',
+  Running = 'RUNNING',
+  Starting = 'STARTING',
+  Stopped = 'STOPPED',
+  Stopping = 'STOPPING',
+  Unknown = 'UNKNOWN'
+}
+
 export type Invoice = {
   __typename?: 'Invoice';
-  amount: Scalars['Float']['output'];
+  amount: Scalars['Money']['output'];
   createdAt: Scalars['Time']['output'];
-  currency: Scalars['String']['output'];
+  currency: Scalars['Currency']['output'];
   dueDate: Scalars['Time']['output'];
   id: Scalars['ID']['output'];
   lineItems: Array<LineItem>;
@@ -199,8 +274,8 @@ export type LineItem = {
   __typename?: 'LineItem';
   description: Scalars['String']['output'];
   quantity: Scalars['Int']['output'];
-  total: Scalars['Float']['output'];
-  unitPrice: Scalars['Float']['output'];
+  total: Scalars['Money']['output'];
+  unitPrice: Scalars['Money']['output'];
 };
 
 export type LoadBalancingMetric = {
@@ -231,10 +306,14 @@ export type Mutation = {
   createPayment: Payment;
   createStream: Stream;
   createStreamKey: StreamKey;
+  deleteClip: Scalars['Boolean']['output'];
   deleteStream: Scalars['Boolean']['output'];
   deleteStreamKey: Scalars['Boolean']['output'];
   refreshStreamKey: Stream;
   revokeDeveloperToken: Scalars['Boolean']['output'];
+  setStreamRecordingConfig: RecordingConfig;
+  startDVR: DvrRequest;
+  stopDVR: Scalars['Boolean']['output'];
   updateBillingTier: BillingStatus;
   updateStream: Stream;
   updateTenant: Tenant;
@@ -267,6 +346,11 @@ export type MutationCreateStreamKeyArgs = {
 };
 
 
+export type MutationDeleteClipArgs = {
+  id: Scalars['ID']['input'];
+};
+
+
 export type MutationDeleteStreamArgs = {
   id: Scalars['ID']['input'];
 };
@@ -288,6 +372,26 @@ export type MutationRevokeDeveloperTokenArgs = {
 };
 
 
+export type MutationSetStreamRecordingConfigArgs = {
+  enabled: Scalars['Boolean']['input'];
+  format?: InputMaybe<Scalars['String']['input']>;
+  internalName: Scalars['String']['input'];
+  retentionDays?: InputMaybe<Scalars['Int']['input']>;
+  segmentDuration?: InputMaybe<Scalars['Int']['input']>;
+};
+
+
+export type MutationStartDvrArgs = {
+  internalName: Scalars['String']['input'];
+  streamId?: InputMaybe<Scalars['ID']['input']>;
+};
+
+
+export type MutationStopDvrArgs = {
+  dvrHash: Scalars['ID']['input'];
+};
+
+
 export type MutationUpdateBillingTierArgs = {
   tierId: Scalars['ID']['input'];
 };
@@ -306,6 +410,7 @@ export type MutationUpdateTenantArgs = {
 export type Node = {
   __typename?: 'Node';
   cluster: Scalars['String']['output'];
+  clusterInfo?: Maybe<Cluster>;
   createdAt: Scalars['Time']['output'];
   id: Scalars['ID']['output'];
   ipAddress?: Maybe<Scalars['String']['output']>;
@@ -313,10 +418,28 @@ export type Node = {
   latitude?: Maybe<Scalars['Float']['output']>;
   location?: Maybe<Scalars['String']['output']>;
   longitude?: Maybe<Scalars['Float']['output']>;
+  metrics?: Maybe<Array<NodeMetric>>;
+  metrics1h?: Maybe<Array<NodeMetricHourly>>;
   name: Scalars['String']['output'];
   region: Scalars['String']['output'];
+  serviceInstances?: Maybe<Array<ServiceInstance>>;
   status: NodeStatus;
   type: Scalars['String']['output'];
+};
+
+
+export type NodeMetricsArgs = {
+  timeRange?: InputMaybe<TimeRangeInput>;
+};
+
+
+export type NodeMetrics1hArgs = {
+  timeRange?: InputMaybe<TimeRangeInput>;
+};
+
+
+export type NodeServiceInstancesArgs = {
+  status?: InputMaybe<InstanceStatus>;
 };
 
 export type NodeMetric = {
@@ -327,7 +450,7 @@ export type NodeMetric = {
   latitude?: Maybe<Scalars['Float']['output']>;
   longitude?: Maybe<Scalars['Float']['output']>;
   memoryUsage: Scalars['Float']['output'];
-  metadata?: Maybe<Scalars['String']['output']>;
+  metadata?: Maybe<Scalars['JSON']['output']>;
   networkRx: Scalars['Int']['output'];
   networkTx: Scalars['Int']['output'];
   nodeId: Scalars['String']['output'];
@@ -336,17 +459,36 @@ export type NodeMetric = {
   timestamp: Scalars['Time']['output'];
 };
 
+export type NodeMetricHourly = {
+  __typename?: 'NodeMetricHourly';
+  avgCpu: Scalars['Float']['output'];
+  avgHealthScore: Scalars['Float']['output'];
+  avgMemory: Scalars['Float']['output'];
+  nodeId: Scalars['String']['output'];
+  peakCpu: Scalars['Float']['output'];
+  peakMemory: Scalars['Float']['output'];
+  timestamp: Scalars['Time']['output'];
+  totalBandwidthIn: Scalars['Int']['output'];
+  totalBandwidthOut: Scalars['Int']['output'];
+  wasHealthy: Scalars['Boolean']['output'];
+};
+
 export enum NodeStatus {
   Degraded = 'DEGRADED',
   Healthy = 'HEALTHY',
   Unhealthy = 'UNHEALTHY'
 }
 
+export type PaginationInput = {
+  limit?: InputMaybe<Scalars['Int']['input']>;
+  offset?: InputMaybe<Scalars['Int']['input']>;
+};
+
 export type Payment = {
   __typename?: 'Payment';
-  amount: Scalars['Float']['output'];
+  amount: Scalars['Money']['output'];
   createdAt: Scalars['Time']['output'];
-  currency: Scalars['String']['output'];
+  currency: Scalars['Currency']['output'];
   id: Scalars['ID']['output'];
   method: PaymentMethod;
   status: PaymentStatus;
@@ -386,20 +528,27 @@ export type Query = {
   __typename?: 'Query';
   billingStatus: BillingStatus;
   billingTiers: Array<BillingTier>;
+  clip?: Maybe<Clip>;
+  clipEvents: Array<ClipEvent>;
+  clipViewingUrls: ClipViewingUrls;
+  clips: Array<Clip>;
   cluster?: Maybe<Cluster>;
   clusters: Array<Cluster>;
   connectionEvents: Array<ConnectionEvent>;
   currentStreamHealth?: Maybe<StreamHealthMetric>;
   developerTokens: Array<DeveloperToken>;
+  dvrRequests: DvrRequestList;
   geographicDistribution: GeographicDistribution;
   invoice?: Maybe<Invoice>;
   invoices: Array<Invoice>;
   loadBalancingMetrics: Array<LoadBalancingMetric>;
   node?: Maybe<Node>;
   nodeMetrics: Array<NodeMetric>;
+  nodeMetrics1h: Array<NodeMetricHourly>;
   nodes: Array<Node>;
   platformOverview: PlatformOverview;
   rebufferingEvents: Array<RebufferingEvent>;
+  recordingConfig: RecordingConfig;
   recordings: Array<Recording>;
   routingEvents: Array<RoutingEvent>;
   serviceInstances: Array<ServiceInstance>;
@@ -420,12 +569,37 @@ export type Query = {
 };
 
 
+export type QueryClipArgs = {
+  id: Scalars['ID']['input'];
+};
+
+
+export type QueryClipEventsArgs = {
+  internalName?: InputMaybe<Scalars['String']['input']>;
+  pagination?: InputMaybe<PaginationInput>;
+  stage?: InputMaybe<Scalars['String']['input']>;
+  timeRange?: InputMaybe<TimeRangeInput>;
+};
+
+
+export type QueryClipViewingUrlsArgs = {
+  clipId: Scalars['ID']['input'];
+};
+
+
+export type QueryClipsArgs = {
+  streamId?: InputMaybe<Scalars['ID']['input']>;
+};
+
+
 export type QueryClusterArgs = {
   id: Scalars['ID']['input'];
 };
 
 
 export type QueryConnectionEventsArgs = {
+  pagination?: InputMaybe<PaginationInput>;
+  sortOrder?: InputMaybe<SortOrder>;
   stream?: InputMaybe<Scalars['String']['input']>;
   timeRange?: InputMaybe<TimeRangeInput>;
 };
@@ -433,6 +607,13 @@ export type QueryConnectionEventsArgs = {
 
 export type QueryCurrentStreamHealthArgs = {
   stream: Scalars['String']['input'];
+};
+
+
+export type QueryDvrRequestsArgs = {
+  internalName?: InputMaybe<Scalars['String']['input']>;
+  pagination?: InputMaybe<PaginationInput>;
+  status?: InputMaybe<Scalars['String']['input']>;
 };
 
 
@@ -448,6 +629,8 @@ export type QueryInvoiceArgs = {
 
 
 export type QueryLoadBalancingMetricsArgs = {
+  pagination?: InputMaybe<PaginationInput>;
+  sortOrder?: InputMaybe<SortOrder>;
   timeRange?: InputMaybe<TimeRangeInput>;
 };
 
@@ -463,6 +646,20 @@ export type QueryNodeMetricsArgs = {
 };
 
 
+export type QueryNodeMetrics1hArgs = {
+  nodeId?: InputMaybe<Scalars['String']['input']>;
+  timeRange?: InputMaybe<TimeRangeInput>;
+};
+
+
+export type QueryNodesArgs = {
+  clusterId?: InputMaybe<Scalars['String']['input']>;
+  status?: InputMaybe<NodeStatus>;
+  tag?: InputMaybe<Scalars['String']['input']>;
+  type?: InputMaybe<Scalars['String']['input']>;
+};
+
+
 export type QueryPlatformOverviewArgs = {
   timeRange?: InputMaybe<TimeRangeInput>;
 };
@@ -474,12 +671,19 @@ export type QueryRebufferingEventsArgs = {
 };
 
 
+export type QueryRecordingConfigArgs = {
+  internalName: Scalars['String']['input'];
+};
+
+
 export type QueryRecordingsArgs = {
   streamId?: InputMaybe<Scalars['ID']['input']>;
 };
 
 
 export type QueryRoutingEventsArgs = {
+  pagination?: InputMaybe<PaginationInput>;
+  sortOrder?: InputMaybe<SortOrder>;
   stream?: InputMaybe<Scalars['String']['input']>;
   timeRange?: InputMaybe<TimeRangeInput>;
 };
@@ -487,6 +691,8 @@ export type QueryRoutingEventsArgs = {
 
 export type QueryServiceInstancesArgs = {
   clusterId?: InputMaybe<Scalars['String']['input']>;
+  nodeId?: InputMaybe<Scalars['String']['input']>;
+  status?: InputMaybe<InstanceStatus>;
 };
 
 
@@ -581,6 +787,14 @@ export type Recording = {
   updatedAt: Scalars['Time']['output'];
 };
 
+export type RecordingConfig = {
+  __typename?: 'RecordingConfig';
+  enabled: Scalars['Boolean']['output'];
+  format: Scalars['String']['output'];
+  retentionDays: Scalars['Int']['output'];
+  segmentDuration: Scalars['Int']['output'];
+};
+
 export type RoutingEvent = {
   __typename?: 'RoutingEvent';
   clientCountry?: Maybe<Scalars['String']['output']>;
@@ -600,35 +814,62 @@ export type RoutingEvent = {
 
 export type ServiceInstance = {
   __typename?: 'ServiceInstance';
+  cluster?: Maybe<Cluster>;
   clusterId: Scalars['String']['output'];
   containerId?: Maybe<Scalars['String']['output']>;
   cpuUsagePercent?: Maybe<Scalars['Float']['output']>;
-  healthStatus: Scalars['String']['output'];
+  healthStatus: NodeStatus;
   id: Scalars['ID']['output'];
   instanceId: Scalars['String']['output'];
   lastHealthCheck?: Maybe<Scalars['Time']['output']>;
   memoryUsageMb?: Maybe<Scalars['Int']['output']>;
+  node?: Maybe<Node>;
   nodeId?: Maybe<Scalars['String']['output']>;
   port?: Maybe<Scalars['Int']['output']>;
   processId?: Maybe<Scalars['Int']['output']>;
   serviceId: Scalars['String']['output'];
   startedAt?: Maybe<Scalars['Time']['output']>;
-  status: Scalars['String']['output'];
+  status: InstanceStatus;
   stoppedAt?: Maybe<Scalars['Time']['output']>;
   version?: Maybe<Scalars['String']['output']>;
 };
+
+export enum SortOrder {
+  Asc = 'ASC',
+  Desc = 'DESC'
+}
 
 export type Stream = {
   __typename?: 'Stream';
   createdAt: Scalars['Time']['output'];
   description?: Maybe<Scalars['String']['output']>;
+  events: Array<StreamEvent>;
+  health: Array<StreamHealthMetric>;
   id: Scalars['ID']['output'];
   name: Scalars['String']['output'];
   playbackId: Scalars['String']['output'];
   record: Scalars['Boolean']['output'];
+  recordings: Array<Recording>;
   status: StreamStatus;
   streamKey: Scalars['String']['output'];
   updatedAt: Scalars['Time']['output'];
+  viewerMetrics5m: Array<ViewerMetrics5m>;
+};
+
+
+export type StreamEventsArgs = {
+  pagination?: InputMaybe<PaginationInput>;
+  timeRange?: InputMaybe<TimeRangeInput>;
+};
+
+
+export type StreamHealthArgs = {
+  timeRange?: InputMaybe<TimeRangeInput>;
+};
+
+
+export type StreamViewerMetrics5mArgs = {
+  timeRange?: InputMaybe<TimeRangeInput>;
 };
 
 export type StreamAnalytics = {
@@ -684,7 +925,7 @@ export type StreamAnalytics = {
 
 export type StreamEvent = {
   __typename?: 'StreamEvent';
-  details?: Maybe<Scalars['String']['output']>;
+  details?: Maybe<Scalars['JSON']['output']>;
   status: StreamStatus;
   stream: Scalars['String']['output'];
   timestamp: Scalars['Time']['output'];
@@ -738,6 +979,7 @@ export type StreamHealthMetric = {
   qualityTier?: Maybe<Scalars['String']['output']>;
   stream: Scalars['String']['output'];
   timestamp: Scalars['Time']['output'];
+  trackMetadata?: Maybe<Scalars['JSON']['output']>;
   width?: Maybe<Scalars['Int']['output']>;
 };
 
@@ -784,10 +1026,22 @@ export type StreamValidation = {
 
 export type Subscription = {
   __typename?: 'Subscription';
+  clipLifecycle: ClipEvent;
+  dvrLifecycle: ClipEvent;
   streamEvents: StreamEvent;
   systemHealth: SystemHealthEvent;
   trackListUpdates: TrackListEvent;
   viewerMetrics: ViewerMetrics;
+};
+
+
+export type SubscriptionClipLifecycleArgs = {
+  stream: Scalars['String']['input'];
+};
+
+
+export type SubscriptionDvrLifecycleArgs = {
+  stream: Scalars['String']['input'];
 };
 
 
@@ -1133,7 +1387,7 @@ export type CreatePaymentMutationVariables = Exact<{
 }>;
 
 
-export type CreatePaymentMutation = { __typename?: 'Mutation', createPayment: { __typename?: 'Payment', id: string, amount: number, currency: string, method: PaymentMethod, status: PaymentStatus, createdAt: string } };
+export type CreatePaymentMutation = { __typename?: 'Mutation', createPayment: { __typename?: 'Payment', id: string, amount: any, currency: any, method: PaymentMethod, status: PaymentStatus, createdAt: string } };
 
 export type UpdateBillingTierMutationVariables = Exact<{
   tierId: Scalars['ID']['input'];
@@ -1149,6 +1403,13 @@ export type CreateClipMutationVariables = Exact<{
 
 export type CreateClipMutation = { __typename?: 'Mutation', createClip: { __typename?: 'Clip', id: string, stream: string, title: string, description?: string | null | undefined, startTime: number, endTime: number, duration: number, playbackId: string, status: string, createdAt: string, updatedAt: string } };
 
+export type DeleteClipMutationVariables = Exact<{
+  id: Scalars['ID']['input'];
+}>;
+
+
+export type DeleteClipMutation = { __typename?: 'Mutation', deleteClip: boolean };
+
 export type CreateApiTokenMutationVariables = Exact<{
   input: CreateDeveloperTokenInput;
 }>;
@@ -1162,6 +1423,32 @@ export type RevokeApiTokenMutationVariables = Exact<{
 
 
 export type RevokeApiTokenMutation = { __typename?: 'Mutation', revokeDeveloperToken: boolean };
+
+export type StartDvrMutationVariables = Exact<{
+  internalName: Scalars['String']['input'];
+  streamId?: InputMaybe<Scalars['ID']['input']>;
+}>;
+
+
+export type StartDvrMutation = { __typename?: 'Mutation', startDVR: { __typename?: 'DVRRequest', dvrHash: string, internalName: string, storageNodeId?: string | null | undefined, status: string, startedAt?: string | null | undefined, endedAt?: string | null | undefined, durationSeconds?: number | null | undefined, sizeBytes?: number | null | undefined, manifestPath?: string | null | undefined, errorMessage?: string | null | undefined, createdAt: string, updatedAt: string } };
+
+export type StopDvrMutationVariables = Exact<{
+  dvrHash: Scalars['ID']['input'];
+}>;
+
+
+export type StopDvrMutation = { __typename?: 'Mutation', stopDVR: boolean };
+
+export type SetStreamRecordingConfigMutationVariables = Exact<{
+  internalName: Scalars['String']['input'];
+  enabled: Scalars['Boolean']['input'];
+  retentionDays?: InputMaybe<Scalars['Int']['input']>;
+  format?: InputMaybe<Scalars['String']['input']>;
+  segmentDuration?: InputMaybe<Scalars['Int']['input']>;
+}>;
+
+
+export type SetStreamRecordingConfigMutation = { __typename?: 'Mutation', setStreamRecordingConfig: { __typename?: 'RecordingConfig', enabled: boolean, retentionDays: number, format: string, segmentDuration: number } };
 
 export type UpdateTenantMutationVariables = Exact<{
   input: UpdateTenantInput;
@@ -1281,19 +1568,62 @@ export type GetBillingStatusQuery = { __typename?: 'Query', billingStatus: { __t
 export type GetInvoicesQueryVariables = Exact<{ [key: string]: never; }>;
 
 
-export type GetInvoicesQuery = { __typename?: 'Query', invoices: Array<{ __typename?: 'Invoice', id: string, amount: number, currency: string, status: InvoiceStatus, dueDate: string, createdAt: string, lineItems: Array<{ __typename?: 'LineItem', description: string, quantity: number, unitPrice: number, total: number }> }> };
+export type GetInvoicesQuery = { __typename?: 'Query', invoices: Array<{ __typename?: 'Invoice', id: string, amount: any, currency: any, status: InvoiceStatus, dueDate: string, createdAt: string, lineItems: Array<{ __typename?: 'LineItem', description: string, quantity: number, unitPrice: any, total: any }> }> };
 
 export type GetInvoiceQueryVariables = Exact<{
   id: Scalars['ID']['input'];
 }>;
 
 
-export type GetInvoiceQuery = { __typename?: 'Query', invoice?: { __typename?: 'Invoice', id: string, amount: number, currency: string, status: InvoiceStatus, dueDate: string, createdAt: string, lineItems: Array<{ __typename?: 'LineItem', description: string, quantity: number, unitPrice: number, total: number }> } | null | undefined };
+export type GetInvoiceQuery = { __typename?: 'Query', invoice?: { __typename?: 'Invoice', id: string, amount: any, currency: any, status: InvoiceStatus, dueDate: string, createdAt: string, lineItems: Array<{ __typename?: 'LineItem', description: string, quantity: number, unitPrice: any, total: any }> } | null | undefined };
+
+export type ClipInfoFragment = { __typename?: 'Clip', id: string, stream: string, title: string, description?: string | null | undefined, startTime: number, endTime: number, duration: number, playbackId: string, status: string, createdAt: string, updatedAt: string };
+
+export type GetClipsQueryVariables = Exact<{
+  streamId?: InputMaybe<Scalars['ID']['input']>;
+}>;
+
+
+export type GetClipsQuery = { __typename?: 'Query', clips: Array<{ __typename?: 'Clip', id: string, stream: string, title: string, description?: string | null | undefined, startTime: number, endTime: number, duration: number, playbackId: string, status: string, createdAt: string, updatedAt: string }> };
+
+export type GetClipQueryVariables = Exact<{
+  id: Scalars['ID']['input'];
+}>;
+
+
+export type GetClipQuery = { __typename?: 'Query', clip?: { __typename?: 'Clip', id: string, stream: string, title: string, description?: string | null | undefined, startTime: number, endTime: number, duration: number, playbackId: string, status: string, createdAt: string, updatedAt: string } | null | undefined };
+
+export type GetClipViewingUrlsQueryVariables = Exact<{
+  clipId: Scalars['ID']['input'];
+}>;
+
+
+export type GetClipViewingUrlsQuery = { __typename?: 'Query', clipViewingUrls: { __typename?: 'ClipViewingUrls', hls?: string | null | undefined, dash?: string | null | undefined, mp4?: string | null | undefined, webm?: string | null | undefined } };
 
 export type GetApiTokensQueryVariables = Exact<{ [key: string]: never; }>;
 
 
 export type GetApiTokensQuery = { __typename?: 'Query', developerTokens: Array<{ __typename?: 'DeveloperToken', id: string, name: string, permissions: string, status: string, lastUsedAt?: string | null | undefined, expiresAt?: string | null | undefined, createdAt: string }> };
+
+export type DvrRequestInfoFragment = { __typename?: 'DVRRequest', dvrHash: string, internalName: string, storageNodeId?: string | null | undefined, status: string, startedAt?: string | null | undefined, endedAt?: string | null | undefined, durationSeconds?: number | null | undefined, sizeBytes?: number | null | undefined, manifestPath?: string | null | undefined, errorMessage?: string | null | undefined, createdAt: string, updatedAt: string };
+
+export type RecordingConfigInfoFragment = { __typename?: 'RecordingConfig', enabled: boolean, retentionDays: number, format: string, segmentDuration: number };
+
+export type GetDvrRequestsQueryVariables = Exact<{
+  internalName?: InputMaybe<Scalars['String']['input']>;
+  status?: InputMaybe<Scalars['String']['input']>;
+  pagination?: InputMaybe<PaginationInput>;
+}>;
+
+
+export type GetDvrRequestsQuery = { __typename?: 'Query', dvrRequests: { __typename?: 'DVRRequestList', total: number, page: number, limit: number, dvrRecordings: Array<{ __typename?: 'DVRRequest', dvrHash: string, internalName: string, storageNodeId?: string | null | undefined, status: string, startedAt?: string | null | undefined, endedAt?: string | null | undefined, durationSeconds?: number | null | undefined, sizeBytes?: number | null | undefined, manifestPath?: string | null | undefined, errorMessage?: string | null | undefined, createdAt: string, updatedAt: string }> } };
+
+export type GetRecordingConfigQueryVariables = Exact<{
+  internalName: Scalars['String']['input'];
+}>;
+
+
+export type GetRecordingConfigQuery = { __typename?: 'Query', recordingConfig: { __typename?: 'RecordingConfig', enabled: boolean, retentionDays: number, format: string, segmentDuration: number } };
 
 export type GetStreamHealthMetricsQueryVariables = Exact<{
   stream: Scalars['String']['input'];
@@ -1363,14 +1693,14 @@ export type GetNodeQueryVariables = Exact<{
 
 export type GetNodeQuery = { __typename?: 'Query', node?: { __typename?: 'Node', id: string, name: string, cluster: string, type: string, status: NodeStatus, region: string, ipAddress?: string | null | undefined, lastSeen: string, createdAt: string, latitude?: number | null | undefined, longitude?: number | null | undefined, location?: string | null | undefined } | null | undefined };
 
-export type ServiceInstanceInfoFragment = { __typename?: 'ServiceInstance', id: string, instanceId: string, clusterId: string, nodeId?: string | null | undefined, serviceId: string, version?: string | null | undefined, port?: number | null | undefined, processId?: number | null | undefined, containerId?: string | null | undefined, status: string, healthStatus: string, startedAt?: string | null | undefined, stoppedAt?: string | null | undefined, lastHealthCheck?: string | null | undefined };
+export type ServiceInstanceInfoFragment = { __typename?: 'ServiceInstance', id: string, instanceId: string, clusterId: string, nodeId?: string | null | undefined, serviceId: string, version?: string | null | undefined, port?: number | null | undefined, processId?: number | null | undefined, containerId?: string | null | undefined, status: InstanceStatus, healthStatus: NodeStatus, startedAt?: string | null | undefined, stoppedAt?: string | null | undefined, lastHealthCheck?: string | null | undefined };
 
 export type GetServiceInstancesQueryVariables = Exact<{
   clusterId?: InputMaybe<Scalars['String']['input']>;
 }>;
 
 
-export type GetServiceInstancesQuery = { __typename?: 'Query', serviceInstances: Array<{ __typename?: 'ServiceInstance', id: string, instanceId: string, clusterId: string, nodeId?: string | null | undefined, serviceId: string, version?: string | null | undefined, port?: number | null | undefined, processId?: number | null | undefined, containerId?: string | null | undefined, status: string, healthStatus: string, startedAt?: string | null | undefined, stoppedAt?: string | null | undefined, lastHealthCheck?: string | null | undefined }> };
+export type GetServiceInstancesQuery = { __typename?: 'Query', serviceInstances: Array<{ __typename?: 'ServiceInstance', id: string, instanceId: string, clusterId: string, nodeId?: string | null | undefined, serviceId: string, version?: string | null | undefined, port?: number | null | undefined, processId?: number | null | undefined, containerId?: string | null | undefined, status: InstanceStatus, healthStatus: NodeStatus, startedAt?: string | null | undefined, stoppedAt?: string | null | undefined, lastHealthCheck?: string | null | undefined }> };
 
 export type TenantClusterAssignmentInfoFragment = { __typename?: 'TenantClusterAssignment', id: string, tenantId: string, clusterId: string, deploymentTier?: string | null | undefined, priority: number, isPrimary: boolean, isActive: boolean, maxStreamsOnCluster?: number | null | undefined, maxViewersOnCluster?: number | null | undefined, maxBandwidthMbpsOnCluster?: number | null | undefined, fallbackWhenFull: boolean, createdAt: string, updatedAt: string };
 
@@ -1408,7 +1738,7 @@ export type GetPerformanceServiceInstancesQueryVariables = Exact<{
 }>;
 
 
-export type GetPerformanceServiceInstancesQuery = { __typename?: 'Query', serviceInstances: Array<{ __typename?: 'ServiceInstance', id: string, instanceId: string, clusterId: string, nodeId?: string | null | undefined, serviceId: string, version?: string | null | undefined, port?: number | null | undefined, processId?: number | null | undefined, containerId?: string | null | undefined, status: string, healthStatus: string, startedAt?: string | null | undefined, stoppedAt?: string | null | undefined, lastHealthCheck?: string | null | undefined, cpuUsagePercent?: number | null | undefined, memoryUsageMb?: number | null | undefined }> };
+export type GetPerformanceServiceInstancesQuery = { __typename?: 'Query', serviceInstances: Array<{ __typename?: 'ServiceInstance', id: string, instanceId: string, clusterId: string, nodeId?: string | null | undefined, serviceId: string, version?: string | null | undefined, port?: number | null | undefined, processId?: number | null | undefined, containerId?: string | null | undefined, status: InstanceStatus, healthStatus: NodeStatus, startedAt?: string | null | undefined, stoppedAt?: string | null | undefined, lastHealthCheck?: string | null | undefined, cpuUsagePercent?: number | null | undefined, memoryUsageMb?: number | null | undefined }> };
 
 export type GetPlatformPerformanceQueryVariables = Exact<{
   timeRange?: InputMaybe<TimeRangeInput>;
@@ -1462,7 +1792,7 @@ export type GetNodeMetricsQueryVariables = Exact<{
 }>;
 
 
-export type GetNodeMetricsQuery = { __typename?: 'Query', nodeMetrics: Array<{ __typename?: 'NodeMetric', timestamp: string, nodeId: string, cpuUsage: number, memoryUsage: number, diskUsage: number, networkRx: number, networkTx: number, healthScore: number, status: string, latitude?: number | null | undefined, longitude?: number | null | undefined, tags?: Array<string> | null | undefined, metadata?: string | null | undefined }> };
+export type GetNodeMetricsQuery = { __typename?: 'Query', nodeMetrics: Array<{ __typename?: 'NodeMetric', timestamp: string, nodeId: string, cpuUsage: number, memoryUsage: number, diskUsage: number, networkRx: number, networkTx: number, healthScore: number, status: string, latitude?: number | null | undefined, longitude?: number | null | undefined, tags?: Array<string> | null | undefined, metadata?: any | null | undefined }> };
 
 export type GetPlatformRoutingEventsQueryVariables = Exact<{
   timeRange?: InputMaybe<TimeRangeInput>;
@@ -1537,7 +1867,7 @@ export type StreamEventsSubscriptionVariables = Exact<{
 }>;
 
 
-export type StreamEventsSubscription = { __typename?: 'Subscription', streamEvents: { __typename?: 'StreamEvent', type: StreamEventType, stream: string, status: StreamStatus, timestamp: string, details?: string | null | undefined } };
+export type StreamEventsSubscription = { __typename?: 'Subscription', streamEvents: { __typename?: 'StreamEvent', type: StreamEventType, stream: string, status: StreamStatus, timestamp: string, details?: any | null | undefined } };
 
 export type ViewerMetricsStreamSubscriptionVariables = Exact<{
   stream: Scalars['String']['input'];

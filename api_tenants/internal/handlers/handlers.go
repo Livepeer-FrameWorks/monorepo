@@ -48,7 +48,7 @@ func ValidateTenant(c *gin.Context) {
 	var resp models.ValidateTenantResponse
 	query := `
 		SELECT name, is_active
-		FROM tenants 
+		FROM quartermaster.tenants 
 		WHERE id = $1
 	`
 
@@ -90,10 +90,10 @@ func ResolveTenant(c *gin.Context) {
 	var param string
 
 	if req.Subdomain != "" {
-		query = `SELECT id, name FROM tenants WHERE subdomain = $1 AND is_active = true`
+		query = `SELECT id, name FROM quartermaster.tenants WHERE subdomain = $1 AND is_active = true`
 		param = req.Subdomain
 	} else if req.Domain != "" {
-		query = `SELECT id, name FROM tenants WHERE custom_domain = $1 AND is_active = true`
+		query = `SELECT id, name FROM quartermaster.tenants WHERE custom_domain = $1 AND is_active = true`
 		param = req.Domain
 	} else {
 		c.JSON(http.StatusBadRequest, qmapi.ErrorResponse{Error: "Either subdomain or domain required"})
@@ -128,7 +128,7 @@ func GetClusterRouting(c *gin.Context) {
 	var primaryClusterID, deploymentTier string
 	err := db.QueryRow(`
 		SELECT primary_cluster_id, deployment_tier 
-		FROM tenants 
+		FROM quartermaster.tenants 
 		WHERE id = $1 AND is_active = true
 	`, req.TenantID).Scan(&primaryClusterID, &deploymentTier)
 
@@ -154,9 +154,9 @@ func GetClusterRouting(c *gin.Context) {
 			c.max_streams,
 			c.current_stream_count,
 			c.health_status
-		FROM infrastructure_clusters c
-		JOIN tenants t ON t.id = $1
-		LEFT JOIN tenant_cluster_assignments tca ON tca.tenant_id = t.id AND tca.cluster_id = c.cluster_id
+		FROM quartermaster.infrastructure_clusters c
+		JOIN quartermaster.tenants t ON t.id = $1
+		LEFT JOIN quartermaster.tenant_cluster_assignments tca ON tca.tenant_id = t.id AND tca.cluster_id = c.cluster_id
 		WHERE c.cluster_id = $2
 		  AND c.is_active = true
 		  AND (
@@ -211,7 +211,7 @@ func GetTenant(c *gin.Context) {
 		       deployment_tier, deployment_model, primary_deployment_tier, allowed_deployment_tiers,
 		       primary_cluster_id, kafka_topic_prefix, kafka_brokers, database_url,
 		       is_active, created_at, updated_at
-		FROM tenants
+		FROM quartermaster.tenants
 		WHERE id = $1 AND is_active = TRUE
 	`
 
@@ -279,7 +279,7 @@ func CreateTenant(c *gin.Context) {
 	}
 
 	query := `
-		INSERT INTO tenants (name, subdomain, custom_domain, deployment_tier, deployment_model, 
+		INSERT INTO quartermaster.tenants (name, subdomain, custom_domain, deployment_tier, deployment_model, 
 		                    primary_deployment_tier, allowed_deployment_tiers, primary_color, secondary_color, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
 		RETURNING id, created_at, updated_at
@@ -426,7 +426,7 @@ func UpdateTenant(c *gin.Context) {
 		return
 	}
 
-	query := "UPDATE tenants SET " + setParts[0]
+	query := "UPDATE quartermaster.tenants SET " + setParts[0]
 	for i := 1; i < len(setParts); i++ {
 		query += ", " + setParts[i]
 	}
@@ -469,7 +469,7 @@ func DeleteTenant(c *gin.Context) {
 		metrics.TenantOperations.WithLabelValues("delete", "requested").Inc()
 	}
 
-	query := `UPDATE tenants SET is_active = FALSE, updated_at = NOW() WHERE id = $1 AND is_active = TRUE`
+	query := `UPDATE quartermaster.tenants SET is_active = FALSE, updated_at = NOW() WHERE id = $1 AND is_active = TRUE`
 
 	result, err := db.Exec(query, tenantID)
 	if err != nil {
@@ -508,7 +508,7 @@ func GetTenantCluster(c *gin.Context) {
 		SELECT id, deployment_tier, deployment_model, primary_deployment_tier, 
 		       allowed_deployment_tiers, primary_cluster_id, kafka_topic_prefix, 
 		       kafka_brokers, database_url
-		FROM tenants 
+		FROM quartermaster.tenants 
 		WHERE id = $1 AND is_active = TRUE
 	`
 
@@ -550,7 +550,7 @@ func UpdateTenantCluster(c *gin.Context) {
 	}
 
 	query := `
-		UPDATE tenants 
+		UPDATE quartermaster.tenants 
 		SET primary_cluster_id = COALESCE($2, primary_cluster_id),
 		    deployment_model = COALESCE($3, deployment_model),
 		    primary_deployment_tier = COALESCE($4, primary_deployment_tier),
@@ -598,7 +598,7 @@ func GetTenantsBatch(c *gin.Context) {
 		SELECT id, name, deployment_tier, deployment_model, primary_deployment_tier,
 		       allowed_deployment_tiers, primary_cluster_id, kafka_topic_prefix,
 		       kafka_brokers, database_url, is_active
-		FROM tenants 
+		FROM quartermaster.tenants 
 		WHERE id = ANY($1) AND is_active = TRUE
 	`
 
@@ -637,8 +637,8 @@ func GetTenantsByCluster(c *gin.Context) {
 		SELECT t.id, t.name, t.deployment_tier, t.deployment_model, 
 		       t.primary_deployment_tier, t.allowed_deployment_tiers,
 		       t.primary_cluster_id, t.is_active
-		FROM tenants t
-		LEFT JOIN tenant_cluster_assignments tca ON t.id = tca.tenant_id
+		FROM quartermaster.tenants t
+		LEFT JOIN quartermaster.tenant_cluster_assignments tca ON t.id = tca.tenant_id
 		WHERE (t.primary_cluster_id = $1 OR tca.cluster_id = $1) AND t.is_active = TRUE
 	`
 

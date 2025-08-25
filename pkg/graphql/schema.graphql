@@ -22,6 +22,7 @@ type Query {
   # Connection and Routing Analytics
   routingEvents(stream: String, timeRange: TimeRangeInput, pagination: PaginationInput, sortOrder: SortOrder): [RoutingEvent!]!
   connectionEvents(stream: String, timeRange: TimeRangeInput, pagination: PaginationInput, sortOrder: SortOrder): [ConnectionEvent!]!
+  clipEvents(internalName: String, stage: String, timeRange: TimeRangeInput, pagination: PaginationInput): [ClipEvent!]!
   
   # Node Performance Metrics
   nodeMetrics(nodeId: String, timeRange: TimeRangeInput): [NodeMetric!]!
@@ -36,6 +37,9 @@ type Query {
   # Stream Management
   streamKeys(streamId: ID!): [StreamKey!]!
   recordings(streamId: ID): [Recording!]!
+  clips(streamId: ID): [Clip!]!
+  clip(id: ID!): Clip
+  clipViewingUrls(clipId: ID!): ClipViewingUrls!
   
   # Tenant Resource Management
   tenantClusterAssignments: [TenantClusterAssignment!]!
@@ -63,6 +67,13 @@ type Query {
 
   # Developer API (from Commodore)
   developerTokens: [DeveloperToken!]!
+  
+  # DVR & recording
+  recordingConfig(internalName: String!): RecordingConfig!
+  dvrRequests(internalName: String, status: String, pagination: PaginationInput): DVRRequestList!
+  
+  # Viewer endpoint resolution (via Foghorn)
+  resolveViewerEndpoint(contentType: String!, contentId: String!): ViewerEndpointResponse!
 }
 
 # Root Mutation type
@@ -75,6 +86,14 @@ type Mutation {
 
   # Clip operations (via Commodore)
   createClip(input: CreateClipInput!): Clip!
+  deleteClip(id: ID!): Boolean!
+
+  # DVR operations (via Commodore)
+  startDVR(internalName: String!, streamId: ID): DVRRequest!
+  stopDVR(dvrHash: ID!): Boolean!
+
+  # Stream recording config (via Commodore)
+  setStreamRecordingConfig(internalName: String!, enabled: Boolean!, retentionDays: Int, format: String, segmentDuration: Int): RecordingConfig!
 
   # Billing operations (via Purser)
   createPayment(input: CreatePaymentInput!): Payment!
@@ -103,6 +122,10 @@ type Subscription {
   # Track list updates
   trackListUpdates(stream: String!): TrackListEvent!
   
+  # Clip lifecycle updates (includes DVR lifecycle mapped as clip events)
+  clipLifecycle(stream: String!): ClipEvent!
+  dvrLifecycle(stream: String!): ClipEvent!
+  
   # System health (admin only)
   systemHealth: SystemHealthEvent!
 }
@@ -127,6 +150,36 @@ input CreateClipInput {
   endTime: Int!
   title: String!
   description: String
+}
+
+# DVR types
+type DVRRequest {
+  dvrHash: ID!
+  internalName: String!
+  storageNodeId: String
+  status: String!
+  startedAt: Time
+  endedAt: Time
+  durationSeconds: Int
+  sizeBytes: Int
+  manifestPath: String
+  errorMessage: String
+  createdAt: Time!
+  updatedAt: Time!
+}
+
+type DVRRequestList {
+  dvrRecordings: [DVRRequest!]!
+  total: Int!
+  page: Int!
+  limit: Int!
+}
+
+type RecordingConfig {
+  enabled: Boolean!
+  retentionDays: Int!
+  format: String!
+  segmentDuration: Int!
 }
 
 input CreatePaymentInput {
@@ -489,6 +542,14 @@ type Clip {
   status: String!
   createdAt: Time!
   updatedAt: Time!
+  viewingUrls: ClipViewingUrls
+}
+
+type ClipViewingUrls {
+  hls: String
+  dash: String
+  mp4: String
+  webm: String
 }
 
 type DeveloperToken {
@@ -782,6 +843,33 @@ type ConnectionEvent {
 }
 
 # ============================================================================
+# CLIP LIFECYCLE ANALYTICS TYPES
+# ============================================================================
+
+type ClipEvent {
+  timestamp: Time!
+  internalName: String!
+  requestId: String!
+  stage: String!
+  contentType: String
+  title: String
+  format: String
+  startUnix: Int
+  stopUnix: Int
+  startMs: Int
+  stopMs: Int
+  durationSec: Int
+  ingestNodeId: String
+  storageNodeId: String
+  routingDistanceKm: Float
+  percent: Int
+  message: String
+  filePath: String
+  s3Url: String
+  sizeBytes: Int
+}
+
+# ============================================================================
 # NODE PERFORMANCE METRICS TYPES
 # ============================================================================
 
@@ -941,4 +1029,42 @@ type TenantClusterAssignment {
   
   createdAt: Time!
   updatedAt: Time!
+}
+
+# ============================================================================
+# VIEWER ENDPOINT RESOLUTION TYPES
+# ============================================================================
+
+# Response from Foghorn's viewer endpoint resolution
+type ViewerEndpointResponse {
+  endpoints: [ViewerEndpoint!]!
+  metadata: ContentMetadata
+}
+
+# Individual viewer endpoint with node and protocol info
+type ViewerEndpoint {
+  nodeId: String!
+  baseUrl: String!
+  protocol: String!        # "webrtc", "hls", "dash", etc from MistServer outputs
+  url: String!             # Complete URL with stream name substituted
+  geoDistance: Float       # Distance from viewer in km
+  loadScore: Float         # Load balancer score
+  healthScore: Float       # Node health score
+  outputs: JSON            # MistServer outputs configuration
+}
+
+# Content metadata for any content type
+type ContentMetadata {
+  contentType: String!      # "live", "dvr", "clip"
+  contentId: String!        # internal name or hash
+  tenantId: String!
+  title: String
+  description: String
+  duration: Int             # seconds, null for live
+  status: String!
+  isLive: Boolean!
+  viewCount: Int
+  recordingSize: Int        # bytes for DVR content
+  clipSource: String        # source info for clips
+  createdAt: String
 }

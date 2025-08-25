@@ -34,6 +34,7 @@ type EventData struct {
 	TrackList     *TrackListPayload     `json:"track_list,omitempty"`
 	Recording     *RecordingPayload     `json:"recording,omitempty"`
 	PushLifecycle *PushLifecyclePayload `json:"push_lifecycle,omitempty"`
+	ClipLifecycle *ClipLifecyclePayload `json:"clip_lifecycle,omitempty"`
 
 	// Infrastructure events
 	NodeLifecycle      *NodeLifecyclePayload      `json:"node_lifecycle,omitempty"`
@@ -58,6 +59,31 @@ type LoadBalancingPayload struct {
 	NodeLongitude     float64 `json:"node_longitude,omitempty"`
 	NodeName          string  `json:"node_name,omitempty"`
 	RoutingDistanceKm float64 `json:"routing_distance_km,omitempty"`
+}
+
+// ClipLifecyclePayload captures clip request/queue/progress/done/failed lifecycle
+type ClipLifecyclePayload struct {
+	InternalName      string  `json:"internal_name,omitempty"`
+	TenantID          string  `json:"tenant_id"`
+	RequestID         string  `json:"request_id"`
+	Stage             string  `json:"stage"`                  // requested|queued|progress|done|failed
+	ContentType       string  `json:"content_type,omitempty"` // clip|dvr
+	Title             string  `json:"title,omitempty"`
+	Format            string  `json:"format,omitempty"`
+	StartUnix         int64   `json:"start_unix,omitempty"`
+	StopUnix          int64   `json:"stop_unix,omitempty"`
+	StartMs           int64   `json:"start_ms,omitempty"`
+	StopMs            int64   `json:"stop_ms,omitempty"`
+	DurationSec       int64   `json:"duration_sec,omitempty"`
+	IngestNodeID      string  `json:"ingest_node_id,omitempty"`
+	StorageNodeID     string  `json:"storage_node_id,omitempty"`
+	RoutingDistanceKm float64 `json:"routing_distance_km,omitempty"`
+	Percent           uint32  `json:"percent,omitempty"`
+	Message           string  `json:"message,omitempty"`
+	FilePath          string  `json:"file_path,omitempty"`
+	S3URL             string  `json:"s3_url,omitempty"`
+	SizeBytes         uint64  `json:"size_bytes,omitempty"`
+	Error             string  `json:"error,omitempty"`
 }
 
 // KafkaEventBatch represents a batch of events for Kafka publishing
@@ -109,8 +135,9 @@ func ConvertBaseEventToKafka(baseEvent *BaseEvent) *KafkaEvent {
 	case EventBandwidthThreshold:
 		event.Data.BandwidthThreshold = baseEvent.BandwidthThreshold
 	case EventLoadBalancing:
-		// LoadBalancing events need to be constructed from legacy data
-		// This will be populated by the caller when converting from protobuf
+		event.Data.LoadBalancing = baseEvent.LoadBalancing
+	case EventClipLifecycle:
+		event.Data.ClipLifecycle = baseEvent.ClipLifecycle
 	}
 
 	return event
@@ -200,6 +227,13 @@ func ConvertKafkaEventBatchToBaseEventBatch(kafkaBatch *KafkaEventBatch) *Batche
 			baseEvent.BandwidthThreshold = kafkaEvent.Data.BandwidthThreshold
 			if kafkaEvent.Data.BandwidthThreshold != nil {
 				baseEvent.InternalName = &kafkaEvent.Data.BandwidthThreshold.InternalName
+			}
+		case EventLoadBalancing:
+			baseEvent.LoadBalancing = kafkaEvent.Data.LoadBalancing
+		case EventClipLifecycle:
+			baseEvent.ClipLifecycle = kafkaEvent.Data.ClipLifecycle
+			if kafkaEvent.Data.ClipLifecycle != nil {
+				baseEvent.InternalName = &kafkaEvent.Data.ClipLifecycle.InternalName
 			}
 		}
 

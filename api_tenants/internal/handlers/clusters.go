@@ -19,7 +19,7 @@ func GetClusters(c *gin.Context) {
 		       max_concurrent_streams, max_concurrent_viewers, max_bandwidth_mbps,
 		       current_stream_count, current_viewer_count, current_bandwidth_mbps,
 		       is_active, health_status, created_at, updated_at
-		FROM infrastructure_clusters
+		FROM quartermaster.infrastructure_clusters
 		ORDER BY cluster_name
 	`)
 	if err != nil {
@@ -59,7 +59,7 @@ func GetCluster(c *gin.Context) {
 		       max_concurrent_streams, max_concurrent_viewers, max_bandwidth_mbps,
 		       current_stream_count, current_viewer_count, current_bandwidth_mbps,
 		       is_active, health_status, created_at, updated_at
-		FROM infrastructure_clusters
+		FROM quartermaster.infrastructure_clusters
 		WHERE cluster_id = $1
 	`
 
@@ -116,7 +116,7 @@ func CreateCluster(c *gin.Context) {
 	}
 
 	query := `
-		INSERT INTO infrastructure_clusters 
+		INSERT INTO quartermaster.infrastructure_clusters 
 		(cluster_id, cluster_name, cluster_type, base_url, database_url, periscope_url, 
 		 kafka_brokers, max_concurrent_streams, max_concurrent_viewers, max_bandwidth_mbps, 
 		 created_at, updated_at)
@@ -273,7 +273,7 @@ func UpdateCluster(c *gin.Context) {
 		return
 	}
 
-	query := "UPDATE infrastructure_clusters SET " + setParts[0]
+	query := "UPDATE quartermaster.infrastructure_clusters SET " + setParts[0]
 	for i := 1; i < len(setParts); i++ {
 		query += ", " + setParts[i]
 	}

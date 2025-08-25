@@ -77,8 +77,8 @@ func (cm *CryptoMonitor) checkPendingPayments() {
 	rows, err := cm.db.Query(`
 		SELECT cw.id, cw.tenant_id, cw.invoice_id, cw.asset, cw.wallet_address,
 			   bi.amount, bi.currency
-		FROM crypto_wallets cw
-		JOIN billing_invoices bi ON cw.invoice_id = bi.id
+		FROM purser.crypto_wallets cw
+		JOIN purser.billing_invoices bi ON cw.invoice_id = bi.id
 		WHERE cw.status = 'active' 
 		  AND cw.expires_at > NOW()
 		  AND bi.status = 'pending'
@@ -236,7 +236,7 @@ func (cm *CryptoMonitor) confirmPayment(walletID, tenantID, invoiceID string, tx
 	now := time.Now()
 
 	_, err = dbTx.Exec(`
-		INSERT INTO billing_payments (id, invoice_id, method, amount, currency, tx_id, status, confirmed_at, created_at, updated_at)
+		INSERT INTO purser.billing_payments (id, invoice_id, method, amount, currency, tx_id, status, confirmed_at, created_at, updated_at)
 		SELECT $1, $2, 
 			   CASE 
 				   WHEN cw.asset = 'BTC' THEN 'crypto_btc'
@@ -245,8 +245,8 @@ func (cm *CryptoMonitor) confirmPayment(walletID, tenantID, invoiceID string, tx
 				   WHEN cw.asset = 'LPT' THEN 'crypto_lpt'
 			   END,
 			   bi.amount, bi.currency, $3, 'confirmed', $4, NOW(), NOW()
-		FROM crypto_wallets cw
-		JOIN billing_invoices bi ON cw.invoice_id = bi.id
+		FROM purser.crypto_wallets cw
+		JOIN purser.billing_invoices bi ON cw.invoice_id = bi.id
 		WHERE cw.id = $5
 	`, paymentID, invoiceID, tx.Hash, now, walletID)
 
@@ -261,7 +261,7 @@ func (cm *CryptoMonitor) confirmPayment(walletID, tenantID, invoiceID string, tx
 
 	// Mark invoice as paid
 	_, err = dbTx.Exec(`
-		UPDATE billing_invoices 
+		UPDATE purser.billing_invoices 
 		SET status = 'paid', paid_at = $1, updated_at = NOW()
 		WHERE id = $2
 	`, now, invoiceID)
@@ -276,7 +276,7 @@ func (cm *CryptoMonitor) confirmPayment(walletID, tenantID, invoiceID string, tx
 
 	// Mark wallet as used
 	_, err = dbTx.Exec(`
-		UPDATE crypto_wallets 
+		UPDATE purser.crypto_wallets 
 		SET status = 'used', updated_at = NOW()
 		WHERE id = $1
 	`, walletID)

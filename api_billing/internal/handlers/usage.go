@@ -85,34 +85,18 @@ func IngestUsageData(c *gin.Context) {
 
 // processUsageSummary processes a single usage summary and stores it in the usage records table
 func processUsageSummary(summary models.UsageSummary, source string) error {
-	// Validate tenant has access to this cluster
-	var hasAccess bool
-	err := db.QueryRow(`
-		SELECT EXISTS(
-			SELECT 1 FROM tenant_cluster_access tca
-			WHERE tca.tenant_id = $1 AND tca.cluster_id = $2 AND tca.is_active = true
-		)
-	`, summary.TenantID, summary.ClusterID).Scan(&hasAccess)
-
-	if err != nil {
-		return err
-	}
-
-	if !hasAccess {
-		logger.WithFields(logging.Fields{
-			"tenant_id":  summary.TenantID,
-			"cluster_id": summary.ClusterID,
-		}).Warn("Tenant does not have access to cluster, skipping usage summary")
-		return nil // Skip but don't error
-	}
-
 	// Convert summary to individual usage records
 	billingMonth := summary.Timestamp.Format("2006-01")
 	usageTypes := map[string]float64{
-		"stream_hours":        summary.StreamHours,
-		"egress_gb":           summary.EgressGB,
-		"recording_gb":        summary.RecordingGB,
-		"peak_bandwidth_mbps": summary.PeakBandwidthMbps,
+		"stream_hours":            summary.StreamHours,
+		"egress_gb":               summary.EgressGB,
+		"recording_gb":            summary.RecordingGB,
+		"peak_bandwidth_mbps":     summary.PeakBandwidthMbps,
+		"storage_gb":              summary.StorageGB,
+		"clips_added":             float64(summary.ClipsAdded),
+		"clips_deleted":           float64(summary.ClipsDeleted),
+		"clip_storage_added_gb":   summary.ClipStorageAddedGB,
+		"clip_storage_deleted_gb": summary.ClipStorageDeletedGB,
 	}
 
 	// Insert/update usage records for each usage type
@@ -122,29 +106,34 @@ func processUsageSummary(summary models.UsageSummary, source string) error {
 		}
 
 		usageDetails := models.JSONB{
-			"max_viewers":       summary.MaxViewers,
-			"total_streams":     summary.TotalStreams,
-			"unique_users":      summary.UniqueUsers,
-			"avg_viewers":       summary.AvgViewers,
-			"unique_countries":  summary.UniqueCountries,
-			"unique_cities":     summary.UniqueCities,
-			"avg_buffer_health": summary.AvgBufferHealth,
-			"avg_bitrate":       summary.AvgBitrate,
-			"packet_loss_rate":  summary.PacketLossRate,
-			"source":            source,
+			"max_viewers":             summary.MaxViewers,
+			"total_streams":           summary.TotalStreams,
+			"unique_users":            summary.UniqueUsers,
+			"avg_viewers":             summary.AvgViewers,
+			"unique_countries":        summary.UniqueCountries,
+			"unique_cities":           summary.UniqueCities,
+			"avg_buffer_health":       summary.AvgBufferHealth,
+			"avg_bitrate":             summary.AvgBitrate,
+			"packet_loss_rate":        summary.PacketLossRate,
+			"source":                  source,
+			"clips_added":             summary.ClipsAdded,
+			"clips_deleted":           summary.ClipsDeleted,
+			"clip_storage_added_gb":   summary.ClipStorageAddedGB,
+			"clip_storage_deleted_gb": summary.ClipStorageDeletedGB,
+			"storage_gb":              summary.StorageGB,
 		}
 
 		// Check if this usage record already exists
 		var existingID string
-		err = db.QueryRow(`
-			SELECT id FROM usage_records 
+		err := db.QueryRow(`
+			SELECT id FROM purser.usage_records 
 			WHERE tenant_id = $1 AND cluster_id = $2 AND usage_type = $3 AND billing_month = $4
 		`, summary.TenantID, summary.ClusterID, usageType, billingMonth).Scan(&existingID)
 
 		if err == sql.ErrNoRows {
 			// Insert new usage record
 			_, err = db.Exec(`
-				INSERT INTO usage_records (
+				INSERT INTO purser.usage_records (
 					tenant_id, cluster_id, usage_type, usage_value, usage_details, billing_month, created_at
 				) VALUES ($1, $2, $3, $4, $5, $6, NOW())
 			`, summary.TenantID, summary.ClusterID, usageType, usageValue, usageDetails, billingMonth)
@@ -166,7 +155,7 @@ func processUsageSummary(summary models.UsageSummary, source string) error {
 		} else {
 			// Update existing usage record (in case of reprocessing)
 			_, err = db.Exec(`
-				UPDATE usage_records SET
+				UPDATE purser.usage_records SET
 					usage_value = $3, usage_details = $4, created_at = NOW()
 				WHERE id = $1 AND tenant_id = $2
 			`, existingID, summary.TenantID, usageValue, usageDetails)
@@ -193,7 +182,7 @@ func updateInvoiceDraft(tenantID string) error {
 	var tierID, subscriptionStatus string
 	err := db.QueryRow(`
 		SELECT ts.tier_id, ts.status 
-		FROM tenant_subscriptions ts
+		FROM purser.tenant_subscriptions ts
 		WHERE ts.tenant_id = $1 AND ts.status = 'active'
 	`, tenantID).Scan(&tierID, &subscriptionStatus)
 
@@ -222,7 +211,7 @@ func updateInvoiceDraft(tenantID string) error {
 			MAX(max_viewers),
 			SUM(total_streams),
 			SUM(recording_gb)
-			FROM usage_records 
+			FROM purser.usage_records 
 			WHERE tenant_id = $1 
 			AND toDate(billing_month || '-01') BETWEEN $2::date AND $3::date
 	`, tenantID, periodStart, periodEnd).Scan(
@@ -266,7 +255,7 @@ func updateInvoiceDraft(tenantID string) error {
 
 	// Create or update invoice draft
 	_, err = db.Exec(`
-		INSERT INTO invoice_drafts (
+		INSERT INTO purser.invoice_drafts (
 			tenant_id, billing_period_start, billing_period_end,
 			stream_hours, egress_gb, recording_gb, max_viewers, total_streams,
 			calculated_amount, status, created_at, updated_at
@@ -320,10 +309,8 @@ func GetUsageRecords(c *gin.Context) {
 	// Build dynamic query
 	query := `
 		SELECT ur.id, ur.tenant_id, ur.cluster_id, ur.usage_type, 
-		       ur.usage_value, ur.usage_details, ur.billing_month, ur.created_at,
-		       ic.cluster_name
-		FROM usage_records ur
-		LEFT JOIN infrastructure_clusters ic ON ur.cluster_id = ic.cluster_id
+		       ur.usage_value, ur.usage_details, ur.billing_month, ur.created_at
+		FROM purser.usage_records ur
 		WHERE ur.tenant_id = $1
 	`
 
@@ -366,7 +353,7 @@ func GetUsageRecords(c *gin.Context) {
 		err := rows.Scan(
 			&record.ID, &record.TenantID, &record.ClusterID, &record.UsageType,
 			&record.UsageValue, &record.UsageDetails, &record.BillingMonth,
-			&record.CreatedAt, &record.ClusterName,
+			&record.CreatedAt,
 		)
 		if err != nil {
 			logger.WithError(err).Error("Failed to scan usage record")

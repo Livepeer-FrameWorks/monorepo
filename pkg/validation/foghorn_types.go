@@ -22,6 +22,14 @@ type FoghornNodeUpdate struct {
 
 	// Config streams from MistServer
 	ConfigStreams []string `json:"conf_streams,omitempty"`
+
+	// Node capabilities and storage info advertised by Helmsman
+	Capabilities FoghornNodeCapabilities `json:"capabilities"`
+	Storage      FoghornStorageInfo      `json:"storage,omitempty"`
+
+	// Limits and current usage
+	Limits    *FoghornNodeLimits      `json:"limits,omitempty"`
+	Artifacts []FoghornStoredArtifact `json:"artifacts,omitempty"`
 }
 
 // FoghornLocationData represents geographic data for nodes
@@ -29,6 +37,61 @@ type FoghornLocationData struct {
 	Latitude  float64 `json:"lat"`
 	Longitude float64 `json:"lon"`
 	Name      string  `json:"name,omitempty"`
+}
+
+// FoghornNodeCapabilities declares the roles a node can fulfill
+type FoghornNodeCapabilities struct {
+	Ingest     bool `json:"ingest"`
+	Edge       bool `json:"edge"`
+	Storage    bool `json:"storage"`
+	Processing bool `json:"processing"`
+
+	// Extensible roles and hardware
+	Roles        []string             `json:"roles,omitempty"`
+	GPUs         []FoghornGPUInfo     `json:"gpus,omitempty"`
+	Accelerators []FoghornAccelerator `json:"accelerators,omitempty"`
+}
+
+// FoghornStorageInfo carries storage-related details for indexing/cleanup
+type FoghornStorageInfo struct {
+	LocalPath string `json:"local_path,omitempty"`
+	S3Bucket  string `json:"s3_bucket,omitempty"`
+	S3Prefix  string `json:"s3_prefix,omitempty"`
+}
+
+// FoghornGPUInfo captures GPU-related capabilities
+type FoghornGPUInfo struct {
+	Vendor            string `json:"vendor,omitempty"`
+	Model             string `json:"model,omitempty"`
+	MemMB             int    `json:"mem_mb,omitempty"`
+	ComputeCapability string `json:"compute_capability,omitempty"`
+}
+
+// FoghornAccelerator captures non-GPU accelerator devices (e.g., Netint)
+type FoghornAccelerator struct {
+	Vendor string `json:"vendor,omitempty"`
+	Model  string `json:"model,omitempty"`
+	Count  int    `json:"count,omitempty"`
+}
+
+// FoghornNodeLimits captures capacity and usage limits for processing/storage
+type FoghornNodeLimits struct {
+	MaxTranscodes        int    `json:"max_transcodes,omitempty"`
+	CurrentTranscodes    int    `json:"current_transcodes,omitempty"`
+	StorageCapacityBytes uint64 `json:"storage_capacity_bytes,omitempty"`
+	StorageUsedBytes     uint64 `json:"storage_used_bytes,omitempty"`
+}
+
+// FoghornStoredArtifact represents stored clips/DVR artifacts on storage-capable nodes
+type FoghornStoredArtifact struct {
+	ID              string `json:"id"`
+	Type            string `json:"type"` // clip|dvr
+	Path            string `json:"path,omitempty"`
+	URL             string `json:"url,omitempty"`
+	SizeBytes       uint64 `json:"size_bytes,omitempty"`
+	DurationSeconds uint32 `json:"duration_seconds,omitempty"`
+	Format          string `json:"format,omitempty"`
+	CreatedAt       int64  `json:"created_at_unix,omitempty"`
 }
 
 // FoghornStreamData represents stream metrics data from MistServer

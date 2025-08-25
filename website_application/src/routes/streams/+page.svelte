@@ -3,6 +3,7 @@
   import { base } from "$app/paths";
   import { auth } from "$lib/stores/auth";
   import { streamsService } from "$lib/graphql/services/streams.js";
+  import { dvrService } from "$lib/graphql/services/dvr.js";
   import { healthService } from "$lib/graphql/services/health.js";
   import { subscribeToStreamMetrics } from "$lib/stores/realtime.js";
   import { getIngestUrls, getDeliveryUrls } from "$lib/config";
@@ -29,6 +30,7 @@
   let showCreateModal = false;
   let newStreamTitle = "";
   let newStreamDescription = "";
+  let newStreamRecord = false;
 
   // Stream deletion
   let deletingStreamId = "";
@@ -54,6 +56,13 @@
 
   // Stream health data for all streams
   let streamHealthData = new Map();
+
+  // DVR management
+  let streamRecordings = [];
+  let recordingConfig = null;
+  let loadingRecordings = false;
+  let startingDVR = false;
+  let stoppingDVR = false;
 
   // Real-time metrics for selected stream (from GraphQL subscriptions)
   let realTimeMetrics = {
@@ -157,7 +166,7 @@
       const newStream = await streamsService.createStream({
         name: newStreamTitle.trim(),
         description: newStreamDescription.trim() || undefined,
-        record: false
+        record: newStreamRecord
       });
 
       // Add new stream to list
@@ -174,6 +183,7 @@
       showCreateModal = false;
       newStreamTitle = "";
       newStreamDescription = "";
+      newStreamRecord = false;
       
       toast.success("Stream created successfully!");
     } catch (error) {
@@ -286,11 +296,75 @@
     }
   }
 
+  // Load stream recordings
+  async function loadStreamRecordings() {
+    if (!selectedStream) return;
+    
+    try {
+      loadingRecordings = true;
+      const result = await dvrService.getStreamRecordings(selectedStream.name);
+      streamRecordings = result.recordings || [];
+      
+      // Also load recording configuration
+      const configResult = await dvrService.getRecordingConfig(selectedStream.name);
+      recordingConfig = configResult.config;
+    } catch (error) {
+      console.error("Failed to load recordings:", error);
+      toast.error("Failed to load recordings");
+    } finally {
+      loadingRecordings = false;
+    }
+  }
+
+  // Start DVR recording
+  async function startDVRRecording() {
+    if (!selectedStream) return;
+    
+    try {
+      startingDVR = true;
+      const result = await dvrService.startDVR(selectedStream.name, selectedStream.id);
+      
+      if (result.success) {
+        toast.success("DVR recording started successfully!");
+        loadStreamRecordings(); // Refresh recordings list
+      } else {
+        toast.error(result.error || "Failed to start DVR recording");
+      }
+    } catch (error) {
+      console.error("Failed to start DVR:", error);
+      toast.error("Failed to start DVR recording");
+    } finally {
+      startingDVR = false;
+    }
+  }
+
+  // Stop DVR recording
+  async function stopDVRRecording(dvrHash) {
+    try {
+      stoppingDVR = true;
+      const result = await dvrService.stopDVR(dvrHash);
+      
+      if (result.success) {
+        toast.success("DVR recording stopped successfully!");
+        loadStreamRecordings(); // Refresh recordings list
+      } else {
+        toast.error(result.error || "Failed to stop DVR recording");
+      }
+    } catch (error) {
+      console.error("Failed to stop DVR:", error);
+      toast.error("Failed to stop DVR recording");
+    } finally {
+      stoppingDVR = false;
+    }
+  }
+
   // Switch tabs
   function switchTab(tab) {
     activeTab = tab;
     if (tab === "keys" && selectedStream) {
       loadStreamKeys();
+    } else if (tab === "recordings" && selectedStream) {
+      loadStreamRecordings();
     }
   }
 
@@ -570,6 +644,16 @@
               </h3>
               <div class="flex items-center space-x-2">
                 <div class="w-2 h-2 rounded-full {stream.status === 'live' ? 'bg-tokyo-night-green animate-pulse' : 'bg-tokyo-night-red'}"></div>
+                {#if stream.status === 'live'}
+                  <a
+                    href="{base}/view?type=live&id={stream.playbackId || stream.id}"
+                    class="text-tokyo-night-cyan hover:text-tokyo-night-blue text-sm p-1"
+                    on:click|stopPropagation
+                    title="Watch live stream"
+                  >
+                    <svelte:component this={getIconComponent('Play')} class="w-4 h-4" />
+                  </a>
+                {/if}
                 <button
                   class="text-tokyo-night-red hover:text-red-400 text-sm"
                   on:click|stopPropagation={() => confirmDeleteStream(stream)}
@@ -1124,20 +1208,174 @@ Quick Setup Guide
           </div>
 
         {:else if activeTab === 'recordings'}
-          <!-- Recordings Tab Content (placeholder for now) -->
+          <!-- DVR Recordings Tab Content -->
           <div class="space-y-6">
             <div class="flex items-center justify-between">
               <div>
-                <h3 class="text-lg font-semibold text-tokyo-night-fg">Stream Recordings</h3>
-                <p class="text-tokyo-night-fg-dark text-sm">View and manage recordings for this stream</p>
+                <h3 class="text-lg font-semibold text-tokyo-night-fg">DVR Recordings</h3>
+                <p class="text-tokyo-night-fg-dark text-sm">Start recording and manage DVR sessions for this stream</p>
+              </div>
+              
+              <div class="flex space-x-3">
+                {#if isLive}
+                  <button
+                    class="btn-primary"
+                    on:click={startDVRRecording}
+                    disabled={startingDVR}
+                  >
+                    {#if startingDVR}
+                      <svelte:component this={getIconComponent('Loader2')} class="w-4 h-4 mr-2 animate-spin" />
+                      Starting...
+                    {:else}
+                      <svelte:component this={getIconComponent('Video')} class="w-4 h-4 mr-2" />
+                      Start Recording
+                    {/if}
+                  </button>
+                {:else}
+                  <div class="text-sm text-tokyo-night-comment px-4 py-2 bg-tokyo-night-bg-dark rounded-lg">
+                    Stream must be live to start recording
+                  </div>
+                {/if}
               </div>
             </div>
 
-            <EmptyState
-              iconName="Video"
-              title="Recordings Coming Soon"
-              description="Recording management will be available in the next update"
-            />
+            {#if loadingRecordings}
+              <div class="space-y-4">
+                {#each Array(3) as _}
+                  <LoadingCard variant="stream" />
+                {/each}
+              </div>
+            {:else if streamRecordings.length === 0}
+              <EmptyState
+                iconName="Video"
+                title="No Recordings Yet"
+                description={isLive ? "Start your first DVR recording above" : "Start streaming, then create DVR recordings"}
+                actionText={isLive ? "Start Recording" : ""}
+                onAction={isLive ? startDVRRecording : undefined}
+              />
+            {:else}
+              <div class="space-y-4">
+                {#each streamRecordings as recording}
+                  <div class="bg-tokyo-night-bg-highlight p-4 rounded-lg border border-tokyo-night-fg-gutter">
+                    <div class="flex items-center justify-between mb-3">
+                      <div class="flex items-center space-x-3">
+                        <svelte:component this={getIconComponent('Video')} class="w-5 h-5 text-tokyo-night-cyan" />
+                        <div>
+                          <h4 class="font-semibold text-tokyo-night-fg">
+                            DVR Recording
+                          </h4>
+                          <p class="text-xs text-tokyo-night-comment">
+                            {recording.createdAt ? new Date(recording.createdAt).toLocaleString() : 'N/A'}
+                          </p>
+                        </div>
+                      </div>
+                      
+                      <div class="flex items-center space-x-2">
+                        <span class="px-2 py-1 text-xs rounded bg-tokyo-night-bg-dark {recording.status === 'completed' ? 'text-tokyo-night-green' : recording.status === 'recording' ? 'text-tokyo-night-yellow' : recording.status === 'failed' ? 'text-tokyo-night-red' : 'text-tokyo-night-fg-dark'}">
+                          {recording.status === 'recording' ? '● Recording' : recording.status}
+                        </span>
+                        
+                        {#if recording.status === 'recording'}
+                          <button
+                            class="text-tokyo-night-red hover:text-red-400 p-1"
+                            on:click={() => stopDVRRecording(recording.dvrHash)}
+                            disabled={stoppingDVR}
+                          >
+                            {#if stoppingDVR}
+                              <svelte:component this={getIconComponent('Loader2')} class="w-4 h-4 animate-spin" />
+                            {:else}
+                              <svelte:component this={getIconComponent('Square')} class="w-4 h-4" />
+                            {/if}
+                          </button>
+                        {/if}
+                      </div>
+                    </div>
+
+                    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm mb-3">
+                      <div>
+                        <p class="text-tokyo-night-comment">Duration</p>
+                        <p class="font-medium text-tokyo-night-fg">
+                          {recording.durationSeconds ? Math.floor(recording.durationSeconds / 60) + 'm' : 'N/A'}
+                        </p>
+                      </div>
+                      <div>
+                        <p class="text-tokyo-night-comment">Size</p>
+                        <p class="font-medium text-tokyo-night-fg">
+                          {recording.sizeBytes ? (recording.sizeBytes / (1024 * 1024)).toFixed(1) + ' MB' : 'N/A'}
+                        </p>
+                      </div>
+                      <div>
+                        <p class="text-tokyo-night-comment">Storage Node</p>
+                        <p class="font-medium text-tokyo-night-fg truncate">
+                          {recording.storageNodeId || 'N/A'}
+                        </p>
+                      </div>
+                      <div>
+                        <p class="text-tokyo-night-comment">Format</p>
+                        <p class="font-medium text-tokyo-night-fg">
+                          HLS
+                        </p>
+                      </div>
+                    </div>
+
+                    {#if recording.manifestPath}
+                      <div class="flex items-center space-x-3">
+                        <input
+                          type="text"
+                          value={recording.manifestPath}
+                          readonly
+                          class="input flex-1 font-mono text-sm"
+                        />
+                        <button
+                          on:click={() => copyToClipboard(recording.manifestPath)}
+                          class="btn-secondary"
+                        >
+                          {#if copiedUrl === recording.manifestPath}
+                            <svelte:component this={getIconComponent('CheckCircle')} class="w-4 h-4" />
+                          {:else}
+                            <svelte:component this={getIconComponent('Copy')} class="w-4 h-4" />
+                          {/if}
+                        </button>
+                        {#if recording.status === 'completed'}
+                          <a
+                            href="{base}/view?type=dvr&id={recording.dvrHash || recording.id}"
+                            class="btn-primary"
+                            title="Watch DVR recording"
+                          >
+                            <svelte:component this={getIconComponent('Play')} class="w-4 h-4" />
+                          </a>
+                        {/if}
+                      </div>
+                    {:else}
+                      <div class="flex items-center space-x-3">
+                        <input
+                          type="text"
+                          value={recording.dvrHash}
+                          readonly
+                          class="input flex-1 font-mono text-sm"
+                        />
+                        <button
+                          on:click={() => copyToClipboard(recording.dvrHash)}
+                          class="btn-secondary"
+                        >
+                          {#if copiedUrl === recording.dvrHash}
+                            <svelte:component this={getIconComponent('CheckCircle')} class="w-4 h-4" />
+                          {:else}
+                            <svelte:component this={getIconComponent('Copy')} class="w-4 h-4" />
+                          {/if}
+                        </button>
+                      </div>
+                    {/if}
+
+                    {#if recording.errorMessage}
+                      <p class="text-xs text-tokyo-night-red mt-2">
+                        Error: {recording.errorMessage}
+                      </p>
+                    {/if}
+                  </div>
+                {/each}
+              </div>
+            {/if}
           </div>
         {/if}
       </div>
@@ -1275,6 +1513,23 @@ Quick Setup Guide
             disabled={creatingStream}
           />
         </div>
+        
+        <div>
+          <label class="flex items-center space-x-3 cursor-pointer">
+            <input
+              type="checkbox"
+              bind:checked={newStreamRecord}
+              disabled={creatingStream}
+              class="w-4 h-4 text-tokyo-night-blue bg-tokyo-night-bg border border-tokyo-night-fg-gutter rounded focus:ring-tokyo-night-blue focus:ring-2"
+            />
+            <div>
+              <span class="text-sm font-medium text-tokyo-night-fg">Enable Recording</span>
+              <p class="text-xs text-tokyo-night-comment">
+                Automatically record your stream to create VOD content
+              </p>
+            </div>
+          </label>
+        </div>
       </div>
       
       <div class="flex justify-end space-x-3 mt-6">
@@ -1284,6 +1539,7 @@ Quick Setup Guide
             showCreateModal = false;
             newStreamTitle = '';
             newStreamDescription = '';
+            newStreamRecord = false;
           }}
           disabled={creatingStream}
         >

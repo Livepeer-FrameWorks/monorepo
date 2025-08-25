@@ -78,6 +78,8 @@ func (h *AnalyticsHandler) convertKafkaEventToTyped(event kafka.AnalyticsEvent) 
 		typedEvent.Data.BandwidthThreshold = event.Data.BandwidthThreshold
 	case validation.EventLoadBalancing:
 		typedEvent.Data.LoadBalancing = event.Data.LoadBalancing
+	case validation.EventClipLifecycle:
+		typedEvent.Data.ClipLifecycle = event.Data.ClipLifecycle
 	}
 
 	return typedEvent, nil
@@ -105,31 +107,6 @@ func (h *AnalyticsHandler) HandleAnalyticsEvent(ydb database.PostgresConn, event
 			h.metrics.AnalyticsEvents.WithLabelValues(event.EventType, "validation_failed").Inc()
 		}
 		return err
-	}
-	// Directly copy from AnalyticsEvent.Data
-	switch validation.EventType(event.EventType) {
-	case validation.EventStreamIngest:
-		typedEvent.Data.StreamIngest = event.Data.StreamIngest
-	case validation.EventStreamView:
-		typedEvent.Data.StreamView = event.Data.StreamView
-	case validation.EventStreamLifecycle, validation.EventStreamBuffer, validation.EventStreamEnd:
-		typedEvent.Data.StreamLifecycle = event.Data.StreamLifecycle
-	case validation.EventUserConnection:
-		typedEvent.Data.UserConnection = event.Data.UserConnection
-	case validation.EventClientLifecycle:
-		typedEvent.Data.ClientLifecycle = event.Data.ClientLifecycle
-	case validation.EventTrackList:
-		typedEvent.Data.TrackList = event.Data.TrackList
-	case validation.EventRecordingLifecycle:
-		typedEvent.Data.Recording = event.Data.Recording
-	case validation.EventPushLifecycle:
-		typedEvent.Data.PushLifecycle = event.Data.PushLifecycle
-	case validation.EventNodeLifecycle:
-		typedEvent.Data.NodeLifecycle = event.Data.NodeLifecycle
-	case validation.EventBandwidthThreshold:
-		typedEvent.Data.BandwidthThreshold = event.Data.BandwidthThreshold
-	case validation.EventLoadBalancing:
-		typedEvent.Data.LoadBalancing = event.Data.LoadBalancing
 	}
 
 	// Validate typed event against shared schema
@@ -170,6 +147,8 @@ func (h *AnalyticsHandler) HandleAnalyticsEvent(ydb database.PostgresConn, event
 		be.BandwidthThreshold = typedEvent.Data.BandwidthThreshold
 	case validation.EventLoadBalancing:
 		be.LoadBalancing = typedEvent.Data.LoadBalancing
+	case validation.EventClipLifecycle:
+		be.ClipLifecycle = typedEvent.Data.ClipLifecycle
 	}
 	batch := validation.BatchedEvents{
 		BatchID:   event.EventID,
@@ -216,6 +195,8 @@ func (h *AnalyticsHandler) HandleAnalyticsEvent(ydb database.PostgresConn, event
 		err = h.processTrackList(ctx, typedEvent)
 	case validation.EventBandwidthThreshold:
 		err = h.processBandwidthThreshold(ctx, typedEvent)
+	case validation.EventClipLifecycle:
+		err = h.processClipLifecycle(ctx, typedEvent)
 	default:
 		h.logger.Warnf("Unknown event type: %s", event.EventType)
 		if h.metrics != nil {
@@ -986,7 +967,7 @@ func (h *AnalyticsHandler) reduceStreamLifecycle(ctx context.Context, ydb databa
 		}
 
 		_, err := ydb.ExecContext(ctx, `
-			INSERT INTO stream_analytics (
+			INSERT INTO periscope.stream_analytics (
 				tenant_id, internal_name, stream_id, status, mist_status, session_start_time, 
 				current_viewers, total_connections, track_count,
 				bandwidth_in, bandwidth_out, upbytes, downbytes,
@@ -995,11 +976,11 @@ func (h *AnalyticsHandler) reduceStreamLifecycle(ctx context.Context, ydb databa
 			VALUES ($1, $2, NULLIF($3,'')::uuid, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
 			ON CONFLICT (tenant_id, internal_name) DO UPDATE SET
 				status = EXCLUDED.status,
-				mist_status = COALESCE(EXCLUDED.mist_status, stream_analytics.mist_status),
-				session_start_time = COALESCE(stream_analytics.session_start_time, EXCLUDED.session_start_time),
+				mist_status = COALESCE(EXCLUDED.mist_status, periscope.stream_analytics.mist_status),
+				session_start_time = COALESCE(periscope.stream_analytics.session_start_time, EXCLUDED.session_start_time),
 				current_viewers = EXCLUDED.current_viewers,
-				peak_viewers = GREATEST(stream_analytics.peak_viewers, EXCLUDED.current_viewers),
-				total_connections = GREATEST(stream_analytics.total_connections, EXCLUDED.total_connections),
+				peak_viewers = GREATEST(periscope.stream_analytics.peak_viewers, EXCLUDED.current_viewers),
+				total_connections = GREATEST(periscope.stream_analytics.total_connections, EXCLUDED.total_connections),
 				track_count = EXCLUDED.track_count,
 				bandwidth_in = EXCLUDED.bandwidth_in,
 				bandwidth_out = EXCLUDED.bandwidth_out,
@@ -1037,32 +1018,32 @@ func (h *AnalyticsHandler) reduceUserConnection(ctx context.Context, ydb databas
 	switch action {
 	case "connect":
 		_, err := ydb.ExecContext(ctx, `
-                        INSERT INTO stream_analytics (tenant_id, internal_name, stream_id, current_viewers, peak_viewers, total_connections, last_updated)
+                        INSERT INTO periscope.stream_analytics (tenant_id, internal_name, stream_id, current_viewers, peak_viewers, total_connections, last_updated)
                         VALUES ($1,$2,NULLIF($3,'')::uuid,1,1,1,$4)
                         ON CONFLICT (tenant_id, internal_name) DO UPDATE SET
-                                current_viewers = stream_analytics.current_viewers + 1,
-                                peak_viewers = GREATEST(stream_analytics.peak_viewers, stream_analytics.current_viewers + 1),
-                                total_connections = stream_analytics.total_connections + 1,
+                                current_viewers = periscope.stream_analytics.current_viewers + 1,
+                                peak_viewers = GREATEST(periscope.stream_analytics.peak_viewers, periscope.stream_analytics.current_viewers + 1),
+                                total_connections = periscope.stream_analytics.total_connections + 1,
                                 last_updated = EXCLUDED.last_updated
                 `, tenantID, internal, internal, event.Timestamp)
 		return err
 	case "disconnect":
 		_, err := ydb.ExecContext(ctx, `
-                        INSERT INTO stream_analytics (tenant_id, internal_name, stream_id, last_updated)
+                        INSERT INTO periscope.stream_analytics (tenant_id, internal_name, stream_id, last_updated)
                         VALUES ($1,$2,NULLIF($3,'')::uuid,$4)
                         ON CONFLICT (tenant_id, internal_name) DO UPDATE SET
-                                current_viewers = GREATEST(stream_analytics.current_viewers - 1, 0),
-                                total_session_duration = stream_analytics.total_session_duration + $5,
-                                upbytes = stream_analytics.upbytes + $6,
-                                downbytes = stream_analytics.downbytes + $7,
-                                bandwidth_in = stream_analytics.bandwidth_in + $6,
-                                bandwidth_out = stream_analytics.bandwidth_out + $7,
+                                current_viewers = GREATEST(periscope.stream_analytics.current_viewers - 1, 0),
+                                total_session_duration = periscope.stream_analytics.total_session_duration + $5,
+                                upbytes = periscope.stream_analytics.upbytes + $6,
+                                downbytes = periscope.stream_analytics.downbytes + $7,
+                                bandwidth_in = periscope.stream_analytics.bandwidth_in + $6,
+                                bandwidth_out = periscope.stream_analytics.bandwidth_out + $7,
                                 last_updated = EXCLUDED.last_updated
                 `, tenantID, internal, internal, event.Timestamp, duration, upBytes, downBytes)
 		return err
 	default:
 		_, err := ydb.ExecContext(ctx, `
-                        INSERT INTO stream_analytics (tenant_id, internal_name, stream_id, last_updated)
+                        INSERT INTO periscope.stream_analytics (tenant_id, internal_name, stream_id, last_updated)
                         VALUES ($1,$2,NULLIF($3,'')::uuid,$4)
                         ON CONFLICT (tenant_id, internal_name) DO UPDATE SET
                                 last_updated = EXCLUDED.last_updated
@@ -1079,7 +1060,7 @@ func (h *AnalyticsHandler) reduceStreamEnd(ctx context.Context, ydb database.Pos
 	streamLifecycle := event.Data.StreamLifecycle
 	status := streamLifecycle.Status
 	_, err := ydb.ExecContext(ctx, `
-                INSERT INTO stream_analytics (tenant_id, internal_name, stream_id, status, session_end_time, last_updated)
+                INSERT INTO periscope.stream_analytics (tenant_id, internal_name, stream_id, status, session_end_time, last_updated)
                 VALUES ($1,$2,NULLIF($3,'')::uuid,$4,$5,$5)
                 ON CONFLICT (tenant_id, internal_name) DO UPDATE SET
                         status = EXCLUDED.status,
@@ -1309,6 +1290,10 @@ func getTenantIDFromKafkaEvent(event validation.KafkaEvent) string {
 		if event.Data.LoadBalancing != nil {
 			return event.Data.LoadBalancing.TenantID
 		}
+	case validation.EventClipLifecycle:
+		if event.Data.ClipLifecycle != nil {
+			return event.Data.ClipLifecycle.TenantID
+		}
 	}
 	return "00000000-0000-0000-0000-000000000001"
 }
@@ -1396,4 +1381,111 @@ func marshalTypedEventData(data interface{}) string {
 	}
 	b, _ := json.Marshal(data)
 	return string(b)
+}
+
+func (h *AnalyticsHandler) processClipLifecycle(ctx context.Context, event *validation.KafkaEvent) error {
+	h.logger.Infof("Processing clip lifecycle event: %s", event.EventID)
+	if event.Data.ClipLifecycle == nil {
+		return nil
+	}
+	cl := event.Data.ClipLifecycle
+
+	batch, err := h.clickhouse.PrepareBatch(ctx, `
+		INSERT INTO clip_events (
+			timestamp, tenant_id, internal_name, request_id, stage, content_type, title, format,
+			start_unix, stop_unix, start_ms, stop_ms, duration_sec,
+			ingest_node_id, storage_node_id, routing_distance_km,
+			percent, message, file_path, s3_url, size_bytes
+		)`)
+	if err != nil {
+		return err
+	}
+
+	// Required
+	internalName := ""
+	if event.Data.ClipLifecycle.InternalName != "" {
+		internalName = event.Data.ClipLifecycle.InternalName
+	}
+	tenantID := getTenantIDFromKafkaEvent(*event)
+
+	// Optional
+	var (
+		title, format                                     interface{}
+		startUnix, stopUnix, startMs, stopMs, durationSec interface{}
+		ingestNode, storageNode, routeKm, percent         interface{}
+		message, filePath, s3url                          interface{}
+		sizeBytes                                         interface{}
+	)
+	if cl.Title != "" {
+		title = cl.Title
+	}
+	if cl.Format != "" {
+		format = cl.Format
+	}
+	if cl.StartUnix != 0 {
+		startUnix = cl.StartUnix
+	}
+	if cl.StopUnix != 0 {
+		stopUnix = cl.StopUnix
+	}
+	if cl.StartMs != 0 {
+		startMs = cl.StartMs
+	}
+	if cl.StopMs != 0 {
+		stopMs = cl.StopMs
+	}
+	if cl.DurationSec != 0 {
+		durationSec = cl.DurationSec
+	}
+	if cl.IngestNodeID != "" {
+		ingestNode = cl.IngestNodeID
+	}
+	if cl.StorageNodeID != "" {
+		storageNode = cl.StorageNodeID
+	}
+	if cl.RoutingDistanceKm != 0 {
+		routeKm = cl.RoutingDistanceKm
+	}
+	if cl.Percent != 0 {
+		percent = cl.Percent
+	}
+	if cl.Message != "" {
+		message = cl.Message
+	}
+	if cl.FilePath != "" {
+		filePath = cl.FilePath
+	}
+	if cl.S3URL != "" {
+		s3url = cl.S3URL
+	}
+	if cl.SizeBytes != 0 {
+		sizeBytes = cl.SizeBytes
+	}
+
+	if err := batch.Append(
+		event.Timestamp,
+		tenantID,
+		internalName,
+		cl.RequestID,
+		cl.Stage,
+		cl.ContentType,
+		title,
+		format,
+		startUnix,
+		stopUnix,
+		startMs,
+		stopMs,
+		durationSec,
+		ingestNode,
+		storageNode,
+		routeKm,
+		percent,
+		message,
+		filePath,
+		s3url,
+		sizeBytes,
+	); err != nil {
+		return err
+	}
+	return batch.Send()
 }

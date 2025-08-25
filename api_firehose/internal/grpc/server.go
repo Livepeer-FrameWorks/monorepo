@@ -50,6 +50,11 @@ func mapProtoEventTypeToValidation(t pb.EventType) validation.EventType {
 		return validation.EventStreamEnd
 	case pb.EventType_EVENT_TYPE_BANDWIDTH_THRESHOLD:
 		return validation.EventBandwidthThreshold
+	case pb.EventType_EVENT_TYPE_CLIP_LIFECYCLE:
+		return validation.EventClipLifecycle
+	case pb.EventType_EVENT_TYPE_DVR_LIFECYCLE:
+		// Treat DVR lifecycle as clip lifecycle for analytics
+		return validation.EventClipLifecycle
 	default:
 		return validation.EventType("unknown")
 	}
@@ -124,6 +129,92 @@ func convertProtoEventToAnalytics(protoEvent *pb.EventData, _ string, batchTenan
 				BandwidthLimit: getOptionalUint64(nm.BandwidthLimitBps),
 			}
 		}
+	case pb.EventType_EVENT_TYPE_CLIP_LIFECYCLE:
+		cl := protoEvent.GetClipLifecycleData()
+		if cl != nil {
+			stage := ""
+			switch cl.GetStage() {
+			case pb.ClipLifecycleData_STAGE_REQUESTED:
+				stage = "requested"
+			case pb.ClipLifecycleData_STAGE_QUEUED:
+				stage = "queued"
+			case pb.ClipLifecycleData_STAGE_PROGRESS:
+				stage = "progress"
+			case pb.ClipLifecycleData_STAGE_DONE:
+				stage = "done"
+			case pb.ClipLifecycleData_STAGE_FAILED:
+				stage = "failed"
+			}
+			event.Data.ClipLifecycle = &validation.ClipLifecyclePayload{
+				InternalName:  getOptionalString(protoEvent.InternalName),
+				RequestID:     cl.GetRequestId(),
+				Stage:         stage,
+				ContentType:   "clip",
+				Title:         getOptionalString(cl.Title),
+				Format:        getOptionalString(cl.Format),
+				StartUnix:     getOptionalInt64(cl.StartUnix),
+				StopUnix:      getOptionalInt64(cl.StopUnix),
+				StartMs:       getOptionalInt64(cl.StartMs),
+				StopMs:        getOptionalInt64(cl.StopMs),
+				DurationSec:   getOptionalInt64(cl.DurationSec),
+				IngestNodeID:  getOptionalString(cl.IngestNodeId),
+				StorageNodeID: getOptionalString(cl.StorageNodeId),
+				RoutingDistanceKm: func() float64 {
+					if cl.RoutingDistanceKm != nil {
+						return *cl.RoutingDistanceKm
+					}
+					return 0
+				}(),
+				Percent: func() uint32 {
+					if cl.Percent != nil {
+						return *cl.Percent
+					}
+					return 0
+				}(),
+				Message:  getOptionalString(cl.Message),
+				FilePath: getOptionalString(cl.FilePath),
+				S3URL:    getOptionalString(cl.S3Url),
+				SizeBytes: func() uint64 {
+					if cl.SizeBytes != nil {
+						return *cl.SizeBytes
+					}
+					return 0
+				}(),
+				Error: getOptionalString(cl.Error),
+			}
+		}
+	case pb.EventType_EVENT_TYPE_DVR_LIFECYCLE:
+		dvr := protoEvent.GetDvrLifecycleData()
+		if dvr != nil {
+			stage := ""
+			switch dvr.GetStage() {
+			case pb.DVRLifecycleData_STAGE_REQUESTED:
+				stage = "requested"
+			case pb.DVRLifecycleData_STAGE_RECORDING:
+				stage = "progress"
+			case pb.DVRLifecycleData_STAGE_PROGRESS:
+				stage = "progress"
+			case pb.DVRLifecycleData_STAGE_STOPPING:
+				stage = "progress"
+			case pb.DVRLifecycleData_STAGE_COMPLETED:
+				stage = "done"
+			case pb.DVRLifecycleData_STAGE_FAILED:
+				stage = "failed"
+			}
+			// Map DVR lifecycle to clip lifecycle payload to reuse pipeline
+			event.Data.ClipLifecycle = &validation.ClipLifecyclePayload{
+				InternalName:  getOptionalString(protoEvent.InternalName),
+				RequestID:     dvr.GetRequestId(),
+				Stage:         stage,
+				ContentType:   "dvr",
+				DurationSec:   dvr.GetDurationSec(),
+				IngestNodeID:  dvr.GetIngestNodeId(),
+				StorageNodeID: dvr.GetStorageNodeId(),
+				FilePath:      dvr.GetManifestPath(),
+				SizeBytes:     dvr.GetSizeBytes(),
+				Message:       dvr.GetError(),
+			}
+		}
 	}
 
 	return event, nil
@@ -142,6 +233,12 @@ func getOptionalBool(p *bool) bool {
 	return *p
 }
 func getOptionalUint64(p *uint64) uint64 {
+	if p == nil {
+		return 0
+	}
+	return *p
+}
+func getOptionalInt64(p *int64) int64 {
 	if p == nil {
 		return 0
 	}
@@ -277,6 +374,8 @@ func (s *DecklogServer) StreamEvents(stream pb.DecklogService_StreamEventsServer
 				be.BandwidthThreshold = analyticsEvent.Data.BandwidthThreshold
 			case validation.EventLoadBalancing:
 				be.LoadBalancing = analyticsEvent.Data.LoadBalancing
+			case validation.EventClipLifecycle:
+				be.ClipLifecycle = analyticsEvent.Data.ClipLifecycle
 			}
 			batch.Events[i] = be
 		}

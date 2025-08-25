@@ -41,7 +41,7 @@ sed -i '' "s/TIMESTAMP_PLACEHOLDER/$(date -u +%Y-%m-%dT%H:%M:%SZ)/" "$OUTPUT_FIL
 
 # Dynamically get all PostgreSQL tables
 POSTGRES_TABLES=$(docker exec frameworks-postgres psql -U frameworks_user -d frameworks -t -A -c \
-    "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name;" 2>/dev/null)
+    "SELECT table_schema || '.' || table_name FROM information_schema.tables WHERE table_schema IN ('public','quartermaster','commodore','purser','foghorn','periscope') ORDER BY table_schema, table_name;" 2>/dev/null)
 
 # Convert to array, filtering empty lines
 POSTGRES_TABLES_ARRAY=()
@@ -65,7 +65,7 @@ for table in "${POSTGRES_TABLES_ARRAY[@]}"; do
     
     # Export table data as JSON array
     docker exec frameworks-postgres psql -U frameworks_user -d frameworks -t -A -c \
-        "SELECT COALESCE(json_agg(row_to_json($table)), '[]'::json) FROM $table;" 2>/dev/null >> "$OUTPUT_FILE" || echo "[]" >> "$OUTPUT_FILE"
+        "SELECT COALESCE(json_agg(row_to_json(t)), '[]'::json) FROM (SELECT * FROM $table) t;" 2>/dev/null >> "$OUTPUT_FILE" || echo "[]" >> "$OUTPUT_FILE"
 done
 
 echo "" >> "$OUTPUT_FILE"
@@ -145,7 +145,7 @@ STREAM_NULLS=$(docker exec frameworks-postgres psql -U frameworks_user -d framew
         'streams_with_null_status', COUNT(*) FILTER (WHERE status IS NULL),
         'streams_with_null_title', COUNT(*) FILTER (WHERE title IS NULL OR title = ''),
         'streams_with_null_internal_name', COUNT(*) FILTER (WHERE internal_name IS NULL)
-    ) FROM streams;" 2>/dev/null || echo "{}")
+    ) FROM commodore.streams;" 2>/dev/null || echo "{}")
 
 echo "      \"streams\": $STREAM_NULLS," >> "$OUTPUT_FILE"
 
@@ -158,7 +158,7 @@ ANALYTICS_NULLS=$(docker exec frameworks-postgres psql -U frameworks_user -d fra
         'null_viewer_count', COUNT(*) FILTER (WHERE current_viewers IS NULL),
         'null_bitrate', COUNT(*) FILTER (WHERE avg_bitrate IS NULL),
         'null_node_id', COUNT(*) FILTER (WHERE primary_node_id IS NULL)
-    ) FROM stream_analytics;" 2>/dev/null || echo "{}")
+    ) FROM periscope.stream_analytics;" 2>/dev/null || echo "{}")
 
 echo "      \"stream_analytics\": $ANALYTICS_NULLS" >> "$OUTPUT_FILE"
 echo "    }," >> "$OUTPUT_FILE"
@@ -168,8 +168,8 @@ echo "    \"data_integrity\": {" >> "$OUTPUT_FILE"
 
 # Check for orphaned records
 ORPHANED_ANALYTICS=$(docker exec frameworks-postgres psql -U frameworks_user -d frameworks -t -A -c "
-    SELECT COUNT(*) FROM stream_analytics sa
-    LEFT JOIN streams s ON sa.stream_id = s.id
+    SELECT COUNT(*) FROM periscope.stream_analytics sa
+    LEFT JOIN commodore.streams s ON sa.stream_id = s.id
     WHERE s.id IS NULL;" 2>/dev/null || echo "0")
 
 echo "      \"orphaned_stream_analytics\": $ORPHANED_ANALYTICS," >> "$OUTPUT_FILE"
@@ -177,8 +177,8 @@ echo "      \"orphaned_stream_analytics\": $ORPHANED_ANALYTICS," >> "$OUTPUT_FIL
 # Check for missing tenant associations
 MISSING_TENANTS=$(docker exec frameworks-postgres psql -U frameworks_user -d frameworks -t -A -c "
     SELECT json_build_object(
-        'streams_without_tenant', (SELECT COUNT(*) FROM streams WHERE tenant_id IS NULL OR tenant_id = '00000000-0000-0000-0000-000000000000'),
-        'analytics_without_tenant', (SELECT COUNT(*) FROM stream_analytics WHERE tenant_id IS NULL OR tenant_id = '00000000-0000-0000-0000-000000000000')
+        'streams_without_tenant', (SELECT COUNT(*) FROM commodore.streams WHERE tenant_id IS NULL OR tenant_id = '00000000-0000-0000-0000-000000000000'),
+        'analytics_without_tenant', (SELECT COUNT(*) FROM periscope.stream_analytics WHERE tenant_id IS NULL OR tenant_id = '00000000-0000-0000-0000-000000000000')
     );" 2>/dev/null || echo "{}")
 
 echo "      \"missing_tenant_associations\": $MISSING_TENANTS" >> "$OUTPUT_FILE"
@@ -239,6 +239,6 @@ done
 
 echo ""
 echo "💡 Tip: Use 'jq' to analyze the exported data:"
-echo "  cat $OUTPUT_FILE | jq '.postgres.streams'"
+echo "  cat $OUTPUT_FILE | jq '.postgres[\"commodore.streams\"]'"
 echo "  cat $OUTPUT_FILE | jq '.clickhouse.record_counts'"
 echo "  cat $OUTPUT_FILE | jq '.analysis'"

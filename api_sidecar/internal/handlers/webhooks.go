@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,6 +16,8 @@ import (
 	"frameworks/pkg/logging"
 	"frameworks/pkg/validation"
 
+	"frameworks/api_sidecar/internal/control"
+
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
@@ -23,6 +26,21 @@ var tenantCache = struct {
 	mu   sync.RWMutex
 	data map[string]string
 }{data: make(map[string]string)}
+
+// isClipHash checks if a string looks like a clip hash (32-character hex string)
+func isClipHash(s string) bool {
+	return len(s) == 32 && isHexString(s)
+}
+
+// isHexString checks if a string contains only hexadecimal characters
+func isHexString(s string) bool {
+	for _, r := range s {
+		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')) {
+			return false
+		}
+	}
+	return true
+}
 
 func getTenantForInternalName(internalName string) string {
 	if internalName == "" {
@@ -42,7 +60,46 @@ func getTenantForInternalName(internalName string) string {
 	}
 	tenantCache.mu.RUnlock()
 
-	// Resolve via Commodore service route with service auth
+	// Check if this is a VOD clip hash - if so, use Foghorn for resolution
+	if isClipHash(internalName) {
+		logger.WithFields(logging.Fields{
+			"internal_name": internalName,
+		}).Debug("Detected clip hash, resolving via Foghorn")
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		resolution, err := control.ResolveClipHash(ctx, internalName)
+		if err != nil {
+			logger.WithFields(logging.Fields{
+				"clip_hash": internalName,
+				"error":     err,
+			}).Error("Failed to resolve clip hash via Foghorn")
+			return ""
+		}
+
+		if resolution == nil {
+			logger.WithFields(logging.Fields{
+				"clip_hash": internalName,
+			}).Warn("Clip not found in Foghorn")
+			return ""
+		}
+
+		// Cache the result
+		tenantCache.mu.Lock()
+		tenantCache.data[internalName] = resolution.TenantId
+		tenantCache.mu.Unlock()
+
+		logger.WithFields(logging.Fields{
+			"clip_hash":   internalName,
+			"tenant_id":   resolution.TenantId,
+			"stream_name": resolution.StreamName,
+		}).Info("Successfully resolved clip hash via Foghorn")
+
+		return resolution.TenantId
+	}
+
+	// For regular streams, resolve via Commodore service route with service auth
 	url := apiBaseURL + "/resolve-internal-name/" + internalName
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
@@ -598,6 +655,9 @@ func HandleStreamEnd(c *gin.Context) {
 		"buffer_state": "EMPTY",
 		"status":       "offline",
 	})
+
+	// Notify Foghorn to stop any active DVR recording for this stream
+	go notifyDVRStreamEnd(internalName, nodeID)
 
 	// Forward stream end event to Commodore for database updates
 	go forwardEventToCommodore("stream-status", map[string]interface{}{
@@ -1432,4 +1492,22 @@ func extractTrackQualityMetrics(tracks []map[string]interface{}) map[string]inte
 	}
 
 	return metrics
+}
+
+// notifyDVRStreamEnd notifies Foghorn that a stream has ended and DVR recording should stop
+func notifyDVRStreamEnd(internalName, nodeID string) {
+	// Create a DVR stop request and send to Foghorn via gRPC
+	if err := control.SendDVRStreamEndNotification(internalName, nodeID); err != nil {
+		logger.WithFields(logging.Fields{
+			"internal_name": internalName,
+			"node_id":       nodeID,
+			"error":         err,
+		}).Error("Failed to send DVR stream end notification via gRPC control channel")
+		return
+	}
+
+	logger.WithFields(logging.Fields{
+		"internal_name": internalName,
+		"node_id":       nodeID,
+	}).Info("Successfully sent DVR stream end notification via gRPC control channel")
 }

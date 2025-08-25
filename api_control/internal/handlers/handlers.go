@@ -5,11 +5,15 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	mathrand "math/rand"
 	"net/http"
 	"net/smtp"
+	"net/url"
 	"os"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -23,10 +27,12 @@ import (
 	"github.com/lib/pq"
 
 	commodoreapi "frameworks/pkg/api/commodore"
+	fapi "frameworks/pkg/api/foghorn"
 	purserapi "frameworks/pkg/api/purser"
 	qmapi "frameworks/pkg/api/quartermaster"
 	"frameworks/pkg/auth"
 	"frameworks/pkg/clients"
+	foghorn "frameworks/pkg/clients/foghorn"
 	purserclient "frameworks/pkg/clients/purser"
 	qmclient "frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/models"
@@ -60,6 +66,52 @@ var (
 	quartermasterClient *qmclient.Client
 	purserClient        *purserclient.Client
 )
+
+type ClipRequest struct {
+	ID         string
+	ClipHash   string
+	FoghornURL string
+	TenantID   string
+	Status     string
+	CreatedAt  time.Time
+}
+
+type ActiveRequestTracker struct {
+	mutex    sync.RWMutex
+	requests map[string]*ClipRequest
+}
+
+func NewActiveRequestTracker() *ActiveRequestTracker {
+	return &ActiveRequestTracker{
+		requests: make(map[string]*ClipRequest),
+	}
+}
+
+func (t *ActiveRequestTracker) Add(req *ClipRequest) {
+	t.mutex.Lock()
+	defer t.mutex.Unlock()
+	t.requests[req.ID] = req
+}
+
+func (t *ActiveRequestTracker) GetByTenant(tenantID string) []*ClipRequest {
+	t.mutex.RLock()
+	defer t.mutex.RUnlock()
+	var result []*ClipRequest
+	for _, req := range t.requests {
+		if req.TenantID == tenantID {
+			result = append(result, req)
+		}
+	}
+	return result
+}
+
+func (t *ActiveRequestTracker) Remove(id string) {
+	t.mutex.Lock()
+	defer t.mutex.Unlock()
+	delete(t.requests, id)
+}
+
+var activeRequests = NewActiveRequestTracker()
 
 func Init(database *sql.DB, log logging.Logger, r Router, m *HandlerMetrics) {
 	db = database
@@ -189,7 +241,7 @@ func Register(c *gin.Context) {
 
 	// Check if user already exists in this tenant
 	var existingID string
-	err = db.QueryRow("SELECT id FROM users WHERE tenant_id = $1 AND email = $2", tenantID, req.Email).Scan(&existingID)
+	err = db.QueryRow("SELECT id FROM commodore.users WHERE tenant_id = $1 AND email = $2", tenantID, req.Email).Scan(&existingID)
 	if err != sql.ErrNoRows {
 		c.JSON(http.StatusConflict, commodoreapi.ErrorResponse{Error: "User already exists in this tenant"})
 		return
@@ -212,13 +264,13 @@ func Register(c *gin.Context) {
 
 	// Check if this is the first user (becomes owner)
 	var userCount int
-	err = db.QueryRow("SELECT COUNT(*) FROM users WHERE tenant_id = $1", tenantID).Scan(&userCount)
+	err = db.QueryRow("SELECT COUNT(*) FROM commodore.users WHERE tenant_id = $1", tenantID).Scan(&userCount)
 	if err == nil && userCount == 0 {
 		role = "owner"
 	}
 
 	_, err = db.Exec(`
-		INSERT INTO users (id, tenant_id, email, password_hash, role, permissions, verified, verification_token, token_expires_at) 
+		INSERT INTO commodore.users (id, tenant_id, email, password_hash, role, permissions, verified, verification_token, token_expires_at) 
 		VALUES ($1, $2, $3, $4, $5, $6, false, $7, $8)
 	`, userID, tenantID, req.Email, hashedPassword, role, getDefaultPermissions(role), verificationToken, tokenExpiry)
 
@@ -286,7 +338,7 @@ func Login(c *gin.Context) {
 	var user models.User
 	err := db.QueryRow(`
 		SELECT id, tenant_id, email, password_hash, role, verified, is_active, created_at
-		FROM users WHERE email = $1
+		FROM commodore.users WHERE email = $1
 	`, req.Email).Scan(&user.ID, &user.TenantID, &user.Email, &user.PasswordHash, &user.Role, &user.IsVerified, &user.IsActive, &user.CreatedAt)
 
 	if err == sql.ErrNoRows {
@@ -333,7 +385,7 @@ func Login(c *gin.Context) {
 	}
 
 	// Update last login timestamp
-	_, err = db.Exec("UPDATE users SET last_login = NOW() WHERE id = $1", user.ID)
+	_, err = db.Exec("UPDATE commodore.users SET last_login_at = NOW() WHERE id = $1", user.ID)
 	if err != nil {
 		logger.WithFields(logging.Fields{
 			"error":   err,
@@ -381,7 +433,7 @@ func GetMe(c *gin.Context) {
 	var user models.User
 	err := db.QueryRow(`
 		SELECT id, email, role, created_at, is_active 
-		FROM users WHERE id = $1
+		FROM commodore.users WHERE id = $1
 	`, userID).Scan(&user.ID, &user.Email, &user.Role, &user.CreatedAt, &user.IsActive)
 
 	if err != nil {
@@ -393,7 +445,7 @@ func GetMe(c *gin.Context) {
 	tenantID := c.GetString("tenant_id")
 	rows, err := db.Query(`
 		SELECT internal_name, stream_key, playback_id, title, status 
-		FROM streams WHERE user_id = $1 AND tenant_id = $2 ORDER BY created_at DESC
+		FROM commodore.streams WHERE user_id = $1 AND tenant_id = $2 ORDER BY created_at DESC
 	`, userID, tenantID)
 
 	if err != nil {
@@ -449,7 +501,7 @@ func GetStreams(c *gin.Context) {
 		query = `
 			SELECT stream_key, playback_id, internal_name, title, description,
 			       is_recording_enabled, is_public, status, start_time, end_time, created_at, updated_at
-			FROM streams 
+			FROM commodore.streams 
 			WHERE tenant_id = $1
 			ORDER BY created_at DESC
 		`
@@ -459,7 +511,7 @@ func GetStreams(c *gin.Context) {
 		query = `
 			SELECT stream_key, playback_id, internal_name, title, description,
 			       is_recording_enabled, is_public, status, start_time, end_time, created_at, updated_at
-			FROM streams 
+			FROM commodore.streams 
 			WHERE user_id = $1 AND tenant_id = $2
 			ORDER BY created_at DESC
 		`
@@ -534,7 +586,7 @@ func GetStream(c *gin.Context) {
 	err := db.QueryRow(`
 		SELECT id, title, description, stream_key, playback_id, internal_name, 
 		       is_recording_enabled, is_public, status, start_time, end_time, created_at
-		FROM streams WHERE internal_name = $1 AND user_id = $2 AND tenant_id = $3
+		FROM commodore.streams WHERE internal_name = $1 AND user_id = $2 AND tenant_id = $3
 	`, streamInternalName, userID, tenantID).Scan(&stream.ID, &stream.Title, &stream.Description,
 		&stream.StreamKey, &stream.PlaybackID, &stream.InternalName,
 		&stream.IsRecordingEnabled, &stream.IsPublic, &stream.Status,
@@ -579,7 +631,7 @@ func GetStreamMetrics(c *gin.Context) {
 	// Verify user owns the stream
 	var streamExists bool
 	err := db.QueryRow(`
-		SELECT EXISTS(SELECT 1 FROM streams WHERE internal_name = $1 AND user_id = $2 AND tenant_id = $3)
+		SELECT EXISTS(SELECT 1 FROM commodore.streams WHERE internal_name = $1 AND user_id = $2 AND tenant_id = $3)
 	`, streamInternalName, userID, tenantID).Scan(&streamExists)
 
 	if err != nil {
@@ -606,7 +658,7 @@ func GetStreamMetrics(c *gin.Context) {
 
 	err = db.QueryRow(`
 		SELECT viewers, status, bitrate, resolution, max_viewers, updated_at
-		FROM streams WHERE internal_name = $1 AND user_id = $2 AND tenant_id = $3
+		FROM commodore.streams WHERE internal_name = $1 AND user_id = $2 AND tenant_id = $3
 	`, streamInternalName, userID, tenantID).Scan(&metrics.Viewers, &metrics.Status, &metrics.Bitrate,
 		&metrics.Resolution, &metrics.MaxViewers, &metrics.UpdatedAt)
 
@@ -650,12 +702,13 @@ func ValidateStreamKey(c *gin.Context) {
 
 	var streamID, userID, tenantID, internalName string
 	var isActive bool
+	var recordingConfigJSON []byte
 	err := db.QueryRow(`
-		SELECT s.id, s.user_id, s.tenant_id, s.internal_name, u.is_active
-		FROM streams s
-		JOIN users u ON s.user_id = u.id
+		SELECT s.id, s.user_id, s.tenant_id, s.internal_name, u.is_active, s.recording_config
+		FROM commodore.streams s
+		JOIN commodore.users u ON s.user_id = u.id
 		WHERE LOWER(s.stream_key) = LOWER($1)
-	`, streamKey).Scan(&streamID, &userID, &tenantID, &internalName, &isActive)
+	`, streamKey).Scan(&streamID, &userID, &tenantID, &internalName, &isActive, &recordingConfigJSON)
 
 	if err == sql.ErrNoRows {
 		c.JSON(http.StatusNotFound, commodoreapi.ValidateStreamKeyResponse{Error: "Invalid stream key"})
@@ -676,9 +729,23 @@ func ValidateStreamKey(c *gin.Context) {
 		return
 	}
 
+	// Parse recording configuration
+	var recordingConfig *commodoreapi.RecordingConfig
+	if len(recordingConfigJSON) > 0 {
+		var config commodoreapi.RecordingConfig
+		if err := json.Unmarshal(recordingConfigJSON, &config); err == nil {
+			recordingConfig = &config
+		} else {
+			logger.WithFields(logging.Fields{
+				"stream_key": streamKey,
+				"error":      err,
+			}).Warn("Failed to parse recording config JSON")
+		}
+	}
+
 	// Update last used timestamp for the stream key (also case-insensitive)
 	_, err = db.Exec(`
-		UPDATE stream_keys SET last_used_at = NOW() 
+		UPDATE commodore.stream_keys SET last_used_at = NOW() 
 		WHERE LOWER(key_value) = LOWER($1) AND is_active = true
 	`, streamKey)
 	if err != nil {
@@ -695,22 +762,717 @@ func ValidateStreamKey(c *gin.Context) {
 		UserID:       userID,
 		TenantID:     tenantID,
 		InternalName: internalName,
+		Recording:    recordingConfig,
 	})
 }
 
-// CreateClip creates a clip from a stream (STUB - not implemented)
+// CreateClip creates a clip from a stream with request tracking
 func CreateClip(c *gin.Context) {
-	var req commodoreapi.CreateClipRequest
+	tenantID := c.GetString("tenant_id")
+	if tenantID == "" {
+		c.JSON(http.StatusUnauthorized, commodoreapi.ErrorResponse{Error: "Authentication required"})
+		return
+	}
+
+	var req commodoreapi.ClipCreateRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusNotImplemented, commodoreapi.NotImplementedResponse{
-		Error:   "Clip creation is not currently implemented",
-		Message: "This feature requires Foghorn service discovery in Commodore, which is not yet deployed",
-		Status:  "not_implemented",
+	foghornList := os.Getenv("FOGHORN_URLS")
+	if foghornList == "" {
+		foghornList = os.Getenv("FOGHORN_URL")
+	}
+	if foghornList == "" {
+		c.JSON(http.StatusServiceUnavailable, commodoreapi.ErrorResponse{Error: "FOGHORN_URLS or FOGHORN_URL not configured"})
+		return
+	}
+	urls := strings.Split(foghornList, ",")
+
+	// Typed request
+	fReq := fapi.CreateClipRequest{
+		TenantID:     tenantID,
+		InternalName: req.InternalName,
+		Format:       req.Format,
+		Title:        req.Title,
+		StartUnix:    req.StartUnix,
+		StopUnix:     req.StopUnix,
+		StartMS:      req.StartMS,
+		StopMS:       req.StopMS,
+		DurationSec:  req.DurationSec,
+	}
+
+	// Try each Foghorn until one succeeds
+	var lastErr error
+	for _, raw := range urls {
+		base := strings.TrimSpace(raw)
+		if base == "" {
+			continue
+		}
+		if !strings.HasPrefix(base, "http://") && !strings.HasPrefix(base, "https://") {
+			base = "http://" + base
+		}
+
+		cli := foghorn.NewClient(foghorn.Config{BaseURL: base, ServiceToken: serviceToken, Timeout: 30 * time.Second, Logger: logger})
+		res, err := cli.CreateClip(c.Request.Context(), &fReq)
+		if err == nil {
+			// Success! Track this request for real-time status updates
+			if res.ClipHash != "" {
+				requestID := uuid.New().String()
+				clipRequest := &ClipRequest{
+					ID:         requestID,
+					ClipHash:   res.ClipHash,
+					FoghornURL: base,
+					TenantID:   tenantID,
+					Status:     "processing",
+					CreatedAt:  time.Now(),
+				}
+				activeRequests.Add(clipRequest)
+
+				logger.WithFields(logging.Fields{
+					"request_id":  requestID,
+					"clip_hash":   res.ClipHash,
+					"tenant_id":   tenantID,
+					"foghorn_url": base,
+				}).Info("Tracking active clip request")
+			}
+
+			c.JSON(http.StatusOK, res)
+			return
+		}
+		lastErr = err
+	}
+
+	c.JSON(http.StatusBadGateway, commodoreapi.ErrorResponse{Error: fmt.Sprintf("all foghorns failed: %v", lastErr)})
+}
+
+// GetClips lists clips for the authenticated user
+func GetClips(c *gin.Context) {
+	tenantID := c.GetString("tenant_id")
+	if tenantID == "" {
+		c.JSON(http.StatusUnauthorized, commodoreapi.ErrorResponse{Error: "Authentication required"})
+		return
+	}
+
+	// Parse pagination parameters
+	page := 1
+	limit := 20
+	if pageStr := c.Query("page"); pageStr != "" {
+		if p, err := strconv.Atoi(pageStr); err == nil && p > 0 {
+			page = p
+		}
+	}
+	if limitStr := c.Query("limit"); limitStr != "" {
+		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 100 {
+			limit = l
+		}
+	}
+
+	// Get list of Foghorn URLs
+	foghornList := os.Getenv("FOGHORN_URLS")
+	if foghornList == "" {
+		foghornList = os.Getenv("FOGHORN_URL")
+	}
+	if foghornList == "" {
+		c.JSON(http.StatusServiceUnavailable, commodoreapi.ErrorResponse{Error: "FOGHORN_URLS not configured"})
+		return
+	}
+	urls := strings.Split(foghornList, ",")
+
+	// Query all Foghorns and merge results
+	var allClips []commodoreapi.ClipFullResponse
+	var totalCount int
+
+	// First, check for active requests and query their specific Foghorns for real-time status
+	activeReqs := activeRequests.GetByTenant(tenantID)
+	for _, req := range activeReqs {
+		if req.FoghornURL != "" {
+			cli := foghorn.NewClient(foghorn.Config{BaseURL: req.FoghornURL, ServiceToken: serviceToken, Timeout: 10 * time.Second, Logger: logger})
+			clipRes, err := cli.GetClip(c.Request.Context(), req.ClipHash, tenantID)
+			if err == nil {
+				// Convert to Commodore format
+				commodoreClip := commodoreapi.ClipFullResponse{
+					ID:          clipRes.ID,
+					ClipHash:    clipRes.ClipHash,
+					StreamName:  clipRes.StreamName,
+					Title:       clipRes.Title,
+					StartTime:   clipRes.StartTime,
+					Duration:    clipRes.Duration,
+					NodeID:      clipRes.NodeID,
+					StoragePath: clipRes.StoragePath,
+					SizeBytes:   clipRes.SizeBytes,
+					Status:      clipRes.Status,
+					AccessCount: clipRes.AccessCount,
+					CreatedAt:   clipRes.CreatedAt,
+				}
+				allClips = append(allClips, commodoreClip)
+
+				// If clip is now ready or failed, remove from active tracking
+				if clipRes.Status == "ready" || clipRes.Status == "failed" {
+					activeRequests.Remove(req.ID)
+				}
+			}
+		}
+	}
+
+	// Then query all Foghorns for remaining clips
+	for _, rawURL := range urls {
+		base := strings.TrimSpace(rawURL)
+		if base == "" {
+			continue
+		}
+		if !strings.HasPrefix(base, "http://") && !strings.HasPrefix(base, "https://") {
+			base = "http://" + base
+		}
+
+		cli := foghorn.NewClient(foghorn.Config{BaseURL: base, ServiceToken: serviceToken, Timeout: 30 * time.Second, Logger: logger})
+		res, err := cli.GetClips(c.Request.Context(), tenantID, page, limit)
+		if err != nil {
+			logger.WithError(err).WithField("foghorn_url", base).Warn("Failed to query clips from Foghorn")
+			continue
+		}
+
+		// Convert Foghorn ClipInfo to Commodore ClipFullResponse, avoiding duplicates
+		for _, clip := range res.Clips {
+			// Check if we already have this clip from active requests
+			isDuplicate := false
+			for _, existing := range allClips {
+				if existing.ClipHash == clip.ClipHash {
+					isDuplicate = true
+					break
+				}
+			}
+
+			if !isDuplicate {
+				commodoreClip := commodoreapi.ClipFullResponse{
+					ID:          clip.ID,
+					ClipHash:    clip.ClipHash,
+					StreamName:  clip.StreamName,
+					Title:       clip.Title,
+					StartTime:   clip.StartTime,
+					Duration:    clip.Duration,
+					NodeID:      clip.NodeID,
+					StoragePath: clip.StoragePath,
+					SizeBytes:   clip.SizeBytes,
+					Status:      clip.Status,
+					AccessCount: clip.AccessCount,
+					CreatedAt:   clip.CreatedAt,
+				}
+				allClips = append(allClips, commodoreClip)
+			}
+		}
+		totalCount += res.Total
+	}
+
+	// Sort by creation time (newest first)
+	sort.Slice(allClips, func(i, j int) bool {
+		return allClips[i].CreatedAt.After(allClips[j].CreatedAt)
 	})
+
+	// Apply pagination to merged results
+	start := (page - 1) * limit
+	end := start + limit
+	if end > len(allClips) {
+		end = len(allClips)
+	}
+	if start > len(allClips) {
+		start = len(allClips)
+		allClips = []commodoreapi.ClipFullResponse{}
+	} else {
+		allClips = allClips[start:end]
+	}
+
+	c.JSON(http.StatusOK, commodoreapi.ClipsListResponse{
+		Clips: allClips,
+		Total: totalCount,
+		Page:  page,
+		Limit: limit,
+	})
+}
+
+// GetClip retrieves a specific clip by ID
+func GetClip(c *gin.Context) {
+	tenantID := c.GetString("tenant_id")
+	clipID := c.Param("id")
+
+	if tenantID == "" {
+		c.JSON(http.StatusUnauthorized, commodoreapi.ErrorResponse{Error: "Authentication required"})
+		return
+	}
+	if clipID == "" {
+		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: "clip ID is required"})
+		return
+	}
+
+	// First, we need to find the clip_hash for this ID by querying all Foghorns
+	foghornList := os.Getenv("FOGHORN_URLS")
+	if foghornList == "" {
+		foghornList = os.Getenv("FOGHORN_URL")
+	}
+	if foghornList == "" {
+		c.JSON(http.StatusServiceUnavailable, commodoreapi.ErrorResponse{Error: "FOGHORN_URLS not configured"})
+		return
+	}
+	urls := strings.Split(foghornList, ",")
+
+	// Query each Foghorn to find the clip
+	for _, rawURL := range urls {
+		base := strings.TrimSpace(rawURL)
+		if base == "" {
+			continue
+		}
+		if !strings.HasPrefix(base, "http://") && !strings.HasPrefix(base, "https://") {
+			base = "http://" + base
+		}
+
+		cli := foghorn.NewClient(foghorn.Config{BaseURL: base, ServiceToken: serviceToken, Timeout: 30 * time.Second, Logger: logger})
+
+		// Get all clips and search for matching ID
+		res, err := cli.GetClips(c.Request.Context(), tenantID, 1, 1000) // Large page to find the clip
+		if err != nil {
+			continue
+		}
+
+		for _, clip := range res.Clips {
+			if clip.ID == clipID {
+				// Found it! Convert to Commodore format
+				commodoreClip := commodoreapi.ClipFullResponse{
+					ID:          clip.ID,
+					ClipHash:    clip.ClipHash,
+					StreamName:  clip.StreamName,
+					Title:       clip.Title,
+					StartTime:   clip.StartTime,
+					Duration:    clip.Duration,
+					NodeID:      clip.NodeID,
+					StoragePath: clip.StoragePath,
+					SizeBytes:   clip.SizeBytes,
+					Status:      clip.Status,
+					AccessCount: clip.AccessCount,
+					CreatedAt:   clip.CreatedAt,
+				}
+				c.JSON(http.StatusOK, commodoreClip)
+				return
+			}
+		}
+	}
+
+	c.JSON(http.StatusNotFound, commodoreapi.ErrorResponse{Error: "Clip not found"})
+}
+
+// GetClipURLs generates viewing URLs for a clip
+func GetClipURLs(c *gin.Context) {
+	tenantID := c.GetString("tenant_id")
+	clipID := c.Param("id")
+
+	if tenantID == "" {
+		c.JSON(http.StatusUnauthorized, commodoreapi.ErrorResponse{Error: "Authentication required"})
+		return
+	}
+	if clipID == "" {
+		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: "clip ID is required"})
+		return
+	}
+
+	// Find the clip and get its hash
+	foghornList := os.Getenv("FOGHORN_URLS")
+	if foghornList == "" {
+		foghornList = os.Getenv("FOGHORN_URL")
+	}
+	if foghornList == "" {
+		c.JSON(http.StatusServiceUnavailable, commodoreapi.ErrorResponse{Error: "FOGHORN_URLS not configured"})
+		return
+	}
+	urls := strings.Split(foghornList, ",")
+
+	// Query each Foghorn to find the clip
+	for _, rawURL := range urls {
+		base := strings.TrimSpace(rawURL)
+		if base == "" {
+			continue
+		}
+		if !strings.HasPrefix(base, "http://") && !strings.HasPrefix(base, "https://") {
+			base = "http://" + base
+		}
+
+		cli := foghorn.NewClient(foghorn.Config{BaseURL: base, ServiceToken: serviceToken, Timeout: 30 * time.Second, Logger: logger})
+
+		// Get all clips and search for matching ID
+		res, err := cli.GetClips(c.Request.Context(), tenantID, 1, 1000)
+		if err != nil {
+			continue
+		}
+
+		for _, clip := range res.Clips {
+			if clip.ID == clipID {
+				// Found it! Get node information for viewing URLs
+				nodeInfo, err := cli.GetClipNode(c.Request.Context(), clip.ClipHash, tenantID)
+				if err != nil {
+					logger.WithError(err).Error("Failed to get clip node info")
+					c.JSON(http.StatusServiceUnavailable, commodoreapi.ErrorResponse{Error: "Failed to get viewing URLs"})
+					return
+				}
+
+				// Generate URLs using the node's outputs
+				urls := make(map[string]string)
+				vodStreamName := fmt.Sprintf("vod+%s", clip.ClipHash)
+
+				baseURL := nodeInfo.BaseURL
+				if baseURL == "" {
+					baseURL = "https://unknown-node"
+				}
+
+				// Common protocols for VOD
+				protocols := []string{"HLS", "DASH", "webrtc", "progressive"}
+				for _, protocol := range protocols {
+					if protocolData, exists := nodeInfo.Outputs[protocol]; exists {
+						if protocolMap, ok := protocolData.(map[string]interface{}); ok {
+							if urlPattern, exists := protocolMap["url"]; exists {
+								if urlStr, ok := urlPattern.(string); ok {
+									// Replace wildcard with VOD stream name
+									finalURL := strings.ReplaceAll(urlStr, "$", vodStreamName)
+									if !strings.HasPrefix(finalURL, "http") {
+										finalURL = baseURL + finalURL
+									}
+									urls[strings.ToLower(protocol)] = finalURL
+								}
+							}
+						}
+					}
+				}
+
+				c.JSON(http.StatusOK, commodoreapi.ClipViewingURLs{
+					URLs: urls,
+				})
+				return
+			}
+		}
+	}
+
+	c.JSON(http.StatusNotFound, commodoreapi.ErrorResponse{Error: "Clip not found"})
+}
+
+// DeleteClip soft-deletes a clip
+func DeleteClip(c *gin.Context) {
+	tenantID := c.GetString("tenant_id")
+	clipID := c.Param("id")
+
+	if tenantID == "" {
+		c.JSON(http.StatusUnauthorized, commodoreapi.ErrorResponse{Error: "Authentication required"})
+		return
+	}
+	if clipID == "" {
+		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: "clip ID is required"})
+		return
+	}
+
+	// Find the clip and get its hash
+	foghornList := os.Getenv("FOGHORN_URLS")
+	if foghornList == "" {
+		foghornList = os.Getenv("FOGHORN_URL")
+	}
+	if foghornList == "" {
+		c.JSON(http.StatusServiceUnavailable, commodoreapi.ErrorResponse{Error: "FOGHORN_URLS not configured"})
+		return
+	}
+	urls := strings.Split(foghornList, ",")
+
+	// Query each Foghorn to find and delete the clip
+	for _, rawURL := range urls {
+		base := strings.TrimSpace(rawURL)
+		if base == "" {
+			continue
+		}
+		if !strings.HasPrefix(base, "http://") && !strings.HasPrefix(base, "https://") {
+			base = "http://" + base
+		}
+
+		cli := foghorn.NewClient(foghorn.Config{BaseURL: base, ServiceToken: serviceToken, Timeout: 30 * time.Second, Logger: logger})
+
+		// Get all clips and search for matching ID
+		res, err := cli.GetClips(c.Request.Context(), tenantID, 1, 1000)
+		if err != nil {
+			continue
+		}
+
+		for _, clip := range res.Clips {
+			if clip.ID == clipID {
+				// Found it! Delete using clip hash
+				if err := cli.DeleteClip(c.Request.Context(), clip.ClipHash, tenantID); err != nil {
+					logger.WithError(err).Error("Failed to delete clip")
+					c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Failed to delete clip"})
+					return
+				}
+
+				c.JSON(http.StatusOK, commodoreapi.SuccessResponse{
+					Message: "Clip deleted successfully",
+				})
+				return
+			}
+		}
+	}
+
+	c.JSON(http.StatusNotFound, commodoreapi.ErrorResponse{Error: "Clip not found"})
+}
+
+// StartDVR starts a DVR recording for a stream by proxying to Foghorn
+func StartDVR(c *gin.Context) {
+	tenantID := c.GetString("tenant_id")
+	if tenantID == "" {
+		c.JSON(http.StatusUnauthorized, commodoreapi.ErrorResponse{Error: "Authentication required"})
+		return
+	}
+
+	var req struct {
+		InternalName string `json:"internal_name"`
+		StreamID     string `json:"stream_id,omitempty"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || req.InternalName == "" {
+		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: "internal_name is required"})
+		return
+	}
+
+	foghornList := os.Getenv("FOGHORN_URLS")
+	if foghornList == "" {
+		foghornList = os.Getenv("FOGHORN_URL")
+	}
+	if foghornList == "" {
+		c.JSON(http.StatusServiceUnavailable, commodoreapi.ErrorResponse{Error: "FOGHORN_URLS not configured"})
+		return
+	}
+	urls := strings.Split(foghornList, ",")
+
+	var lastErr error
+	for _, rawURL := range urls {
+		base := strings.TrimSpace(rawURL)
+		if base == "" {
+			continue
+		}
+		if !strings.HasPrefix(base, "http://") && !strings.HasPrefix(base, "https://") {
+			base = "http://" + base
+		}
+		cli := foghorn.NewClient(foghorn.Config{BaseURL: base, ServiceToken: serviceToken, Timeout: 20 * time.Second, Logger: logger})
+
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+		defer cancel()
+		res, err := cli.StartDVRRecording(ctx, &fapi.StartDVRRequest{TenantID: tenantID, InternalName: req.InternalName, StreamID: req.StreamID})
+		if err == nil {
+			c.JSON(http.StatusOK, res)
+			return
+		}
+		lastErr = err
+	}
+
+	c.JSON(http.StatusBadGateway, commodoreapi.ErrorResponse{Error: fmt.Sprintf("all foghorns failed: %v", lastErr)})
+}
+
+// StopDVR stops an active DVR recording
+func StopDVR(c *gin.Context) {
+	tenantID := c.GetString("tenant_id")
+	if tenantID == "" {
+		c.JSON(http.StatusUnauthorized, commodoreapi.ErrorResponse{Error: "Authentication required"})
+		return
+	}
+	var req struct {
+		DVRHash string `json:"dvr_hash"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || req.DVRHash == "" {
+		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: "dvr_hash is required"})
+		return
+	}
+
+	foghornList := os.Getenv("FOGHORN_URLS")
+	if foghornList == "" {
+		foghornList = os.Getenv("FOGHORN_URL")
+	}
+	if foghornList == "" {
+		c.JSON(http.StatusServiceUnavailable, commodoreapi.ErrorResponse{Error: "FOGHORN_URLS not configured"})
+		return
+	}
+	urls := strings.Split(foghornList, ",")
+
+	var lastErr error
+	for _, rawURL := range urls {
+		base := strings.TrimSpace(rawURL)
+		if base == "" {
+			continue
+		}
+		if !strings.HasPrefix(base, "http://") && !strings.HasPrefix(base, "https://") {
+			base = "http://" + base
+		}
+		cli := foghorn.NewClient(foghorn.Config{BaseURL: base, ServiceToken: serviceToken, Timeout: 15 * time.Second, Logger: logger})
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 8*time.Second)
+		defer cancel()
+		if err := cli.StopDVRRecording(ctx, req.DVRHash, tenantID); err == nil {
+			c.JSON(http.StatusOK, commodoreapi.SuccessResponse{Message: "stopping"})
+			return
+		} else {
+			lastErr = err
+		}
+	}
+
+	c.JSON(http.StatusBadGateway, commodoreapi.ErrorResponse{Error: fmt.Sprintf("all foghorns failed: %v", lastErr)})
+}
+
+// GetDVRStatus retrieves DVR status for a given hash
+func GetDVRStatus(c *gin.Context) {
+	tenantID := c.GetString("tenant_id")
+	if tenantID == "" {
+		c.JSON(http.StatusUnauthorized, commodoreapi.ErrorResponse{Error: "Authentication required"})
+		return
+	}
+	dvrHash := c.Param("dvr_hash")
+	if dvrHash == "" {
+		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: "dvr_hash required"})
+		return
+	}
+
+	foghornList := os.Getenv("FOGHORN_URLS")
+	if foghornList == "" {
+		foghornList = os.Getenv("FOGHORN_URL")
+	}
+	if foghornList == "" {
+		c.JSON(http.StatusServiceUnavailable, commodoreapi.ErrorResponse{Error: "FOGHORN_URLS not configured"})
+		return
+	}
+	urls := strings.Split(foghornList, ",")
+
+	for _, rawURL := range urls {
+		base := strings.TrimSpace(rawURL)
+		if base == "" {
+			continue
+		}
+		if !strings.HasPrefix(base, "http://") && !strings.HasPrefix(base, "https://") {
+			base = "http://" + base
+		}
+		cli := foghorn.NewClient(foghorn.Config{BaseURL: base, ServiceToken: serviceToken, Timeout: 10 * time.Second, Logger: logger})
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 6*time.Second)
+		defer cancel()
+		if info, err := cli.GetDVRStatus(ctx, dvrHash, tenantID); err == nil {
+			c.JSON(http.StatusOK, info)
+			return
+		}
+	}
+
+	c.JSON(http.StatusNotFound, commodoreapi.ErrorResponse{Error: "DVR recording not found"})
+}
+
+// ListDVRRequests lists DVR recordings for a tenant (optionally filtered)
+func ListDVRRequests(c *gin.Context) {
+	tenantID := c.GetString("tenant_id")
+	if tenantID == "" {
+		c.JSON(http.StatusUnauthorized, commodoreapi.ErrorResponse{Error: "Authentication required"})
+		return
+	}
+	internalName := c.Query("internal_name")
+	status := c.Query("status")
+	page, _ := strconv.Atoi(c.Query("page"))
+	limit, _ := strconv.Atoi(c.Query("limit"))
+	if page <= 0 {
+		page = 1
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+
+	foghornList := os.Getenv("FOGHORN_URLS")
+	if foghornList == "" {
+		foghornList = os.Getenv("FOGHORN_URL")
+	}
+	if foghornList == "" {
+		c.JSON(http.StatusServiceUnavailable, commodoreapi.ErrorResponse{Error: "FOGHORN_URLS not configured"})
+		return
+	}
+	urls := strings.Split(foghornList, ",")
+
+	var merged []fapi.DVRInfo
+	total := 0
+	for _, rawURL := range urls {
+		base := strings.TrimSpace(rawURL)
+		if base == "" {
+			continue
+		}
+		if !strings.HasPrefix(base, "http://") && !strings.HasPrefix(base, "https://") {
+			base = "http://" + base
+		}
+		cli := foghorn.NewClient(foghorn.Config{BaseURL: base, ServiceToken: serviceToken, Timeout: 15 * time.Second, Logger: logger})
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 8*time.Second)
+		defer cancel()
+		res, err := cli.ListDVRRecordings(ctx, tenantID, internalName, status, page, limit)
+		if err != nil {
+			continue
+		}
+		merged = append(merged, res.DVRRecordings...)
+		total += res.Total
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"dvr_recordings": merged,
+		"total":          total,
+		"page":           page,
+		"limit":          limit,
+	})
+}
+
+// GetRecordingConfig returns recording_config for a stream
+func GetRecordingConfig(c *gin.Context) {
+	internalName := c.Param("internal_name")
+	if internalName == "" {
+		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: "internal_name required"})
+		return
+	}
+	var cfgJSON []byte
+	if err := db.QueryRow(`SELECT recording_config FROM commodore.streams WHERE internal_name = $1`, internalName).Scan(&cfgJSON); err != nil {
+		if err == sql.ErrNoRows {
+			c.JSON(http.StatusNotFound, commodoreapi.ErrorResponse{Error: "stream not found"})
+			return
+		}
+		logger.WithError(err).Error("Failed to fetch recording_config")
+		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "database error"})
+		return
+	}
+	if len(cfgJSON) == 0 {
+		c.JSON(http.StatusOK, commodoreapi.RecordingConfig{Enabled: false, RetentionDays: 30, Format: "ts", SegmentDuration: 6})
+		return
+	}
+	var cfg commodoreapi.RecordingConfig
+	if err := json.Unmarshal(cfgJSON, &cfg); err != nil {
+		c.JSON(http.StatusOK, commodoreapi.RecordingConfig{Enabled: false, RetentionDays: 30, Format: "ts", SegmentDuration: 6})
+		return
+	}
+	c.JSON(http.StatusOK, cfg)
+}
+
+// UpdateRecordingConfig updates recording_config for a stream
+func UpdateRecordingConfig(c *gin.Context) {
+	tenantID := c.GetString("tenant_id")
+	if tenantID == "" {
+		c.JSON(http.StatusUnauthorized, commodoreapi.ErrorResponse{Error: "Authentication required"})
+		return
+	}
+	internalName := c.Param("internal_name")
+	if internalName == "" {
+		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: "internal_name required"})
+		return
+	}
+	var cfg commodoreapi.RecordingConfig
+	if err := c.ShouldBindJSON(&cfg); err != nil {
+		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: "invalid body"})
+		return
+	}
+	b, _ := json.Marshal(cfg)
+	// Ensure tenant ownership when updating
+	res, err := db.Exec(`UPDATE commodore.streams SET recording_config = $1::jsonb, updated_at = NOW() WHERE internal_name = $2 AND tenant_id = $3`, string(b), internalName, tenantID)
+	if err != nil {
+		logger.WithError(err).Error("Failed to update recording_config")
+		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "database error"})
+		return
+	}
+	if rows, _ := res.RowsAffected(); rows == 0 {
+		c.JSON(http.StatusNotFound, commodoreapi.ErrorResponse{Error: "stream not found"})
+		return
+	}
+	c.JSON(http.StatusOK, cfg)
 }
 
 // GetStreamNode returns the appropriate node for a stream
@@ -725,7 +1487,7 @@ func GetStreamNode(c *gin.Context) {
 	var tenantID, streamID string
 	err := db.QueryRow(`
 		SELECT tenant_id, stream_id 
-		FROM stream_keys 
+		FROM commodore.stream_keys 
 		WHERE key_value = $1 AND is_active = true
 	`, streamKey).Scan(&tenantID, &streamID)
 
@@ -758,6 +1520,7 @@ func GetStreamNode(c *gin.Context) {
 // CreateStream creates a new stream for a user
 func CreateStream(c *gin.Context) {
 	userID := c.GetString("user_id")
+	tenantID := c.GetString("tenant_id")
 
 	var req commodoreapi.CreateStreamRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -768,8 +1531,8 @@ func CreateStream(c *gin.Context) {
 	var streamID, streamKey, playbackID, internalName string
 	err := db.QueryRow(`
 		SELECT stream_id, stream_key, playback_id, internal_name 
-		FROM create_user_stream($1, $2)
-	`, userID, req.Title).Scan(&streamID, &streamKey, &playbackID, &internalName)
+		FROM commodore.create_user_stream($1, $2, $3)
+	`, tenantID, userID, req.Title).Scan(&streamID, &streamKey, &playbackID, &internalName)
 
 	if err != nil {
 		logger.WithFields(logging.Fields{
@@ -784,7 +1547,7 @@ func CreateStream(c *gin.Context) {
 	// Update description if provided
 	if req.Description != "" {
 		_, err = db.Exec(`
-			UPDATE streams SET description = $1 WHERE id = $2
+			UPDATE commodore.streams SET description = $1 WHERE id = $2
 		`, req.Description, streamID)
 		if err != nil {
 			logger.WithFields(logging.Fields{
@@ -809,13 +1572,14 @@ func CreateStream(c *gin.Context) {
 // DeleteStream deletes a stream for a user
 func DeleteStream(c *gin.Context) {
 	userID := c.GetString("user_id")
+	tenantID := c.GetString("tenant_id")
 	streamID := c.Param("id")
 
 	// Verify user owns the stream and get stream details
 	var streamUUID, streamKey, internalName, title string
 	err := db.QueryRow(`
 		SELECT id, stream_key, internal_name, title 
-		FROM streams 
+		FROM commodore.streams 
 		WHERE internal_name = $1 AND user_id = $2
 	`, streamID, userID).Scan(&streamUUID, &streamKey, &internalName, &title)
 
@@ -848,7 +1612,7 @@ func DeleteStream(c *gin.Context) {
 	defer tx.Rollback()
 
 	// Delete related stream_keys
-	_, err = tx.Exec(`DELETE FROM stream_keys WHERE stream_id = $1`, streamID)
+	_, err = tx.Exec(`DELETE FROM commodore.stream_keys WHERE stream_id = $1`, streamID)
 	if err != nil {
 		logger.WithFields(logging.Fields{
 			"user_id":   userID,
@@ -859,20 +1623,37 @@ func DeleteStream(c *gin.Context) {
 		return
 	}
 
-	// Delete related clips
-	_, err = tx.Exec(`DELETE FROM clips WHERE stream_id = $1`, streamID)
-	if err != nil {
-		logger.WithFields(logging.Fields{
-			"user_id":   userID,
-			"stream_id": streamID,
-			"error":     err,
-		}).Error("Failed to delete clips")
-		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Failed to cleanup clips"})
-		return
+	// Delete related clips via Foghorn API (no cross-service DB access)
+	foghornList := os.Getenv("FOGHORN_URLS")
+	if foghornList == "" {
+		foghornList = os.Getenv("FOGHORN_URL")
+	}
+	if foghornList != "" {
+		urls := strings.Split(foghornList, ",")
+		for _, rawURL := range urls {
+			base := strings.TrimSpace(rawURL)
+			if base == "" {
+				continue
+			}
+			if !strings.HasPrefix(base, "http://") && !strings.HasPrefix(base, "https://") {
+				base = "http://" + base
+			}
+			cli := foghorn.NewClient(foghorn.Config{BaseURL: base, ServiceToken: serviceToken, Timeout: 30 * time.Second, Logger: logger})
+			res, err := cli.GetClips(c.Request.Context(), tenantID, 1, 1000)
+			if err != nil {
+				logger.WithError(err).WithField("foghorn_url", base).Warn("Failed to list clips for deletion")
+				continue
+			}
+			for _, clip := range res.Clips {
+				if clip.StreamName == internalName {
+					_ = cli.DeleteClip(c.Request.Context(), clip.ClipHash, tenantID)
+				}
+			}
+		}
 	}
 
 	// Delete the stream itself
-	_, err = tx.Exec(`DELETE FROM streams WHERE id = $1`, streamID)
+	_, err = tx.Exec(`DELETE FROM commodore.streams WHERE id = $1`, streamID)
 	if err != nil {
 		logger.WithFields(logging.Fields{
 			"user_id":   userID,
@@ -914,7 +1695,7 @@ func DeleteStream(c *gin.Context) {
 func GetUsers(c *gin.Context) {
 	rows, err := db.Query(`
 		SELECT id, email, created_at, is_active 
-		FROM users ORDER BY created_at DESC
+		FROM commodore.users ORDER BY created_at DESC
 	`)
 
 	if err != nil {
@@ -945,7 +1726,7 @@ func GetAllStreams(c *gin.Context) {
 	rows, err := db.Query(`
 		SELECT internal_name, stream_key, playback_id, title, description,
 		       is_recording_enabled, is_public, status, start_time, end_time, created_at
-		FROM streams ORDER BY created_at DESC
+		FROM commodore.streams ORDER BY created_at DESC
 	`)
 
 	if err != nil {
@@ -992,7 +1773,7 @@ func TerminateStream(c *gin.Context) {
 	streamInternalName := c.Param("id") // Now expects internal_name instead of UUID
 
 	_, err := db.Exec(`
-		UPDATE streams SET status = 'terminated', end_time = NOW() WHERE internal_name = $1
+		UPDATE commodore.streams SET status = 'terminated', end_time = NOW() WHERE internal_name = $1
 	`, streamInternalName)
 
 	if err != nil {
@@ -1013,7 +1794,7 @@ func RefreshStreamKey(c *gin.Context) {
 	var currentStreamKey, playbackID, internalName, streamUUID string
 	err := db.QueryRow(`
 		SELECT stream_key, playback_id, internal_name, id 
-		FROM streams 
+		FROM commodore.streams 
 		WHERE internal_name = $1 AND user_id = $2 AND tenant_id = $3
 	`, streamInternalName, userID, tenantID).Scan(&currentStreamKey, &playbackID, &internalName, &streamUUID)
 
@@ -1034,7 +1815,7 @@ func RefreshStreamKey(c *gin.Context) {
 
 	// Generate new stream key using database function for consistency
 	var newStreamKey string
-	err = db.QueryRow(`SELECT 'sk_' || generate_random_string(28)`).Scan(&newStreamKey)
+	err = db.QueryRow(`SELECT 'sk_' || commodore.generate_random_string(28)`).Scan(&newStreamKey)
 	if err != nil {
 		logger.WithFields(logging.Fields{
 			"user_id":              userID,
@@ -1047,7 +1828,7 @@ func RefreshStreamKey(c *gin.Context) {
 
 	// Update the stream with new key
 	_, err = db.Exec(`
-		UPDATE streams 
+		UPDATE commodore.streams 
 		SET stream_key = $1, updated_at = NOW()
 		WHERE id = $2
 	`, newStreamKey, streamUUID)
@@ -1064,7 +1845,7 @@ func RefreshStreamKey(c *gin.Context) {
 
 	// Update the stream_keys table (deactivate old key and add new one)
 	_, err = db.Exec(`
-		UPDATE stream_keys 
+		UPDATE commodore.stream_keys 
 		SET is_active = false 
 		WHERE LOWER(key_value) = LOWER($1)
 	`, currentStreamKey)
@@ -1078,7 +1859,7 @@ func RefreshStreamKey(c *gin.Context) {
 
 	// Add new key to stream_keys table
 	_, err = db.Exec(`
-		INSERT INTO stream_keys (stream_id, key_value, key_name, is_active)
+		INSERT INTO commodore.stream_keys (stream_id, key_value, key_name, is_active)
 		VALUES ($1, $2, 'Refreshed Key', true)
 	`, streamUUID, newStreamKey)
 	if err != nil {
@@ -1125,7 +1906,7 @@ func HandleStreamStart(c *gin.Context) {
 	// Update stream status based on whether we have stream_id or internal_name
 	if eventData.StreamID != "" {
 		_, err := db.Exec(`
-			UPDATE streams 
+			UPDATE commodore.streams 
 			SET status = 'live', start_time = NOW(), updated_at = NOW()
 			WHERE id = $1
 		`, eventData.StreamID)
@@ -1142,7 +1923,7 @@ func HandleStreamStart(c *gin.Context) {
 		}
 	} else if eventData.InternalName != "" {
 		_, err := db.Exec(`
-			UPDATE streams 
+			UPDATE commodore.streams 
 			SET status = 'live', start_time = NOW(), updated_at = NOW()
 			WHERE internal_name = $1
 		`, eventData.InternalName)
@@ -1161,7 +1942,7 @@ func HandleStreamStart(c *gin.Context) {
 	// Update stream key last used timestamp if provided
 	if eventData.StreamKey != "" {
 		_, err := db.Exec(`
-			UPDATE stream_keys SET last_used_at = NOW()
+			UPDATE commodore.stream_keys SET last_used_at = NOW()
 			WHERE LOWER(key_value) = LOWER($1) AND is_active = true
 		`, eventData.StreamKey)
 		if err != nil {
@@ -1219,7 +2000,7 @@ func HandleRecordingStatus(c *gin.Context) {
 	// Update recording status with tenant awareness
 	tenantID := "00000000-0000-0000-0000-000000000001" // Demo tenant for now
 	_, err := db.Exec(`
-		UPDATE streams SET is_recording_enabled = $1, updated_at = NOW()
+		UPDATE commodore.streams SET is_recording_enabled = $1, updated_at = NOW()
 		WHERE tenant_id = $2 AND internal_name = $3
 	`, eventData.IsRecording, tenantID, eventData.InternalName)
 	if err != nil {
@@ -1250,7 +2031,7 @@ func ResolvePlaybackID(c *gin.Context) {
 
 	var internalName, tenantID, status string
 	err := db.QueryRow(`
-		SELECT internal_name, tenant_id, status FROM streams WHERE LOWER(playback_id) = LOWER($1)
+		SELECT internal_name, tenant_id, status FROM commodore.streams WHERE LOWER(playback_id) = LOWER($1)
 	`, playbackID).Scan(&internalName, &tenantID, &status)
 
 	if err == sql.ErrNoRows {
@@ -1333,7 +2114,7 @@ func CreateAPIToken(c *gin.Context) {
 
 	// Generate API token with FrameWorks prefix
 	var tokenValue string
-	err := db.QueryRow(`SELECT 'fwk_' || generate_random_string(40)`).Scan(&tokenValue)
+	err := db.QueryRow(`SELECT 'fwk_' || commodore.generate_random_string(40)`).Scan(&tokenValue)
 	if err != nil {
 		logger.WithFields(logging.Fields{
 			"user_id": userID,
@@ -1362,7 +2143,7 @@ func CreateAPIToken(c *gin.Context) {
 	// Create token record
 	tokenID := uuid.New().String()
 	_, err = db.Exec(`
-		INSERT INTO api_tokens (id, tenant_id, user_id, token_value, token_name, permissions, is_active, expires_at, created_at)
+		INSERT INTO commodore.api_tokens (id, tenant_id, user_id, token_value, token_name, permissions, is_active, expires_at, created_at)
 		VALUES ($1, $2, $3, $4, $5, $6, true, $7, NOW())
 	`, tokenID, tenantID, userID, tokenValue, req.TokenName, pq.Array(permissions), expiresAt)
 
@@ -1393,7 +2174,7 @@ func GetAPITokens(c *gin.Context) {
 
 	rows, err := db.Query(`
 		SELECT id, token_name, permissions, is_active, last_used_at, expires_at, created_at
-		FROM api_tokens 
+		FROM commodore.api_tokens 
 		WHERE user_id = $1 
 		ORDER BY created_at DESC
 	`, userID)
@@ -1458,7 +2239,7 @@ func RevokeAPIToken(c *gin.Context) {
 	// Verify user owns the token
 	var tokenName string
 	err := db.QueryRow(`
-		SELECT token_name FROM api_tokens 
+		SELECT token_name FROM commodore.api_tokens 
 		WHERE id = $1 AND user_id = $2 AND is_active = true
 	`, tokenID, userID).Scan(&tokenName)
 
@@ -1479,7 +2260,7 @@ func RevokeAPIToken(c *gin.Context) {
 
 	// Revoke the token
 	_, err = db.Exec(`
-		UPDATE api_tokens 
+		UPDATE commodore.api_tokens 
 		SET is_active = false, updated_at = NOW()
 		WHERE id = $1
 	`, tokenID)
@@ -1522,7 +2303,7 @@ func VerifyEmail(c *gin.Context) {
 	var tokenExpiry time.Time
 	err := db.QueryRow(`
 		SELECT id, tenant_id, email, token_expires_at 
-		FROM users 
+		FROM commodore.users 
 		WHERE verification_token = $1 AND verified = false
 	`, token).Scan(&userID, &tenantID, &email, &tokenExpiry)
 
@@ -1546,7 +2327,7 @@ func VerifyEmail(c *gin.Context) {
 
 	// Mark user as verified and clear verification token
 	_, err = db.Exec(`
-		UPDATE users 
+		UPDATE commodore.users 
 		SET verified = true, verification_token = NULL, token_expires_at = NULL, updated_at = NOW()
 		WHERE id = $1
 	`, userID)
@@ -1658,7 +2439,7 @@ func createUserStreamInTenant(tenantID, userID, title string) (*struct {
 
 	// Insert the stream with tenant context
 	_, err := db.Exec(`
-		INSERT INTO streams (id, tenant_id, user_id, stream_key, playback_id, internal_name, title)
+		INSERT INTO commodore.streams (id, tenant_id, user_id, stream_key, playback_id, internal_name, title)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
 	`, streamID, tenantID, userID, streamKey, playbackID, internalName, title)
 
@@ -1668,7 +2449,7 @@ func createUserStreamInTenant(tenantID, userID, title string) (*struct {
 
 	// Also create an entry in stream_keys for backward compatibility
 	_, err = db.Exec(`
-		INSERT INTO stream_keys (tenant_id, stream_id, key_value, key_name, is_active)
+		INSERT INTO commodore.stream_keys (tenant_id, stream_id, key_value, key_name, is_active)
 		VALUES ($1, $2, $3, 'Primary Key', TRUE)
 	`, tenantID, streamID, streamKey)
 
@@ -2038,7 +2819,8 @@ func ResolveInternalName(c *gin.Context) {
 	}
 
 	var tenantID, userID string
-	err := db.QueryRow(`SELECT tenant_id, user_id FROM streams WHERE internal_name = $1`, internalName).Scan(&tenantID, &userID)
+	var recordingConfigJSON []byte
+	err := db.QueryRow(`SELECT tenant_id, user_id, recording_config FROM commodore.streams WHERE internal_name = $1`, internalName).Scan(&tenantID, &userID, &recordingConfigJSON)
 	if err == sql.ErrNoRows {
 		c.JSON(http.StatusNotFound, commodoreapi.ErrorResponse{Error: "Not found"})
 		return
@@ -2049,10 +2831,20 @@ func ResolveInternalName(c *gin.Context) {
 		return
 	}
 
+	// Parse recording config if present
+	var recordingConfig *commodoreapi.RecordingConfig
+	if len(recordingConfigJSON) > 0 {
+		var config commodoreapi.RecordingConfig
+		if err := json.Unmarshal(recordingConfigJSON, &config); err == nil {
+			recordingConfig = &config
+		}
+	}
+
 	c.JSON(http.StatusOK, commodoreapi.InternalNameResponse{
 		InternalName: internalName,
 		TenantID:     tenantID,
 		UserID:       userID,
+		Recording:    recordingConfig,
 	})
 }
 
@@ -2115,7 +2907,7 @@ func GetStreamKeys(c *gin.Context) {
 	// Verify stream ownership
 	var streamExists bool
 	err := db.QueryRow(`
-		SELECT EXISTS(SELECT 1 FROM streams WHERE id = $1 AND tenant_id = $2 AND user_id = $3)
+		SELECT EXISTS(SELECT 1 FROM commodore.streams WHERE id = $1 AND tenant_id = $2 AND user_id = $3)
 	`, streamID, tenantID, userID).Scan(&streamExists)
 	if err != nil {
 		logger.WithError(err).Error("Failed to verify stream ownership")
@@ -2131,7 +2923,7 @@ func GetStreamKeys(c *gin.Context) {
 	// Get all keys for the stream
 	rows, err := db.Query(`
 		SELECT id, tenant_id, user_id, stream_id, key_value, key_name, is_active, last_used_at, created_at, updated_at
-		FROM stream_keys
+		FROM commodore.stream_keys
 		WHERE tenant_id = $1 AND stream_id = $2
 		ORDER BY created_at DESC
 	`, tenantID, streamID)
@@ -2207,7 +2999,7 @@ func CreateStreamKey(c *gin.Context) {
 	// Verify stream ownership
 	var streamExists bool
 	err := db.QueryRow(`
-		SELECT EXISTS(SELECT 1 FROM streams WHERE id = $1 AND tenant_id = $2 AND user_id = $3)
+		SELECT EXISTS(SELECT 1 FROM commodore.streams WHERE id = $1 AND tenant_id = $2 AND user_id = $3)
 	`, streamID, tenantID, userID).Scan(&streamExists)
 	if err != nil {
 		logger.WithError(err).Error("Failed to verify stream ownership")
@@ -2237,7 +3029,7 @@ func CreateStreamKey(c *gin.Context) {
 	}
 
 	_, err = db.Exec(`
-		INSERT INTO stream_keys (id, tenant_id, stream_id, key_value, key_name, is_active, created_at)
+		INSERT INTO commodore.stream_keys (id, tenant_id, stream_id, key_value, key_name, is_active, created_at)
 		VALUES ($1, $2, $3, $4, $5, TRUE, NOW())
 	`, keyID, tenantID, streamID, keyValue, keyName)
 	if err != nil {
@@ -2278,9 +3070,9 @@ func DeactivateStreamKey(c *gin.Context) {
 
 	// Verify ownership and deactivate key
 	result, err := db.Exec(`
-		UPDATE stream_keys SET is_active = FALSE
+		UPDATE commodore.stream_keys SET is_active = FALSE
 		WHERE id = $1 AND stream_id = $2 AND tenant_id = $3 
-		AND EXISTS(SELECT 1 FROM streams WHERE id = $4 AND tenant_id = $5 AND user_id = $6)
+		AND EXISTS(SELECT 1 FROM commodore.streams WHERE id = $4 AND tenant_id = $5 AND user_id = $6)
 	`, keyID, streamID, tenantID, streamID, tenantID, userID)
 	if err != nil {
 		logger.WithError(err).Error("Failed to deactivate stream key")
@@ -2328,8 +3120,8 @@ func GetRecordings(c *gin.Context) {
 			SELECT r.id, r.stream_id, r.title, r.duration, 
 				   r.file_size_bytes, r.file_path, r.thumbnail_url, 
 				   r.status, r.created_at, r.updated_at
-			FROM recordings r
-			JOIN streams s ON r.stream_id = s.id
+			FROM commodore.recordings r
+			JOIN commodore.streams s ON r.stream_id = s.id
 			WHERE r.tenant_id = $1 AND s.user_id = $2 AND r.stream_id = $3
 			ORDER BY r.created_at DESC
 		`
@@ -2340,8 +3132,8 @@ func GetRecordings(c *gin.Context) {
 			SELECT r.id, r.stream_id, r.title, r.duration, 
 				   r.file_size_bytes, r.file_path, r.thumbnail_url, 
 				   r.status, r.created_at, r.updated_at
-			FROM recordings r
-			JOIN streams s ON r.stream_id = s.id
+			FROM commodore.recordings r
+			JOIN commodore.streams s ON r.stream_id = s.id
 			WHERE r.tenant_id = $1 AND s.user_id = $2
 			ORDER BY r.created_at DESC
 		`
@@ -2401,4 +3193,88 @@ func GetRecordings(c *gin.Context) {
 		Recordings: recordings,
 		Count:      len(recordings),
 	})
+}
+
+// ResolveViewerEndpoint resolves viewer endpoints through Foghorn
+func ResolveViewerEndpoint(c *gin.Context) {
+	var req commodoreapi.ViewerEndpointRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: "Invalid request payload"})
+		return
+	}
+
+	// Validate required fields
+	if req.ContentType == "" || req.ContentID == "" {
+		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: "content_type and content_id are required"})
+		return
+	}
+
+	// Get viewer IP from request if not provided
+	if req.ViewerIP == "" {
+		req.ViewerIP = c.ClientIP()
+	}
+
+	// Get Foghorn URLs from environment (following existing pattern)
+	foghornList := os.Getenv("FOGHORN_URLS")
+	if foghornList == "" {
+		logger.Error("FOGHORN_URLS environment variable not set")
+		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Service configuration error"})
+		return
+	}
+
+	serviceToken := os.Getenv("SERVICE_TOKEN")
+	if serviceToken == "" {
+		logger.Error("SERVICE_TOKEN environment variable not set")
+		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Service configuration error"})
+		return
+	}
+
+	urls := strings.Split(foghornList, ",")
+	var lastErr error
+
+	// Try each Foghorn instance (following existing pattern from CreateClip)
+	for _, rawURL := range urls {
+		rawURL = strings.TrimSpace(rawURL)
+		if rawURL == "" {
+			continue
+		}
+
+		base, err := url.Parse(rawURL)
+		if err != nil {
+			logger.WithError(err).WithField("url", rawURL).Error("Invalid Foghorn URL")
+			lastErr = err
+			continue
+		}
+
+		// Create Foghorn client for this instance
+		cli := foghorn.NewClient(foghorn.Config{
+			BaseURL:      base.String(),
+			ServiceToken: serviceToken,
+			Timeout:      30 * time.Second,
+			Logger:       logger,
+		})
+
+		// Convert to Foghorn request format
+		foghornReq := &fapi.ViewerEndpointRequest{
+			ContentType: req.ContentType,
+			ContentID:   req.ContentID,
+			ViewerIP:    req.ViewerIP,
+		}
+
+		// Make the request
+		res, err := cli.ResolveViewerEndpoint(c.Request.Context(), foghornReq)
+		if err != nil {
+			logger.WithError(err).WithField("foghorn_url", base.String()).Error("Foghorn viewer endpoint resolution failed")
+			lastErr = err
+			continue
+		}
+
+		// Return the response directly (it's already the correct type via type alias)
+		c.JSON(http.StatusOK, res)
+		return
+	}
+
+	// All Foghorn instances failed
+	logger.WithError(lastErr).Error("All Foghorn instances failed for viewer endpoint resolution")
+	c.JSON(http.StatusServiceUnavailable, commodoreapi.ErrorResponse{Error: "Service temporarily unavailable"})
 }

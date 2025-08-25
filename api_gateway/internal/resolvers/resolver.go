@@ -1,6 +1,7 @@
 package resolvers
 
 import (
+	"context"
 	"fmt"
 	"frameworks/api_gateway/internal/clients"
 	"frameworks/pkg/config"
@@ -23,7 +24,7 @@ type GraphQLMetrics struct {
 type Resolver struct {
 	Clients   *clients.ServiceClients
 	Logger    logging.Logger
-	wsManager *WebSocketManager
+	WSManager *WebSocketManager
 	Metrics   *GraphQLMetrics
 }
 
@@ -36,15 +37,15 @@ func NewResolver(serviceClients *clients.ServiceClients, logger logging.Logger, 
 	return &Resolver{
 		Clients:   serviceClients,
 		Logger:    logger,
-		wsManager: wsManager,
+		WSManager: wsManager,
 		Metrics:   metrics,
 	}
 }
 
 // Shutdown gracefully shuts down the resolver and its resources
 func (r *Resolver) Shutdown() error {
-	if r.wsManager != nil {
-		return r.wsManager.Shutdown()
+	if r.WSManager != nil {
+		return r.WSManager.Shutdown()
 	}
 	return nil
 }
@@ -99,4 +100,40 @@ func (r *Resolver) normalizeTimeRange(p TimeRangeParams) (start *time.Time, end 
 		start = &clamped
 	}
 	return start, end, nil
+}
+
+// DoResolveViewerEndpoint calls Commodore to resolve viewer endpoints (which then calls Foghorn)
+func (r *Resolver) DoResolveViewerEndpoint(ctx context.Context, contentType, contentID string, viewerIP *string) ([]ViewerEndpoint, error) {
+	// Call Commodore's viewer endpoint resolution (Commodore will handle tenant resolution internally)
+	endpoints, err := r.Clients.Commodore.ResolveViewerEndpoint(ctx, contentType, contentID, viewerIP)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve viewer endpoints: %v", err)
+	}
+
+	// Convert to resolver ViewerEndpoint type
+	result := make([]ViewerEndpoint, len(endpoints))
+	for i, endpoint := range endpoints {
+		result[i] = ViewerEndpoint{
+			NodeID:      endpoint.NodeID,
+			BaseURL:     endpoint.BaseURL,
+			Protocol:    endpoint.Protocol,
+			URL:         endpoint.URL,
+			GeoDistance: endpoint.GeoDistance,
+			LoadScore:   endpoint.LoadScore,
+			HealthScore: endpoint.HealthScore,
+		}
+	}
+
+	return result, nil
+}
+
+// ViewerEndpoint represents a single viewer endpoint for the resolver
+type ViewerEndpoint struct {
+	NodeID      string
+	BaseURL     string
+	Protocol    string
+	URL         string
+	GeoDistance float64
+	LoadScore   float64
+	HealthScore float64
 }

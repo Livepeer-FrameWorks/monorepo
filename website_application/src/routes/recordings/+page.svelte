@@ -1,13 +1,11 @@
 <script>
   import { onMount } from 'svelte';
-  import { client } from '$lib/graphql/client.js';
-  import { GetRecordingsDocument } from '$lib/graphql/generated/apollo-helpers';
+  import { dvrService } from '$lib/graphql/services/dvr.js';
   import { formatBytes, formatDuration, formatDate } from '$lib/utils/formatters.js';
 
   let recordings = [];
   let loading = true;
   let error = null;
-  let selectedTenant = 'all';
   let statusFilter = 'all';
   let searchQuery = '';
 
@@ -17,14 +15,13 @@
   let totalRecordings = 0;
 
   $: filteredRecordings = recordings.filter(recording => {
-    const matchesTenant = selectedTenant === 'all' || recording.tenantId === selectedTenant;
     const matchesStatus = statusFilter === 'all' || recording.status === statusFilter;
     const matchesSearch = !searchQuery || 
-      recording.streamName?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      recording.filename?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      recording.id?.toLowerCase().includes(searchQuery.toLowerCase());
+      recording.internalName?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      recording.dvrHash?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      recording.manifestPath?.toLowerCase().includes(searchQuery.toLowerCase());
     
-    return matchesTenant && matchesStatus && matchesSearch;
+    return matchesStatus && matchesSearch;
   });
 
   $: paginatedRecordings = filteredRecordings.slice(
@@ -38,14 +35,15 @@
   async function loadRecordings() {
     try {
       loading = true;
-      const result = await client.query({
-        query: GetRecordingsDocument,
-        variables: {},
-        fetchPolicy: 'network-only'
-      });
+      const result = await dvrService.getDVRRequests();
 
-      recordings = result.data?.recordings || [];
-      error = null;
+      if (result.success) {
+        recordings = result.recordings || [];
+        error = null;
+      } else {
+        error = result.error || 'Failed to load recordings';
+        recordings = [];
+      }
     } catch (err) {
       console.error('Failed to load recordings:', err);
       error = 'Failed to load recordings';
@@ -110,9 +108,9 @@
 
     <!-- Controls -->
     <div class="bg-tokyo-night-bg-light rounded-lg p-6 mb-6 border border-tokyo-night-fg-gutter">
-      <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
         <!-- Search -->
-        <div class="md:col-span-2">
+        <div>
           <label for="search" class="block text-sm font-medium text-tokyo-night-fg-dark mb-2">
             Search Recordings
           </label>
@@ -120,7 +118,7 @@
             id="search"
             type="text"
             bind:value={searchQuery}
-            placeholder="Search by stream name, filename, or ID..."
+            placeholder="Search by stream name, hash, or path..."
             class="w-full px-3 py-2 bg-tokyo-night-bg-dark border border-tokyo-night-fg-gutter rounded-md text-tokyo-night-fg placeholder-tokyo-night-comment focus:outline-none focus:ring-2 focus:ring-tokyo-night-blue focus:border-transparent"
           />
         </div>
@@ -141,23 +139,6 @@
             <option value="processing">Processing</option>
             <option value="failed">Failed</option>
             <option value="paused">Paused</option>
-          </select>
-        </div>
-
-        <!-- Tenant Filter -->
-        <div>
-          <label for="tenant-filter" class="block text-sm font-medium text-tokyo-night-fg-dark mb-2">
-            Tenant
-          </label>
-          <select
-            id="tenant-filter"
-            bind:value={selectedTenant}
-            class="w-full px-3 py-2 bg-tokyo-night-bg-dark border border-tokyo-night-fg-gutter rounded-md text-tokyo-night-fg focus:outline-none focus:ring-2 focus:ring-tokyo-night-blue focus:border-transparent"
-          >
-            <option value="all">All Tenants</option>
-            {#each [...new Set(recordings.map(r => r.tenantId).filter(Boolean))] as tenantId}
-              <option value={tenantId}>{tenantId}</option>
-            {/each}
           </select>
         </div>
       </div>
@@ -210,10 +191,10 @@
     {:else if paginatedRecordings.length === 0}
       <div class="bg-tokyo-night-bg-light rounded-lg p-12 text-center border border-tokyo-night-fg-gutter">
         <div class="text-tokyo-night-fg-dark mb-4">No recordings found</div>
-        {#if searchQuery || statusFilter !== 'all' || selectedTenant !== 'all'}
+        {#if searchQuery || statusFilter !== 'all'}
           <div class="text-tokyo-night-comment text-sm mb-4">Try adjusting your filters</div>
           <button 
-            on:click={() => { searchQuery = ''; statusFilter = 'all'; selectedTenant = 'all'; }}
+            on:click={() => { searchQuery = ''; statusFilter = 'all'; }}
             class="px-4 py-2 bg-tokyo-night-bg-dark hover:bg-tokyo-night-fg-gutter rounded-md text-tokyo-night-fg transition-colors"
           >
             Clear Filters
@@ -251,25 +232,25 @@
               </tr>
             </thead>
             <tbody class="divide-y divide-tokyo-night-fg-gutter">
-              {#each paginatedRecordings as recording (recording.id)}
+              {#each paginatedRecordings as recording (recording.dvrHash)}
                 <tr class="hover:bg-tokyo-night-bg-dark/50 transition-colors">
                   <td class="px-6 py-4">
                     <div class="flex flex-col">
-                      <div class="text-sm font-medium text-tokyo-night-fg truncate max-w-xs" title={recording.filename}>
-                        {recording.filename || recording.id}
+                      <div class="text-sm font-medium text-tokyo-night-fg truncate max-w-xs" title={recording.manifestPath}>
+                        {recording.manifestPath || recording.dvrHash}
                       </div>
                       <div class="text-xs text-tokyo-night-comment font-mono">
-                        {recording.id}
+                        {recording.dvrHash}
                       </div>
                     </div>
                   </td>
                   <td class="px-6 py-4">
                     <div class="flex flex-col">
                       <div class="text-sm text-tokyo-night-fg">
-                        {recording.streamName || 'Unknown'}
+                        {recording.internalName || 'Unknown'}
                       </div>
                       <div class="text-xs text-tokyo-night-comment">
-                        {recording.tenantId}
+                        {recording.storageNodeId || 'N/A'}
                       </div>
                     </div>
                   </td>
@@ -280,24 +261,23 @@
                     </span>
                   </td>
                   <td class="px-6 py-4 text-sm text-tokyo-night-fg">
-                    {recording.duration ? formatDuration(recording.duration) : 'N/A'}
+                    {recording.durationSeconds ? formatDuration(recording.durationSeconds * 1000) : 'N/A'}
                   </td>
                   <td class="px-6 py-4 text-sm text-tokyo-night-fg">
-                    {recording.fileSize ? formatBytes(recording.fileSize) : 'N/A'}
+                    {recording.sizeBytes ? formatBytes(recording.sizeBytes) : 'N/A'}
                   </td>
                   <td class="px-6 py-4 text-sm text-tokyo-night-fg">
                     {recording.createdAt ? formatDate(recording.createdAt) : 'N/A'}
                   </td>
                   <td class="px-6 py-4">
                     <div class="flex space-x-2">
-                      {#if recording.status === 'completed' && recording.downloadUrl}
+                      {#if recording.status === 'completed' && recording.manifestPath}
                         <a
-                          href={recording.downloadUrl}
-                          download
+                          href={recording.manifestPath}
                           class="text-tokyo-night-cyan hover:text-tokyo-night-blue text-sm font-medium"
-                          title="Download recording"
+                          title="View recording manifest"
                         >
-                          Download
+                          View
                         </a>
                       {/if}
                       {#if recording.status === 'recording'}

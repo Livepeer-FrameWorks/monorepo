@@ -10,42 +10,17 @@ import (
 	"frameworks/api_gateway/graph/generated"
 	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/loaders"
+	"frameworks/api_gateway/internal/middleware"
+	"frameworks/api_gateway/internal/resolvers"
 	"frameworks/pkg/api/commodore"
 	"frameworks/pkg/api/periscope"
 	"frameworks/pkg/models"
+	"net/http"
 	"strings"
 	"time"
+
+	"github.com/gin-gonic/gin"
 )
-
-// pagination bounds
-const defaultLimit = 100
-const maxLimit = 1000
-
-func clampPagination(p *model.PaginationInput, total int) (start int, end int) {
-	limit := defaultLimit
-	if p != nil {
-		if p.Offset != nil {
-			start = *p.Offset
-			if start < 0 {
-				start = 0
-			}
-		}
-		if p.Limit != nil {
-			limit = *p.Limit
-		}
-	}
-	if limit <= 0 {
-		limit = defaultLimit
-	}
-	if limit > maxLimit {
-		limit = maxLimit
-	}
-	end = total
-	if start+limit < end {
-		end = start + limit
-	}
-	return start, end
-}
 
 // CurrentTier is the resolver for the currentTier field.
 func (r *billingStatusResolver) CurrentTier(ctx context.Context, obj *models.BillingStatus) (*models.BillingTier, error) {
@@ -119,6 +94,29 @@ func (r *billingTierResolver) Features(ctx context.Context, obj *models.BillingT
 // Stream is the resolver for the stream field.
 func (r *clipResolver) Stream(ctx context.Context, obj *commodore.ClipResponse) (string, error) {
 	return obj.StreamID, nil
+}
+
+// ViewingUrls is the resolver for the viewingUrls field.
+func (r *clipResolver) ViewingUrls(ctx context.Context, obj *commodore.ClipResponse) (*model.ClipViewingUrls, error) {
+	panic(fmt.Errorf("not implemented: ViewingUrls - viewingUrls"))
+}
+
+// Percent is the resolver for the percent field.
+func (r *clipEventResolver) Percent(ctx context.Context, obj *periscope.ClipEvent) (*int, error) {
+	if obj.Percent == nil {
+		return nil, nil
+	}
+	v := int(*obj.Percent)
+	return &v, nil
+}
+
+// SizeBytes is the resolver for the sizeBytes field.
+func (r *clipEventResolver) SizeBytes(ctx context.Context, obj *periscope.ClipEvent) (*int, error) {
+	if obj.SizeBytes == nil {
+		return nil, nil
+	}
+	v := int(*obj.SizeBytes)
+	return &v, nil
 }
 
 // Name is the resolver for the name field.
@@ -290,6 +288,66 @@ func (r *mutationResolver) RefreshStreamKey(ctx context.Context, id string) (*mo
 // CreateClip is the resolver for the createClip field.
 func (r *mutationResolver) CreateClip(ctx context.Context, input model.CreateClipInput) (*commodore.ClipResponse, error) {
 	return r.DoCreateClip(ctx, input)
+}
+
+// DeleteClip is the resolver for the deleteClip field.
+func (r *mutationResolver) DeleteClip(ctx context.Context, id string) (bool, error) {
+	return r.DoDeleteClip(ctx, id)
+}
+
+// StartDvr is the resolver for the startDVR field.
+func (r *mutationResolver) StartDvr(ctx context.Context, internalName string, streamID *string) (*model.DVRRequest, error) {
+	res, err := r.Resolver.DoStartDVR(ctx, internalName, streamID)
+	if err != nil {
+		return nil, err
+	}
+	// Map Commodore.StartDVRResponse (status + dvr_hash) into a minimal DVRRequest
+	out := &model.DVRRequest{
+		DvrHash:      res.DVRHash,
+		InternalName: internalName,
+		Status:       res.Status,
+		CreatedAt:    time.Now(),
+		UpdatedAt:    time.Now(),
+	}
+	if res.StorageNodeID != "" {
+		out.StorageNodeID = &res.StorageNodeID
+	}
+	return out, nil
+}
+
+// StopDvr is the resolver for the stopDVR field.
+func (r *mutationResolver) StopDvr(ctx context.Context, dvrHash string) (bool, error) {
+	return r.Resolver.DoStopDVR(ctx, dvrHash)
+}
+
+// SetStreamRecordingConfig is the resolver for the setStreamRecordingConfig field.
+func (r *mutationResolver) SetStreamRecordingConfig(ctx context.Context, internalName string, enabled bool, retentionDays *int, format *string, segmentDuration *int) (*model.RecordingConfig, error) {
+	cfg := commodore.RecordingConfig{Enabled: enabled}
+	if retentionDays != nil {
+		cfg.RetentionDays = *retentionDays
+	} else {
+		cfg.RetentionDays = 30
+	}
+	if format != nil {
+		cfg.Format = *format
+	} else {
+		cfg.Format = "ts"
+	}
+	if segmentDuration != nil {
+		cfg.SegmentDuration = *segmentDuration
+	} else {
+		cfg.SegmentDuration = 6
+	}
+	updated, err := r.Resolver.DoSetRecordingConfig(ctx, internalName, cfg)
+	if err != nil {
+		return nil, err
+	}
+	return &model.RecordingConfig{
+		Enabled:         updated.Enabled,
+		RetentionDays:   updated.RetentionDays,
+		Format:          updated.Format,
+		SegmentDuration: updated.SegmentDuration,
+	}, nil
 }
 
 // CreatePayment is the resolver for the createPayment field.
@@ -670,6 +728,33 @@ func (r *queryResolver) ConnectionEvents(ctx context.Context, stream *string, ti
 	return res[start:end], nil
 }
 
+// ClipEvents is the resolver for the clipEvents field.
+func (r *queryResolver) ClipEvents(ctx context.Context, internalName *string, stage *string, timeRange *model.TimeRangeInput, pagination *model.PaginationInput) ([]*periscope.ClipEvent, error) {
+	var startTime, endTime *time.Time
+	if timeRange != nil {
+		startTime = &timeRange.Start
+		endTime = &timeRange.End
+	}
+	var offset, limit *int
+	if pagination != nil {
+		if pagination.Offset != nil {
+			offset = pagination.Offset
+		}
+		if pagination.Limit != nil {
+			limit = pagination.Limit
+		}
+	}
+	resp, err := r.Clients.Periscope.GetClipEvents(ctx, internalName, stage, startTime, endTime, offset, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get clip events: %w", err)
+	}
+	items := make([]*periscope.ClipEvent, 0, len(resp.Events))
+	for i := range resp.Events {
+		items = append(items, &resp.Events[i])
+	}
+	return items, nil
+}
+
 // NodeMetrics is the resolver for the nodeMetrics field.
 func (r *queryResolver) NodeMetrics(ctx context.Context, nodeID *string, timeRange *model.TimeRangeInput) ([]*periscope.NodeMetric, error) {
 	var startTime, endTime *time.Time
@@ -787,6 +872,21 @@ func (r *queryResolver) Recordings(ctx context.Context, streamID *string) ([]*co
 	return r.DoGetRecordings(ctx, streamID)
 }
 
+// Clips is the resolver for the clips field.
+func (r *queryResolver) Clips(ctx context.Context, streamID *string) ([]*commodore.ClipResponse, error) {
+	return r.DoGetClips(ctx, streamID)
+}
+
+// Clip is the resolver for the clip field.
+func (r *queryResolver) Clip(ctx context.Context, id string) (*commodore.ClipResponse, error) {
+	return r.DoGetClip(ctx, id)
+}
+
+// ClipViewingUrls is the resolver for the clipViewingUrls field.
+func (r *queryResolver) ClipViewingUrls(ctx context.Context, clipID string) (*model.ClipViewingUrls, error) {
+	return r.DoGetClipViewingUrls(ctx, clipID)
+}
+
 // TenantClusterAssignments is the resolver for the tenantClusterAssignments field.
 func (r *queryResolver) TenantClusterAssignments(ctx context.Context) ([]*model.TenantClusterAssignment, error) {
 	var assignments []*model.TenantClusterAssignment
@@ -893,6 +993,140 @@ func (r *queryResolver) Node(ctx context.Context, id string) (*models.Infrastruc
 // DeveloperTokens is the resolver for the developerTokens field.
 func (r *queryResolver) DeveloperTokens(ctx context.Context) ([]*models.APIToken, error) {
 	return r.DoGetDeveloperTokens(ctx)
+}
+
+// RecordingConfig is the resolver for the recordingConfig field.
+func (r *queryResolver) RecordingConfig(ctx context.Context, internalName string) (*model.RecordingConfig, error) {
+	cfg, err := r.Resolver.DoGetRecordingConfig(ctx, internalName)
+	if err != nil {
+		return nil, err
+	}
+	return &model.RecordingConfig{
+		Enabled:         cfg.Enabled,
+		RetentionDays:   cfg.RetentionDays,
+		Format:          cfg.Format,
+		SegmentDuration: cfg.SegmentDuration,
+	}, nil
+}
+
+// DvrRequests is the resolver for the dvrRequests field.
+func (r *queryResolver) DvrRequests(ctx context.Context, internalName *string, status *string, pagination *model.PaginationInput) (*model.DVRRequestList, error) {
+	var page, limit *int
+	if pagination != nil {
+		page = pagination.Offset
+		limit = pagination.Limit
+	}
+	list, err := r.Resolver.DoListDVRRequests(ctx, internalName, status, page, limit)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]*model.DVRRequest, 0, len(list.DVRRecordings))
+	for i := range list.DVRRecordings {
+		rec := &list.DVRRecordings[i]
+		item := &model.DVRRequest{
+			DvrHash:      rec.DVRHash,
+			InternalName: rec.InternalName,
+			Status:       rec.Status,
+			CreatedAt:    rec.CreatedAt,
+			UpdatedAt:    rec.UpdatedAt,
+		}
+		if rec.StorageNodeID != "" {
+			item.StorageNodeID = &rec.StorageNodeID
+		}
+		if rec.StartedAt != nil {
+			item.StartedAt = rec.StartedAt
+		}
+		if rec.EndedAt != nil {
+			item.EndedAt = rec.EndedAt
+		}
+		if rec.DurationSeconds != nil {
+			v := int(*rec.DurationSeconds)
+			item.DurationSeconds = &v
+		}
+		if rec.SizeBytes != nil {
+			v := int(*rec.SizeBytes)
+			item.SizeBytes = &v
+		}
+		if rec.ManifestPath != "" {
+			v := rec.ManifestPath
+			item.ManifestPath = &v
+		}
+		if rec.ErrorMessage != "" {
+			v := rec.ErrorMessage
+			item.ErrorMessage = &v
+		}
+		items = append(items, item)
+	}
+	return &model.DVRRequestList{DvrRecordings: items, Total: list.Total, Page: list.Page, Limit: list.Limit}, nil
+}
+
+// ResolveViewerEndpoint is the resolver for the resolveViewerEndpoint field.
+func (r *queryResolver) ResolveViewerEndpoint(ctx context.Context, contentType string, contentID string) (*model.ViewerEndpointResponse, error) {
+	// Extract viewer IP from request context
+	var viewerIP *string
+
+	// Extract IP from GraphQL request context
+	if ginCtx := ctx.Value("GinContext"); ginCtx != nil {
+		if c, ok := ginCtx.(*gin.Context); ok {
+			clientIP := c.ClientIP() // Gin's built-in method handles X-Forwarded-For, etc.
+			viewerIP = &clientIP
+		}
+	}
+
+	// Fallback: try to get from raw HTTP request
+	if viewerIP == nil {
+		if req := ctx.Value("http_request"); req != nil {
+			if httpReq, ok := req.(*http.Request); ok {
+				clientIP := httpReq.Header.Get("X-Forwarded-For")
+				if clientIP == "" {
+					clientIP = httpReq.Header.Get("X-Real-IP")
+				}
+				if clientIP == "" {
+					clientIP = httpReq.RemoteAddr
+				}
+				// Extract IP from potential "ip:port" format
+				if idx := strings.LastIndex(clientIP, ":"); idx != -1 {
+					clientIP = clientIP[:idx]
+				}
+				// Use first IP if comma-separated list
+				if strings.Contains(clientIP, ",") {
+					clientIP = strings.TrimSpace(strings.Split(clientIP, ",")[0])
+				}
+				viewerIP = &clientIP
+			}
+		}
+	}
+
+	// If we still don't have an IP, this is an error
+	if viewerIP == nil {
+		return nil, fmt.Errorf("unable to determine viewer IP address for GeoIP routing")
+	}
+
+	// Call Commodore's viewer endpoint resolution (which then calls Foghorn)
+	endpoints, err := r.Resolver.DoResolveViewerEndpoint(ctx, contentType, contentID, viewerIP)
+	if err != nil {
+		return nil, err
+	}
+
+	// Convert to GraphQL model
+	var gqlEndpoints []*model.ViewerEndpoint
+	for _, ep := range endpoints {
+		gqlEndpoints = append(gqlEndpoints, &model.ViewerEndpoint{
+			NodeID:      ep.NodeID,
+			BaseURL:     ep.BaseURL,
+			Protocol:    ep.Protocol,
+			URL:         ep.URL,
+			GeoDistance: &ep.GeoDistance,
+			LoadScore:   &ep.LoadScore,
+			HealthScore: &ep.HealthScore,
+		})
+	}
+
+	// TODO: Add metadata handling once Commodore returns it
+	return &model.ViewerEndpointResponse{
+		Endpoints: gqlEndpoints,
+		Metadata:  nil,
+	}, nil
 }
 
 // Title is the resolver for the title field.
@@ -1245,6 +1479,38 @@ func (r *subscriptionResolver) TrackListUpdates(ctx context.Context, stream stri
 	return r.Resolver.DoTrackListUpdates(ctx, stream)
 }
 
+// ClipLifecycle is the resolver for the clipLifecycle field.
+func (r *subscriptionResolver) ClipLifecycle(ctx context.Context, stream string) (<-chan *periscope.ClipEvent, error) {
+	user, err := middleware.RequireAuth(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("authentication required for subscriptions: %w", err)
+	}
+	jwtToken := ""
+	if token := ctx.Value("jwt_token"); token != nil {
+		if s, ok := token.(string); ok {
+			jwtToken = s
+		}
+	}
+	cfg := resolvers.ConnectionConfig{UserID: user.UserID, TenantID: user.TenantID, JWT: jwtToken}
+	return r.Resolver.WSManager.SubscribeToLifecycle(ctx, cfg, stream)
+}
+
+// DvrLifecycle is the resolver for the dvrLifecycle field.
+func (r *subscriptionResolver) DvrLifecycle(ctx context.Context, stream string) (<-chan *periscope.ClipEvent, error) {
+	user, err := middleware.RequireAuth(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("authentication required for subscriptions: %w", err)
+	}
+	jwtToken := ""
+	if token := ctx.Value("jwt_token"); token != nil {
+		if s, ok := token.(string); ok {
+			jwtToken = s
+		}
+	}
+	cfg := resolvers.ConnectionConfig{UserID: user.UserID, TenantID: user.TenantID, JWT: jwtToken}
+	return r.Resolver.WSManager.SubscribeToLifecycle(ctx, cfg, stream)
+}
+
 // SystemHealth is the resolver for the systemHealth field.
 func (r *subscriptionResolver) SystemHealth(ctx context.Context) (<-chan *model.SystemHealthEvent, error) {
 	return r.Resolver.DoSystemUpdates(ctx)
@@ -1360,6 +1626,9 @@ func (r *Resolver) BillingTier() generated.BillingTierResolver { return &billing
 // Clip returns generated.ClipResolver implementation.
 func (r *Resolver) Clip() generated.ClipResolver { return &clipResolver{r} }
 
+// ClipEvent returns generated.ClipEventResolver implementation.
+func (r *Resolver) ClipEvent() generated.ClipEventResolver { return &clipEventResolver{r} }
+
 // Cluster returns generated.ClusterResolver implementation.
 func (r *Resolver) Cluster() generated.ClusterResolver { return &clusterResolver{r} }
 
@@ -1440,6 +1709,7 @@ func (r *Resolver) ViewerMetrics5m() generated.ViewerMetrics5mResolver {
 type billingStatusResolver struct{ *Resolver }
 type billingTierResolver struct{ *Resolver }
 type clipResolver struct{ *Resolver }
+type clipEventResolver struct{ *Resolver }
 type clusterResolver struct{ *Resolver }
 type developerTokenResolver struct{ *Resolver }
 type invoiceResolver struct{ *Resolver }

@@ -491,3 +491,36 @@ func (c *Client) GetRealtimeEvents(ctx context.Context) (*periscope.RealtimeEven
 
 	return &response, nil
 }
+
+// GetClipEvents returns clip lifecycle events with optional filters
+func (c *Client) GetClipEvents(ctx context.Context, internalName *string, stage *string, startTime, endTime *time.Time, offset, limit *int) (*periscope.ClipEventsResponse, error) {
+	params := url.Values{}
+	if internalName != nil && *internalName != "" {
+		params.Set("internal_name", *internalName)
+	}
+	if stage != nil && *stage != "" {
+		params.Set("stage", *stage)
+	}
+	if startTime != nil {
+		params.Set("start_time", startTime.Format(time.RFC3339))
+	}
+	if endTime != nil {
+		params.Set("end_time", endTime.Format(time.RFC3339))
+	}
+	if offset != nil {
+		params.Set("offset", fmt.Sprintf("%d", *offset))
+	}
+	if limit != nil {
+		params.Set("limit", fmt.Sprintf("%d", *limit))
+	}
+
+	body, err := c.makeRequest(ctx, "GET", "/analytics/clip-events", params)
+	if err != nil {
+		return nil, err
+	}
+	var resp periscope.ClipEventsResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+	return &resp, nil
+}

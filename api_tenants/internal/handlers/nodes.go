@@ -28,7 +28,7 @@ func GetNodes(c *gin.Context) {
 		       availability_zone, latitude, longitude, cpu_cores, memory_gb,
 		       disk_gb, status, health_score, last_heartbeat, tags, metadata,
 		       created_at, updated_at
-		FROM infrastructure_nodes
+		FROM quartermaster.infrastructure_nodes
 		WHERE 1=1
 	`
 	args := []interface{}{}
@@ -125,7 +125,7 @@ func GetNode(c *gin.Context) {
 		       availability_zone, latitude, longitude, cpu_cores, memory_gb,
 		       disk_gb, status, health_score, last_heartbeat, tags, metadata,
 		       created_at, updated_at
-		FROM infrastructure_nodes
+		FROM quartermaster.infrastructure_nodes
 		WHERE node_id = $1
 	`, nodeID).Scan(
 		&node.ID, &node.NodeID, &node.ClusterID, &node.NodeName, &node.NodeType,
@@ -197,7 +197,7 @@ func CreateNode(c *gin.Context) {
 
 	// Verify cluster exists
 	var clusterExists bool
-	err := db.QueryRow("SELECT EXISTS(SELECT 1 FROM infrastructure_clusters WHERE cluster_id = $1)", req.ClusterID).Scan(&clusterExists)
+	err := db.QueryRow("SELECT EXISTS(SELECT 1 FROM quartermaster.infrastructure_clusters WHERE cluster_id = $1)", req.ClusterID).Scan(&clusterExists)
 	if err != nil {
 		logger.WithError(err).Error("Failed to check cluster existence")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to validate cluster"})
@@ -215,7 +215,7 @@ func CreateNode(c *gin.Context) {
 
 	var node models.InfrastructureNode
 	err = db.QueryRow(`
-		INSERT INTO infrastructure_nodes 
+		INSERT INTO quartermaster.infrastructure_nodes 
 		(node_id, cluster_id, node_name, node_type, internal_ip, external_ip,
 		 wireguard_ip, wireguard_public_key, region, availability_zone,
 		 latitude, longitude, cpu_cores, memory_gb, disk_gb, tags, metadata,
@@ -284,7 +284,7 @@ func UpdateNodeHealth(c *gin.Context) {
 	}
 
 	// Build dynamic update query
-	query := "UPDATE infrastructure_nodes SET last_heartbeat = NOW(), updated_at = NOW()"
+	query := "UPDATE quartermaster.infrastructure_nodes SET last_heartbeat = NOW(), updated_at = NOW()"
 	args := []interface{}{}
 	argCount := 0
 

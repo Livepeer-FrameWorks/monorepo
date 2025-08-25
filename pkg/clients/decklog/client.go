@@ -218,3 +218,53 @@ func NewLoadBalancingEvent(tenantID, streamID, selectedNode, selectedNodeID, cli
 		Timestamp: timestamppb.Now(),
 	}
 }
+
+// NewClipLifecycleEvent creates a new clip lifecycle event
+func NewClipLifecycleEvent(tenantID string, internalName string, requestID string, stage pb.ClipLifecycleData_Stage, opts func(*pb.ClipLifecycleData)) *pb.Event {
+	data := &pb.ClipLifecycleData{Stage: stage, RequestId: requestID}
+	if opts != nil {
+		opts(data)
+	}
+	return &pb.Event{
+		Source:   "clip_orchestrator",
+		TenantId: tenantID,
+		Events: []*pb.EventData{
+			{
+				EventId:       fmt.Sprintf("clip_%d", time.Now().UnixNano()),
+				EventType:     pb.EventType_EVENT_TYPE_CLIP_LIFECYCLE,
+				Timestamp:     timestamppb.Now(),
+				Source:        "clip_orchestrator",
+				InternalName:  &internalName,
+				Region:        os.Getenv("REGION"),
+				SchemaVersion: "1.0",
+				EventData:     &pb.EventData_ClipLifecycleData{ClipLifecycleData: data},
+			},
+		},
+		Timestamp: timestamppb.Now(),
+	}
+}
+
+// NewDVRLifecycleEvent creates a new DVR lifecycle event
+func NewDVRLifecycleEvent(tenantID string, internalName string, requestID string, stage pb.DVRLifecycleData_Stage, opts func(*pb.DVRLifecycleData)) *pb.Event {
+	data := &pb.DVRLifecycleData{Stage: stage, RequestId: requestID}
+	if opts != nil {
+		opts(data)
+	}
+	return &pb.Event{
+		Source:   "dvr_orchestrator",
+		TenantId: tenantID,
+		Events: []*pb.EventData{
+			{
+				EventId:       fmt.Sprintf("dvr_%d", time.Now().UnixNano()),
+				EventType:     pb.EventType_EVENT_TYPE_DVR_LIFECYCLE,
+				Timestamp:     timestamppb.Now(),
+				Source:        "dvr_orchestrator",
+				InternalName:  &internalName,
+				Region:        os.Getenv("REGION"),
+				SchemaVersion: "1.0",
+				EventData:     &pb.EventData_DvrLifecycleData{DvrLifecycleData: data},
+			},
+		},
+		Timestamp: timestamppb.Now(),
+	}
+}

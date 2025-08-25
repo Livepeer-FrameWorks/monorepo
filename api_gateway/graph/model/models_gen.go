@@ -19,6 +19,28 @@ type CityMetric struct {
 	Longitude   *float64 `json:"longitude,omitempty"`
 }
 
+type ClipViewingUrls struct {
+	Hls  *string `json:"hls,omitempty"`
+	Dash *string `json:"dash,omitempty"`
+	Mp4  *string `json:"mp4,omitempty"`
+	Webm *string `json:"webm,omitempty"`
+}
+
+type ContentMetadata struct {
+	ContentType   string  `json:"contentType"`
+	ContentID     string  `json:"contentId"`
+	TenantID      string  `json:"tenantId"`
+	Title         *string `json:"title,omitempty"`
+	Description   *string `json:"description,omitempty"`
+	Duration      *int    `json:"duration,omitempty"`
+	Status        string  `json:"status"`
+	IsLive        bool    `json:"isLive"`
+	ViewCount     *int    `json:"viewCount,omitempty"`
+	RecordingSize *int    `json:"recordingSize,omitempty"`
+	ClipSource    *string `json:"clipSource,omitempty"`
+	CreatedAt     *string `json:"createdAt,omitempty"`
+}
+
 type CountryMetric struct {
 	CountryCode string        `json:"countryCode"`
 	ViewerCount int           `json:"viewerCount"`
@@ -60,6 +82,28 @@ type CreateStreamInput struct {
 
 type CreateStreamKeyInput struct {
 	Name string `json:"name"`
+}
+
+type DVRRequest struct {
+	DvrHash         string     `json:"dvrHash"`
+	InternalName    string     `json:"internalName"`
+	StorageNodeID   *string    `json:"storageNodeId,omitempty"`
+	Status          string     `json:"status"`
+	StartedAt       *time.Time `json:"startedAt,omitempty"`
+	EndedAt         *time.Time `json:"endedAt,omitempty"`
+	DurationSeconds *int       `json:"durationSeconds,omitempty"`
+	SizeBytes       *int       `json:"sizeBytes,omitempty"`
+	ManifestPath    *string    `json:"manifestPath,omitempty"`
+	ErrorMessage    *string    `json:"errorMessage,omitempty"`
+	CreatedAt       time.Time  `json:"createdAt"`
+	UpdatedAt       time.Time  `json:"updatedAt"`
+}
+
+type DVRRequestList struct {
+	DvrRecordings []*DVRRequest `json:"dvrRecordings"`
+	Total         int           `json:"total"`
+	Page          int           `json:"page"`
+	Limit         int           `json:"limit"`
 }
 
 type GeographicDistribution struct {
@@ -135,6 +179,13 @@ type RebufferingEvent struct {
 	HealthScore          *float64    `json:"healthScore,omitempty"`
 	FrameJitterMs        *float64    `json:"frameJitterMs,omitempty"`
 	PacketLossPercentage *float64    `json:"packetLossPercentage,omitempty"`
+}
+
+type RecordingConfig struct {
+	Enabled         bool   `json:"enabled"`
+	RetentionDays   int    `json:"retentionDays"`
+	Format          string `json:"format"`
+	SegmentDuration int    `json:"segmentDuration"`
 }
 
 type StreamHealthAlert struct {
@@ -221,6 +272,22 @@ type UpdateStreamInput struct {
 type UpdateTenantInput struct {
 	Name     *string `json:"name,omitempty"`
 	Settings *string `json:"settings,omitempty"`
+}
+
+type ViewerEndpoint struct {
+	NodeID      string   `json:"nodeId"`
+	BaseURL     string   `json:"baseUrl"`
+	Protocol    string   `json:"protocol"`
+	URL         string   `json:"url"`
+	GeoDistance *float64 `json:"geoDistance,omitempty"`
+	LoadScore   *float64 `json:"loadScore,omitempty"`
+	HealthScore *float64 `json:"healthScore,omitempty"`
+	Outputs     *string  `json:"outputs,omitempty"`
+}
+
+type ViewerEndpointResponse struct {
+	Endpoints []*ViewerEndpoint `json:"endpoints"`
+	Metadata  *ContentMetadata  `json:"metadata,omitempty"`
 }
 
 type ViewerMetrics struct {

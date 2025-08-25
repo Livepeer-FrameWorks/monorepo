@@ -32,7 +32,7 @@ func ValidateAPIToken(db *sql.DB, tokenValue string) (*APIToken, error) {
 	err := db.QueryRow(`
 		SELECT id, tenant_id, user_id, token_value, token_name, 
 		       permissions, is_active, expires_at, created_at
-		FROM api_tokens 
+		FROM commodore.api_tokens 
 		WHERE token_value = $1 AND is_active = true
 	`, tokenValue).Scan(
 		&token.ID, &token.TenantID, &token.UserID, &token.TokenValue,

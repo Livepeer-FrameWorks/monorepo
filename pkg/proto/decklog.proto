@@ -32,6 +32,8 @@ enum EventType {
   EVENT_TYPE_STREAM_BUFFER = 11;
   EVENT_TYPE_STREAM_END = 12;
   EVENT_TYPE_BANDWIDTH_THRESHOLD = 13;
+  EVENT_TYPE_CLIP_LIFECYCLE = 14;
+  EVENT_TYPE_DVR_LIFECYCLE = 15;
 }
 
 message Event {
@@ -70,6 +72,8 @@ message EventData {
     TrackListData track_list_data = 22;
     RecordingLifecycleData recording_lifecycle_data = 23;
     PushLifecycleData push_lifecycle_data = 24;
+    ClipLifecycleData clip_lifecycle_data = 25;
+    DVRLifecycleData dvr_lifecycle_data = 26;
   }
 }
 
@@ -272,6 +276,36 @@ message RecordingLifecycleData {
   optional string node_id = 8;
 }
 
+// Clip lifecycle specific data
+message ClipLifecycleData {
+  enum Stage {
+    STAGE_UNSPECIFIED = 0;
+    STAGE_REQUESTED = 1;
+    STAGE_QUEUED = 2;
+    STAGE_PROGRESS = 3;
+    STAGE_DONE = 4;
+    STAGE_FAILED = 5;
+  }
+  Stage stage = 1;
+  string request_id = 2;
+  optional string title = 3;
+  optional string format = 4;
+  optional int64 start_unix = 5;
+  optional int64 stop_unix = 6;
+  optional int64 start_ms = 7;
+  optional int64 stop_ms = 8;
+  optional int64 duration_sec = 9;
+  optional string ingest_node_id = 10;
+  optional string storage_node_id = 11;
+  optional double routing_distance_km = 12;
+  optional uint32 percent = 13;
+  optional string message = 14;
+  optional string file_path = 15;
+  optional string s3_url = 16;
+  optional uint64 size_bytes = 17;
+  optional string error = 18;
+}
+
 // Track list events data
 message TrackListData {
   string track_list = 1;
@@ -289,6 +323,27 @@ message TrackListData {
   uint32 primary_audio_sample_rate = 13;
   string quality_tier = 14;
   optional string node_id = 15;
+}
+
+// DVR lifecycle specific data
+message DVRLifecycleData {
+  enum Stage {
+    STAGE_UNSPECIFIED = 0;
+    STAGE_REQUESTED = 1;
+    STAGE_RECORDING = 2;
+    STAGE_PROGRESS = 3;
+    STAGE_STOPPING = 4;
+    STAGE_COMPLETED = 5;
+    STAGE_FAILED = 6;
+  }
+  Stage stage = 1;
+  string request_id = 2;
+  optional string ingest_node_id = 3;
+  optional string storage_node_id = 4;
+  optional int64 duration_sec = 5;
+  optional uint64 size_bytes = 6;
+  optional string manifest_path = 7;
+  optional string error = 8;
 }
 
 

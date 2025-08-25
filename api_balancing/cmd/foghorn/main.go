@@ -2,6 +2,7 @@ package main
 
 import (
 	"frameworks/api_balancing/internal/balancer"
+	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/handlers"
 	"frameworks/pkg/config"
 	"frameworks/pkg/database"
@@ -64,6 +65,13 @@ func main() {
 	// Initialize handlers
 	handlers.Init(db, logger, lb, metrics)
 
+	// Start Helmsman control gRPC server
+	control.Init(logger)
+	controlAddr := config.GetEnv("FOGHORN_CONTROL_ADDR", ":18019")
+	if _, err := control.StartGRPCServer(controlAddr, logger); err != nil {
+		logger.WithError(err).Fatal("Failed to start control gRPC server")
+	}
+
 	// Setup router with unified monitoring
 	router := server.SetupServiceRouter(logger, "foghorn", healthChecker, metricsCollector)
 
@@ -76,8 +84,21 @@ func main() {
 	// Node shutdown notification endpoint for Helmsman
 	router.POST("/node/shutdown", handlers.HandleNodeShutdown)
 
-	// MistServer Compatibility - This is the ONLY API we need
-	// All requests go through the compatibility handler
+	// Clip orchestration endpoints
+	router.POST("/clips/create", handlers.HandleCreateClip)
+	router.GET("/clips", handlers.HandleGetClips)
+	router.GET("/clips/:clip_hash", handlers.HandleGetClip)
+	router.GET("/clips/:clip_hash/node", handlers.HandleGetClipNode)
+	router.DELETE("/clips/:clip_hash", handlers.HandleDeleteClip)
+	router.GET("/clips/resolve/:clip_hash", handlers.HandleResolveClip)
+
+	// Nodes overview for capabilities/limits/artifacts
+	router.GET("/nodes/overview", handlers.HandleNodesOverview)
+
+	// Viewer endpoint resolution
+	router.POST("/viewer/resolve", handlers.HandleResolveViewerEndpoint)
+
+	// MistServer Compatibility - all requests including capability filtering via query params
 	router.NoRoute(handlers.MistServerCompatibilityHandler)
 
 	// Start server with graceful shutdown

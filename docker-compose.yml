@@ -71,7 +71,12 @@ services:
       POSTGRES_DB: frameworks
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ./database/init_quartermaster.sql:/docker-entrypoint-initdb.d/10_init_quartermaster.sql:ro
+      - ./database/init_purser.sql:/docker-entrypoint-initdb.d/20_init_purser.sql:ro
+      - ./database/init_foghorn.sql:/docker-entrypoint-initdb.d/30_init_foghorn.sql:ro
+      - ./database/init_commodore.sql:/docker-entrypoint-initdb.d/40_init_commodore.sql:ro
+      - ./database/init_periscope.sql:/docker-entrypoint-initdb.d/50_init_periscope.sql:ro
+      - ./database/init_demo.sql:/docker-entrypoint-initdb.d/99_init_demo.sql:ro
       # - ./database/migrations:/docker-entrypoint-initdb.d/migrations:ro
     ports:
       - "5432:5432"
@@ -149,6 +154,7 @@ services:
     environment:
       - DATABASE_URL=postgres://frameworks_user:frameworks_dev@postgres:5432/frameworks?sslmode=disable
       - PORT=18008
+      - FOGHORN_CONTROL_ADDR=:18019
       - LOG_LEVEL=info
       - GIN_MODE=release
       - DECKLOG_URL=http://decklog:18006
@@ -161,6 +167,7 @@ services:
       - SERVICE_TOKEN=your-service-token-change-in-production
     ports:
       - "18008:18008"
+      - "18019:18019"
     depends_on:
       postgres:
         condition: service_healthy
@@ -475,6 +482,7 @@ services:
       - COMMODORE_URL=http://commodore:18001
       - DECKLOG_URL=http://decklog:18006
       - FOGHORN_URL=http://foghorn:18008
+      - FOGHORN_CONTROL_ADDR=foghorn:18019
       - MISTSERVER_URL=http://mistserver:4242
       - MIST_PASSWORD=${MIST_PASSWORD:-koekjes}
       - MIST_API_USERNAME=${MIST_API_USERNAME:-test}
@@ -803,7 +811,7 @@ services:
       - clickhouse_data:/var/lib/clickhouse
       - ./infrastructure/clickhouse/users.xml:/etc/clickhouse-server/users.xml:ro
       - ./infrastructure/clickhouse/config.xml:/etc/clickhouse-server/config.d/frameworks.xml:ro
-      - ./database/clickhouse-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ./database/init_clickhouse_periscope.sql:/docker-entrypoint-initdb.d/init.sql:ro
     environment:
       # Start with default user for initialization
       CLICKHOUSE_USER: default
