@@ -265,7 +265,7 @@ func (cm *CleanupMonitor) getCleanupCandidates(clipsDir string) ([]ClipCleanupIn
 		// Get additional info from artifact index if available
 		if clipInfo, exists := artifactIndex[clipHash]; exists {
 			// Use creation time from file system as it's more reliable
-			candidate.CreatedAt = time.Unix(clipInfo.CreatedAt, 0)
+			candidate.CreatedAt = clipInfo.CreatedAt
 		}
 
 		// Calculate cleanup priority (lower = higher priority for deletion)

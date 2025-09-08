@@ -11,6 +11,7 @@
   import ComingSoonModal from "$lib/components/ComingSoonModal.svelte";
   import Toast from "$lib/components/Toast.svelte";
   import ErrorBoundary from "$lib/components/ErrorBoundary.svelte";
+  import BetaBadge from "$lib/components/BetaBadge.svelte";
 
   let isAuthenticated = false;
   /** @type {any} */
@@ -96,13 +97,12 @@
   <!-- Loading Screen -->
   <div class="min-h-screen bg-tokyo-night-bg flex items-center justify-center">
     <div class="text-center">
-      <div class="inline-flex items-center space-x-3">
+      <div class="inline-flex items-center">
         <img
-          src="/icon.png"
+          src="/frameworks-dark-horizontal-lockup-transparent.svg"
           alt="FrameWorks"
-          class="h-12 w-12 rounded-xl animate-pulse logo-gradient"
+          class="h-16 animate-pulse"
         />
-        <span class="text-2xl font-bold gradient-text">FrameWorks</span>
       </div>
       <div class="mt-4 text-tokyo-night-comment">Loading...</div>
     </div>
@@ -136,15 +136,17 @@
               <!-- FrameWorks Branding -->
               <a
                 href="{base}/"
-                class="flex items-center space-x-3 hover:opacity-80 transition-opacity"
+                class="flex items-center hover:opacity-80 transition-opacity"
               >
                 <img
-                  src="/icon.png"
+                  src="/frameworks-dark-horizontal-lockup-transparent.svg"
                   alt="FrameWorks"
-                  class="h-8 w-8 rounded-lg logo-gradient"
+                  class="h-10"
                 />
-                <span class="text-lg font-bold gradient-text">FrameWorks</span>
               </a>
+              
+              <!-- Beta Badge -->
+              <BetaBadge />
 
               <!-- Page Title -->
               <div class="text-tokyo-night-comment">•</div>
@@ -192,31 +194,18 @@
           <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div class="flex justify-between items-center h-16 lg:h-20">
               <!-- Logo Section -->
-              <div class="flex items-center space-x-3">
+              <div class="flex items-center gap-3">
                 <a
                   href={getMarketingSiteUrl()}
-                  class="flex items-center space-x-2 lg:space-x-3 group"
+                  class="flex items-center hover:opacity-80 transition-opacity"
                 >
-                  <div class="relative">
-                    <img
-                      src="/icon.png"
-                      alt="FrameWorks"
-                      class="h-8 w-8 lg:h-12 lg:w-12 rounded-lg lg:rounded-xl transition-transform duration-300 group-hover:scale-105 logo-gradient"
-                    />
-                    <div
-                      class="absolute inset-0 rounded-lg lg:rounded-xl bg-gradient-to-r from-tokyo-night-blue/20 to-tokyo-night-cyan/20 opacity-0 group-hover:opacity-100 transition-opacity duration-300"
-                    />
-                  </div>
-                  <div class="flex flex-col">
-                    <span class="text-lg lg:text-2xl font-bold gradient-text"
-                      >FrameWorks</span
-                    >
-                    <span
-                      class="hidden sm:block text-xs text-tokyo-night-comment -mt-1"
-                      >Complete Video Infrastructure</span
-                    >
-                  </div>
+                  <img
+                    src="/frameworks-dark-horizontal-lockup-transparent.svg"
+                    alt="FrameWorks"
+                    class="h-10"
+                  />
                 </a>
+                <BetaBadge />
               </div>
 
               <!-- Desktop Navigation -->

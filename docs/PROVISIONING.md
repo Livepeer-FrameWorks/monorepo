@@ -1,12 +1,38 @@
-# 🚀 FrameWorks Production Deployment Guide
+# FrameWorks Production Deployment Guide
 
-> **⚠️ HERE BE DRAGONS** 🐉  
-> This is a complex multi-tier deployment with private networking, distributed databases, and real-time streaming infrastructure.
-> This guide can be helpful for those experimenting with the stack or meaning to get a greater insight in the components.
-> For production setup, we recommend handling provisioning, DNS, certs and private mesh using Terraform and Ansible. See our [Infrastructure Guide](./INFRASTRUCTURE.md) for more info.
-> In the future, Helm charts are planned for deployment of everything but the media Edge nodes.
+> **Important: Platform Architecture Guide**  
+> This guide provides **detailed bare-metal deployment** instructions showing the platform architecture at its lowest level.  
+> Understanding these fundamentals is crucial for production deployments, troubleshooting, and performance optimization.
 
-## 📋 Overview
+## Choose Your Deployment Method
+
+| Method | Use Case | Complexity | Documentation |
+|--------|----------|------------|---------------|
+| **[FrameWorks CLI](../cli/)** | **Edge node automation** | Low | Docs: [CLI](../cli/README.md) |
+| **[Docker Compose](./provisioning/docker-compose/production-overrides.md)** | **Containerized deployment** | Medium | Docs: [Guides](./provisioning/) |
+| **Bare Metal** (This guide) | Platform fundamentals, OS tuning, custom configs | High | See below |
+| **Terraform + Ansible** | Infrastructure as Code | Medium | Planned |
+| **Kubernetes** | Cloud-native scaling | High | Planned |
+
+## Documentation Structure
+
+For easier deployment, check out our new guides:
+
+- **[Provisioning Overview](./provisioning/)** - Choose your deployment path
+- **[Docker Compose Guides](./provisioning/docker-compose/)** - Production-ready containerized deployment
+  - [External Services Setup](./provisioning/docker-compose/external-services.md) - CloudFlare, SMTP, Stripe
+  - [Production Overrides](./provisioning/docker-compose/production-overrides.md) - Resource limits, security
+  - [Backup & Restore](./operations/backup-restore.md) - Data protection procedures
+  - [Troubleshooting](./operations/troubleshooting.md) - Common issues and solutions
+
+---
+
+> **Caution: Bare‑metal complexity**  
+> The bare-metal deployment below is a complex multi-tier setup with private networking, distributed databases, and real-time streaming infrastructure.
+> This guide is helpful for those experimenting with the stack or needing greater insight into the components.
+> **Consider Docker Compose first** unless you specifically need bare-metal deployment.
+
+## Overview
 
 This guide demonstrates a **production-ready FrameWorks deployment** based on our current MVP setup. It covers:
 
@@ -18,7 +44,7 @@ This guide demonstrates a **production-ready FrameWorks deployment** based on ou
 - **System tuning** for high-performance streaming
 - **DNS & domain management**
 
-## 🏗️ Architecture Overview
+## Architecture Overview
 
 ```
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
@@ -51,7 +77,7 @@ This guide demonstrates a **production-ready FrameWorks deployment** based on ou
                         └─────────────────┘
 ```
 
-## 🌐 Domain & DNS Strategy
+## Domain & DNS Strategy
 
 ### Domain Structure
 ```
@@ -82,7 +108,7 @@ frameworks.network (primary)
 - **Load Balancing**: Cloudflare pools with health checks
 - **SSL**: Cloudflare + Let's Encrypt (Certbot)
 
-## 🛡️ Step 1: WireGuard Mesh Network
+## Step 1: WireGuard Mesh Network
 
 ### Network Topology
 ```
@@ -176,7 +202,7 @@ systemctl enable wg-quick@wg0
 10.10.0.3    kafka-us.cluster.local
 ```
 
-## 🗄️ Step 2: Database Cluster
+## Step 2: Database Cluster
 
 ### YugabyteDB (State & Configuration)
 
@@ -424,7 +450,7 @@ systemctl restart clickhouse-server
 #### Schema Initialization
 ```bash
 # Initialize schema
-clickhouse-client --user frameworks --password frameworks_dev --query="$(cat database/clickhouse-init.sql)"
+clickhouse-client --user frameworks --password frameworks_dev --query="$(cat database/init_clickhouse_periscope.sql)"
 ```
 
 #### Checks
@@ -434,7 +460,7 @@ clickhouse-client --user frameworks --password frameworks_dev --query="SELECT * 
 ```
 
 
-## 📦 Step 3: Kafka Cluster
+## Step 3: Kafka Cluster
 
 ### System Preparation
 ```bash
@@ -537,7 +563,7 @@ systemctl enable zookeeper kafka
 systemctl start zookeeper kafka
 ```
 
-## ⚙️ Step 4: System Tuning
+## Step 4: System Tuning
 
 ### Network Performance Tuning
 ```bash
@@ -571,10 +597,39 @@ cat >> /etc/security/limits.conf << EOF
 EOF
 ```
 
-## 🌐 Step 5: Custom Nginx Build with GeoIP2
+## Step 5: Nginx with Geographic Routing
 
-### Why Custom Build?
-FrameWorks requires advanced GeoIP functionality for intelligent load balancing via Foghorn. This requires a custom Nginx build with the `ngx_http_geoip2_module` and MaxMind database integration.
+### Geographic IP Detection Options
+
+FrameWorks supports multiple approaches for geographic IP detection used by Foghorn for intelligent load balancing:
+
+1. **CloudFlare Headers** (Recommended for production)
+   - Uses `CF-IPCountry`, `CF-Connecting-IP`, `CF-IPLatitude`, `CF-IPLongitude` headers
+   - No additional setup required when using CloudFlare proxy
+   - Most accurate and requires no maintenance
+
+2. **Standard GeoIP2 Module** (Alternative)
+   - Uses MaxMind GeoLite2 databases with nginx-module-geoip2 
+   - Available as package on most distributions
+   - Requires periodic database updates
+
+3. **Custom Nginx Build** (Advanced users only)
+   - Only needed for specific customizations or older distributions
+   - Most users should use standard packages instead
+
+### Option A: CloudFlare Headers (Recommended)
+
+When using CloudFlare as your DNS provider with proxy enabled, Foghorn automatically receives geographic headers. No additional Nginx configuration needed.
+
+Foghorn geographic detection priority:
+1. CloudFlare headers (highest priority)
+2. Standard X-Latitude/X-Longitude headers  
+3. MaxMind GeoIP lookups (if configured)
+4. Query parameters (lowest priority)
+
+### Option B: Standard GeoIP2 Package
+
+For non-CloudFlare deployments, install the standard GeoIP2 module:
 
 ### Prerequisites Installation
 ```bash
@@ -845,7 +900,7 @@ disable_login_form = false
 systemctl enable --now grafana.service
 ```
 
-## 🌐 Step 6: Production Nginx Configuration
+## Step 6: Production Nginx Configuration
 
 **`/usr/local/nginx/nginx.conf`:**
 ```nginx
@@ -1164,7 +1219,7 @@ http {
 } # http end
 ```
 
-### 📊 Monitoring Stack Integration
+### Monitoring Stack Integration
 
 **Grafana Data Source Configuration:**
 ```json
@@ -1184,7 +1239,7 @@ remote_write:
   - url: http://stats.frameworks.network:8428/api/v1/write
 ```
 
-### 🔄 Automated Maintenance Tasks
+### Automated Maintenance Tasks
 
 **Crontab setup (`crontab -e`):**
 ```bash
@@ -1430,7 +1485,7 @@ certbot --nginx -d decklog.frameworks.network
 systemctl enable certbot.timer
 ```
 
-## 🚀 Step 6: Service Deployment
+## Step 6: Service Deployment
 
 ### Build & Deploy Script Example
 ```bash
@@ -1478,7 +1533,7 @@ sudo cp purser /usr/local/bin/
 sudo systemctl start purser
 
 # Foghorn
-cd ../api_foghorn
+cd ../api_balancing
 go build -o foghorn ./cmd/foghorn
 sudo systemctl stop foghorn || true
 sudo cp foghorn /usr/local/bin/
@@ -1536,7 +1591,9 @@ Environment=LOG_LEVEL=info
 Environment=DATABASE_URL=postgres://frameworks_user:frameworks_dev@db.frameworks.network:5433/frameworks?sslmode=require
 Environment=JWT_SECRET=your-jwt-secret-here
 Environment=SERVICE_TOKEN=your-service-token-here
+Environment=FOGHORN_URLS=http://127.0.0.1:18008
 Environment=FOGHORN_URL=http://127.0.0.1:18008
+Environment=FOGHORN_CONTROL_ADDR=:18019
 Environment=MIST_USERNAME=test
 Environment=MIST_PASSWORD=test
 Environment=QUARTERMASTER_URL=http://127.0.0.1:18002
@@ -1663,7 +1720,7 @@ RestartSec=5
 WantedBy=multi-user.target
 ```
 
-## 📊 Step 7: Environment Variables
+## Step 7: Environment Variables
 
 ### Central Node
 ```bash
@@ -1730,7 +1787,7 @@ PURSER_URL=https://purser.frameworks.network
 SERVICE_TOKEN=your-service-to-service-token
 ```
 
-## 🔍 Step 8: Monitoring & Health Checks
+## Step 8: Monitoring & Health Checks
 
 ### Cloudflare Health Checks
 Configure health check pools in Cloudflare:
@@ -1786,7 +1843,7 @@ scrape_configs:
     metrics_path: '/metrics'
 ```
 
-## 🚨 Step 9: Security Hardening
+## Step 9: Security Hardening
 
 ### Firewall Rules
 ```bash

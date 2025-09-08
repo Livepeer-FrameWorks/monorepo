@@ -20,6 +20,11 @@
       "@babel/preset-typescript"
     ]
   },
+  "dependencies": {
+    "hls.js": "^1.5.15",
+    "dashjs": "^4.7.4",
+    "video.js": "^8.23.0"
+  },
   "peerDependencies": {
     "react": "^17.0.0 || ^18.0.0",
     "react-dom": "^17.0.0 || ^18.0.0"

@@ -1,0 +1,195 @@
+package cache
+
+import (
+	"context"
+	"sync"
+	"time"
+)
+
+type Options struct {
+	TTL                  time.Duration
+	StaleWhileRevalidate time.Duration
+	NegativeTTL          time.Duration
+	MaxEntries           int
+}
+
+type MetricsHooks struct {
+	OnHit   func(labels map[string]string)
+	OnMiss  func(labels map[string]string)
+	OnStale func(labels map[string]string)
+	OnStore func(labels map[string]string)
+	OnError func(labels map[string]string)
+}
+
+type entry struct {
+	value      interface{}
+	err        error
+	expiresAt  time.Time
+	staleAt    time.Time
+	negative   bool
+	refreshing bool
+	lastUsed   time.Time
+}
+
+type Cache struct {
+	mu      sync.RWMutex
+	items   map[string]*entry
+	order   []string
+	opts    Options
+	metrics MetricsHooks
+}
+
+func New(opts Options, hooks MetricsHooks) *Cache {
+	return &Cache{
+		items:   make(map[string]*entry),
+		order:   make([]string, 0, 128),
+		opts:    opts,
+		metrics: hooks,
+	}
+}
+
+type Loader func(ctx context.Context, key string) (interface{}, bool, error)
+
+func (c *Cache) Get(ctx context.Context, key string, loader Loader) (interface{}, bool, error) {
+	now := time.Now()
+	c.mu.RLock()
+	if e, ok := c.items[key]; ok {
+		if now.Before(e.expiresAt) {
+			e.lastUsed = now
+			c.mu.RUnlock()
+			if c.metrics.OnHit != nil {
+				c.metrics.OnHit(map[string]string{"key": key})
+			}
+			if e.negative {
+				return nil, false, e.err
+			}
+			return e.value, true, nil
+		}
+		if now.Before(e.staleAt) {
+			// SWR: return stale and refresh in background once
+			if c.metrics.OnStale != nil {
+				c.metrics.OnStale(map[string]string{"key": key})
+			}
+			if !e.refreshing {
+				e.refreshing = true
+				go c.refresh(ctx, key, loader)
+			}
+			val, ok := e.value, !e.negative
+			c.mu.RUnlock()
+			if ok {
+				return val, true, nil
+			}
+			return nil, false, e.err
+		}
+		// Hard expired: drop and load synchronously
+		c.mu.RUnlock()
+		c.mu.Lock()
+		delete(c.items, key)
+		c.removeFromOrder(key)
+		c.mu.Unlock()
+	} else {
+		c.mu.RUnlock()
+	}
+
+	if c.metrics.OnMiss != nil {
+		c.metrics.OnMiss(map[string]string{"key": key})
+	}
+	val, ok, err := loader(ctx, key)
+	c.store(key, val, ok, err)
+	if !ok {
+		return nil, false, err
+	}
+	return val, true, nil
+}
+
+func (c *Cache) refresh(ctx context.Context, key string, loader Loader) {
+	val, ok, err := loader(ctx, key)
+	c.store(key, val, ok, err)
+}
+
+func (c *Cache) store(key string, val interface{}, ok bool, err error) {
+	now := time.Now()
+	e := &entry{lastUsed: now}
+	if ok {
+		e.value = val
+		e.expiresAt = now.Add(c.opts.TTL)
+		e.staleAt = e.expiresAt.Add(c.opts.StaleWhileRevalidate)
+		e.negative = false
+	} else {
+		if c.opts.NegativeTTL <= 0 {
+			// Do not store negatives
+			if c.metrics.OnError != nil {
+				c.metrics.OnError(map[string]string{"key": key})
+			}
+			return
+		}
+		e.err = err
+		e.negative = true
+		e.expiresAt = now.Add(c.opts.NegativeTTL)
+		e.staleAt = e.expiresAt
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if prev, exists := c.items[key]; exists {
+		// preserve order position
+		_ = prev
+	} else {
+		c.order = append(c.order, key)
+	}
+	e.refreshing = false
+	c.items[key] = e
+	c.evictIfNeeded()
+	if c.metrics.OnStore != nil {
+		c.metrics.OnStore(map[string]string{"key": key, "ok": boolStr(ok)})
+	}
+}
+
+func (c *Cache) removeFromOrder(key string) {
+	for i, k := range c.order {
+		if k == key {
+			c.order = append(c.order[:i], c.order[i+1:]...)
+			return
+		}
+	}
+}
+
+func (c *Cache) evictIfNeeded() {
+	if c.opts.MaxEntries <= 0 || len(c.items) <= c.opts.MaxEntries {
+		return
+	}
+	// Simple FIFO eviction; can be replaced with true LRU
+	excess := len(c.items) - c.opts.MaxEntries
+	for excess > 0 && len(c.order) > 0 {
+		victim := c.order[0]
+		c.order = c.order[1:]
+		delete(c.items, victim)
+		excess--
+	}
+}
+
+func (c *Cache) Set(key string, val interface{}, ttl time.Duration) {
+	now := time.Now()
+	e := &entry{value: val, expiresAt: now.Add(ttl), staleAt: now.Add(ttl).Add(c.opts.StaleWhileRevalidate), lastUsed: now}
+	c.mu.Lock()
+	if _, exists := c.items[key]; !exists {
+		c.order = append(c.order, key)
+	}
+	c.items[key] = e
+	c.evictIfNeeded()
+	c.mu.Unlock()
+}
+
+func (c *Cache) Delete(key string) {
+	c.mu.Lock()
+	delete(c.items, key)
+	c.removeFromOrder(key)
+	c.mu.Unlock()
+}
+
+func boolStr(b bool) string {
+	if b {
+		return "true"
+	}
+	return "false"
+}

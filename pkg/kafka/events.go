@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"frameworks/pkg/database"
-	"frameworks/pkg/validation"
 
 	"github.com/sirupsen/logrus"
 )
@@ -23,19 +22,12 @@ type Event struct {
 
 // AnalyticsEvent represents a single analytics event
 type AnalyticsEvent struct {
-	EventID       string               `json:"event_id"`
-	EventType     string               `json:"event_type"`
-	Timestamp     time.Time            `json:"timestamp"`
-	Source        string               `json:"source"`
-	TenantID      string               `json:"tenant_id,omitempty"`
-	StreamID      *string              `json:"stream_id,omitempty"`
-	UserID        *string              `json:"user_id,omitempty"`
-	PlaybackID    *string              `json:"playback_id,omitempty"`
-	InternalName  *string              `json:"internal_name,omitempty"`
-	Region        string               `json:"region"`
-	NodeURL       *string              `json:"node_url,omitempty"`
-	Data          validation.EventData `json:"data"`
-	SchemaVersion string               `json:"schema_version"`
+	EventID   string                 `json:"event_id"`
+	EventType string                 `json:"event_type"`
+	Timestamp time.Time              `json:"timestamp"`
+	Source    string                 `json:"source"`
+	TenantID  string                 `json:"tenant_id,omitempty"`
+	Data      map[string]interface{} `json:"data"` // Transparent protobuf message as JSON
 }
 
 // EventHandler interface for handling Kafka events

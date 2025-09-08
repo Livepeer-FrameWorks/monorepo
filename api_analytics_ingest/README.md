@@ -17,9 +17,14 @@ events into PostgreSQL (`stream_analytics`) for stream state tracking.
 - `track-list` → `track_list_events`
 - `recording-lifecycle` → `stream_events` (used in billing queries)
 
-## Configuration
-- `CLICKHOUSE_HOST`, `CLICKHOUSE_DB`, `CLICKHOUSE_USER`, `CLICKHOUSE_PASSWORD`
-- `KAFKA_BROKERS`, `KAFKA_GROUP_ID`, `KAFKA_TOPICS` (default `analytics_events`), `KAFKA_CLIENT_ID`
-- `DATABASE_URL` (required to enable PostgreSQL state tracking), `LOG_LEVEL`
+## Run (dev)
+- Start the full stack from repo root: `docker-compose up -d`
+- Or run just Periscope‑Ingest: `cd api_analytics_ingest && go run ./cmd/periscope`
+
+Configuration: copy `env.example` to `.env` and use the inline comments as reference. Do not commit secrets.
+
+## Related
+- Root `README.md` (ports, stack overview)
+- `docs/DATABASE.md` (schemas, MVs)
 
 Cross‑refs: docs/DATABASE.md (schemas, MVs); docs/IMPLEMENTATION.md (event headers/types).

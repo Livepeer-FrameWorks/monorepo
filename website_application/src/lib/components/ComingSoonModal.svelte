@@ -159,28 +159,15 @@
           {:else if item.name === "Browser Streaming"}
             <li class="flex items-start space-x-2">
               <span class="text-tokyo-night-purple mt-0.5">•</span>
-              <span>Stream directly from browser without OBS</span>
+              <span>WebRTC infrastructure is ready and configured</span>
             </li>
             <li class="flex items-start space-x-2">
               <span class="text-tokyo-night-purple mt-0.5">•</span>
-              <span>WebRTC-based ultra-low latency streaming</span>
+              <span>Needs final browser integration and UI development</span>
             </li>
             <li class="flex items-start space-x-2">
               <span class="text-tokyo-night-purple mt-0.5">•</span>
               <span>One-click "Go Live" from your dashboard</span>
-            </li>
-          {:else if item.name === "Clips"}
-            <li class="flex items-start space-x-2">
-              <span class="text-tokyo-night-green mt-0.5">•</span>
-              <span>Create clips from live streams with timeline editor</span>
-            </li>
-            <li class="flex items-start space-x-2">
-              <span class="text-tokyo-night-green mt-0.5">•</span>
-              <span>Requires storage node routing and API integration</span>
-            </li>
-            <li class="flex items-start space-x-2">
-              <span class="text-tokyo-night-green mt-0.5">•</span>
-              <span>MistServer supports clipping capability</span>
             </li>
           {:else if item.name === "Recordings"}
             <li class="flex items-start space-x-2">
@@ -237,15 +224,15 @@
           {:else if item.name === "Device Discovery"}
             <li class="flex items-start space-x-2">
               <span class="text-tokyo-night-cyan mt-0.5">•</span>
-              <span>Auto-discover AV devices and cameras</span>
+              <span>Feature working, being packaged for run-your-own-edge</span>
             </li>
             <li class="flex items-start space-x-2">
               <span class="text-tokyo-night-cyan mt-0.5">•</span>
-              <span>Feature support in testing, requires deployment pipeline</span>
+              <span>Needs API endpoints for discovery results</span>
             </li>
             <li class="flex items-start space-x-2">
               <span class="text-tokyo-night-cyan mt-0.5">•</span>
-              <span>Integrated sidecar for remote management</span>
+              <span>DevOps automation for DNS/Certs in progress</span>
             </li>
           {:else if item.name === "Network Status"}
             <li class="flex items-start space-x-2">

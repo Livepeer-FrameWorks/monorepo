@@ -1,6 +1,16 @@
 import { motion } from 'framer-motion'
 import { useState, useEffect, useRef } from 'react'
 import config from '../config'
+import {
+  EnvelopeIcon,
+  ChatBubbleLeftRightIcon,
+  ChatBubbleOvalLeftEllipsisIcon,
+  BugAntIcon,
+  CpuChipIcon,
+  UserIcon,
+  CheckCircleIcon,
+  ExclamationCircleIcon
+} from '@heroicons/react/24/outline'
 
 const Contact = () => {
   const [formData, setFormData] = useState({
@@ -111,7 +121,7 @@ const Contact = () => {
 
   const contactMethods = [
     {
-      icon: "📧",
+      icon: <EnvelopeIcon className="w-10 h-10" />,
       title: "Email",
       description: "Get in touch via email",
       contact: config.contactEmail,
@@ -119,7 +129,7 @@ const Contact = () => {
       disabled: false
     },
     {
-      icon: "💬",
+      icon: <ChatBubbleLeftRightIcon className="w-10 h-10" />,
       title: "Discord Community",
       description: "Join our Discord for ultra low latency chat",
       contact: "Invite link",
@@ -127,7 +137,7 @@ const Contact = () => {
       disabled: false
     },
     {
-      icon: "💭",
+      icon: <ChatBubbleOvalLeftEllipsisIcon className="w-10 h-10" />,
       title: "Forum",
       description: "For those who prefer a more structured discussion format",
       contact: "forum.frameworks.network",
@@ -135,7 +145,7 @@ const Contact = () => {
       disabled: false
     },
     {
-      icon: "🐛",
+      icon: <BugAntIcon className="w-10 h-10" />,
       title: "Issues",
       description: "Report bugs or request features",
       contact: "GitHub Issues",
@@ -177,7 +187,7 @@ const Contact = () => {
                 transition={{ duration: 0.6, delay: index * 0.1 }}
                 className={`glow-card p-6 text-center flex flex-col h-full ${method.disabled ? 'opacity-60' : ''}`}
               >
-                <div className="text-4xl mb-4">{method.icon}</div>
+                <div className="text-4xl mb-4 text-tokyo-night-cyan flex justify-center">{method.icon}</div>
                 <h3 className="text-xl font-bold text-tokyo-night-fg mb-2">{method.title}</h3>
                 <p className="text-tokyo-night-fg-dark mb-4 flex-grow">{method.description}</p>
                 <div className="mt-auto">
@@ -311,7 +321,7 @@ const Contact = () => {
                         disabled={success}
                         className="text-tokyo-night-red flex-shrink-0"
                       />
-                      <span className="text-2xl">🤖</span>
+                      <CpuChipIcon className="w-8 h-8 text-tokyo-night-red" />
                       <div className="text-tokyo-night-red text-sm">
                         <div>I'm a robot —</div>
                         <div>discard this message</div>
@@ -327,7 +337,7 @@ const Contact = () => {
                         disabled={success}
                         className="text-tokyo-night-green flex-shrink-0"
                       />
-                      <span className="text-2xl">👋</span>
+                      <UserIcon className="w-8 h-8 text-tokyo-night-green" />
                       <div className="text-tokyo-night-green text-sm">
                         <div>I'm human —</div>
                         <div>please send this</div>
@@ -344,7 +354,8 @@ const Contact = () => {
                   >
                     <div className="text-center">
                       <h3 className="text-xl font-semibold text-tokyo-night-green mb-2">
-                        ✅ Message Sent Successfully!
+                        <CheckCircleIcon className="inline-block w-6 h-6 mr-2" />
+                        Message Sent Successfully!
                       </h3>
                       <p className="text-tokyo-night-fg-dark">
                         Thank you for your message! We'll get back to you soon.
@@ -376,7 +387,8 @@ const Contact = () => {
                   >
                     <div className="text-center">
                       <h3 className="text-xl font-semibold text-tokyo-night-red mb-2">
-                        ❌ Error
+                        <ExclamationCircleIcon className="inline-block w-6 h-6 mr-2" />
+                        Error
                       </h3>
                       <p className="text-tokyo-night-fg-dark">{error}</p>
                     </div>

@@ -115,6 +115,9 @@ models:
   DeveloperToken:
     model:
       - frameworks/pkg/models.APIToken
+  BootstrapToken:
+    model:
+      - frameworks/pkg/models.BootstrapToken
 
   Money:
     model:

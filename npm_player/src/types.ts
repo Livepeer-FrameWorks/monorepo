@@ -11,6 +11,34 @@ export interface PlayerProps {
   thumbnailUrl?: string | null;
   /** Unified options (branding, playback prefs, etc.) */
   options?: Partial<PlayerOptions>;
+  /** Detailed state updates for UI (booting, gateway, connecting, playing, etc.) */
+  onStateChange?: (state: PlayerState, context?: PlayerStateContext) => void;
+}
+
+/** High-level player state machine for UI */
+export type PlayerState =
+  | 'booting'
+  | 'gateway_loading'
+  | 'gateway_ready'
+  | 'gateway_error'
+  | 'no_endpoint'
+  | 'selecting_player'
+  | 'connecting'
+  | 'buffering'
+  | 'playing'
+  | 'paused'
+  | 'ended'
+  | 'error'
+  | 'destroyed';
+
+export interface PlayerStateContext {
+  reason?: string;
+  gatewayStatus?: 'idle' | 'loading' | 'ready' | 'error';
+  selectedPlayer?: string; // shortname
+  selectedProtocol?: string;
+  nodeId?: string;
+  endpointUrl?: string;
+  error?: string;
 }
 
 export interface MistPlayerProps {
@@ -26,29 +54,6 @@ export interface MistPlayerProps {
   muted?: boolean;
   /** URL to poster/thumbnail image (optional) */
   poster?: string;
-}
-
-export interface DirectSourcePlayerProps {
-  src: string;
-  muted?: boolean;
-  controls?: boolean;
-  poster?: string;
-  onError?: () => void;
-}
-
-export interface WHEPPlayerProps {
-  /** WHEP endpoint URL */
-  whepUrl: string;
-  /** Whether to auto-play the stream (default: true) */
-  autoPlay?: boolean;
-  /** Whether to start muted (default: true) */
-  muted?: boolean;
-  /** Callback function for error events */
-  onError?: (error: Error) => void;
-  /** Callback function when connection is established */
-  onConnected?: () => void;
-  /** Callback function when connection is lost */
-  onDisconnected?: () => void;
 }
 
 export interface LoadingScreenProps {
@@ -107,6 +112,7 @@ export interface PlayerOptions {
   autoplay?: boolean;
   muted?: boolean;
   controls?: boolean;
+  stockControls?: boolean;
   preferredProtocol?: 'auto' | 'whep' | 'mist' | 'native';
   analytics?: {
     enabled: boolean;

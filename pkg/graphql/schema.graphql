@@ -64,9 +64,18 @@ type Query {
   cluster(id: ID!): Cluster
   nodes(clusterId: String, status: NodeStatus, type: String, tag: String): [Node!]!
   node(id: ID!): Node
+  
+  # Service discovery and access (Quartermaster)
+  discoverServices(type: String!, clusterId: String): [ServiceInstance!]!
+  clustersAccess: [ClusterAccess!]!
+  clustersAvailable: [AvailableCluster!]!
+  serviceInstancesHealth(serviceId: String): [ServiceInstanceHealth!]!
 
   # Developer API (from Commodore)
   developerTokens: [DeveloperToken!]!
+  
+  # Bootstrap token management (admin/provider only via Quartermaster)
+  bootstrapTokens: [BootstrapToken!]!
   
   # DVR & recording
   recordingConfig(internalName: String!): RecordingConfig!
@@ -74,6 +83,8 @@ type Query {
   
   # Viewer endpoint resolution (via Foghorn)
   resolveViewerEndpoint(contentType: String!, contentId: String!): ViewerEndpointResponse!
+  # Mist JSON meta (via Commodore -> Foghorn)
+  streamMeta(streamKey: String!, targetBaseUrl: String, targetNodeId: String, includeRaw: Boolean): StreamMetaResponse!
 }
 
 # Root Mutation type
@@ -105,6 +116,10 @@ type Mutation {
   # Developer API operations (via Commodore)
   createDeveloperToken(input: CreateDeveloperTokenInput!): DeveloperToken!
   revokeDeveloperToken(id: ID!): Boolean!
+  
+  # Bootstrap token operations (admin/provider only via Quartermaster)
+  createBootstrapToken(input: CreateBootstrapTokenInput!): BootstrapToken!
+  revokeBootstrapToken(id: ID!): Boolean!
   
   # Stream key operations (via Commodore)
   createStreamKey(streamId: ID!, input: CreateStreamKeyInput!): StreamKey!
@@ -199,6 +214,13 @@ input CreateDeveloperTokenInput {
   expiresIn: Int
 }
 
+input CreateBootstrapTokenInput {
+  name: String!
+  type: BootstrapTokenType!
+  expiresIn: Int    # Days until expiration
+  usageLimit: Int   # Max uses allowed
+}
+
 input CreateStreamKeyInput {
   name: String!
 }
@@ -266,6 +288,11 @@ enum NodeStatus {
   HEALTHY
   DEGRADED
   UNHEALTHY
+}
+
+enum BootstrapTokenType {
+  EDGE_NODE
+  SERVICE
 }
 
 # Real-time event types
@@ -563,6 +590,19 @@ type DeveloperToken {
   createdAt: Time!
 }
 
+type BootstrapToken {
+  id: ID!
+  name: String!
+  token: String          # Only returned on creation
+  type: BootstrapTokenType!
+  usageLimit: Int
+  usageCount: Int!
+  expiresAt: Time
+  createdAt: Time!
+  lastUsedAt: Time
+  isActive: Boolean!
+}
+
 # ============================================================================
 # STREAM HEALTH & QUALITY TYPES
 # ============================================================================
@@ -852,16 +892,9 @@ type ClipEvent {
   requestId: String!
   stage: String!
   contentType: String
-  title: String
-  format: String
   startUnix: Int
   stopUnix: Int
-  startMs: Int
-  stopMs: Int
-  durationSec: Int
   ingestNodeId: String
-  storageNodeId: String
-  routingDistanceKm: Float
   percent: Int
   message: String
   filePath: String
@@ -969,6 +1002,35 @@ type ServiceInstance {
   cluster: Cluster
 }
 
+# Cluster access entry (Quartermaster)
+type ClusterAccess {
+  clusterId: String!
+  clusterName: String!
+  accessLevel: String!
+  resourceLimits: JSON
+}
+
+# Available cluster entry (Quartermaster)
+type AvailableCluster {
+  clusterId: String!
+  clusterName: String!
+  tiers: [String!]!
+  autoEnroll: Boolean!
+}
+
+# Service instance health (Quartermaster)
+type ServiceInstanceHealth {
+  instanceId: String!
+  serviceId: String!
+  clusterId: String!
+  protocol: String!
+  host: String
+  port: Int!
+  healthEndpoint: String
+  status: String!
+  lastHealthCheck: Time
+}
+
 # ============================================================================
 # STREAM MANAGEMENT TYPES
 # ============================================================================
@@ -1067,4 +1129,41 @@ type ContentMetadata {
   recordingSize: Int        # bytes for DVR content
   clipSource: String        # source info for clips
   createdAt: String
+}
+
+# ============================================================================
+# STREAM META TYPES
+# ============================================================================
+
+type StreamMetaResponse {
+  metaSummary: StreamMetaSummary!
+  raw: JSON
+}
+
+type StreamMetaSummary {
+  isLive: Boolean!
+  bufferWindowMs: Int!
+  jitterMs: Int!
+  unixOffsetMs: Int!
+  nowMs: Int
+  lastMs: Int
+  width: Int
+  height: Int
+  version: Int
+  type: String
+  tracks: [StreamMetaTrack!]!
+}
+
+type StreamMetaTrack {
+  id: String!
+  type: String!
+  codec: String!
+  channels: Int
+  rate: Int
+  width: Int
+  height: Int
+  bitrateBps: Int
+  nowMs: Int
+  lastMs: Int
+  firstMs: Int
 }

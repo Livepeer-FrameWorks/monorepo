@@ -31,12 +31,12 @@ import (
 	purserapi "frameworks/pkg/api/purser"
 	qmapi "frameworks/pkg/api/quartermaster"
 	"frameworks/pkg/auth"
+	"frameworks/pkg/cache"
 	"frameworks/pkg/clients"
 	foghorn "frameworks/pkg/clients/foghorn"
 	purserclient "frameworks/pkg/clients/purser"
 	qmclient "frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/models"
-	"frameworks/pkg/validation"
 )
 
 // HandlerMetrics holds the metrics for handler operations
@@ -44,10 +44,9 @@ type HandlerMetrics struct {
 	AuthOperations   *prometheus.CounterVec
 	AuthDuration     *prometheus.HistogramVec
 	ActiveSessions   *prometheus.GaugeVec
+	LoginAttempts    *prometheus.CounterVec
+	RegistrationFlow *prometheus.CounterVec
 	StreamOperations *prometheus.CounterVec
-	DBQueries        *prometheus.CounterVec
-	DBDuration       *prometheus.HistogramVec
-	DBConnections    *prometheus.GaugeVec
 }
 
 var db *sql.DB
@@ -134,6 +133,13 @@ func Init(database *sql.DB, log logging.Logger, r Router, m *HandlerMetrics) {
 		log.Fatal("SERVICE_TOKEN environment variable is required")
 	}
 
+	// Quartermaster cache
+	qmTTLSecs := getEnvInt("QUARTERMASTER_CACHE_TTL_SECONDS", 60)
+	qmSWRSecs := getEnvInt("QUARTERMASTER_CACHE_SWR_SECONDS", 30)
+	qmNegSecs := getEnvInt("QUARTERMASTER_CACHE_NEG_TTL_SECONDS", 10)
+	qmMax := getEnvInt("QUARTERMASTER_CACHE_MAX", 10000)
+	qmCache := cache.New(cache.Options{TTL: time.Duration(qmTTLSecs) * time.Second, StaleWhileRevalidate: time.Duration(qmSWRSecs) * time.Second, NegativeTTL: time.Duration(qmNegSecs) * time.Second, MaxEntries: qmMax}, cache.MetricsHooks{})
+
 	quartermasterClient = qmclient.NewClient(qmclient.Config{
 		BaseURL:      quartermasterURL,
 		ServiceToken: serviceToken,
@@ -144,6 +150,7 @@ func Init(database *sql.DB, log logging.Logger, r Router, m *HandlerMetrics) {
 			SuccessThreshold: 2,
 			Timeout:          30 * time.Second,
 		},
+		Cache: qmCache,
 	})
 
 	purserClient = purserclient.NewClient(purserclient.Config{
@@ -157,6 +164,15 @@ func Init(database *sql.DB, log logging.Logger, r Router, m *HandlerMetrics) {
 			Timeout:          30 * time.Second,
 		},
 	})
+}
+
+func getEnvInt(key string, def int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
+	return def
 }
 
 // Register handles user registration with comprehensive bot protection
@@ -645,16 +661,7 @@ func GetStreamMetrics(c *gin.Context) {
 	}
 
 	// Get current stream metrics from the database
-	var metrics struct {
-		Viewers      int       `json:"viewers"`
-		Status       string    `json:"status"`
-		BandwidthIn  *int64    `json:"bandwidth_in"`
-		BandwidthOut *int64    `json:"bandwidth_out"`
-		Resolution   *string   `json:"resolution"`
-		Bitrate      *string   `json:"bitrate"`
-		MaxViewers   *int      `json:"max_viewers"`
-		UpdatedAt    time.Time `json:"updated_at"`
-	}
+	var metrics commodoreapi.StreamMetrics
 
 	err = db.QueryRow(`
 		SELECT viewers, status, bitrate, resolution, max_viewers, updated_at
@@ -1223,10 +1230,7 @@ func StartDVR(c *gin.Context) {
 		return
 	}
 
-	var req struct {
-		InternalName string `json:"internal_name"`
-		StreamID     string `json:"stream_id,omitempty"`
-	}
+	var req commodoreapi.StreamClipRequest
 	if err := c.ShouldBindJSON(&req); err != nil || req.InternalName == "" {
 		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: "internal_name is required"})
 		return
@@ -1273,9 +1277,7 @@ func StopDVR(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, commodoreapi.ErrorResponse{Error: "Authentication required"})
 		return
 	}
-	var req struct {
-		DVRHash string `json:"dvr_hash"`
-	}
+	var req commodoreapi.DVRClipRequest
 	if err := c.ShouldBindJSON(&req); err != nil || req.DVRHash == "" {
 		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: "dvr_hash is required"})
 		return
@@ -1416,9 +1418,9 @@ func ListDVRRequests(c *gin.Context) {
 
 // GetRecordingConfig returns recording_config for a stream
 func GetRecordingConfig(c *gin.Context) {
-	internalName := c.Param("internal_name")
+	internalName := c.Param("id") // Now expects internal_name as :id parameter
 	if internalName == "" {
-		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: "internal_name required"})
+		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: "stream ID required"})
 		return
 	}
 	var cfgJSON []byte
@@ -1450,9 +1452,9 @@ func UpdateRecordingConfig(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, commodoreapi.ErrorResponse{Error: "Authentication required"})
 		return
 	}
-	internalName := c.Param("internal_name")
+	internalName := c.Param("id") // Now expects internal_name as :id parameter
 	if internalName == "" {
-		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: "internal_name required"})
+		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: "stream ID required"})
 		return
 	}
 	var cfg commodoreapi.RecordingConfig
@@ -1883,20 +1885,7 @@ func RefreshStreamKey(c *gin.Context) {
 
 // HandleStreamStart handles stream start events from Helmsman
 func HandleStreamStart(c *gin.Context) {
-	var eventData struct {
-		StreamID     string `json:"stream_id"`
-		StreamKey    string `json:"stream_key"`
-		InternalName string `json:"internal_name"`
-		Hostname     string `json:"hostname"`
-		PushURL      string `json:"push_url"`
-		EventType    string `json:"event_type"`
-		Timestamp    int64  `json:"timestamp"`
-		// Cluster metadata
-		ClusterID  string `json:"cluster_id"`
-		FoghornURI string `json:"foghorn_uri"`
-		NodeID     string `json:"node_id"`
-		NodeName   string `json:"node_name"`
-	}
+	var eventData commodoreapi.StreamEventRequest
 
 	if err := c.ShouldBindJSON(&eventData); err != nil {
 		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: "Invalid payload"})
@@ -1958,7 +1947,7 @@ func HandleStreamStart(c *gin.Context) {
 
 // HandleStreamStatus handles stream status updates from Helmsman
 func HandleStreamStatus(c *gin.Context) {
-	var req validation.StreamLifecyclePayload
+	var req commodoreapi.StreamStatusRequest
 
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: "Invalid payload"})
@@ -1985,12 +1974,7 @@ func HandleStreamStatus(c *gin.Context) {
 
 // HandleRecordingStatus handles recording status updates from Helmsman
 func HandleRecordingStatus(c *gin.Context) {
-	var eventData struct {
-		InternalName string `json:"internal_name"`
-		IsRecording  bool   `json:"is_recording"`
-		EventType    string `json:"event_type"`
-		Timestamp    int64  `json:"timestamp"`
-	}
+	var eventData commodoreapi.RecordingStatusRequest
 
 	if err := c.ShouldBindJSON(&eventData); err != nil {
 		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: "Invalid payload"})
@@ -2064,7 +2048,7 @@ func ResolvePlaybackID(c *gin.Context) {
 
 // HandlePushStatus handles push status updates from Helmsman
 func HandlePushStatus(c *gin.Context) {
-	var req validation.PushLifecyclePayload
+	var req commodoreapi.PushStatusRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: "Invalid payload"})
 		return
@@ -2425,12 +2409,7 @@ func generateRandomString(length int) string {
 }
 
 // createUserStreamInTenant creates a stream for a user in a specific tenant
-func createUserStreamInTenant(tenantID, userID, title string) (*struct {
-	StreamID     string
-	StreamKey    string
-	PlaybackID   string
-	InternalName string
-}, error) {
+func createUserStreamInTenant(tenantID, userID, title string) (*commodoreapi.CreateStreamResult, error) {
 	// Generate unique identifiers
 	streamID := uuid.New().String()
 	streamKey := "sk_" + generateRandomString(28)
@@ -2457,12 +2436,7 @@ func createUserStreamInTenant(tenantID, userID, title string) (*struct {
 		return nil, err
 	}
 
-	return &struct {
-		StreamID     string
-		StreamKey    string
-		PlaybackID   string
-		InternalName string
-	}{
+	return &commodoreapi.CreateStreamResult{
 		StreamID:     streamID,
 		StreamKey:    streamKey,
 		PlaybackID:   playbackID,
@@ -3277,4 +3251,77 @@ func ResolveViewerEndpoint(c *gin.Context) {
 	// All Foghorn instances failed
 	logger.WithError(lastErr).Error("All Foghorn instances failed for viewer endpoint resolution")
 	c.JSON(http.StatusServiceUnavailable, commodoreapi.ErrorResponse{Error: "Service temporarily unavailable"})
+}
+
+// StreamMetaByKey resolves a stream_key to internal_name and proxies meta request to Foghorn
+func StreamMetaByKey(c *gin.Context) {
+	streamKey := c.Param("stream_key")
+	if streamKey == "" {
+		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: "stream_key is required"})
+		return
+	}
+
+	// Resolve tenant and stream info
+	var tenantID, internalName string
+	err := db.QueryRow(`
+        SELECT s.tenant_id, s.internal_name
+        FROM commodore.streams s
+        JOIN commodore.stream_keys k ON k.stream_id = s.id AND k.is_active = true
+        WHERE LOWER(k.key_value) = LOWER($1)
+    `, streamKey).Scan(&tenantID, &internalName)
+	if err == sql.ErrNoRows {
+		c.JSON(http.StatusNotFound, commodoreapi.ErrorResponse{Error: "stream key not found"})
+		return
+	}
+	if err != nil {
+		logger.WithError(err).Error("Failed to resolve stream key")
+		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "database error"})
+		return
+	}
+
+	// Determine Foghorn URL (cluster aware): reuse existing env fan-out pattern
+	foghornList := os.Getenv("FOGHORN_URLS")
+	if foghornList == "" {
+		foghornList = os.Getenv("FOGHORN_URL")
+	}
+	if foghornList == "" {
+		c.JSON(http.StatusServiceUnavailable, commodoreapi.ErrorResponse{Error: "FOGHORN_URLS not configured"})
+		return
+	}
+	urls := strings.Split(foghornList, ",")
+
+	serviceToken := os.Getenv("SERVICE_TOKEN")
+
+	// Optional target params and includeRaw flag
+	targetBaseURL := c.Query("target_base_url")
+	targetNodeID := c.Query("target_node_id")
+	includeRaw := false
+	if v := c.Query("include_raw"); v != "" {
+		if v == "1" || strings.ToLower(v) == "true" || strings.ToLower(v) == "yes" {
+			includeRaw = true
+		}
+	}
+
+	// Try each Foghorn until success
+	var lastErr error
+	for _, raw := range urls {
+		base := strings.TrimSpace(raw)
+		if base == "" {
+			continue
+		}
+		if !strings.HasPrefix(base, "http://") && !strings.HasPrefix(base, "https://") {
+			base = "http://" + base
+		}
+		cli := foghorn.NewClient(foghorn.Config{BaseURL: base, ServiceToken: serviceToken, Timeout: 8 * time.Second, Logger: logger})
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 6*time.Second)
+		defer cancel()
+		res, err := cli.GetStreamMeta(ctx, internalName, includeRaw, targetBaseURL, targetNodeID)
+		if err == nil {
+			c.JSON(http.StatusOK, res)
+			return
+		}
+		lastErr = err
+	}
+
+	c.JSON(http.StatusBadGateway, commodoreapi.ErrorResponse{Error: fmt.Sprintf("all foghorns failed: %v", lastErr)})
 }

@@ -1844,7 +1844,7 @@ func GetStreamBufferEvents(c *gin.Context) {
 	rows, err := clickhouse.QueryContext(c.Request.Context(), `
 		SELECT timestamp, event_id, status, node_id, event_data
 		FROM stream_events
-		WHERE tenant_id = ? AND internal_name = ? AND event_type = 'stream-buffer'
+        WHERE tenant_id = ? AND internal_name = ? AND event_type = 'stream_buffer'
 		AND timestamp BETWEEN ? AND ?
 		ORDER BY timestamp DESC
 	`, tenantID, internalName, startTime, endTime)
@@ -1901,7 +1901,7 @@ func GetStreamEndEvents(c *gin.Context) {
 	rows, err := clickhouse.QueryContext(c.Request.Context(), `
 		SELECT timestamp, event_id, status, node_id, event_data
 		FROM stream_events
-		WHERE tenant_id = ? AND internal_name = ? AND event_type = 'stream-end'
+        WHERE tenant_id = ? AND internal_name = ? AND event_type = 'stream_end'
 		AND timestamp BETWEEN ? AND ?
 		ORDER BY timestamp DESC
 	`, tenantID, internalName, startTime, endTime)
@@ -1958,9 +1958,8 @@ func GetClipEvents(c *gin.Context) {
 	}
 
 	query := `
-		SELECT timestamp, internal_name, request_id, stage, content_type, title, format,
-		       start_unix, stop_unix, start_ms, stop_ms, duration_sec,
-		       ingest_node_id, storage_node_id, routing_distance_km,
+		SELECT timestamp, internal_name, request_id, stage, content_type,
+		       start_unix, stop_unix, ingest_node_id,
 		       percent, message, file_path, s3_url, size_bytes
 		FROM clip_events
 		WHERE tenant_id = ? AND timestamp BETWEEN ? AND ?`
@@ -1990,48 +1989,18 @@ func GetClipEvents(c *gin.Context) {
 	}
 	defer rows.Close()
 
-	type ClipEvent struct {
-		Timestamp         time.Time `json:"timestamp"`
-		InternalName      string    `json:"internal_name"`
-		RequestID         string    `json:"request_id"`
-		Stage             string    `json:"stage"`
-		ContentType       *string   `json:"content_type,omitempty"`
-		Title             *string   `json:"title,omitempty"`
-		Format            *string   `json:"format,omitempty"`
-		StartUnix         *int64    `json:"start_unix,omitempty"`
-		StopUnix          *int64    `json:"stop_unix,omitempty"`
-		StartMs           *int64    `json:"start_ms,omitempty"`
-		StopMs            *int64    `json:"stop_ms,omitempty"`
-		DurationSec       *int64    `json:"duration_sec,omitempty"`
-		IngestNodeID      *string   `json:"ingest_node_id,omitempty"`
-		StorageNodeID     *string   `json:"storage_node_id,omitempty"`
-		RoutingDistanceKm *float64  `json:"routing_distance_km,omitempty"`
-		Percent           *uint32   `json:"percent,omitempty"`
-		Message           *string   `json:"message,omitempty"`
-		FilePath          *string   `json:"file_path,omitempty"`
-		S3URL             *string   `json:"s3_url,omitempty"`
-		SizeBytes         *uint64   `json:"size_bytes,omitempty"`
-	}
-
-	var events []ClipEvent
+	var events []periscope.ClipEvent
 	for rows.Next() {
-		var ev ClipEvent
+		var ev periscope.ClipEvent
 		if err := rows.Scan(
 			&ev.Timestamp,
 			&ev.InternalName,
 			&ev.RequestID,
 			&ev.Stage,
 			&ev.ContentType,
-			&ev.Title,
-			&ev.Format,
 			&ev.StartUnix,
 			&ev.StopUnix,
-			&ev.StartMs,
-			&ev.StopMs,
-			&ev.DurationSec,
 			&ev.IngestNodeID,
-			&ev.StorageNodeID,
-			&ev.RoutingDistanceKm,
 			&ev.Percent,
 			&ev.Message,
 			&ev.FilePath,

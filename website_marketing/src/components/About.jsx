@@ -1,7 +1,9 @@
 import { motion } from 'framer-motion'
 import { Link } from 'react-router-dom'
 import config from '../config'
-import ExternalLinkIcon from './ExternalLinkIcon'
+import BetaBadge from './BetaBadge'
+import InfoTooltip from './InfoTooltip'
+import { ChartBarIcon, ArrowTopRightOnSquareIcon } from '@heroicons/react/24/outline'
 
 const About = () => {
   const team = [
@@ -23,24 +25,24 @@ const About = () => {
 
   const timeline = [
     {
-      year: "Early 2025",
-      title: "Private Deployment & MVP Development",
-      description: "Private deployment for scoping the pipeline, experimentation with core features, and iterating on what works best for the platform"
+      year: "Now",
+      title: "Public Beta",
+      description: "Core platform available. Auto‑discovery, compositing, and AI flagged as Beta with limited capacity."
     },
     {
       year: "Sep 2025",
-      title: "IBC Launch",
-      description: "Public launch at IBC Amsterdam (Sep 12-15) with auto-discovery binary, multi-stream compositing, and full platform features"
+      title: "IBC Demo Milestone",
+      description: "First user onboarding at IBC Amsterdam (Sep 12–15)."
     },
     {
       year: "2026+",
       title: "Scale & Expand",
-      description: "Team expansion, strategic partnerships, mobile apps, marketing & sales growth, and global infrastructure deployment"
+      description: "Team expansion, strategic partnerships, mobile apps, and global infrastructure deployment."
     },
     {
       year: "Future",
       title: "Federalized CDN Network",
-      description: "Multiple independent entities operating edge node clusters with intelligent resource trading. Allow entities to monetize excess capacity while accessing resources when needed, forming a cost-effective federalized CDN that rivals traditional providers."
+      description: "Independent edge clusters with resource exchange — a cost‑effective, federated CDN."
     }
   ]
 
@@ -96,7 +98,7 @@ const About = () => {
               <div className="flex flex-col sm:flex-row gap-4">
                 <a href={config.appUrl} className="btn-primary flex items-center justify-center whitespace-nowrap">
                   Start Free
-                  <ExternalLinkIcon className="w-4 h-4 ml-2 flex-shrink-0" />
+                  <ArrowTopRightOnSquareIcon className="w-4 h-4 ml-2 flex-shrink-0" />
                 </a>
                 <Link to="/contact" className="btn-secondary">
                   Talk to Sales
@@ -123,8 +125,11 @@ const About = () => {
                 <div className="flex items-start gap-3">
                   <div className="w-2 h-2 bg-tokyo-night-green rounded-full mt-3 flex-shrink-0"></div>
                   <div>
-                    <h4 className="font-semibold text-tokyo-night-fg mb-1">Unique Features</h4>
-                    <p className="text-tokyo-night-fg-dark text-sm">Auto-discovery, multi-stream compositing, and hybrid deployment</p>
+                    <div className="flex items-center gap-2">
+                      <h4 className="font-semibold text-tokyo-night-fg">Unique Features</h4>
+                      <BetaBadge label="Beta" />
+                    </div>
+                    <p className="text-tokyo-night-fg-dark text-sm">Auto‑discovery, multi‑stream compositing, AI processing <span className="inline-flex items-center gap-1"><InfoTooltip>Experimental during beta; performance and hardware support vary.</InfoTooltip></span></p>
                   </div>
                 </div>
                 <div className="flex items-start gap-3">
@@ -132,6 +137,13 @@ const About = () => {
                   <div>
                     <h4 className="font-semibold text-tokyo-night-fg mb-1">Architectural Flexibility</h4>
                     <p className="text-tokyo-night-fg-dark text-sm">Build your own edge network or use our complete pipeline - your choice</p>
+                  </div>
+                </div>
+                <div className="flex items-start gap-3">
+                  <div className="w-2 h-2 bg-tokyo-night-orange rounded-full mt-3 flex-shrink-0"></div>
+                  <div>
+                    <h4 className="font-semibold text-tokyo-night-fg mb-1">VOD</h4>
+                    <p className="text-tokyo-night-fg-dark text-sm">DVR and Clips available today; uploaded VOD library management is planned.</p>
                   </div>
                 </div>
                 <div className="flex items-start gap-3">
@@ -270,7 +282,9 @@ const About = () => {
                   Live Updates
                 </span>
               </div>
-              <div className="text-4xl mb-4">📊</div>
+              <div className="mb-4">
+                <ChartBarIcon className="w-12 h-12 text-tokyo-night-cyan" />
+              </div>
               <h3 className="text-xl font-bold text-tokyo-night-fg mb-3">Real-time Analytics & Monitoring</h3>
               <p className="text-tokyo-night-fg-dark">Live viewer counts, bandwidth monitoring, instant alerts, and performance metrics. See what's happening across your entire streaming network in real-time with WebSocket-powered dashboards.</p>
             </motion.div>
@@ -534,7 +548,7 @@ const About = () => {
                 className="btn-primary flex items-center justify-center"
               >
                 Start Free Today
-                <ExternalLinkIcon className="w-4 h-4 ml-2" />
+                <ArrowTopRightOnSquareIcon className="w-4 h-4 ml-2" />
               </a>
               <Link to="/contact" className="btn-secondary">
                 Enterprise Sales
@@ -546,7 +560,7 @@ const About = () => {
                 className="btn-secondary flex items-center justify-center"
               >
                 View Open Source
-                <ExternalLinkIcon className="w-4 h-4 ml-2" />
+                <ArrowTopRightOnSquareIcon className="w-4 h-4 ml-2" />
               </a>
             </div>
             <p className="text-tokyo-night-comment text-sm mt-6">

@@ -12,7 +12,7 @@ import (
 	"frameworks/pkg/auth"
 	"frameworks/pkg/config"
 	"frameworks/pkg/logging"
-	"frameworks/pkg/validation"
+	pb "frameworks/pkg/proto"
 
 	"github.com/gorilla/websocket"
 )
@@ -186,18 +186,33 @@ func (h *Hub) shouldReceiveMessage(client *Client, msg *signalman.Message) bool 
 	return false
 }
 
-// extractUserIDFromEvent extracts user ID from typed event data
+// extractUserIDFromEvent extracts user ID from event data
 func (h *Hub) extractUserIDFromEvent(msg *signalman.Message) string {
-	// Extract user ID from stream ingest events (these have actual user IDs)
-	if msg.Data.StreamIngest != nil {
-		return msg.Data.StreamIngest.UserID
+	// Extract user ID/session ID from MistTrigger envelope for viewer connect/disconnect
+	switch msg.Type {
+	case "viewer_resolve":
+		return "" // not user-specific
+	case "viewer_connect", "viewer_disconnect":
+		// RawData holds a MistTrigger; try to unmarshal and inspect
+		b, err := json.Marshal(msg.RawData)
+		if err != nil {
+			return ""
+		}
+		var mt pb.MistTrigger
+		if err := json.Unmarshal(b, &mt); err != nil {
+			return ""
+		}
+		switch p := mt.GetTriggerPayload().(type) {
+		case *pb.MistTrigger_ViewerConnect:
+			if p.ViewerConnect.GetSessionId() != "" {
+				return p.ViewerConnect.GetSessionId()
+			}
+		case *pb.MistTrigger_ViewerDisconnect:
+			if p.ViewerDisconnect.GetSessionId() != "" {
+				return p.ViewerDisconnect.GetSessionId()
+			}
+		}
 	}
-
-	// For connection events, use session ID as user identification
-	if msg.Data.UserConnection != nil {
-		return msg.Data.UserConnection.SessionID
-	}
-
 	return ""
 }
 
@@ -214,11 +229,12 @@ func (h *Hub) unregisterClient(client *Client) {
 }
 
 // BroadcastTypedToTenant sends a typed message to all clients of a specific tenant
-func (h *Hub) BroadcastTypedToTenant(tenantID string, msgType, channel string, data validation.EventData) {
+func (h *Hub) BroadcastTypedToTenant(tenantID string, msgType, channel string, data map[string]interface{}) {
 	message := signalman.Message{
 		Type:      msgType,
 		Channel:   channel,
-		Data:      data,
+		Data:      h.convertToTypedEventData(msgType, data),
+		RawData:   data, // Keep raw data for backwards compatibility
 		Timestamp: time.Now(),
 		TenantID:  &tenantID,
 	}
@@ -233,11 +249,12 @@ func (h *Hub) BroadcastTypedToTenant(tenantID string, msgType, channel string, d
 }
 
 // BroadcastTypedInfrastructure sends typed infrastructure messages to all clients subscribed to system channel
-func (h *Hub) BroadcastTypedInfrastructure(msgType string, data validation.EventData) {
+func (h *Hub) BroadcastTypedInfrastructure(msgType string, data map[string]interface{}) {
 	message := signalman.Message{
 		Type:      msgType,
 		Channel:   "system",
-		Data:      data,
+		Data:      h.convertToTypedEventData(msgType, data),
+		RawData:   data, // Keep raw data for backwards compatibility
 		Timestamp: time.Now(),
 	}
 
@@ -477,4 +494,36 @@ func (c *Client) sendTypedMessage(data interface{}) {
 		// Channel full, disconnect client
 		close(c.send)
 	}
+}
+
+// convertToTypedEventData converts raw protobuf data to typed EventData
+func (h *Hub) convertToTypedEventData(eventType string, data map[string]interface{}) signalman.EventData {
+	eventData := signalman.EventData{}
+	// Data is a MistTrigger envelope; unmarshal once and extract
+	b, err := json.Marshal(data)
+	if err != nil {
+		return eventData
+	}
+	var mt pb.MistTrigger
+	if err := json.Unmarshal(b, &mt); err != nil {
+		return eventData
+	}
+
+	switch p := mt.GetTriggerPayload().(type) {
+	case *pb.MistTrigger_ClientLifecycleUpdate:
+		eventData.ClientLifecycle = p.ClientLifecycleUpdate
+	case *pb.MistTrigger_NodeLifecycleUpdate:
+		eventData.NodeLifecycle = p.NodeLifecycleUpdate
+	case *pb.MistTrigger_TrackList:
+		eventData.TrackList = p.TrackList
+	case *pb.MistTrigger_StreamBuffer:
+		// Stream buffer not represented in EventData; no-op here (Stream events handled separately)
+	case *pb.MistTrigger_ClipLifecycleData:
+		eventData.ClipLifecycle = p.ClipLifecycleData
+	case *pb.MistTrigger_DvrLifecycleData:
+		eventData.DVRLifecycle = p.DvrLifecycleData
+	case *pb.MistTrigger_LoadBalancingData:
+		eventData.LoadBalancing = p.LoadBalancingData
+	}
+	return eventData
 }

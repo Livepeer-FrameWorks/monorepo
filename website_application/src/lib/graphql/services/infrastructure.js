@@ -29,6 +29,9 @@ export const infrastructureService = {
     return result.data.clusters;
   },
 
+  /**
+   * @param {string} id
+   */
   async getCluster(id) {
     const result = await client.query({
       query: GetClusterDocument,
@@ -46,6 +49,9 @@ export const infrastructureService = {
     return result.data.nodes;
   },
 
+  /**
+   * @param {string} id
+   */
   async getNode(id) {
     const result = await client.query({
       query: GetNodeDocument,
@@ -56,6 +62,9 @@ export const infrastructureService = {
   },
 
   // Service Instances
+  /**
+   * @param {string | null} [clusterId]
+   */
   async getServiceInstances(clusterId = null) {
     try {
       const result = await client.query({
@@ -87,6 +96,9 @@ export const infrastructureService = {
   },
 
   // Mutations
+  /**
+   * @param {Object} input
+   */
   async updateTenant(input) {
     const result = await client.mutate({
       mutation: UpdateTenantDocument,
@@ -97,6 +109,9 @@ export const infrastructureService = {
   },
 
   // Subscriptions
+  /**
+   * @param {{ onSystemHealth?: Function, onError?: Function }} callbacks
+   */
   subscribeToSystemHealth(callbacks) {
     const observable = client.subscribe({
       query: SystemHealthDocument

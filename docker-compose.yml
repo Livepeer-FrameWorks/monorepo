@@ -38,6 +38,8 @@ services:
     ports:
       - "18000:18000"
     depends_on:
+      quartermaster:
+        condition: service_healthy
       commodore:
         condition: service_started
       periscope-query:
@@ -157,7 +159,24 @@ services:
       - FOGHORN_CONTROL_ADDR=:18019
       - LOG_LEVEL=info
       - GIN_MODE=release
+      - COMMODORE_URL=http://commodore:18001
+      - COMMODORE_CACHE_TTL=60s
+      - COMMODORE_CACHE_SWR=30s
+      - COMMODORE_CACHE_NEG_TTL=10s
+      - COMMODORE_CACHE_MAX=10000
+      - GEOIP_MMDB_PATH=
+      - GEOIP_CACHE_TTL=300s
+      - GEOIP_CACHE_SWR=120s
+      - GEOIP_CACHE_NEG_TTL=60s
+      - GEOIP_CACHE_MAX=50000
       - DECKLOG_URL=http://decklog:18006
+      - DECKLOG_ALLOW_INSECURE=true  # For local development only
+      # gRPC Security Configuration
+      - GRPC_USE_TLS=false  # Set to true for production TLS
+      - GRPC_TLS_CERT_PATH=/path/to/cert.pem  # Path to TLS certificate
+      - GRPC_TLS_KEY_PATH=/path/to/key.pem    # Path to TLS private key
+      - DECKLOG_USE_TLS=false  # Set to true for secure Decklog connections
+      - QUARTERMASTER_URL=http://quartermaster:18002
       - CPU_WEIGHT=500
       - RAM_WEIGHT=500
       - BANDWIDTH_WEIGHT=1000
@@ -170,6 +189,8 @@ services:
       - "18019:18019"
     depends_on:
       postgres:
+        condition: service_healthy
+      quartermaster:
         condition: service_healthy
     restart: unless-stopped
     networks:
@@ -357,6 +378,8 @@ services:
       - GIN_MODE=release
       - GRPC_PORT=18006
       - ALLOW_INSECURE=true  # For local development only
+      - QUARTERMASTER_URL=http://quartermaster:18002
+      - SERVICE_TOKEN=your-service-token-change-in-production
     ports:
       - "18006:18006"
       - "18026:18026"
@@ -440,10 +463,6 @@ services:
       - DATABASE_URL=postgres://frameworks_user:frameworks_dev@postgres:5432/frameworks?sslmode=disable
       - JWT_SECRET=your-jwt-secret-change-in-production
       - FOGHORN_URL=http://foghorn:18008
-      - MIST_USERNAME=${MIST_USERNAME:-test}
-      - MIST_PASSWORD=${MIST_PASSWORD:-test}
-      - MIST_API_USERNAME=${MIST_API_USERNAME:-test}
-      - MIST_API_PASSWORD=${MIST_API_PASSWORD:-test}
       - PORT=18001
       - QUARTERMASTER_URL=http://quartermaster:18002
       - PURSER_URL=http://purser:18003
@@ -479,21 +498,25 @@ services:
       context: .
       dockerfile: api_sidecar/Dockerfile
     environment:
-      - COMMODORE_URL=http://commodore:18001
-      - DECKLOG_URL=http://decklog:18006
+      - HELMSMAN_WEBHOOK_URL=http://helmsman:18007
       - FOGHORN_URL=http://foghorn:18008
       - FOGHORN_CONTROL_ADDR=foghorn:18019
+      - FOGHORN_HTTP_BASE=http://foghorn:18008
+      - EDGE_PUBLIC_HOSTNAME=localhost
       - MISTSERVER_URL=http://mistserver:4242
-      - MIST_PASSWORD=${MIST_PASSWORD:-koekjes}
-      - MIST_API_USERNAME=${MIST_API_USERNAME:-test}
-      - MIST_API_PASSWORD=${MIST_API_PASSWORD:-test}
+      - MIST_PASSWORD=koekjes
+      - MIST_API_USERNAME=test
+      - MIST_API_PASSWORD=test
       - CLUSTER_ID=default-cluster
       - NODE_NAME=edge-node-1
       - PORT=18007
       - LOG_LEVEL=info
       - SERVICE_TOKEN=your-service-token-change-in-production
-      - DECKLOG_GRPC_TARGET=decklog:18006
-      - DECKLOG_ALLOW_INSECURE=true  # For local development only
+      - QUARTERMASTER_URL=http://quartermaster:18002
+      # gRPC Security Configuration
+      - GRPC_USE_TLS=false  # Set to true for production TLS
+    volumes:
+      - ./infrastructure/edge/machine-id:/etc/machine-id:ro
     depends_on:
       commodore:
         condition: service_started
@@ -545,6 +568,8 @@ services:
       - CLICKHOUSE_DB=frameworks
       - CLICKHOUSE_USER=frameworks
       - CLICKHOUSE_PASSWORD=frameworks_dev
+      - QUARTERMASTER_URL=http://quartermaster:18002
+      - SERVICE_TOKEN=your-service-token-change-in-production
     depends_on:
       postgres:
         condition: service_healthy
@@ -595,12 +620,15 @@ services:
       - CLICKHOUSE_DB=frameworks
       - CLICKHOUSE_USER=frameworks
       - CLICKHOUSE_PASSWORD=frameworks_dev
+      - QUARTERMASTER_URL=http://quartermaster:18002
     depends_on:
       postgres:
         condition: service_healthy
       purser:
         condition: service_started
       clickhouse:
+        condition: service_healthy
+      quartermaster:
         condition: service_healthy
     restart: unless-stopped
     networks:
@@ -632,8 +660,8 @@ services:
       - DATABASE_URL=postgres://frameworks_user:frameworks_dev@postgres:5432/frameworks?sslmode=disable
       - PORT=18003
       - LOG_LEVEL=info
-      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:-sk_test_dummy}
-      - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET:-whsec_dummy}
+      - STRIPE_SECRET_KEY=sk_test_dummy
+      - STRIPE_WEBHOOK_SECRET=whsec_dummy
       - GIN_MODE=release
       - JWT_SECRET=your-jwt-secret-change-in-production
       - SERVICE_TOKEN=your-service-token-change-in-production
@@ -656,7 +684,7 @@ services:
       postgres:
         condition: service_healthy
       quartermaster:
-        condition: service_started
+        condition: service_healthy
     restart: unless-stopped
     networks:
       - frameworks
@@ -676,8 +704,8 @@ services:
       start_period: 10s
 
   # Web Console
-  frontend:
-    container_name: frameworks-frontend
+  webapp:
+    container_name: frameworks-webapp
     build:
       context: ./website_application
       dockerfile: Dockerfile
@@ -719,6 +747,7 @@ services:
       args:
         - VITE_APP_URL=http://localhost:18090/app/
         - VITE_API_URL=http://localhost:18001
+        - VITE_GATEWAY_URL=http://localhost:18090/graphql
         - VITE_GITHUB_URL=https://github.com/livepeer-frameworks/monorepo
         - VITE_LIVEPEER_URL=https://livepeer.org
         - VITE_LIVEPEER_EXPLORER_URL=https://explorer.livepeer.org
@@ -736,7 +765,7 @@ services:
       commodore:
         condition: service_started
       quartermaster:
-        condition: service_started
+        condition: service_healthy
     restart: unless-stopped
     networks:
       - frameworks
@@ -776,7 +805,7 @@ services:
         condition: service_started
       periscope-query:
         condition: service_started
-      frontend:
+      webapp:
         condition: service_started
       website:
         condition: service_started

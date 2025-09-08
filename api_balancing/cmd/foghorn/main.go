@@ -4,12 +4,15 @@ import (
 	"frameworks/api_balancing/internal/balancer"
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/handlers"
+	"frameworks/api_balancing/internal/state"
+	"frameworks/pkg/cache"
 	"frameworks/pkg/config"
 	"frameworks/pkg/database"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/monitoring"
 	"frameworks/pkg/server"
 	"frameworks/pkg/version"
+	"time"
 )
 
 func main() {
@@ -28,7 +31,7 @@ func main() {
 	defer db.Close()
 
 	// Create load balancer instance
-	lb := balancer.NewLoadBalancer(db, logger)
+	lb := balancer.NewLoadBalancer(logger)
 
 	// Set weights from environment variables
 	cpu := uint64(config.GetEnvInt("CPU_WEIGHT", 500))
@@ -59,6 +62,34 @@ func main() {
 		HealthScoreCalculations: metricsCollector.NewCounter("health_score_calculations_total", "Health score calculations", []string{}),
 	}
 
+	// Wire state metrics hooks
+	stateWrites := metricsCollector.NewCounter("state_writes_total", "State write-through operations", []string{"entity", "op"})
+	rehydrateDur := metricsCollector.NewHistogram("state_rehydrate_seconds", "State rehydrate duration", []string{"entity"}, nil)
+	state.SetMetricsHooks(
+		func(labels map[string]string) { stateWrites.WithLabelValues(labels["entity"], labels["op"]).Inc() },
+		func(seconds float64, labels map[string]string) {
+			rehydrateDur.WithLabelValues(labels["entity"]).Observe(seconds)
+		},
+	)
+
+	// Cache metrics and factory
+	cacheHits := metricsCollector.NewCounter("cache_hits_total", "Cache hits", []string{"key"})
+	cacheMiss := metricsCollector.NewCounter("cache_misses_total", "Cache misses", []string{"key"})
+	cacheStale := metricsCollector.NewCounter("cache_stale_total", "Cache stale served", []string{"key"})
+	cacheStore := metricsCollector.NewCounter("cache_store_total", "Cache stores", []string{"key", "ok"})
+	cacheError := metricsCollector.NewCounter("cache_errors_total", "Cache load errors", []string{"key"})
+
+	newCache := func(ttl, swr, negTTL time.Duration, max int) *cache.Cache {
+		return cache.New(cache.Options{TTL: ttl, StaleWhileRevalidate: swr, NegativeTTL: negTTL, MaxEntries: max}, cache.MetricsHooks{
+			OnHit:   func(l map[string]string) { cacheHits.WithLabelValues(l["key"]).Inc() },
+			OnMiss:  func(l map[string]string) { cacheMiss.WithLabelValues(l["key"]).Inc() },
+			OnStale: func(l map[string]string) { cacheStale.WithLabelValues(l["key"]).Inc() },
+			OnStore: func(l map[string]string) { cacheStore.WithLabelValues(l["key"], l["ok"]).Inc() },
+			OnError: func(l map[string]string) { cacheError.WithLabelValues(l["key"]).Inc() },
+		})
+	}
+	_ = newCache // Placeholder until wired into clients (Commodore/GeoIP)
+
 	// Create database metrics
 	metrics.DBQueries, metrics.DBDuration, metrics.DBConnections = metricsCollector.CreateDatabaseMetrics()
 
@@ -67,6 +98,21 @@ func main() {
 
 	// Start Helmsman control gRPC server
 	control.Init(logger)
+
+	// Configure unified state policies and rehydrate from DB (nodes, DVR, clips)
+	state.DefaultManager().ConfigurePolicies(state.PoliciesConfig{
+		WritePolicies: map[state.EntityType]state.WritePolicy{
+			state.EntityClip: {Enabled: true, Mode: state.WriteThrough},
+			state.EntityDVR:  {Enabled: true, Mode: state.WriteThrough},
+		},
+		SyncPolicies: map[state.EntityType]state.SyncPolicy{
+			state.EntityClip: {BootRehydrate: true, ReconcileInterval: 180 * time.Second},
+			state.EntityDVR:  {BootRehydrate: true, ReconcileInterval: 180 * time.Second},
+		},
+		ClipRepo: control.NewClipRepository(),
+		DVRRepo:  control.NewDVRRepository(),
+		NodeRepo: control.NewNodeRepository(),
+	})
 	controlAddr := config.GetEnv("FOGHORN_CONTROL_ADDR", ":18019")
 	if _, err := control.StartGRPCServer(controlAddr, logger); err != nil {
 		logger.WithError(err).Fatal("Failed to start control gRPC server")
@@ -74,15 +120,6 @@ func main() {
 
 	// Setup router with unified monitoring
 	router := server.SetupServiceRouter(logger, "foghorn", healthChecker, metricsCollector)
-
-	// Node update endpoint for Helmsman
-	router.POST("/node/update", handlers.HandleNodeUpdate)
-
-	// Stream health update endpoint for Helmsman
-	router.POST("/stream/health", handlers.HandleStreamHealth)
-
-	// Node shutdown notification endpoint for Helmsman
-	router.POST("/node/shutdown", handlers.HandleNodeShutdown)
 
 	// Clip orchestration endpoints
 	router.POST("/clips/create", handlers.HandleCreateClip)
@@ -96,7 +133,12 @@ func main() {
 	router.GET("/nodes/overview", handlers.HandleNodesOverview)
 
 	// Viewer endpoint resolution
-	router.POST("/viewer/resolve", handlers.HandleResolveViewerEndpoint)
+	router.POST("/viewer/resolve-endpoint", handlers.HandleResolveViewerEndpoint)
+	// Stream meta endpoint
+	router.POST("/viewer/stream-meta", handlers.HandleStreamMeta)
+
+	// Root page debug interface (takes precedence over MistServer compatibility)
+	router.GET("/dashboard", handlers.HandleRootPage)
 
 	// MistServer Compatibility - all requests including capability filtering via query params
 	router.NoRoute(handlers.MistServerCompatibilityHandler)

@@ -8,6 +8,8 @@ import (
 	"syscall"
 
 	"frameworks/api_analytics_ingest/internal/handlers"
+	qmapi "frameworks/pkg/api/quartermaster"
+	qmclient "frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/config"
 	"frameworks/pkg/database"
 	"frameworks/pkg/kafka"
@@ -15,6 +17,7 @@ import (
 	"frameworks/pkg/monitoring"
 	"frameworks/pkg/server"
 	"frameworks/pkg/version"
+	"time"
 )
 
 func main() {
@@ -48,7 +51,7 @@ func main() {
 	// Create custom analytics ingestion metrics
 	metrics := &handlers.PeriscopeMetrics{
 		AnalyticsEvents:         metricsCollector.NewCounter("analytics_events_total", "Analytics events processed", []string{"event_type", "status"}),
-		BatchProcessingDuration: metricsCollector.NewHistogram("batch_processing_duration_seconds", "Batch processing time", []string{}, nil),
+		BatchProcessingDuration: metricsCollector.NewHistogram("batch_processing_duration_seconds", "Batch processing time", []string{"source"}, nil),
 		ClickHouseInserts:       metricsCollector.NewCounter("clickhouse_inserts_total", "ClickHouse inserts", []string{"table", "status"}),
 	}
 
@@ -103,6 +106,18 @@ func main() {
 	}
 
 	logger.Info("Periscope-Ingest started - consuming analytics events from Kafka")
+
+	// Best-effort service registration in Quartermaster
+	go func() {
+		qc := qmclient.NewClient(qmclient.Config{BaseURL: config.GetEnv("QUARTERMASTER_URL", "http://localhost:18002"), ServiceToken: config.GetEnv("SERVICE_TOKEN", ""), Logger: logger})
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if _, err := qc.BootstrapService(ctx, &qmapi.BootstrapServiceRequest{Type: "periscope_ingest", Version: version.Version, Protocol: "http", HealthEndpoint: func() *string { s := "/health"; return &s }(), Port: 18005}); err != nil {
+			logger.WithError(err).Warn("Quartermaster bootstrap (periscope_ingest) failed")
+		} else {
+			logger.Info("Quartermaster bootstrap (periscope_ingest) ok")
+		}
+	}()
 
 	// Wait for interrupt
 	sigChan := make(chan os.Signal, 1)

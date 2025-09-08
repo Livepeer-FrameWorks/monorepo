@@ -16,10 +16,11 @@ Edge sidecar for MistServer. Validates streams via Commodore, collects metrics, 
 - One instance per MistServer node
 - Configured with node identity and cluster Decklog target
 
-## Configuration
-- `COMMODORE_URL`, `SERVICE_TOKEN`
-- `DECKLOG_GRPC_TARGET`, `DECKLOG_ALLOW_INSECURE`
-- Node identity/env (region, hostname)
+## Run (dev)
+- Typically runs alongside MistServer. For local stack: `docker-compose up -d`
+- Or run just Helmsman: `cd api_sidecar && go run ./cmd/helmsman`
+
+Configuration: copy `env.example` to `.env` and use the inline comments as reference. Do not commit secrets.
 
 Health: `GET /health`.
 

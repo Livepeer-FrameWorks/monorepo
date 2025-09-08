@@ -1,0 +1,46 @@
+{
+  email {{ACME_EMAIL}}
+  servers {
+    protocols h1 h2 h3
+  }
+}
+
+{{EDGE_DOMAIN}} {
+  @compressible {
+    not path *.ts *.m4s *.mp4 *.webm
+  }
+  encode @compressible zstd gzip
+
+  headers {
+    Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+    X-Content-Type-Options "nosniff"
+    X-Frame-Options "SAMEORIGIN"
+    Referrer-Policy "strict-origin-when-cross-origin"
+    Permissions-Policy "geolocation=(), microphone=()"
+  }
+
+  handle_path /webhooks/* {
+    reverse_proxy helmsman:18007
+  }
+
+  handle /view/* {
+    reverse_proxy mistserver:8080 {
+      flush_interval -1
+      transport http {
+        read_timeout 0
+        write_timeout 0
+        keepalive 64
+      }
+      header_up X-Forwarded-Proto {scheme}
+      header_up X-Forwarded-For {remote_host}
+    }
+  }
+
+  reverse_proxy mistserver:8080
+
+  log {
+    output stdout
+    format json
+  }
+}
+

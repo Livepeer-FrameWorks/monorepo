@@ -2,288 +2,288 @@
 
 This roadmap reflects the current implementation status. It's an honest view of what works now and what's planned.
 
-**Legend:**
-- ✅ **Complete** - Fully implemented and production-ready
-- 🔄 **Partial** - Basic implementation exists but not feature-complete
-- 🚧 **In Progress** - Actively being developed
-- ❌ **Not Started** - Planned but no implementation yet
-- 🔍 **Surface Level** - Exists but only as stubs or basic scaffolding
+Status legend:
+- Complete — Fully implemented and production-ready
+- Partial — Basic implementation exists but not feature-complete
+- In progress — Actively being developed
+- Not started — Planned but no implementation yet
+- Basic only — Exists as stubs or scaffolding
 
 ---
 
-## 🎬 Core Infrastructure
+## Core Infrastructure
 
 Aim: rock‑solid basics. These are the services and controls everything else depends on.
 
 ### User Registration & Authentication
-- **Status**: ✅ **Complete**
+- Status: Complete
 - **Implementation**: JWT auth, bot protection, email verification
 - **UI Components**: Login/register forms, email verification flow
-- **Notes**: Fully functional with proper tenant context
+- Notes: Functional with tenant context
 
 ### Multi-Tenant Architecture
-- **Status**: 🔄 **Partial (Surface Level)**
+- Status: Partial (basic only)
 - **Implementation**: 
-  - ✅ Database schema with tenant isolation
-  - ✅ Tenant-aware API endpoints
-  - 🔍 Cluster-per-tenant support (DB fields only, no orchestration)
-  - ❌ Deployment automation
-  - ❌ Tenant provisioning
+  - Database schema with tenant isolation
+  - Tenant-aware API endpoints
+  - Cluster-per-tenant support (DB fields only, no orchestration)
+  - Deployment automation (missing)
+  - Tenant provisioning (missing)
 - **UI Components**: Tenant-aware dashboards work
 - **Missing**: Actual deployment orchestration, automated provisioning
 
 ### Tenant Management (Quartermaster)
-- **Status**: 🔄 **Partial**
+- Status: Partial
 - **Implementation**: 
-  - ✅ Basic CRUD operations
-  - ✅ Tenant registry API
-  - 🔍 Feature flags (JSON field, no UI)
-  - 🔍 Deployment tiers (DB only, manual)
-  - 🔍 Cluster assignment (basic logic)
-  - ❌ Domain automation
+  - Basic CRUD operations
+  - Tenant registry API
+  - Feature flags (JSON field, no UI)
+  - Deployment tiers (DB only, manual)
+  - Cluster assignment (basic logic)
+  - Domain automation (missing)
 - **UI Components**: ❌ **Missing** - No tenant management UI
-- **Missing**: Automated cluster management, domain DNS/SSL automation
+- Missing: Automated cluster management; domain DNS/SSL automation
 
 ### CQRS Analytics (Periscope)
-- **Status**: ✅ **Complete**
+- Status: Complete
 - **Implementation**: 
-  - ✅ Split into Periscope-Ingest and Periscope-Query
-  - ✅ Kafka event pipeline (fully functional)
-  - ✅ PostgreSQL for state management
-  - ✅ ClickHouse for time-series analytics
-  - ✅ Materialized views for aggregations
-  - ✅ TTL and automatic cleanup
+  - Split into Periscope-Ingest and Periscope-Query
+  - Kafka event pipeline (functional)
+  - PostgreSQL for state management
+  - ClickHouse for time-series analytics
+  - Materialized views for aggregations
+  - TTL and automatic cleanup
 - **UI Components**: Real-time analytics dashboard
-- **Notes**: Well-implemented. DB schema's and queries can probably use some tweaking though.
+- Notes: Stable; schema and queries may need tuning.
 
 ### Bot Protection
-- **Status**: ✅ **Complete**
+- Status: Complete
 - **Implementation**: Honeypot fields, human verification, timing validation
 - **UI Components**: Human verification in register form
-- **Notes**: Works good enough for basic protection
+- Notes: Provides basic protection.
 
 ### Stream Management
-- **Status**: ✅ **Complete**
+- Status: Complete
 - **Implementation**: Full CRUD operations, stream keys, playback IDs
 - **UI Components**: Stream creation/deletion, URL generation
-- **Notes**: Basic but fully functional
+- Notes: Functional.
 
 ### Protocol Support
-- **Status**: ✅ **Complete**
+- Status: Complete
 - **Implementation**: RTMP, SRT, WHIP ingest → HLS, WebRTC egress
 - **UI Components**: Protocol documentation with URLs
-- **Notes**: MistServer handles this well, we can enable anything we need as we go.
+- Notes: Configurable via MistServer.
 
 ### Cluster Router (Foghorn)
-- **Status**: 🔄 **Partial**
+- Status: Partial
 - **Implementation**: 
-  - ✅ Load balancing with capacity awareness
-  - ✅ Geographic proximity routing
-  - ✅ Basic health checks
-  - 🔍 Multi-tier support (DB only)
-  - 🔍 Tenant-aware routing (basic)
+  - Load balancing with capacity awareness
+  - Geographic proximity routing
+  - Basic health checks
+  - Multi-tier support (DB only)
+  - Tenant-aware routing (basic)
 - **UI Components**: Backend only
-- **Missing**: Advanced orchestration, auto-scaling
+- Missing: Advanced orchestration; auto-scaling
 
 ### Payment Processing (Purser)
-- **Status**: 🔄 **Partial**
+- Status: Partial
 - **Implementation**: 
-  - ✅ Stripe integration (functional)
-  - 🔄 Crypto monitoring (BTC, ETH, USDC, LPT)
-  - 🔍 Mollie integration (stubs only)
-  - ❌ Usage-based billing automation
-- **UI Components**: 🔍 **Surface Level** - UI exists but backend methods return empty data
-- **Missing**: Automated invoicing, production crypto wallets, GetInvoices/GetBillingTiers implementations
+  - Stripe integration (functional)
+  - Crypto monitoring (BTC, ETH, USDC, LPT)
+  - Mollie integration (stubs only)
+  - Usage-based billing automation (missing)
+- UI Components: Basic only — UI exists but backend methods return empty data
+- Missing: Automated invoicing; production crypto wallets; GetInvoices/GetBillingTiers implementations
 
 ---
 
-## 📊 Analytics & Monitoring
+## Analytics and Monitoring
 
 ### Real-time Viewer Counts
-- **Status**: ✅ **Complete**
+- Status: Complete
 - **Implementation**: WebSocket updates, ClickHouse aggregations
 - **UI Components**: Dashboard widgets with auto-refresh
 
 ### Enhanced Client Metrics
-- **Status**: ✅ **Complete**
+- Status: Complete
 - **Implementation**: Packet stats, bandwidth, connection quality, geo
 - **UI Components**: Technical metrics dashboard
 
 ### Geographic Analytics
-- **Status**: 🔍 **Surface Level**
+- Status: Basic only
 - **Implementation**: 
-  - ✅ Data captured in ClickHouse
-  - ❌ No aggregation queries
-  - ❌ No backend API
-- **UI Components**: 🔍 **Surface Level** - UI exists but shows infrastructure nodes, not analytics
-- **Missing**: Actual geographic analytics API and proper visualization
+  - Data captured in ClickHouse
+  - No aggregation queries
+  - No backend API
+- UI Components: Basic only — UI exists but shows infrastructure nodes, not analytics
+- Missing: Aggregation API and visualization
 
 ### Performance Metrics
-- **Status**: ✅ **Complete**
+- Status: Complete
 - **Implementation**: Bandwidth, latency, packet loss tracking
 - **UI Components**: Real-time performance dashboard
 
 ### Usage Tracking & Billing
-- **Status**: 🔍 **Surface Level**
+- Status: Basic only
 - **Implementation**: 
-  - ✅ Metrics collected
-  - 🔍 Basic queries exist
-  - ❌ No billing aggregation
-  - ❌ No automated invoicing
-- **UI Components**: 🔍 **Surface Level** - UI exists but no actual usage-to-billing pipeline
-- **Missing**: Usage-to-billing pipeline, automated invoicing
+  - Metrics collected
+  - Basic queries exist
+  - No billing aggregation
+  - No automated invoicing
+- UI Components: Basic only — UI exists but no usage-to-billing pipeline
+- Missing: Usage-to-billing pipeline; automated invoicing
 
 ---
 
-## 🚀 DevOps & Infrastructure
+## DevOps and Infrastructure
 
 ### Infrastructure as Code
-- **Status**: ❌ **Not Started**
+- Status: Not started
 - **Required**: 
   - Terraform configurations for cloud providers
   - Ansible playbooks for service deployment
   - Kubernetes manifests for container orchestration
-- **Missing**: All IaC components
+- Missing: All IaC components
 
 ### Service Discovery & Orchestration
-- **Status**: 🔍 **Surface Level**
+- Status: Basic only
 - **Implementation**: 
-  - 🔍 Manual service configuration
-  - ❌ No service mesh
-  - ❌ No automatic service discovery
+  - Manual service configuration
+  - No service mesh
+  - No automatic service discovery
 
 ### Monitoring & Observability
-- **Status**: 🔄 **Partial**
+- Status: Partial
 - **Implementation**: 
-  - ✅ Basic health endpoints
-  - 🔍 Prometheus metrics (minimal)
+  - Basic health endpoints
+  - Prometheus metrics (minimal)
 
 ### CI/CD Pipeline
-- **Status**: 🔍 **Surface Level**
+- Status: Basic only
 - **Implementation**: 
-  - 🔍 Basic GitHub Actions
-  - ❌ No automated testing
-  - ❌ No deployment automation
+  - Basic GitHub Actions
+  - No automated testing
+  - No deployment automation
 - **Required**: Full CI/CD with testing, staging, production
 
 ---
 
-## 🌐 Streaming & Distribution
+## Streaming and Distribution
 
 ### Multi-format Streaming
-- **Status**: ✅ **Complete**
+- Status: Complete
 - **Implementation**: All protocols via MistServer
 
 ### Drop-in AV Device Discovery
-- **Status**: 🔍 **Surface Level**
+- Status: Basic only
 - **Implementation**: Capabilities exists but no deployment pipeline
-- **Missing**: Integration, remote management
+- Missing: Integration; remote management
 
 ### Multi-stream Compositing
-- **Status**: 🔍 **Surface Level**
+- Status: Basic only
 - **Implementation**: MistServer supports but no orchestration
-- **Missing**: Stream bonding, metering, UI
+- Missing: Stream bonding; metering; UI
 
 ### Transcoding
-- **Status**: 🔍 **Surface Level**
+- Status: Basic only (planned)
 - **Implementation**: Livepeer integration planned
-- **Missing**: Actual integration, DevOps work
+- Missing: Integration and operations work
 
 ### Multi-platform Restreaming
-- **Status**: ❌ **Not Started**
-- **Notes**: Considering Restream partnership
+- Status: Not started
+- Notes: Considering partnership options
 
 ### Custom Domains
-- **Status**: 🔍 **Surface Level**
+- Status: Basic only
 - **Implementation**: 
-  - ✅ Database fields
-  - ❌ No DNS automation
-  - ❌ No SSL automation
-- **Missing**: api_dnsmgr, api_certmgr services
+  - Database fields
+  - No DNS automation
+  - No SSL automation
+- Missing: api_dnsmgr and api_certmgr services
 
 ---
 
-## 🎥 Content Management
+## Content Management
 
 ### Live Recording
-- **Status**: 🔍 **Surface Level**
+- Status: Basic only
 - **Implementation**: MistServer capable but no infrastructure
-- **Missing**: Storage nodes, API, metering
+- Missing: Storage nodes; API; metering
 
 ### VOD Management
-- **Status**: ❌ **Not Started**
-- **Missing**: Entire VOD infrastructure
+- Status: Not started
+- Missing: Entire VOD infrastructure
 
 ### Live Clipping
-- **Status**: 🔍 **Surface Level**
+- Status: Basic only
 - **Implementation**: MistServer capable
-- **Missing**: Storage, API, UI
+- Missing: Storage; API; UI
 
 ### Storage Management
-- **Status**: ❌ **Not Started**
-- **Missing**: Storage service, quotas, management
+- Status: Not started
+- Missing: Storage service; quotas; management
 
 ---
 
-## 👥 Team & Account Features
+## Team and Account Features
 
 ### Team Collaboration
-- **Status**: ❌ **Not Started**
-- **Missing**: Data model, API, UI
+- Status: Not started
+- Missing: Data model; API; UI
 
 ### Billing System
-- **Status**: 🔍 **Surface Level**
+- Status: Basic only
 - **Implementation**: 
-  - ✅ Payment processing
-  - ❌ Usage-based billing
-  - ❌ Invoice generation
-- **UI Components**: ❌ **Missing**
+  - Payment processing
+  - Usage-based billing (missing)
+  - Invoice generation (missing)
+- UI Components: Missing
 
 ### API Access Management
-- **Status**: 🔍 **Surface Level**
+- Status: Basic only
 - **Implementation**: Tokens work, basic management
-- **UI Components**: 🔍 **Surface Level** - UI exists at `/developer/api` but incomplete management functions
+- UI Components: Basic only — UI exists at `/developer/api` but management functions are incomplete
 
 ### Prepaid Credits
-- **Status**: ❌ **Not Started**
+- Status: Not started
 
 ---
 
-## 🔧 Developer & Integration Features
+## Developer and Integration Features
 
 ### REST API
-- **Status**: ✅ **Complete**
+- Status: Complete
 - **Implementation**: Functional for existing features
 
 ### Webhooks
-- **Status**: 🔄 **Partial**
-- **Implementation**: MistServer webhooks only
-- **Missing**: Customer-facing webhooks
+- Status: Partial
+- Implementation: MistServer webhooks only
+- Missing: Customer-facing webhooks
 
 ### NPM Packages
-- **Status**: ❌ **Not Started**
+- Status: Not started
 
 ### Calendar Integration
-- **Status**: ❌ **Not Started**
+- Status: Not started
 
 ### Custom Integrations
-- **Status**: ❌ **Not Started**
+- Status: Not started
 
 ---
 
-## 🚀 Advanced & Enterprise Features
+## Advanced and Enterprise Features
 
 ### AI Processing
-- **Status**: ❌ **Not Started**
-- **Notes**: Testing on edge nodes but no infrastructure
+- Status: Not started
+- Notes: Experimentation on edge nodes; no production infrastructure
 
 ---
 
-## 📱 Mobile & Native Apps
+## Mobile and Native Apps
 
 ### Android App
-- **Status**: 🔍 **Surface Level**
-- **Implementation**: Basic scoping only
+- Status: Basic only
+- Implementation: Basic scoping only
 
 ### iOS App
-- **Status**: ❌ **Not Started**
+- Status: Not started

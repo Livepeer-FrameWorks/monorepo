@@ -6,6 +6,7 @@ package graph
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"frameworks/api_gateway/graph/generated"
 	"frameworks/api_gateway/graph/model"
@@ -14,6 +15,7 @@ import (
 	"frameworks/api_gateway/internal/resolvers"
 	"frameworks/pkg/api/commodore"
 	"frameworks/pkg/api/periscope"
+	"frameworks/pkg/api/quartermaster"
 	"frameworks/pkg/models"
 	"net/http"
 	"strings"
@@ -89,6 +91,18 @@ func (r *billingTierResolver) Features(ctx context.Context, obj *models.BillingT
 	}
 
 	return features, nil
+}
+
+// Type is the resolver for the type field.
+func (r *bootstrapTokenResolver) Type(ctx context.Context, obj *models.BootstrapToken) (model.BootstrapTokenType, error) {
+	switch obj.Type {
+	case "EDGE_NODE":
+		return model.BootstrapTokenTypeEdgeNode, nil
+	case "SERVICE":
+		return model.BootstrapTokenTypeService, nil
+	default:
+		return model.BootstrapTokenTypeService, fmt.Errorf("unknown bootstrap token type: %s", obj.Type)
+	}
 }
 
 // Stream is the resolver for the stream field.
@@ -373,6 +387,16 @@ func (r *mutationResolver) CreateDeveloperToken(ctx context.Context, input model
 // RevokeDeveloperToken is the resolver for the revokeDeveloperToken field.
 func (r *mutationResolver) RevokeDeveloperToken(ctx context.Context, id string) (bool, error) {
 	return r.DoRevokeDeveloperToken(ctx, id)
+}
+
+// CreateBootstrapToken is the resolver for the createBootstrapToken field.
+func (r *mutationResolver) CreateBootstrapToken(ctx context.Context, input model.CreateBootstrapTokenInput) (*models.BootstrapToken, error) {
+	return r.DoCreateBootstrapToken(ctx, input)
+}
+
+// RevokeBootstrapToken is the resolver for the revokeBootstrapToken field.
+func (r *mutationResolver) RevokeBootstrapToken(ctx context.Context, id string) (bool, error) {
+	return r.DoRevokeBootstrapToken(ctx, id)
 }
 
 // CreateStreamKey is the resolver for the createStreamKey field.
@@ -990,9 +1014,64 @@ func (r *queryResolver) Node(ctx context.Context, id string) (*models.Infrastruc
 	return r.DoGetNode(ctx, id)
 }
 
+// DiscoverServices is the resolver for the discoverServices field.
+func (r *queryResolver) DiscoverServices(ctx context.Context, typeArg string, clusterID *string) ([]*models.ServiceInstance, error) {
+	return r.Resolver.DoDiscoverServices(ctx, typeArg, clusterID)
+}
+
+// ClustersAccess is the resolver for the clustersAccess field.
+func (r *queryResolver) ClustersAccess(ctx context.Context) ([]*model.ClusterAccess, error) {
+	return r.Resolver.DoGetClustersAccess(ctx)
+}
+
+// ClustersAvailable is the resolver for the clustersAvailable field.
+func (r *queryResolver) ClustersAvailable(ctx context.Context) ([]*model.AvailableCluster, error) {
+	return r.Resolver.DoGetClustersAvailable(ctx)
+}
+
+// ServiceInstancesHealth is the resolver for the serviceInstancesHealth field.
+func (r *queryResolver) ServiceInstancesHealth(ctx context.Context, serviceID *string) ([]*model.ServiceInstanceHealth, error) {
+	var resp *quartermaster.ServicesHealthResponse
+	var err error
+	if serviceID != nil && *serviceID != "" {
+		resp, err = r.Clients.Quartermaster.GetServiceHealth(ctx, *serviceID)
+	} else {
+		resp, err = r.Clients.Quartermaster.GetServicesHealth(ctx)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get service health: %w", err)
+	}
+	out := make([]*model.ServiceInstanceHealth, 0, len(resp.Instances))
+	for i := range resp.Instances {
+		hi := resp.Instances[i]
+		item := &model.ServiceInstanceHealth{
+			InstanceID:      hi.InstanceID,
+			ServiceID:       hi.ServiceID,
+			ClusterID:       hi.ClusterID,
+			Protocol:        hi.Protocol,
+			Port:            hi.Port,
+			Status:          hi.Status,
+			LastHealthCheck: hi.LastHealthCheck,
+		}
+		if hi.Host != nil {
+			item.Host = hi.Host
+		}
+		if hi.HealthEndpoint != nil {
+			item.HealthEndpoint = hi.HealthEndpoint
+		}
+		out = append(out, item)
+	}
+	return out, nil
+}
+
 // DeveloperTokens is the resolver for the developerTokens field.
 func (r *queryResolver) DeveloperTokens(ctx context.Context) ([]*models.APIToken, error) {
 	return r.DoGetDeveloperTokens(ctx)
+}
+
+// BootstrapTokens is the resolver for the bootstrapTokens field.
+func (r *queryResolver) BootstrapTokens(ctx context.Context) ([]*models.BootstrapToken, error) {
+	return r.DoGetBootstrapTokens(ctx)
 }
 
 // RecordingConfig is the resolver for the recordingConfig field.
@@ -1111,6 +1190,14 @@ func (r *queryResolver) ResolveViewerEndpoint(ctx context.Context, contentType s
 	// Convert to GraphQL model
 	var gqlEndpoints []*model.ViewerEndpoint
 	for _, ep := range endpoints {
+		var outputsJSON *string
+		if ep.Outputs != nil {
+			if jsonBytes, err := json.Marshal(ep.Outputs); err == nil {
+				outputsStr := string(jsonBytes)
+				outputsJSON = &outputsStr
+			}
+		}
+
 		gqlEndpoints = append(gqlEndpoints, &model.ViewerEndpoint{
 			NodeID:      ep.NodeID,
 			BaseURL:     ep.BaseURL,
@@ -1119,14 +1206,86 @@ func (r *queryResolver) ResolveViewerEndpoint(ctx context.Context, contentType s
 			GeoDistance: &ep.GeoDistance,
 			LoadScore:   &ep.LoadScore,
 			HealthScore: &ep.HealthScore,
+			Outputs:     outputsJSON,
 		})
 	}
 
-	// TODO: Add metadata handling once Commodore returns it
 	return &model.ViewerEndpointResponse{
 		Endpoints: gqlEndpoints,
 		Metadata:  nil,
 	}, nil
+}
+
+// StreamMeta is the resolver for the streamMeta field.
+func (r *queryResolver) StreamMeta(ctx context.Context, streamKey string, targetBaseURL *string, targetNodeID *string, includeRaw *bool) (*model.StreamMetaResponse, error) {
+	meta, err := r.Resolver.DoGetStreamMeta(ctx, streamKey, targetBaseURL, targetNodeID, includeRaw)
+	if err != nil {
+		return nil, err
+	}
+	ms := &model.StreamMetaSummary{
+		IsLive:         meta.MetaSummary.IsLive,
+		BufferWindowMs: int(meta.MetaSummary.BufferWindowMs),
+		JitterMs:       int(meta.MetaSummary.JitterMs),
+		UnixOffsetMs:   meta.MetaSummary.UnixOffsetMs,
+		Type:           meta.MetaSummary.Type,
+	}
+	if meta.MetaSummary.Version != nil {
+		v := int(*meta.MetaSummary.Version)
+		ms.Version = &v
+	}
+	if meta.MetaSummary.Width != nil {
+		v := int(*meta.MetaSummary.Width)
+		ms.Width = &v
+	}
+	if meta.MetaSummary.Height != nil {
+		v := int(*meta.MetaSummary.Height)
+		ms.Height = &v
+	}
+	if meta.MetaSummary.NowMs != nil {
+		v := int(*meta.MetaSummary.NowMs)
+		ms.NowMs = &v
+	}
+	if meta.MetaSummary.LastMs != nil {
+		v := int(*meta.MetaSummary.LastMs)
+		ms.LastMs = &v
+	}
+	for _, t := range meta.MetaSummary.Tracks {
+		track := &model.StreamMetaTrack{ID: t.ID, Type: t.Type, Codec: t.Codec}
+		if t.Channels != nil {
+			v := int(*t.Channels)
+			track.Channels = &v
+		}
+		if t.Rate != nil {
+			v := int(*t.Rate)
+			track.Rate = &v
+		}
+		if t.Width != nil {
+			v := int(*t.Width)
+			track.Width = &v
+		}
+		if t.Height != nil {
+			v := int(*t.Height)
+			track.Height = &v
+		}
+		if t.BitrateBps != nil {
+			v := int(*t.BitrateBps)
+			track.BitrateBps = &v
+		}
+		if t.NowMs != nil {
+			v := int(*t.NowMs)
+			track.NowMs = &v
+		}
+		if t.LastMs != nil {
+			v := int(*t.LastMs)
+			track.LastMs = &v
+		}
+		if t.FirstMs != nil {
+			v := int(*t.FirstMs)
+			track.FirstMs = &v
+		}
+		ms.Tracks = append(ms.Tracks, track)
+	}
+	return &model.StreamMetaResponse{MetaSummary: ms, Raw: meta.Raw}, nil
 }
 
 // Title is the resolver for the title field.
@@ -1623,6 +1782,11 @@ func (r *Resolver) BillingStatus() generated.BillingStatusResolver { return &bil
 // BillingTier returns generated.BillingTierResolver implementation.
 func (r *Resolver) BillingTier() generated.BillingTierResolver { return &billingTierResolver{r} }
 
+// BootstrapToken returns generated.BootstrapTokenResolver implementation.
+func (r *Resolver) BootstrapToken() generated.BootstrapTokenResolver {
+	return &bootstrapTokenResolver{r}
+}
+
 // Clip returns generated.ClipResolver implementation.
 func (r *Resolver) Clip() generated.ClipResolver { return &clipResolver{r} }
 
@@ -1708,6 +1872,7 @@ func (r *Resolver) ViewerMetrics5m() generated.ViewerMetrics5mResolver {
 
 type billingStatusResolver struct{ *Resolver }
 type billingTierResolver struct{ *Resolver }
+type bootstrapTokenResolver struct{ *Resolver }
 type clipResolver struct{ *Resolver }
 type clipEventResolver struct{ *Resolver }
 type clusterResolver struct{ *Resolver }

@@ -1,0 +1,244 @@
+name: Release Platform
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write      # create release, upload assets
+  packages: write      # push images to GHCR
+
+env:
+  REGISTRY: ghcr.io/${{ github.repository_owner }}
+
+jobs:
+  build-images:
+    name: Build & Push Images
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - { name: gateway,           context: api_gateway,            dockerfile: api_gateway/Dockerfile }
+          - { name: quartermaster,     context: api_tenants,            dockerfile: api_tenants/Dockerfile }
+          - { name: commodore,         context: api_control,            dockerfile: api_control/Dockerfile }
+          - { name: purser,            context: api_billing,            dockerfile: api_billing/Dockerfile }
+          - { name: foghorn,           context: api_balancing,          dockerfile: api_balancing/Dockerfile }
+          - { name: decklog,           context: api_firehose,           dockerfile: api_firehose/Dockerfile }
+          - { name: periscope-ingest,  context: api_analytics_ingest,   dockerfile: api_analytics_ingest/Dockerfile }
+          - { name: periscope-query,   context: api_analytics_query,    dockerfile: api_analytics_query/Dockerfile }
+          - { name: signalman,         context: api_realtime,           dockerfile: api_realtime/Dockerfile }
+          - { name: helmsman,          context: api_sidecar,            dockerfile: api_sidecar/Dockerfile }
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Read service component version (optional)
+        id: svcver
+        run: |
+          FILE="${{ matrix.service.context }}/VERSION"
+          if [[ -f "$FILE" ]]; then
+            echo "version=$(tr -d '\n' < "$FILE")" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=0.0.0" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build & push ${{ matrix.service.name }}
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ${{ matrix.service.dockerfile }}
+          push: true
+          provenance: true
+          sbom: true
+          build-args: |
+            VERSION=${{ github.ref_name }}
+            GIT_COMMIT=${{ github.sha }}
+            BUILD_DATE=${{ github.event.repository.updated_at }}
+            COMPONENT_NAME=${{ matrix.service.name }}
+            COMPONENT_VERSION=${{ steps.svcver.outputs.version }}
+          tags: |
+            ${{ env.REGISTRY }}/frameworks-${{ matrix.service.name }}:${{ github.ref_name }}
+
+      - name: Write digest artifact
+        run: |
+          mkdir -p dist
+          cat > dist/image-${{ matrix.service.name }}.json <<JSON
+          {
+            "name": "${{ matrix.service.name }}",
+            "image": "${{ env.REGISTRY }}/frameworks-${{ matrix.service.name }}:${{ github.ref_name }}",
+            "digest": "${{ steps.build.outputs.digest }}",
+            "service_version": "${{ steps.svcver.outputs.version }}",
+            "git_commit": "${{ github.sha }}"
+          }
+          JSON
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-digests
+          path: dist/image-${{ matrix.service.name }}.json
+
+  build-cli:
+    name: Build CLI binaries
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            ext: ""
+          - goos: linux
+            goarch: arm64
+            ext: ""
+          - goos: darwin
+            goarch: amd64
+            ext: ""
+          - goos: darwin
+            goarch: arm64
+            ext: ""
+          - goos: windows
+            goarch: amd64
+            ext: ".exe"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Sanitize platform tag to component version
+        id: compver
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          echo "value=${ver}" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - name: Build CLI ${{ matrix.goos }}/${{ matrix.goarch }}
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          set -euo pipefail
+          cd cli
+          out="frameworks-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}"
+          go build -ldflags "-X frameworks/pkg/version.Version=${{ github.ref_name }} -X frameworks/pkg/version.GitCommit=${{ github.sha }} -X frameworks/pkg/version.BuildDate=$(date -u '+%Y-%m-%dT%H:%M:%SZ') -X frameworks/pkg/version.ComponentName=cli -X frameworks/pkg/version.ComponentVersion=${{ steps.compver.outputs.value }}" -o "$out" .
+          cd ..
+          mkdir -p dist/cli
+          mv "cli/$out" "dist/cli/$out"
+      - name: Upload CLI artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-binaries
+          path: dist/cli/*
+
+  manifest:
+    name: Generate & Publish Manifest
+    needs: [build-images, build-cli]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download image digest artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: image-digests
+          path: dist/digests
+      - name: Generate manifest
+        run: |
+          echo "platform_version: ${{ github.ref_name }}" > dist/manifest.yaml
+          echo "git_commit: ${{ github.sha }}" >> dist/manifest.yaml
+          echo "release_date: $(date -u '+%Y-%m-%dT%H:%M:%SZ')" >> dist/manifest.yaml
+          echo "services:" >> dist/manifest.yaml
+          for f in dist/digests/*.json; do
+            name=$(jq -r .name "$f")
+            image=$(jq -r .image "$f")
+            digest=$(jq -r .digest "$f")
+            svcver=$(jq -r .service_version "$f")
+            echo "  - name: ${name}" >> dist/manifest.yaml
+            echo "    service_version: ${svcver}" >> dist/manifest.yaml
+            echo "    image: ${image}" >> dist/manifest.yaml
+            echo "    digest: ${digest}" >> dist/manifest.yaml
+          done
+      - name: Upload manifest artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-manifest
+          path: dist/manifest.yaml
+      - name: Download CLI artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: cli-binaries
+          path: dist/cli
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            dist/manifest.yaml
+            dist/cli/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  update-env:
+    name: Update GitOps Environment Repo
+    needs: [manifest]
+    runs-on: ubuntu-latest
+    env:
+      ENV_REPO: Livepeer-FrameWorks/gitops
+      RELEASE_BRANCH: release/${{ github.ref_name }}
+    steps:
+      - name: Checkout env repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.ENV_REPO }}
+          token: ${{ secrets.GITOPS_REPO_TOKEN }}
+          path: env-repo
+      - name: Download manifest artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: release-manifest
+          path: dist
+      - name: Commit manifest into env repo
+        run: |
+          set -euo pipefail
+          mkdir -p env-repo/releases
+          cp dist/manifest.yaml env-repo/releases/${{ github.ref_name }}.yaml
+          # Update channel pointer
+          channel="stable"
+          if [[ "${{ github.ref_name }}" == *"-rc."* ]]; then channel="rc"; fi
+          mkdir -p env-repo/channels
+          cat > env-repo/channels/${channel}.yaml <<YAML
+          platform_version: ${{ github.ref_name }}
+          manifest: releases/${{ github.ref_name }}.yaml
+          updated_at: $(date -u '+%Y-%m-%dT%H:%M:%SZ')
+          YAML
+          cd env-repo
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git checkout -b "${RELEASE_BRANCH}" || git checkout "${RELEASE_BRANCH}"
+          git add releases/${{ github.ref_name }}.yaml channels/${channel}.yaml
+          git commit -m "Release manifest for ${{ github.ref_name }}"
+      - name: Create PR to env repo
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITOPS_REPO_TOKEN }}
+          path: env-repo
+          branch: ${{ env.RELEASE_BRANCH }}
+          title: "Release ${{ github.ref_name }} manifest"
+          commit-message: "Release ${{ github.ref_name }} manifest"
+          body: |
+            This PR adds the release manifest for ${{ github.ref_name }}.
+            It maps each service to image@digest and includes component versions.

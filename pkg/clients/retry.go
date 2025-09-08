@@ -1,12 +1,14 @@
 package clients
 
 import (
-	"context"
-	"fmt"
-	"math"
-	"math/rand"
-	"net/http"
-	"time"
+    "bytes"
+    "context"
+    "fmt"
+    "io"
+    "math"
+    "math/rand"
+    "net/http"
+    "time"
 )
 
 // RetryConfig configures retry behavior
@@ -89,8 +91,23 @@ func DoWithRetry(ctx context.Context, client *http.Client, req *http.Request, co
 
 // doRetryAttempts handles the actual retry logic
 func doRetryAttempts(ctx context.Context, client *http.Client, req *http.Request, config RetryConfig) (*http.Response, error) {
-	var lastResp *http.Response
-	var lastErr error
+    var lastResp *http.Response
+    var lastErr error
+
+    // Snapshot original request body (if any) so we can rebuild the request per attempt.
+    var bodyBytes []byte
+    if req.Body != nil {
+        // Read and replace body with a reusable reader
+        var err error
+        bodyBytes, err = io.ReadAll(req.Body)
+        if err != nil {
+            return nil, err
+        }
+        _ = req.Body.Close()
+        req.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+        req.ContentLength = int64(len(bodyBytes))
+        req.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(bodyBytes)), nil }
+    }
 
 	for attempt := 0; attempt <= config.MaxRetries; attempt++ {
 		if attempt > 0 {
@@ -113,12 +130,22 @@ func doRetryAttempts(ctx context.Context, client *http.Client, req *http.Request
 			}
 		}
 
-		// Create a new request for each attempt
-		clonedReq := req.Clone(ctx)
-
-		resp, err := client.Do(clonedReq)
-		lastResp = resp
-		lastErr = err
+        // Rebuild a fresh request for each attempt to ensure body is readable
+        var attemptReq *http.Request
+        if bodyBytes != nil {
+            attemptReq, lastErr = http.NewRequestWithContext(ctx, req.Method, req.URL.String(), bytes.NewReader(bodyBytes))
+        } else {
+            attemptReq, lastErr = http.NewRequestWithContext(ctx, req.Method, req.URL.String(), nil)
+        }
+        if lastErr != nil {
+            return nil, lastErr
+        }
+        // Copy headers
+        attemptReq.Header = req.Header.Clone()
+        attemptReq.ContentLength = req.ContentLength
+        resp, err := client.Do(attemptReq)
+        lastResp = resp
+        lastErr = err
 
 		// Check if we should retry
 		if !config.RetryFunc(resp, err) {

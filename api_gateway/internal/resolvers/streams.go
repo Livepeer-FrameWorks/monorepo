@@ -2,6 +2,7 @@ package resolvers
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -814,4 +815,92 @@ func (r *Resolver) DoListDVRRequests(ctx context.Context, internalName *string, 
 		return nil, fmt.Errorf("failed to list DVR requests: %w", err)
 	}
 	return out, nil
+}
+
+// DoGetStreamMeta retrieves metadata for a stream
+func (r *Resolver) DoGetStreamMeta(ctx context.Context, streamKey string, targetBaseURL *string, targetNodeID *string, includeRaw *bool) (*model.StreamMetaResponse, error) {
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Demo: get stream meta")
+		rawData := `{"isLive":true,"bufferWindow":5000,"jitter":100,"unixOffset":1000,"now":1640995200000,"last":1640995195000,"width":1920,"height":1080,"version":3,"type":"video"}`
+		return &model.StreamMetaResponse{
+			MetaSummary: &model.StreamMetaSummary{
+				IsLive:         true,
+				BufferWindowMs: 5000,
+				JitterMs:       100,
+				UnixOffsetMs:   1000,
+				NowMs:          intPtr(1640995200000),
+				LastMs:         intPtr(1640995195000),
+				Width:          intPtr(1920),
+				Height:         intPtr(1080),
+				Version:        intPtr(3),
+				Type:           stringPtr("video"),
+			},
+			Raw: func() *string {
+				if includeRaw != nil && *includeRaw {
+					return &rawData
+				}
+				return nil
+			}(),
+		}, nil
+	}
+
+	// Call Commodore to get stream metadata
+	// Commodore's GetStreamMeta signature: (ctx, streamKey string, includeRaw bool, targetBaseURL, targetNodeID *string)
+	includeRawBool := includeRaw != nil && *includeRaw
+	metaResp, err := r.Clients.Commodore.GetStreamMeta(ctx, streamKey, includeRawBool, targetBaseURL, targetNodeID)
+	if err != nil {
+		r.Logger.WithError(err).Error("Failed to get stream metadata")
+		return nil, fmt.Errorf("failed to get stream metadata: %w", err)
+	}
+
+	// Convert foghorn.MetaSummary to GraphQL model.StreamMetaSummary
+	result := &model.StreamMetaSummary{
+		IsLive:         metaResp.MetaSummary.IsLive,
+		BufferWindowMs: int(metaResp.MetaSummary.BufferWindowMs), // Convert int64 to int
+		JitterMs:       int(metaResp.MetaSummary.JitterMs),       // Convert int64 to int
+		UnixOffsetMs:   int(metaResp.MetaSummary.UnixOffset),     // Convert int64 to int
+	}
+
+	// Add optional fields if present
+	if metaResp.MetaSummary.NowMs != nil {
+		nowMs := int(*metaResp.MetaSummary.NowMs)
+		result.NowMs = &nowMs
+	}
+	if metaResp.MetaSummary.LastMs != nil {
+		lastMs := int(*metaResp.MetaSummary.LastMs)
+		result.LastMs = &lastMs
+	}
+	if metaResp.MetaSummary.Width != nil {
+		result.Width = metaResp.MetaSummary.Width
+	}
+	if metaResp.MetaSummary.Height != nil {
+		result.Height = metaResp.MetaSummary.Height
+	}
+	if metaResp.MetaSummary.Version != nil {
+		result.Version = metaResp.MetaSummary.Version
+	}
+	if metaResp.MetaSummary.Type != "" {
+		result.Type = &metaResp.MetaSummary.Type
+	}
+
+	// Build the response
+	response := &model.StreamMetaResponse{
+		MetaSummary: result,
+	}
+
+	// Include raw response if requested
+	if includeRawBool && metaResp.Raw != nil {
+		// Convert the 'any' type to string via JSON marshalling
+		if rawBytes, err := json.Marshal(metaResp.Raw); err == nil {
+			rawStr := string(rawBytes)
+			response.Raw = &rawStr
+		}
+	}
+
+	return response, nil
+}
+
+// intPtr returns a pointer to the int value
+func intPtr(i int) *int {
+	return &i
 }

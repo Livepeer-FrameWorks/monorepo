@@ -2,27 +2,19 @@ package balancer
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"math"
 	"net"
-	"strconv"
 	"strings"
-	"sync"
-	"time"
 
 	"frameworks/pkg/logging"
-	"frameworks/pkg/validation"
+
+	"frameworks/api_balancing/internal/state"
 )
 
 // LoadBalancer is the main load balancer instance
 type LoadBalancer struct {
-	db        *sql.DB
-	logger    logging.Logger
-	nodes     map[string]*Node
-	nodeIDMap map[string]string // NodeID -> BaseURL mapping
-	revIDMap  map[string]string // BaseURL -> NodeID mapping
-	mu        sync.RWMutex
+	logger logging.Logger
 
 	// Configurable weights (exactly like C++ version)
 	WeightCPU   uint64
@@ -30,129 +22,20 @@ type LoadBalancer struct {
 	WeightBW    uint64
 	WeightGeo   uint64
 	WeightBonus uint64
-
-	// Staleness detection
-	stalenessChecker chan bool
-}
-
-// Node represents a MistServer node (matches C++ hostDetails exactly)
-type Node struct {
-	Host           string            `json:"host"`
-	BinHost        [16]byte          `json:"bin_host"` // Binary IP address (IPv6 compatible)
-	Port           int               `json:"port"`
-	DTSCPort       int               `json:"dtsc_port"`
-	Tags           []string          `json:"tags"`
-	GeoLatitude    float64           `json:"geo_latitude"`
-	GeoLongitude   float64           `json:"geo_longitude"`
-	LocationName   string            `json:"location_name"`
-	CPU            uint64            `json:"cpu"` // 0-1000 (tenths of percentage, like C++)
-	RAMMax         uint64            `json:"ram_max"`
-	RAMCurrent     uint64            `json:"ram_current"`
-	UpSpeed        uint64            `json:"up_speed"`        // bytes/sec
-	DownSpeed      uint64            `json:"down_speed"`      // bytes/sec
-	AvailBandwidth uint64            `json:"avail_bandwidth"` // bytes/sec
-	AddBandwidth   uint64            `json:"add_bandwidth"`   // penalty bandwidth
-	IsActive       bool              `json:"is_active"`
-	LastUpdate     time.Time         `json:"last_update"`
-	Streams        map[string]Stream `json:"streams"`
-	ConfigStreams  []string          `json:"config_streams"` // streams this node can serve
-
-	// Capabilities and storage info (advertised by Helmsman)
-	CapIngest     bool     `json:"cap_ingest"`
-	CapEdge       bool     `json:"cap_edge"`
-	CapStorage    bool     `json:"cap_storage"`
-	CapProcessing bool     `json:"cap_processing"`
-	Roles         []string `json:"roles,omitempty"`
-	GPUVendor     string   `json:"gpu_vendor,omitempty"`
-	GPUCount      int      `json:"gpu_count,omitempty"`
-	GPUMemMB      int      `json:"gpu_mem_mb,omitempty"`
-	GPUCC         string   `json:"gpu_cc,omitempty"`
-	StorageLocal  string   `json:"storage_local"`
-	StorageBucket string   `json:"storage_bucket"`
-	StoragePrefix string   `json:"storage_prefix"`
-
-	// Limits and artifacts
-	MaxTranscodes        int                                `json:"max_transcodes,omitempty"`
-	CurrentTranscodes    int                                `json:"current_transcodes,omitempty"`
-	StorageCapacityBytes uint64                             `json:"storage_capacity_bytes,omitempty"`
-	StorageUsedBytes     uint64                             `json:"storage_used_bytes,omitempty"`
-	Artifacts            []validation.FoghornStoredArtifact `json:"artifacts,omitempty"`
-}
-
-// Stream represents stream information on a node (matches C++ streamDetails)
-type Stream struct {
-	Total      uint64 `json:"total"`     // viewer count
-	Inputs     uint32 `json:"inputs"`    // input count (for ingest)
-	Bandwidth  uint32 `json:"bandwidth"` // bandwidth per viewer
-	PrevTotal  uint64 `json:"prev_total"`
-	BytesUp    uint64 `json:"bytes_up"`
-	BytesDown  uint64 `json:"bytes_down"`
-	Replicated bool   `json:"replicated"` // whether this stream is replicated from another node
 }
 
 // NewLoadBalancer creates a new load balancer with C++ defaults
-func NewLoadBalancer(db *sql.DB, logger logging.Logger) *LoadBalancer {
+func NewLoadBalancer(logger logging.Logger) *LoadBalancer {
 	lb := &LoadBalancer{
-		db:               db,
-		logger:           logger,
-		nodes:            make(map[string]*Node),
-		nodeIDMap:        make(map[string]string),
-		revIDMap:         make(map[string]string),
-		WeightCPU:        500,  // Same as C++
-		WeightRAM:        500,  // Same as C++
-		WeightBW:         1000, // Same as C++
-		WeightGeo:        1000, // Same as C++
-		WeightBonus:      50,   // Same as C++ (not 200!)
-		stalenessChecker: make(chan bool),
+		logger:      logger,
+		WeightCPU:   500,  // Same as C++
+		WeightRAM:   500,  // Same as C++
+		WeightBW:    1000, // Same as C++
+		WeightGeo:   1000, // Same as C++
+		WeightBonus: 50,   // Same as C++ (not 200!)
 	}
-
-	// Start staleness detection background goroutine
-	go lb.runStalenessChecker()
 
 	return lb
-}
-
-// AddNode adds a node to the load balancer
-func (lb *LoadBalancer) AddNode(host string, port int) error {
-	return lb.AddNodeWithID("", host, port)
-}
-
-// AddNodeWithID adds a node to the load balancer with a nodeID
-func (lb *LoadBalancer) AddNodeWithID(nodeID, host string, port int) error {
-	lb.mu.Lock()
-	defer lb.mu.Unlock()
-
-	// Resolve host to binary IP address (like C++)
-	binHost := lb.hostToBinary(host)
-
-	node := &Node{
-		Host:           host,
-		BinHost:        binHost,
-		Port:           port,
-		DTSCPort:       4200,              // Default DTSC port
-		CPU:            1000,              // Start at max load (like C++)
-		AvailBandwidth: 128 * 1024 * 1024, // Assume 1G connection (like C++)
-		IsActive:       true,
-		Streams:        make(map[string]Stream),
-		Tags:           make([]string, 0),
-		ConfigStreams:  make([]string, 0),
-	}
-
-	lb.nodes[host] = node
-
-	// Store NodeID mapping if provided
-	if nodeID != "" {
-		lb.nodeIDMap[nodeID] = host
-		lb.revIDMap[host] = nodeID
-		lb.logger.WithFields(logging.Fields{
-			"host":    host,
-			"node_id": nodeID,
-		}).Info("Added node to load balancer with NodeID")
-	} else {
-		lb.logger.WithField("host", host).Info("Added node to load balancer")
-	}
-
-	return nil
 }
 
 // hostToBinary converts hostname to 16-byte binary representation (IPv6 compatible)
@@ -206,172 +89,52 @@ func (lb *LoadBalancer) compareBinaryHosts(host1, host2 [16]byte) bool {
 	return true
 }
 
-// RemoveNode removes a node from the load balancer
-func (lb *LoadBalancer) RemoveNode(host string) error {
-	lb.mu.Lock()
-	defer lb.mu.Unlock()
+// GetAllNodes returns all nodes from unified state
+func (lb *LoadBalancer) GetAllNodes() []state.EnhancedBalancerNodeSnapshot {
+	snapshot := state.DefaultManager().GetBalancerSnapshotAtomic()
+	if snapshot == nil {
+		return []state.EnhancedBalancerNodeSnapshot{}
+	}
+	return snapshot.Nodes
+}
 
-	if _, exists := lb.nodes[host]; exists {
-		delete(lb.nodes, host)
+// GetNodes returns nodes map from unified state
+func (lb *LoadBalancer) GetNodes() map[string]state.NodeState {
+	snapshot := state.DefaultManager().GetBalancerSnapshotAtomic()
+	if snapshot == nil {
+		return map[string]state.NodeState{}
+	}
 
-		// Remove NodeID mappings pointing to this host
-		for nodeID, mappedHost := range lb.nodeIDMap {
-			if mappedHost == host {
-				delete(lb.nodeIDMap, nodeID)
-				delete(lb.revIDMap, host)
-				lb.logger.WithFields(logging.Fields{
-					"host":    host,
-					"node_id": nodeID,
-				}).Debug("Removed NodeID mapping")
-			}
+	result := make(map[string]state.NodeState)
+	for _, snap := range snapshot.Nodes {
+		if nodeState := state.DefaultManager().GetNodeState(snap.NodeID); nodeState != nil {
+			result[snap.Host] = *nodeState
 		}
-
-		lb.logger.WithField("host", host).Info("Removed node from load balancer")
 	}
-
-	return nil
+	return result
 }
 
-// UpdateNodeMetrics updates metrics for a node (called by Helmsman) - TYPED VERSION
-func (lb *LoadBalancer) UpdateNodeMetrics(host string, data *validation.FoghornNodeUpdate) error {
-	lb.mu.Lock()
-	defer lb.mu.Unlock()
-
-	node, exists := lb.nodes[host]
-	if !exists {
-		return fmt.Errorf("node %s not found", host)
-	}
-
-	// Update metrics from typed data (matches raw MistServer data)
-	node.CPU = uint64(data.CPU)               // Raw CPU (tenths of percentage)
-	node.RAMMax = uint64(data.RAMMax)         // Raw RAM max (MiB)
-	node.RAMCurrent = uint64(data.RAMCurrent) // Raw RAM current (MiB)
-	node.UpSpeed = uint64(data.UpSpeed)       // Raw upload speed (bytes/sec)
-	node.DownSpeed = uint64(data.DownSpeed)   // Raw download speed (bytes/sec)
-	if data.BWLimit > 0 {
-		node.AvailBandwidth = uint64(data.BWLimit) // Raw bandwidth limit (bytes/sec)
-	}
-
-	// Update geo location from typed data
-	node.GeoLatitude = data.Location.Latitude
-	node.GeoLongitude = data.Location.Longitude
-	node.LocationName = data.Location.Name
-
-	// Update tags from typed data
-	node.Tags = make([]string, len(data.Tags))
-	copy(node.Tags, data.Tags)
-
-	// Update capabilities and storage info
-	node.CapIngest = data.Capabilities.Ingest
-	node.CapEdge = data.Capabilities.Edge
-	node.CapStorage = data.Capabilities.Storage
-	node.CapProcessing = data.Capabilities.Processing
-	node.Roles = append([]string(nil), data.Capabilities.Roles...)
-	if len(data.Capabilities.GPUs) > 0 {
-		// store summary in primary GPU fields (first GPU)
-		g := data.Capabilities.GPUs[0]
-		node.GPUVendor = g.Vendor
-		node.GPUCount = len(data.Capabilities.GPUs)
-		node.GPUMemMB = g.MemMB
-		node.GPUCC = g.ComputeCapability
-	} else {
-		node.GPUVendor, node.GPUCount, node.GPUMemMB, node.GPUCC = "", 0, 0, ""
-	}
-	node.StorageLocal = data.Storage.LocalPath
-	node.StorageBucket = data.Storage.S3Bucket
-	node.StoragePrefix = data.Storage.S3Prefix
-
-	if data.Limits != nil {
-		node.MaxTranscodes = data.Limits.MaxTranscodes
-		node.CurrentTranscodes = data.Limits.CurrentTranscodes
-		node.StorageCapacityBytes = data.Limits.StorageCapacityBytes
-		node.StorageUsedBytes = data.Limits.StorageUsedBytes
-	}
-	node.Artifacts = append([]validation.FoghornStoredArtifact(nil), data.Artifacts...)
-
-	// Update streams from typed data
-	node.Streams = make(map[string]Stream)
-	for streamName, streamData := range data.Streams {
-		stream := Stream{
-			Total:      streamData.Total,
-			Inputs:     streamData.Inputs,
-			Bandwidth:  streamData.Bandwidth,
-			BytesUp:    streamData.BytesUp,
-			BytesDown:  streamData.BytesDown,
-			Replicated: streamData.Replicated,
-		}
-		node.Streams[streamName] = stream
-	}
-
-	// Update config streams from typed data
-	node.ConfigStreams = make([]string, len(data.ConfigStreams))
-	copy(node.ConfigStreams, data.ConfigStreams)
-
-	// Decay add bandwidth (like C++)
-	node.AddBandwidth = uint64(float64(node.AddBandwidth) * 0.75)
-	node.LastUpdate = time.Now()
-
-	return nil
-}
-
-// GetAllNodes returns all nodes
-func (lb *LoadBalancer) GetAllNodes() []*Node {
-	lb.mu.RLock()
-	defer lb.mu.RUnlock()
-
-	nodes := make([]*Node, 0, len(lb.nodes))
-	for _, node := range lb.nodes {
-		nodes = append(nodes, node)
-	}
-
-	return nodes
-}
-
-// GetNodes returns the nodes map
-func (lb *LoadBalancer) GetNodes() map[string]*Node {
-	lb.mu.RLock()
-	defer lb.mu.RUnlock()
-	return lb.nodes
-}
-
-// GetNodeByID looks up a node's BaseURL by NodeID
+// GetNodeByID looks up a node's BaseURL by NodeID from unified state
 func (lb *LoadBalancer) GetNodeByID(nodeID string) (string, error) {
-	lb.mu.RLock()
-	defer lb.mu.RUnlock()
-
-	baseURL, exists := lb.nodeIDMap[nodeID]
-	if !exists {
+	node := state.DefaultManager().GetNodeState(nodeID)
+	if node == nil {
 		return "", fmt.Errorf("node with ID %s not found", nodeID)
 	}
-
-	return baseURL, nil
+	return node.BaseURL, nil
 }
 
-// UpdateNodeIDMapping updates the NodeID to BaseURL mapping
-func (lb *LoadBalancer) UpdateNodeIDMapping(nodeID, baseURL string) error {
-	lb.mu.Lock()
-	defer lb.mu.Unlock()
-
-	// Verify the node exists
-	if _, exists := lb.nodes[baseURL]; !exists {
-		return fmt.Errorf("node %s not found", baseURL)
-	}
-
-	lb.nodeIDMap[nodeID] = baseURL
-	lb.revIDMap[baseURL] = nodeID
-	lb.logger.WithFields(logging.Fields{
-		"node_id":  nodeID,
-		"base_url": baseURL,
-	}).Debug("Updated NodeID mapping")
-
-	return nil
-}
-
-// GetNodeIDByHost returns the NodeID for a given host if known
+// GetNodeIDByHost returns the NodeID for a given host from unified state
 func (lb *LoadBalancer) GetNodeIDByHost(host string) string {
-	lb.mu.RLock()
-	defer lb.mu.RUnlock()
-	return lb.revIDMap[host]
+	snapshot := state.DefaultManager().GetBalancerSnapshotAtomic()
+	if snapshot == nil {
+		return ""
+	}
+	for _, snap := range snapshot.Nodes {
+		if snap.Host == host {
+			return snap.NodeID
+		}
+	}
+	return ""
 }
 
 // GetBestNode finds the best node using EXACT C++ rate() algorithm
@@ -401,66 +164,61 @@ func (lb *LoadBalancer) GetBestNodeWithScore(ctx context.Context, streamName str
 	}
 	best := nodes[0]
 
-	// Add viewer (like C++)
-	lb.mu.Lock()
-	if node, exists := lb.nodes[best.Host]; exists {
-		lb.addViewer(node, streamName)
-	}
-	lb.mu.Unlock()
+	// No virtual viewer tracking needed - rely on USER_NEW/USER_END triggers
 
 	return best.Host, best.Score, best.GeoLatitude, best.GeoLongitude, best.LocationName, nil
 }
 
-// GetTopNodesWithScores finds the top N nodes and returns them with scores (for fallbacks)
 func (lb *LoadBalancer) GetTopNodesWithScores(ctx context.Context, streamName string, lat, lon float64, tagAdjust map[string]int, clientIP string, maxNodes int) ([]NodeWithScore, error) {
-	lb.mu.RLock()
-	defer lb.mu.RUnlock()
+	snapshot := state.DefaultManager().GetBalancerSnapshotAtomic()
+	if snapshot == nil || len(snapshot.Nodes) == 0 {
+		return nil, fmt.Errorf("no nodes available in unified state")
+	}
 
 	type scoredNode struct {
-		node  *Node
+		snap  state.EnhancedBalancerNodeSnapshot
 		score uint64
 	}
 	var scoredNodes []scoredNode
 
-	// Optional capability filter via context value "cap"
+	// Parse capability requirements
 	requireCap, _ := ctx.Value("cap").(string)
 	var reqs []string
 	if requireCap != "" {
 		for _, p := range strings.Split(requireCap, ",") {
-			v := strings.TrimSpace(p)
-			if v != "" {
+			if v := strings.TrimSpace(p); v != "" {
 				reqs = append(reqs, v)
 			}
 		}
 	}
-	skipForCap := func(n *Node) bool {
+
+	skipForCap := func(snap state.EnhancedBalancerNodeSnapshot) bool {
 		if len(reqs) == 0 {
 			return false
 		}
-		roleSet := make(map[string]bool, len(n.Roles))
-		for _, r := range n.Roles {
+		roleSet := make(map[string]bool, len(snap.Roles))
+		for _, r := range snap.Roles {
 			roleSet[r] = true
 		}
 		for _, r := range reqs {
 			switch r {
 			case "ingest":
-				if !n.CapIngest && !roleSet["ingest"] {
+				if !snap.CapIngest && !roleSet["ingest"] {
 					return true
 				}
 			case "edge":
-				if !n.CapEdge && !roleSet["edge"] {
+				if !snap.CapEdge && !roleSet["edge"] {
 					return true
 				}
 			case "storage":
-				if !n.CapStorage && !roleSet["storage"] {
+				if !snap.CapStorage && !roleSet["storage"] {
 					return true
 				}
 			case "processing":
-				if !n.CapProcessing && !roleSet["processing"] {
+				if !snap.CapProcessing && !roleSet["processing"] {
 					return true
 				}
 			default:
-				// treat as arbitrary role name
 				if !roleSet[r] {
 					return true
 				}
@@ -469,45 +227,33 @@ func (lb *LoadBalancer) GetTopNodesWithScores(ctx context.Context, streamName st
 		return false
 	}
 
-	// Get client's binary IP for same-host detection
 	var clientBinHost [16]byte
 	if clientIP != "" {
 		clientBinHost = lb.hostToBinary(clientIP)
 	}
 
-	for _, node := range lb.nodes {
-		if !node.IsActive {
-			continue
-		}
-		if requireCap != "" && skipForCap(node) {
+	for _, snap := range snapshot.Nodes {
+		if !snap.IsActive || skipForCap(snap) {
 			continue
 		}
 
-		// Skip same-host nodes for source selection (like C++)
-		if streamName != "" && clientIP != "" && lb.compareBinaryHosts(node.BinHost, clientBinHost) {
+		if streamName != "" && clientIP != "" && state.CompareBinaryHosts(snap.BinHost, clientBinHost) {
 			lb.logger.WithFields(logging.Fields{
-				"stream":    streamName,
-				"host":      node.Host,
-				"client_ip": clientIP,
+				"stream": streamName, "host": snap.Host, "client_ip": clientIP,
 			}).Debug("Ignoring same-host entry for source selection")
 			continue
 		}
 
-		// Calculate score using EXACT C++ rate() method
-		score := lb.rateNode(node, streamName, lat, lon, tagAdjust)
+		score := lb.rateNode(snap, streamName, lat, lon, tagAdjust)
 		if score == 0 {
 			continue
 		}
 
-		// Same-host bonus for viewing (not source)
-		if clientIP != "" && streamName == "" && lb.compareBinaryHosts(node.BinHost, clientBinHost) {
+		if clientIP != "" && streamName == "" && state.CompareBinaryHosts(snap.BinHost, clientBinHost) {
 			score = score * 5
 		}
 
-		scoredNodes = append(scoredNodes, scoredNode{
-			node:  node,
-			score: score,
-		})
+		scoredNodes = append(scoredNodes, scoredNode{snap: snap, score: score})
 	}
 
 	if len(scoredNodes) == 0 {
@@ -523,157 +269,127 @@ func (lb *LoadBalancer) GetTopNodesWithScores(ctx context.Context, streamName st
 		}
 	}
 
-	// Limit to requested number of nodes
 	if maxNodes > 0 && len(scoredNodes) > maxNodes {
 		scoredNodes = scoredNodes[:maxNodes]
 	}
 
-	// Convert to return type
-	var result []NodeWithScore
-	for _, sn := range scoredNodes {
-		nodeID := lb.revIDMap[sn.node.Host]
-		result = append(result, NodeWithScore{
-			Host:         sn.node.Host,
-			NodeID:       nodeID,
-			Score:        sn.score,
-			GeoLatitude:  sn.node.GeoLatitude,
-			GeoLongitude: sn.node.GeoLongitude,
-			LocationName: sn.node.LocationName,
-		})
+	result := make([]NodeWithScore, len(scoredNodes))
+	for i, sn := range scoredNodes {
+		result[i] = NodeWithScore{
+			Host: sn.snap.Host, NodeID: sn.snap.NodeID, Score: sn.score,
+			GeoLatitude: sn.snap.GeoLatitude, GeoLongitude: sn.snap.GeoLongitude, LocationName: sn.snap.LocationName,
+		}
 	}
 
 	lb.logger.WithFields(logging.Fields{
-		"stream":    streamName,
-		"num_nodes": len(result),
-		"winner":    result[0].Host,
-		"score":     result[0].Score,
-		"lat":       lat,
-		"lon":       lon,
+		"stream": streamName, "num_nodes": len(result), "winner": result[0].Host,
+		"score": result[0].Score, "lat": lat, "lon": lon,
 	}).Info("Load balancing decision")
 
 	return result, nil
 }
 
-// rateNode implements the EXACT C++ rate() method
-func (lb *LoadBalancer) rateNode(node *Node, streamName string, lat, lon float64, tagAdjust map[string]int) uint64 {
-	// Check if host is valid (like C++)
-	if node.RAMMax == 0 || node.AvailBandwidth == 0 {
+func (lb *LoadBalancer) rateNode(snap state.EnhancedBalancerNodeSnapshot, streamName string, lat, lon float64, tagAdjust map[string]int) uint64 {
+	// Check if host is valid
+	if snap.RAMMax == 0 || snap.BWLimit == 0 {
 		lb.logger.WithFields(logging.Fields{
-			"host":      node.Host,
-			"ram_max":   node.RAMMax,
-			"bandwidth": node.AvailBandwidth,
+			"host": snap.Host, "ram_max": snap.RAMMax, "bw_limit": snap.BWLimit,
 		}).Warn("Host invalid")
 		return 0
 	}
 
-	// Check bandwidth limits (like C++)
-	if node.UpSpeed >= node.AvailBandwidth || (node.UpSpeed+node.AddBandwidth) >= node.AvailBandwidth {
+	// Check bandwidth limits using pre-computed available bandwidth
+	if snap.BWAvailable == 0 {
 		lb.logger.WithFields(logging.Fields{
-			"host":            node.Host,
-			"up_speed":        node.UpSpeed,
-			"add_bandwidth":   node.AddBandwidth,
-			"avail_bandwidth": node.AvailBandwidth,
+			"host": snap.Host, "up_speed": snap.UpSpeed, "add_bandwidth": snap.AddBandwidth,
+			"bw_limit": snap.BWLimit, "bw_available": snap.BWAvailable,
 		}).Info("Host over bandwidth")
 		return 0
 	}
 
-	// Check if stream exists, has inputs, and is not replicated (EXACT C++ source() method line 279)
+	// Check stream exists, has inputs, not replicated
 	if streamName != "" {
-		stream, exists := node.Streams[streamName]
+		stream, exists := snap.Streams[streamName]
 		if !exists || stream.Inputs == 0 || stream.Replicated {
 			lb.logger.WithFields(logging.Fields{
-				"stream": streamName,
-				"host":   node.Host,
-				"exists": exists,
+				"stream": streamName, "host": snap.Host, "exists": exists,
 				"inputs": func() uint32 {
 					if exists {
 						return stream.Inputs
-					} else {
-						return 0
 					}
+					return 0
 				}(),
 				"replicated": func() bool {
 					if exists {
 						return stream.Replicated
-					} else {
-						return false
 					}
+					return false
 				}(),
 			}).Debug("Stream not suitable for source: missing, no inputs, or replicated")
 			return 0
 		}
 	}
 
-	// Check config streams (like C++)
-	if len(node.ConfigStreams) > 0 {
+	// Check config streams
+	if len(snap.ConfigStreams) > 0 {
 		allowed := false
-		for _, confStream := range node.ConfigStreams {
-			if confStream == streamName {
-				allowed = true
-				break
-			}
-			// Check prefix match (like C++)
-			if strings.HasPrefix(streamName, confStream+"+") || strings.HasPrefix(streamName, confStream+" ") {
+		for _, confStream := range snap.ConfigStreams {
+			if confStream == streamName || strings.HasPrefix(streamName, confStream+"+") || strings.HasPrefix(streamName, confStream+" ") {
 				allowed = true
 				break
 			}
 		}
 		if !allowed {
 			lb.logger.WithFields(logging.Fields{
-				"stream": streamName,
-				"host":   node.Host,
+				"stream": streamName, "host": snap.Host,
 			}).Debug("Stream not available from host")
 			return 0
 		}
 	}
 
-	// Calculate scores EXACTLY like C++
-	cpuScore := lb.WeightCPU - (node.CPU*lb.WeightCPU)/1000
-	ramScore := lb.WeightRAM - ((node.RAMCurrent * lb.WeightRAM) / node.RAMMax)
-	bwScore := lb.WeightBW - (((node.UpSpeed + node.AddBandwidth) * lb.WeightBW) / node.AvailBandwidth)
+	// Get current weights from unified state manager
+	weights := state.DefaultManager().GetWeights()
 
-	// Geographic score (like C++)
+	// Use pre-computed scores for faster calculation
+	cpuScore := snap.CPUScore
+	ramScore := snap.RAMScore
+	bwScore := weights["bw"] - (uint64(snap.UpSpeed+float64(snap.AddBandwidth))*weights["bw"])/uint64(snap.BWLimit)
+
+	// Geographic score (still computed dynamically)
 	var geoScore uint64 = 0
-	if node.GeoLatitude != 0 && node.GeoLongitude != 0 && lat != 0 && lon != 0 {
-		distance := lb.geoDist(node.GeoLatitude, node.GeoLongitude, lat, lon)
-		geoScore = lb.WeightGeo - uint64(float64(lb.WeightGeo)*distance)
+	if snap.GeoLatitude != 0 && snap.GeoLongitude != 0 && lat != 0 && lon != 0 {
+		distance := lb.geoDist(snap.GeoLatitude, snap.GeoLongitude, lat, lon)
+		geoScore = weights["geo"] - uint64(float64(weights["geo"])*distance)
 	}
 
-	// Stream bonus (like C++)
+	// Stream bonus
 	var streamBonus uint64 = 0
-	if _, hasStream := node.Streams[streamName]; hasStream {
-		streamBonus = lb.WeightBonus
+	if _, hasStream := snap.Streams[streamName]; hasStream {
+		streamBonus = weights["bonus"]
 	}
 
-	// Base score
+	// Base score using pre-computed values
 	score := cpuScore + ramScore + bwScore + geoScore + streamBonus
 
-	// Apply tag adjustments EXACTLY like C++
+	// Apply tag adjustments
 	var adjustment int64 = 0
 	if len(tagAdjust) > 0 {
 		for tagMatch, adj := range tagAdjust {
-			adjustment += int64(lb.applyAdjustment(node.Tags, tagMatch, adj))
+			adjustment += int64(lb.applyAdjustment(snap.Tags, tagMatch, adj))
 		}
 	}
 
-	// Apply adjustment (like C++)
+	// Apply adjustment
 	if adjustment >= 0 || -adjustment < int64(score) {
 		score = uint64(int64(score) + adjustment)
 	} else {
 		score = 0
 	}
 
-	// Log detailed scoring (like C++)
 	lb.logger.WithFields(logging.Fields{
-		"host":           node.Host,
-		"cpu_score":      cpuScore,
-		"ram_score":      ramScore,
-		"stream_bonus":   streamBonus,
-		"bw_score":       bwScore,
-		"bw_max_mbps":    node.AvailBandwidth / 1024 / 1024,
-		"geo_score":      geoScore,
-		"tag_adjustment": adjustment,
-		"final_score":    score,
+		"host": snap.Host, "cpu_score": cpuScore, "ram_score": ramScore, "stream_bonus": streamBonus,
+		"bw_score": bwScore, "bw_max_mbps": uint64(snap.BWLimit) / 1024 / 1024, "geo_score": geoScore,
+		"tag_adjustment": adjustment, "final_score": score,
 	}).Debug("Host scoring details")
 
 	return score
@@ -730,147 +446,10 @@ func (lb *LoadBalancer) applyAdjustment(tags []string, match string, adj int) in
 	return 0
 }
 
-// addViewer implements C++ addViewer method
-func (lb *LoadBalancer) addViewer(node *Node, streamName string) {
-	var toAdd uint64 = 0
-
-	if stream, exists := node.Streams[streamName]; exists {
-		toAdd = uint64(stream.Bandwidth)
-	} else {
-		// Calculate estimated bandwidth like C++
-		total := uint64(0)
-		for _, stream := range node.Streams {
-			total += stream.Total
-		}
-		if total > 0 {
-			toAdd = (node.UpSpeed + node.DownSpeed) / total
-		} else {
-			toAdd = 131072 // assume 1mbps (like C++)
-		}
-	}
-
-	// Ensure reasonable limits (like C++)
-	if toAdd < 64*1024 {
-		toAdd = 64 * 1024 // minimum 0.5 mbps
-	}
-	if toAdd > 1024*1024 {
-		toAdd = 1024 * 1024 // maximum 8 mbps
-	}
-
-	node.AddBandwidth += toAdd
-}
-
-// UpdateStreamHealth updates the health status of a stream on a node - TYPED VERSION
-func (lb *LoadBalancer) UpdateStreamHealth(host string, streamName string, isHealthy bool, details *validation.FoghornStreamHealth) error {
-	lb.mu.Lock()
-	defer lb.mu.Unlock()
-
-	node, exists := lb.nodes[host]
-	if !exists {
-		return fmt.Errorf("node %s not found", host)
-	}
-
-	// Get or create stream
-	stream, exists := node.Streams[streamName]
-	if !exists {
-		stream = Stream{}
-	}
-
-	// Update stream health
-	if !isHealthy {
-		// If stream is not healthy, mark it as having no viewers
-		stream.Total = 0
-		stream.Inputs = 0
-		stream.Bandwidth = 0
-		stream.BytesUp = 0
-		stream.BytesDown = 0
-	} else {
-		// If stream is healthy, ensure it has at least basic metrics
-		if stream.Total == 0 {
-			stream.Total = 1 // At least one viewer
-		}
-		if stream.Bandwidth == 0 {
-			stream.Bandwidth = 131072 // Default 1mbps like C++
-		}
-	}
-
-	// Update additional details from typed data if provided
-	if details != nil {
-		// Buffer state affects health
-		switch details.BufferState {
-		case "EMPTY", "DRY":
-			stream.Total = 0
-			stream.Inputs = 0
-		case "FULL", "RECOVER":
-			if stream.Total == 0 {
-				stream.Total = 1
-			}
-		}
-
-		// Update bandwidth from bandwidth_data if provided
-		if details.BandwidthData != "" {
-			if bw, err := strconv.ParseUint(details.BandwidthData, 10, 32); err == nil {
-				stream.Bandwidth = uint32(bw)
-			}
-		}
-	}
-
-	// Update the stream in the node
-	node.Streams[streamName] = stream
-
-	bufferState := ""
-	if details != nil {
-		bufferState = details.BufferState
-	}
-
-	lb.logger.WithFields(logging.Fields{
-		"host":         host,
-		"stream":       streamName,
-		"is_healthy":   isHealthy,
-		"total":        stream.Total,
-		"bandwidth":    stream.Bandwidth,
-		"buffer_state": bufferState,
-	}).Info("Updated stream health status")
-
-	return nil
-}
-
-// HandleNodeShutdown marks a node as inactive and cleans up its state - TYPED VERSION
-func (lb *LoadBalancer) HandleNodeShutdown(host string, reason string, details *validation.FoghornNodeShutdown) error {
-	lb.mu.Lock()
-	defer lb.mu.Unlock()
-
-	node, exists := lb.nodes[host]
-	if !exists {
-		return fmt.Errorf("node %s not found", host)
-	}
-
-	// Mark node as inactive
-	node.IsActive = false
-
-	// Clear all streams since node is shutting down
-	node.Streams = make(map[string]Stream)
-
-	// Log shutdown
-	lb.logger.WithFields(logging.Fields{
-		"host":    host,
-		"reason":  reason,
-		"details": details,
-	}).Info("Node marked as inactive due to shutdown")
-
-	return nil
-}
-
-// SetWeights updates the scoring weights (like C++ /?weights= endpoint)
+// SetWeights updates the scoring weights and triggers score recomputation (like C++ /?weights= endpoint)
 func (lb *LoadBalancer) SetWeights(cpu, ram, bandwidth, geo, streamBonus uint64) {
-	lb.mu.Lock()
-	defer lb.mu.Unlock()
-
-	lb.WeightCPU = cpu
-	lb.WeightRAM = ram
-	lb.WeightBW = bandwidth
-	lb.WeightGeo = geo
-	lb.WeightBonus = streamBonus
+	// Delegate to unified state manager
+	state.DefaultManager().SetWeights(cpu, ram, bandwidth, geo, streamBonus)
 
 	lb.logger.WithFields(logging.Fields{
 		"cpu":          cpu,
@@ -878,103 +457,10 @@ func (lb *LoadBalancer) SetWeights(cpu, ram, bandwidth, geo, streamBonus uint64)
 		"bandwidth":    bandwidth,
 		"geo":          geo,
 		"stream_bonus": streamBonus,
-	}).Info("Updated load balancer weights")
+	}).Info("Updated load balancer weights - delegated to unified state manager")
 }
 
-// GetWeights returns current weights
+// GetWeights returns current weights from unified state manager
 func (lb *LoadBalancer) GetWeights() map[string]uint64 {
-	lb.mu.RLock()
-	defer lb.mu.RUnlock()
-
-	return map[string]uint64{
-		"cpu":   lb.WeightCPU,
-		"ram":   lb.WeightRAM,
-		"bw":    lb.WeightBW,
-		"geo":   lb.WeightGeo,
-		"bonus": lb.WeightBonus,
-	}
-}
-
-// runStalenessChecker runs a background goroutine to detect stale nodes
-func (lb *LoadBalancer) runStalenessChecker() {
-	ticker := time.NewTicker(30 * time.Second) // Check every 30 seconds
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ticker.C:
-			lb.checkStaleNodes()
-		case <-lb.stalenessChecker:
-			// Signal to stop the checker
-			return
-		}
-	}
-}
-
-// checkStaleNodes marks nodes as inactive if they haven't sent updates recently
-func (lb *LoadBalancer) checkStaleNodes() {
-	lb.mu.Lock()
-	defer lb.mu.Unlock()
-
-	now := time.Now()
-	staleThreshold := 90 * time.Second  // Mark stale after 90 seconds (Helmsman sends every 10s)
-	removeThreshold := 10 * time.Minute // Remove completely after 10 minutes
-
-	var staleness []string
-	var removals []string
-
-	for host, node := range lb.nodes {
-		if node.LastUpdate.IsZero() {
-			// Node was just added but never updated - give it some time
-			continue
-		}
-
-		timeSinceUpdate := now.Sub(node.LastUpdate)
-
-		if timeSinceUpdate > removeThreshold {
-			// Node has been stale too long - remove it completely
-			removals = append(removals, host)
-		} else if timeSinceUpdate > staleThreshold && node.IsActive {
-			// Node is stale but not removed yet - mark inactive
-			node.IsActive = false
-			staleness = append(staleness, host)
-		}
-	}
-
-	// Log stale nodes
-	for _, host := range staleness {
-		lb.logger.WithFields(logging.Fields{
-			"host":        host,
-			"last_update": lb.nodes[host].LastUpdate,
-			"age":         now.Sub(lb.nodes[host].LastUpdate),
-		}).Warn("Node marked as inactive due to staleness")
-	}
-
-	// Remove completely stale nodes
-	for _, host := range removals {
-		// Remove NodeID mappings
-		for nodeID, mappedHost := range lb.nodeIDMap {
-			if mappedHost == host {
-				delete(lb.nodeIDMap, nodeID)
-			}
-		}
-		for baseURL := range lb.revIDMap {
-			if baseURL == host {
-				delete(lb.revIDMap, baseURL)
-			}
-		}
-
-		lb.logger.WithFields(logging.Fields{
-			"host":        host,
-			"last_update": lb.nodes[host].LastUpdate,
-			"age":         now.Sub(lb.nodes[host].LastUpdate),
-		}).Info("Removed stale node from load balancer")
-
-		delete(lb.nodes, host)
-	}
-}
-
-// Shutdown gracefully shuts down the load balancer
-func (lb *LoadBalancer) Shutdown() {
-	close(lb.stalenessChecker)
+	return state.DefaultManager().GetWeights()
 }

@@ -20,6 +20,11 @@
   $: formattedValue = formatValue(value, format, unit);
   $: changeDirection = changePercent ? (changePercent > 0 ? 'up' : 'down') : null;
   
+  /**
+   * @param {number | null} val
+   * @param {string} fmt
+   * @param {string} unit
+   */
   function formatValue(val, fmt, unit) {
     if (val === null || val === undefined) return 'N/A';
     
@@ -36,6 +41,9 @@
     }
   }
   
+  /**
+   * @param {string | null} direction
+   */
   function getTrendIcon(direction) {
     switch (direction) {
       case 'up': return '↗';
@@ -45,6 +53,10 @@
     }
   }
   
+  /**
+   * @param {string | null} direction
+   * @param {boolean} positive
+   */
   function getTrendColor(direction, positive = true) {
     if (!direction) return 'text-slate-400';
     

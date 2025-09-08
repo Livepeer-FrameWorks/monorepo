@@ -2,7 +2,7 @@
 
 The marketing website for FrameWorks - a React-based site showcasing the streaming platform's features, pricing, and documentation.
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Prerequisites
 
@@ -25,11 +25,7 @@ The marketing website for FrameWorks - a React-based site showcasing the streami
    ```bash
    cp env.example .env
    ```
-   
-   Edit `.env` with your specific configuration:
-   - `VITE_APP_URL`: URL of the main FrameWorks application
-   - `VITE_CONTACT_API_URL`: URL of the contact forms API
-   - `VITE_DEMO_STREAM_NAME`: Stream name for the live demo player
+   Edit `.env` as needed. See `env.example` comments for details. Do not commit secrets.
 
 4. **Start the development server:**
    ```bash
@@ -39,7 +35,7 @@ The marketing website for FrameWorks - a React-based site showcasing the streami
 5. **Open your browser:**
    Navigate to `http://localhost:9004`
 
-## 🛠️ Development
+## Development
 
 ### Available Scripts
 
@@ -67,13 +63,13 @@ src/
 ### Key Features
 
 - **Live Demo Player**: Integrated MistPlayer showing real streaming
-- **Anti-Spam Contact Form**: Level 3™️ bot protection with behavioral tracking
+- **Anti-spam Contact Form**: Behavioral checks and validation
 - **Responsive Design**: Mobile-first with Tailwind CSS
 - **Tokyo Night Theme**: Custom dark theme with gradient accents
 - **Framer Motion**: Smooth animations and transitions
 - **SEO Optimized**: Meta tags and semantic HTML
 
-## 🎨 Styling
+## Styling
 
 The site uses a custom "Tokyo Night" theme built with Tailwind CSS:
 
@@ -82,7 +78,7 @@ The site uses a custom "Tokyo Night" theme built with Tailwind CSS:
 - **Components**: Glass cards with glow effects
 - **Animations**: Smooth transitions and hover effects
 
-## 🔧 Configuration
+## Configuration
 
 All configuration is handled through environment variables defined in `config.js`:
 
@@ -95,7 +91,7 @@ const config = {
 }
 ```
 
-## 📱 Pages
+## Pages
 
 ### Landing Page (`/`)
 - Hero section with live streaming demo
@@ -126,7 +122,7 @@ const config = {
 - Architecture overview
 - Code examples and deployment instructions
 
-## 🚢 Deployment
+## Deployment
 
 ### Docker Deployment
 
@@ -140,13 +136,4 @@ docker build -t frameworks-marketing .
 docker run -p 80:80 frameworks-marketing
 ```
 
-### Environment Variables for Production
-
-Set these environment variables for production deployment:
-
-```bash
-VITE_APP_URL=https://app.frameworks.network
-VITE_CONTACT_API_URL=https://contact.frameworks.network
-VITE_CONTACT_EMAIL=info@frameworks.network
-VITE_DOMAIN=frameworks.network
-```
+Configuration for production is also managed via `.env`. Use `env.example` as the source of truth for available variables and descriptions.

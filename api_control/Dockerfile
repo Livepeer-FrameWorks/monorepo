@@ -19,16 +19,20 @@ COPY pkg/ ../pkg/
 # Copy service source code
 COPY api_control/ ./
 
-# Build the application with version injection
+# Build the application with version and component injection
 ARG VERSION=dev
 ARG GIT_COMMIT=docker
 ARG BUILD_DATE
+ARG COMPONENT_NAME=commodore
+ARG COMPONENT_VERSION=0.0.0
 
 RUN go mod download
 RUN CGO_ENABLED=0 GOOS=linux go build \
     -ldflags "-X frameworks/pkg/version.Version=${VERSION} \
               -X frameworks/pkg/version.GitCommit=${GIT_COMMIT} \
-              -X frameworks/pkg/version.BuildDate=${BUILD_DATE}" \
+              -X frameworks/pkg/version.BuildDate=${BUILD_DATE} \
+              -X frameworks/pkg/version.ComponentName=${COMPONENT_NAME} \
+              -X frameworks/pkg/version.ComponentVersion=${COMPONENT_VERSION}" \
     -a -installsuffix cgo -o commodore ./cmd/commodore
 
 # Runtime stage

@@ -72,3 +72,17 @@ type CreateAPITokenRequest struct {
 	Permissions []string   `json:"permissions"`
 	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
 }
+
+// BootstrapToken represents a bootstrap token for edge node or service enrollment
+type BootstrapToken struct {
+	ID         string     `json:"id"`
+	Name       string     `json:"name"`
+	Token      string     `json:"token,omitempty"` // Only returned on creation
+	Type       string     `json:"type"`            // "EDGE_NODE" or "SERVICE"
+	UsageLimit *int       `json:"usage_limit,omitempty"`
+	UsageCount int        `json:"usage_count"`
+	ExpiresAt  *time.Time `json:"expires_at,omitempty"`
+	CreatedAt  time.Time  `json:"created_at"`
+	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
+	IsActive   bool       `json:"is_active"`
+}

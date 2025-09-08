@@ -211,6 +211,90 @@ func (r *Resolver) DoGetNode(ctx context.Context, id string) (*models.Infrastruc
 	return &nodeResp.Node, nil
 }
 
+// DoDiscoverServices discovers running service instances by service type and optional cluster
+func (r *Resolver) DoDiscoverServices(ctx context.Context, serviceType string, clusterID *string) ([]*models.ServiceInstance, error) {
+	if middleware.IsDemoMode(ctx) {
+		// In demo mode, return empty list for discovery
+		return []*models.ServiceInstance{}, nil
+	}
+	resp, err := r.Clients.Quartermaster.ServiceDiscovery(ctx, serviceType, clusterID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to discover services: %w", err)
+	}
+	if resp == nil {
+		return []*models.ServiceInstance{}, nil
+	}
+	out := make([]*models.ServiceInstance, 0, len(resp.Instances))
+	for i := range resp.Instances {
+		out = append(out, &resp.Instances[i])
+	}
+	return out, nil
+}
+
+// DoGetClustersAccess returns clusters the current tenant can access
+func (r *Resolver) DoGetClustersAccess(ctx context.Context) ([]*model.ClusterAccess, error) {
+	if middleware.IsDemoMode(ctx) {
+		// Simple demo response with a single shared cluster
+		return []*model.ClusterAccess{
+			{ClusterID: "cluster_demo_us_west", ClusterName: "US West (Oregon)", AccessLevel: "shared"},
+		}, nil
+	}
+	resp, err := r.Clients.Quartermaster.GetClustersAccess(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get clusters access: %w", err)
+	}
+	if resp == nil {
+		return []*model.ClusterAccess{}, nil
+	}
+	out := make([]*model.ClusterAccess, 0, len(resp.Clusters))
+	for i := range resp.Clusters {
+		c := resp.Clusters[i]
+		item := &model.ClusterAccess{
+			ClusterID:   c.ClusterID,
+			ClusterName: c.ClusterName,
+			AccessLevel: c.AccessLevel,
+		}
+		// ResourceLimits: GraphQL JSON scalar maps to *string in generated models.
+		// Serialize map → JSON string when present.
+		if c.ResourceLimits != nil {
+			if b, err := json.Marshal(c.ResourceLimits); err == nil {
+				s := string(b)
+				item.ResourceLimits = &s
+			}
+		}
+		out = append(out, item)
+	}
+	return out, nil
+}
+
+// DoGetClustersAvailable returns clusters available for onboarding UX
+func (r *Resolver) DoGetClustersAvailable(ctx context.Context) ([]*model.AvailableCluster, error) {
+	if middleware.IsDemoMode(ctx) {
+		return []*model.AvailableCluster{
+			{ClusterID: "cluster_demo_us_west", ClusterName: "US West (Oregon)", Tiers: []string{"free"}, AutoEnroll: true},
+		}, nil
+	}
+	resp, err := r.Clients.Quartermaster.GetClustersAvailable(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get clusters available: %w", err)
+	}
+	if resp == nil {
+		return []*model.AvailableCluster{}, nil
+	}
+	out := make([]*model.AvailableCluster, 0, len(resp.Clusters))
+	for i := range resp.Clusters {
+		c := resp.Clusters[i]
+		item := &model.AvailableCluster{
+			ClusterID:   c.ClusterID,
+			ClusterName: c.ClusterName,
+			Tiers:       c.Tiers,
+			AutoEnroll:  c.AutoEnroll,
+		}
+		out = append(out, item)
+	}
+	return out, nil
+}
+
 // DoUpdateTenant updates tenant settings
 func (r *Resolver) DoUpdateTenant(ctx context.Context, input model.UpdateTenantInput) (*models.Tenant, error) {
 	if middleware.IsDemoMode(ctx) {

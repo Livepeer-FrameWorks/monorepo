@@ -160,6 +160,7 @@ export function formatResolution(resolution) {
   if (!resolution) return 'N/A';
   
   // Common resolution mappings
+  /** @type {Record<string, string>} */
   const resolutionMap = {
     '1920x1080': '1080p',
     '1280x720': '720p',

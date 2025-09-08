@@ -1,19 +1,29 @@
 import { motion } from 'framer-motion'
 import { Link } from 'react-router-dom'
-import { Player } from '@stronk-tech/mistplayer-react'
+// Demo player wrapper with status/health integration
+import { Player as FrameworksPlayer } from '@livepeer-frameworks/player'
+import BetaBadge from './BetaBadge'
+import InfoTooltip from './InfoTooltip'
 import { useState, useEffect } from 'react'
 import config from '../config'
-import ExternalLinkIcon from './ExternalLinkIcon'
+import { ArrowTopRightOnSquareIcon } from '@heroicons/react/24/outline'
+import { 
+  VideoCameraIcon,
+  FilmIcon,
+  GlobeAltIcon,
+  LockOpenIcon
+} from '@heroicons/react/24/outline'
 
 const LandingPage = () => {
   const [showDemo, setShowDemo] = useState(false)
   const [showPlayer, setShowPlayer] = useState(false)
   const [logoAnimationComplete, setLogoAnimationComplete] = useState(false)
+  const [demoState, setDemoState] = useState('booting')
 
   useEffect(() => {
     // Preload logo image so glitch strips can start immediately
     const img = new Image()
-    img.src = '/logo.png'
+    img.src = '/frameworks-dark-vertical-lockup.svg'
 
     // Logo enters with glitch, then reveals player
     const playerTimer = setTimeout(() => {
@@ -41,28 +51,28 @@ const LandingPage = () => {
     {
       title: "Drop-in AV Device Discovery",
       description: "Our binary automatically discovers and connects IP cameras, USB webcams, HDMI inputs, and other AV devices. Zero configuration required.",
-      icon: "📹",
+      icon: VideoCameraIcon,
       color: "text-tokyo-night-blue",
       badge: "Industry First"
     },
     {
       title: "Multi-stream Compositing",
       description: "Combine multiple input streams into one composite output with picture-in-picture, overlays, and OBS-style mixing capabilities.",
-      icon: "🎬",
+      icon: FilmIcon,
       color: "text-tokyo-night-green",
       badge: "Advanced Feature"
     },
     {
       title: "Hybrid Cloud + Self-hosted",
       description: "Combine our hosted service with your own nodes. One console to manage all your edge nodes worldwide.",
-      icon: "🌐",
+      icon: GlobeAltIcon,
       color: "text-tokyo-night-yellow",
       badge: "Unique Model"
     },
     {
       title: "Public Domain Licensed",
       description: "No attribution required, no copyleft restrictions. Unlike typical 'open source' licenses, you truly own what you deploy.",
-      icon: "🔓",
+      icon: LockOpenIcon,
       color: "text-tokyo-night-purple",
       badge: "Open Source"
     }
@@ -102,7 +112,7 @@ const LandingPage = () => {
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
               <a href={config.appUrl} className="btn-primary flex items-center justify-center whitespace-nowrap">
                 Start Free
-                <ExternalLinkIcon className="w-4 h-4 ml-2 flex-shrink-0" />
+                <ArrowTopRightOnSquareIcon className="w-4 h-4 ml-2 flex-shrink-0" />
               </a>
               <Link to="/pricing" className="btn-secondary">
                 View Pricing
@@ -132,9 +142,27 @@ const LandingPage = () => {
                     <h2 className="text-xl sm:text-2xl font-bold gradient-text">
                       FrameWorks Demo
                     </h2>
-                    <div className="px-2 py-1 bg-tokyo-night-comment/20 text-tokyo-night-comment rounded-full text-xs font-medium">
-                      OFFLINE
-                    </div>
+                    {/* Online/Offline pill */}
+                    {(() => {
+                      const s = demoState
+                      const map = {
+                        booting: { label: 'BOOTING', cls: 'bg-tokyo-night-comment/20 text-tokyo-night-comment border-tokyo-night-comment/40' },
+                        gateway_loading: { label: 'RESOLVING', cls: 'bg-tokyo-night-comment/20 text-tokyo-night-comment border-tokyo-night-comment/40' },
+                        gateway_ready: { label: 'ENDPOINT READY', cls: 'bg-tokyo-night-blue/20 text-tokyo-night-blue border-tokyo-night-blue/40' },
+                        gateway_error: { label: 'GATEWAY ERROR', cls: 'bg-red-500/20 text-red-400 border-red-500/40' },
+                        no_endpoint: { label: 'WAITING FOR ENDPOINT', cls: 'bg-tokyo-night-comment/20 text-tokyo-night-comment border-tokyo-night-comment/40' },
+                        selecting_player: { label: 'SELECTING PLAYER', cls: 'bg-tokyo-night-blue/20 text-tokyo-night-blue border-tokyo-night-blue/40' },
+                        connecting: { label: 'CONNECTING', cls: 'bg-tokyo-night-blue/20 text-tokyo-night-blue border-tokyo-night-blue/40' },
+                        buffering: { label: 'BUFFERING', cls: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/40' },
+                        playing: { label: 'STREAMING', cls: 'bg-green-500/20 text-green-400 border-green-500/40' },
+                        paused: { label: 'PAUSED', cls: 'bg-tokyo-night-comment/20 text-tokyo-night-comment border-tokyo-night-comment/40' },
+                        ended: { label: 'ENDED', cls: 'bg-tokyo-night-comment/20 text-tokyo-night-comment border-tokyo-night-comment/40' },
+                        error: { label: 'ERROR', cls: 'bg-red-500/20 text-red-400 border-red-500/40' },
+                        destroyed: { label: 'STOPPED', cls: 'bg-tokyo-night-comment/20 text-tokyo-night-comment border-tokyo-night-comment/40' }
+                      }
+                      const m = map[s] || map.booting
+                      return <span className={`px-2 py-1 rounded-full text-xs font-medium border ${m.cls}`}>{m.label}</span>
+                    })()}
                   </div>
                   <p className="text-tokyo-night-fg-dark text-sm">
                     Watch our streaming infrastructure in action.
@@ -144,12 +172,14 @@ const LandingPage = () => {
                 {/* Video Player - takes up most space */}
                 <div className="relative flex-1 mb-6">
                   <div className="w-full h-full rounded-xl overflow-hidden bg-tokyo-night-bg-dark shadow-2xl border border-tokyo-night-bg">
-                    <Player
-                      streamName={config.demoStreamName}
-                      playerType="whep"
-                      className="w-full h-full object-cover"
-                      autoplayMuted={true}
-                    />
+                    <div className="relative w-full h-[320px] sm:h-[380px]">
+                      <FrameworksPlayer
+                        contentId={config.demoStreamName}
+                        contentType="live"
+                        options={{ autoplay: true, muted: true, controls: false, gatewayUrl: config.gatewayUrl || undefined }}
+                        onStateChange={(st) => setDemoState(st)}
+                      />
+                    </div>
                   </div>
                 </div>
               </div>
@@ -184,47 +214,13 @@ const LandingPage = () => {
                       ease: [0.25, 0.46, 0.45, 0.94]
                     }}
                   >
-                    {/* Main logo - tiled strip.png */}
-                    <div className="absolute inset-0 w-full h-full rounded-xl shadow-2xl neon-glow flex flex-col overflow-hidden">
-                      {(() => {
-                        const strips = [];
-                        const numStrips = 8;
-
-                        for (let i = 0; i < numStrips; i++) {
-                          const isFirstStrip = i === 0;
-                          const isLastStrip = i === numStrips - 1;
-                          const isFlipped = i % 2 === 1;
-
-                          let borderRadius = '0';
-                          if (isFirstStrip && !isFlipped) {
-                            borderRadius = '0.75rem 0.75rem 0 0';
-                          } else if (isFirstStrip && isFlipped) {
-                            borderRadius = '0 0 0.75rem 0.75rem';
-                          } else if (isLastStrip && !isFlipped) {
-                            borderRadius = '0 0 0.75rem 0.75rem';
-                          } else if (isLastStrip && isFlipped) {
-                            borderRadius = '0.75rem 0.75rem 0 0';
-                          }
-
-                          strips.push(
-                            <div
-                              key={i}
-                              className="flex-1 w-full min-h-0"
-                              style={{
-                                backgroundImage: 'url(/strip.png)',
-                                backgroundSize: '100% 100%',
-                                backgroundRepeat: 'no-repeat',
-                                backgroundPosition: 'center',
-                                transform: isFlipped ? 'scaleY(-1)' : 'none',
-                                borderRadius: borderRadius,
-                                overflow: 'hidden'
-                              }}
-                            />
-                          );
-                        }
-
-                        return strips;
-                      })()}
+                    {/* Main logo - centered vertical lockup */}
+                    <div className="absolute inset-0 w-full h-full rounded-xl shadow-2xl neon-glow flex items-center justify-center overflow-hidden bg-black">
+                      <img 
+                        src="/frameworks-dark-vertical-lockup.svg" 
+                        alt="FrameWorks" 
+                        className="w-2/3 max-w-[300px] h-auto"
+                      />
                     </div>
                   </motion.div>
 
@@ -281,7 +277,7 @@ const LandingPage = () => {
                               right: `-${stripExtension}px`,
                               top: `${currentPosition}px`,
                               height: `${stripHeight}px`,
-                              backgroundImage: 'url(/logo.png)',
+                              backgroundImage: 'url(/frameworks-dark-vertical-lockup.svg)',
                               backgroundSize: `calc(100% - ${stripExtension * 2}px) auto`,
                               backgroundPosition: `${stripExtension}px -${currentPosition}px`,
                               backgroundRepeat: 'no-repeat',
@@ -357,7 +353,7 @@ const LandingPage = () => {
       </section>
 
       {/* CSS for glitch animations */}
-      <style jsx>{`
+      <style>{`
         @keyframes glitch-5 {
           0.00%, 33.33%, 43.33%, 66.67%, 76.67%, 100.00% {
             transform: none;
@@ -502,12 +498,24 @@ const LandingPage = () => {
                 transition={{ duration: 0.6, delay: index * 0.1 }}
                 className="glow-card p-6 relative"
               >
-                <div className="absolute top-4 right-4">
-                  <span className="bg-tokyo-night-blue/20 text-tokyo-night-blue px-2 py-1 rounded text-xs font-medium">
-                    {feature.badge}
-                  </span>
+                <div className="absolute top-4 right-4 flex items-center gap-2">
+                  {(feature.title.includes('Discovery') || feature.title.includes('Compositing')) ? (
+                    <>
+                      <BetaBadge label="Beta" />
+                      <InfoTooltip>Feature available with limits during beta; see Roadmap for scope and timeline.</InfoTooltip>
+                    </>
+                  ) : (
+                    <span className="bg-tokyo-night-blue/20 text-tokyo-night-blue px-2 py-1 rounded text-xs font-medium">
+                      {feature.badge}
+                    </span>
+                  )}
                 </div>
-                <div className={`text-4xl mb-4 ${feature.color}`}>{feature.icon}</div>
+                <div className={`mb-4 ${feature.color}`}>
+                  {(() => {
+                    const Icon = feature.icon;
+                    return <Icon className="w-10 h-10" />;
+                  })()}
+                </div>
                 <h3 className="text-xl font-bold text-tokyo-night-fg mb-3">
                   {feature.title}
                 </h3>
@@ -571,7 +579,7 @@ const LandingPage = () => {
                     className="btn-primary w-full flex items-center justify-center mb-4 whitespace-nowrap"
                   >
                     Start Free Today
-                    <ExternalLinkIcon className="w-4 h-4 ml-2 flex-shrink-0" />
+                    <ArrowTopRightOnSquareIcon className="w-4 h-4 ml-2 flex-shrink-0" />
                   </a>
                   <p className="text-tokyo-night-comment text-sm">
                     No credit card required • Deploy in minutes
@@ -718,7 +726,7 @@ const LandingPage = () => {
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
               <a href={config.appUrl} className="btn-primary flex items-center justify-center whitespace-nowrap">
                 Start Free Today
-                <ExternalLinkIcon className="w-4 h-4 ml-2 flex-shrink-0" />
+                <ArrowTopRightOnSquareIcon className="w-4 h-4 ml-2 flex-shrink-0" />
               </a>
               <Link to="/contact" className="btn-secondary">
                 Talk to Sales
@@ -730,7 +738,7 @@ const LandingPage = () => {
                 className="btn-secondary flex items-center whitespace-nowrap"
               >
                 View Open Source
-                <ExternalLinkIcon className="w-4 h-4 ml-2 flex-shrink-0" />
+                <ArrowTopRightOnSquareIcon className="w-4 h-4 ml-2 flex-shrink-0" />
               </a>
             </div>
             <p className="text-tokyo-night-comment text-sm mt-6">

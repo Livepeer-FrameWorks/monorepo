@@ -13,16 +13,11 @@ Commodore is the control API. It owns users, streams, API tokens and exposes ten
 - Database: PostgreSQL/YugabyteDB for tenants, users, streams, API tokens
 - Auth: JWT for users, service tokens for S2S
 
-## Configuration
+## Run (dev)
+- Start the full stack from repo root: `docker-compose up -d`
+- Or run just Commodore: `cd api_control && go run ./cmd/commodore`
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `DATABASE_URL` | Yes | PostgreSQL/YugabyteDB DSN |
-| `JWT_SECRET` | Yes | JWT signing secret |
-| `SERVICE_TOKEN` | Yes | Service‑to‑service auth token |
-| `PORT` | No | HTTP port (default: 18001) |
-| `GIN_MODE` | No | `debug` or `release` |
-| `LOG_LEVEL` | No | `debug|info|warn|error` |
+Configuration: copy `env.example` to `.env` and use the inline comments as reference. Do not commit secrets.
 
 Health: `GET /health`.
 

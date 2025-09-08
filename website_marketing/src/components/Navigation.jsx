@@ -1,7 +1,8 @@
 import { Link, useLocation } from 'react-router-dom'
 import { useState } from 'react'
 import config from '../config'
-import ExternalLinkIcon from './ExternalLinkIcon'
+import { ArrowTopRightOnSquareIcon } from '@heroicons/react/24/outline'
+import BetaBadge from './BetaBadge'
 
 const Navigation = () => {
   const location = useLocation()
@@ -14,15 +15,15 @@ const Navigation = () => {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex justify-between items-center h-16">
           {/* Logo */}
-          <div className="flex items-center space-x-2">
-            <a href="/" className="flex items-center space-x-3">
-              <img src="/icon.png" alt={config.companyName} className="h-12 w-12 rounded-lg logo-gradient" />
-              <span className="text-xl font-bold gradient-text">{config.companyName}</span>
+          <div className="flex items-center gap-3">
+            <a href="/" className="flex items-center">
+              <img src="/frameworks-dark-horizontal-lockup-transparent.svg" alt={config.companyName} className="h-10" />
             </a>
+            <BetaBadge />
           </div>
 
           {/* Desktop Navigation */}
-          <div className="hidden md:flex items-center space-x-8">
+          <div className="hidden lg:flex items-center space-x-8">
             <Link
               to="/"
               className={`text-sm font-medium transition-colors duration-200 ${isActive('/') ? 'text-tokyo-night-blue' : 'text-tokyo-night-fg-dark hover:text-tokyo-night-fg'
@@ -44,10 +45,10 @@ const Navigation = () => {
             >
               Pricing
             </Link>
-            <Link
-              to="/docs"
-              className={`text-sm font-medium transition-colors duration-200 ${isActive('/docs') ? 'text-tokyo-night-blue' : 'text-tokyo-night-fg-dark hover:text-tokyo-night-fg'
-                }`}
+              <Link
+                to="/docs"
+                className={`text-sm font-medium transition-colors duration-200 ${isActive('/docs') ? 'text-tokyo-night-blue' : 'text-tokyo-night-fg-dark hover:text-tokyo-night-fg'
+                  }`}
             >
               Docs
             </Link>
@@ -65,20 +66,20 @@ const Navigation = () => {
               className="text-sm font-medium text-tokyo-night-fg-dark hover:text-tokyo-night-fg transition-colors duration-200 flex items-center"
             >
               Code
-              <ExternalLinkIcon className="w-3 h-3 ml-1" />
+              <ArrowTopRightOnSquareIcon className="w-3 h-3 ml-1" />
             </a>
             <a
               href={config.appUrl}
               className="btn-primary flex items-center"
             >
               Try Now
-              <ExternalLinkIcon className="w-4 h-4 ml-2" />
+              <ArrowTopRightOnSquareIcon className="w-4 h-4 ml-2" />
             </a>
           </div>
 
           {/* Mobile menu button */}
           <button
-            className="md:hidden p-2 rounded-lg hover:bg-tokyo-night-bg-light transition-colors duration-200"
+            className="lg:hidden p-2 rounded-lg hover:bg-tokyo-night-bg-light transition-colors duration-200"
             onClick={() => setIsMenuOpen(!isMenuOpen)}
           >
             <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -93,7 +94,7 @@ const Navigation = () => {
 
         {/* Mobile Navigation */}
         {isMenuOpen && (
-          <div className="md:hidden py-4 border-t border-tokyo-night-fg-gutter">
+          <div className="lg:hidden py-4 border-t border-tokyo-night-fg-gutter">
             <div className="flex flex-col space-y-4">
               <Link
                 to="/"
@@ -104,12 +105,12 @@ const Navigation = () => {
                 Home
               </Link>
               <Link
-                to="/docs"
-                className={`text-sm font-medium transition-colors duration-200 ${isActive('/docs') ? 'text-tokyo-night-blue' : 'text-tokyo-night-fg-dark hover:text-tokyo-night-fg'
+                to="/about"
+                className={`text-sm font-medium transition-colors duration-200 ${isActive('/about') ? 'text-tokyo-night-blue' : 'text-tokyo-night-fg-dark hover:text-tokyo-night-fg'
                   }`}
                 onClick={() => setIsMenuOpen(false)}
               >
-                Documentation
+                About
               </Link>
               <Link
                 to="/pricing"
@@ -120,12 +121,12 @@ const Navigation = () => {
                 Pricing
               </Link>
               <Link
-                to="/about"
-                className={`text-sm font-medium transition-colors duration-200 ${isActive('/about') ? 'text-tokyo-night-blue' : 'text-tokyo-night-fg-dark hover:text-tokyo-night-fg'
+                to="/docs"
+                className={`text-sm font-medium transition-colors duration-200 ${isActive('/docs') ? 'text-tokyo-night-blue' : 'text-tokyo-night-fg-dark hover:text-tokyo-night-fg'
                   }`}
                 onClick={() => setIsMenuOpen(false)}
               >
-                About
+                Documentation
               </Link>
               <Link
                 to="/contact"
@@ -135,6 +136,35 @@ const Navigation = () => {
               >
                 Contact
               </Link>
+              <div className="pt-4 mt-4 border-t border-tokyo-night-fg-gutter">
+                <p className="text-xs text-tokyo-night-comment mb-2">Resources</p>
+                <div className="flex flex-col space-y-4">
+                  <Link
+                    to="/status"
+                    className={`text-sm font-medium transition-colors duration-200 ${isActive('/status') ? 'text-tokyo-night-blue' : 'text-tokyo-night-fg-dark hover:text-tokyo-night-fg'
+                      }`}
+                    onClick={() => setIsMenuOpen(false)}
+                  >
+                    Status
+                  </Link>
+                  <Link
+                    to="/roadmap"
+                    className={`text-sm font-medium transition-colors duration-200 ${isActive('/roadmap') ? 'text-tokyo-night-blue' : 'text-tokyo-night-fg-dark hover:text-tokyo-night-fg'
+                      }`}
+                    onClick={() => setIsMenuOpen(false)}
+                  >
+                    Roadmap
+                  </Link>
+                  {/* <Link
+                    to="/changelog"
+                    className={`text-sm font-medium transition-colors duration-200 ${isActive('/changelog') ? 'text-tokyo-night-blue' : 'text-tokyo-night-fg-dark hover:text-tokyo-night-fg'
+                      }`}
+                    onClick={() => setIsMenuOpen(false)}
+                  >
+                    Changelog
+                  </Link> */}
+                </div>
+              </div>
               <a
                 href={config.githubUrl}
                 target="_blank"
@@ -142,14 +172,14 @@ const Navigation = () => {
                 className="text-sm font-medium text-tokyo-night-fg-dark hover:text-tokyo-night-fg transition-colors duration-200 flex items-center"
               >
                 GitHub
-                <ExternalLinkIcon className="w-3 h-3 ml-1" />
+                <ArrowTopRightOnSquareIcon className="w-3 h-3 ml-1" />
               </a>
               <a
                 href={config.appUrl}
                 className="btn-primary inline-flex items-center justify-center"
               >
                 Try Now
-                <ExternalLinkIcon className="w-4 h-4 ml-2" />
+                <ArrowTopRightOnSquareIcon className="w-4 h-4 ml-2" />
               </a>
             </div>
           </div>

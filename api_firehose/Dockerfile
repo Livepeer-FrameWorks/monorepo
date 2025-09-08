@@ -24,10 +24,15 @@ COPY api_firehose/ api_firehose/
 WORKDIR /src/frameworks
 RUN cd pkg/proto && make proto
 
-# Build the application
+# Build the application with version and component injection
 WORKDIR /src/frameworks/api_firehose
 RUN go mod download
-RUN CGO_ENABLED=0 go build -ldflags "-X frameworks/pkg/version.Version=dev -X frameworks/pkg/version.GitCommit=docker -X frameworks/pkg/version.BuildDate=$(date -u '+%Y-%m-%dT%H:%M:%SZ')" -o bin/decklog cmd/decklog/main.go
+ARG VERSION=dev
+ARG GIT_COMMIT=docker
+ARG BUILD_DATE
+ARG COMPONENT_NAME=decklog
+ARG COMPONENT_VERSION=0.0.0
+RUN CGO_ENABLED=0 go build -ldflags "-X frameworks/pkg/version.Version=${VERSION} -X frameworks/pkg/version.GitCommit=${GIT_COMMIT} -X frameworks/pkg/version.BuildDate=${BUILD_DATE} -X frameworks/pkg/version.ComponentName=${COMPONENT_NAME} -X frameworks/pkg/version.ComponentVersion=${COMPONENT_VERSION}" -o bin/decklog cmd/decklog/main.go
 
 # Final stage
 FROM alpine:3.19

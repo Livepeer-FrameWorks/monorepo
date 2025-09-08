@@ -1,6 +1,6 @@
 # FrameWorks Architecture TLDR
 
-## 🏗️ **Multi-Plane Architecture Overview**
+## Multi-Plane Architecture Overview
 
 FrameWorks is a distributed microservices platform for multi-tenant video streaming, built on clear plane separation and an event pipeline:
 
@@ -11,7 +11,7 @@ FrameWorks is a distributed microservices platform for multi-tenant video stream
 
 ---
 
-## 🧱 **Complete Service Stack**
+## Complete Service Stack
 
 ### Core Services
 
@@ -36,12 +36,12 @@ FrameWorks is a distributed microservices platform for multi-tenant video stream
 | Web Console | 18030 | Central | Main application interface |
 | Marketing Site | 18031 | Central | Public website |
 | Forms API | 18032 | Central | Contact form handling |
-| **Planned Services** 🚧 | | | |
+| **Planned Services** | | | |
 | Privateer (api_mesh) | 18012 | Central | WireGuard mesh orchestration |
 | Lookout (api_incidents) | 18013 | Central | Incident management |
 | Parlor (api_rooms) | 18014 | Central | Interactive room service |
 | Deckhand (api_ticketing) | 18015 | Central | Support ticketing |
-| **Deferred Services** ⏸️ | | | |
+| **Deferred Services** | | | |
 | Seawarden | 18010 | Central | Certificate management (use Cloudflare + Let's Encrypt) |
 | Navigator | 18011 | Central | DNS management (use Cloudflare DNS API) |
 
@@ -71,7 +71,7 @@ Note: State/aggregates live in PostgreSQL (YugabyteDB-compatible). Time‑series
 
 ---
 
-## 🌍 **Deployment Tiers**
+## Deployment Tiers
 
 - **Central**: Commodore, Quartermaster, Periscope, Purser, PostgreSQL, ClickHouse, Foghorn
 - **Regional**: Bridge, Decklog, Kafka, Signalman, Web Console, Marketing Site
@@ -79,7 +79,7 @@ Note: State/aggregates live in PostgreSQL (YugabyteDB-compatible). Time‑series
 
 ---
 
-## 🔄 **Data Flow Architecture**
+## Data Flow Architecture
 
 ### Event-Driven Analytics Pipeline
 ```
@@ -106,7 +106,7 @@ RTMP/SRT/WHIP → MistServer → HLS/WebRTC/SRT → Viewers
 
 ---
 
-## 📊 **Event Types & Kafka Topic**
+## Event Types & Kafka Topic
 
 - **Topic**: `analytics_events`
 - **Event types** (hyphenated):
@@ -117,7 +117,7 @@ RTMP/SRT/WHIP → MistServer → HLS/WebRTC/SRT → Viewers
 
 ---
 
-## 🔐 **Authentication & Security**
+## Authentication & Security
 
 - Control Plane (HTTP): JWT/API tokens, tenant‑scoped
 - Data Plane (Kafka): service tokens, tenant headers, VPN
@@ -125,7 +125,7 @@ RTMP/SRT/WHIP → MistServer → HLS/WebRTC/SRT → Viewers
 
 ---
 
-## 📈 **Scaling Characteristics**
+## Scaling Characteristics
 
 Each tier has different scaling patterns and bottlenecks, allowing independent optimization based on workload characteristics.
 

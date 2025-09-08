@@ -27,14 +27,7 @@ Incidents ──────┘                         ↓
 
 NOTE: We might want to deprecate api_forms and roll it into the Deckhand.
 
-## Configuration
-
-Environment variables:
-- `PORT` - API port (default: 18015)
-- `DATABASE_URL` - PostgreSQL connection string
-- `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS` - Email config
-- `KNOWLEDGE_BASE_PATH` - Static knowledge base files
-- `DEFAULT_SLA_HOURS` - Default response time (default: 24)
+Configuration: this service is planned. When implemented, configuration will be provided via an `env.example` file with inline comments.
 
 ## Integration Points
 

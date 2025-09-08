@@ -13,8 +13,6 @@ require (
 
 replace frameworks/pkg => ../pkg
 
-replace frameworks/api_firehose => ../api_firehose
-
 require (
 	github.com/ClickHouse/ch-go v0.67.0 // indirect
 	github.com/ClickHouse/clickhouse-go/v2 v2.40.1 // indirect

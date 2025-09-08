@@ -32,7 +32,28 @@ Principles
 - Shared types in `pkg/models`
 - Time‑series in ClickHouse; control/aggregates in Postgres
 
-## Quick start (docker-compose)
+## Quick Start
+
+### Edge Node Deployment (CLI)
+
+For deploying edge streaming nodes, use the FrameWorks CLI:
+
+```bash
+# Install CLI
+curl -L https://github.com/frameworks/cli/releases/latest/download/frameworks -o frameworks
+chmod +x frameworks
+sudo mv frameworks /usr/local/bin/
+
+# Deploy edge node
+frameworks edge bootstrap --domain stream.example.com --token YOUR_TOKEN
+frameworks edge up
+```
+
+See [CLI documentation](./cli/) for details.
+
+### Development Setup (docker-compose)
+
+For local development and testing:
 
 ```bash
 git clone https://github.com/Livepeer-FrameWorks/monorepo.git
@@ -86,10 +107,10 @@ Endpoints (local)
 | UI | Web Console | 18030 | Application UI |
 | UI | Marketing Site | 18031 | Public site |
 | Support | Forms API | 18032 | Contact forms |
-| Deferred | Seawarden | 18010 | Certificate management (use Cloudflare + Let's Encrypt) |
-| Deferred | Navigator | 18011 | DNS management (use Cloudflare DNS API from Quartermaster) |
+| Deferred | Seawarden | 18010 | Certificate management (use nginx/caddy instead) |
+| Deferred | Navigator | 18011 | DNS management (manual for now, future MVP in Quartermaster) |
+| Deferred | Lookout (api_incidents) | 18013 | Incident management (use Prometheus/Grafana instead) |
 | Planned | Privateer (api_mesh) | 18012 | WireGuard mesh orchestration |
-| Planned | Lookout (api_incidents) | 18013 | Incident management |
 | Planned | Parlor (api_rooms) | 18014 | Channel rooms for interactive features |
 | Planned | Deckhand (api_ticketing) | 18015 | Support ticketing |
 
@@ -115,5 +136,5 @@ If not provided, geo enrichment is disabled and NULL values are used for geograp
 - [Architecture TL;DR](docs/TLDR.md) — High‑level map of planes, services, infra components, deployment tiers, data flows, Kafka topics, and local dev quickstart.
 - [Implementation](docs/IMPLEMENTATION.md) — Technical deep‑dive: service responsibilities, APIs, shared models, validation, Kafka topics/headers, event types/flow, DB usage, and security.
 - [Infrastructure](docs/INFRASTRUCTURE.md) — Infra approach today (Terraform + Ansible + Quartermaster) and the future path (Kubernetes/GitOps), with tier roles and evolution.
-- [Provisioning](docs/PROVISIONING.md) — Step‑by‑step production deployment: domains/DNS, WireGuard mesh, DB/Kafka clusters, custom Nginx/SSL, monitoring stack, systemd units, and hardening.
+- [Provisioning](docs/provisioning/) — Deployment methods, prerequisites, networking (WireGuard), SSL, DNS, and production notes.
 - [Roadmap](docs/ROADMAP.md) — Honest feature status: what ships today vs. planned; gaps and priorities across analytics, billing, UI, and media.

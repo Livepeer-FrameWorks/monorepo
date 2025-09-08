@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"frameworks/api_gateway/internal/clients"
+	commodore "frameworks/pkg/api/commodore"
 	"frameworks/pkg/config"
 	"frameworks/pkg/logging"
 	"time"
@@ -103,37 +104,13 @@ func (r *Resolver) normalizeTimeRange(p TimeRangeParams) (start *time.Time, end 
 }
 
 // DoResolveViewerEndpoint calls Commodore to resolve viewer endpoints (which then calls Foghorn)
-func (r *Resolver) DoResolveViewerEndpoint(ctx context.Context, contentType, contentID string, viewerIP *string) ([]ViewerEndpoint, error) {
+func (r *Resolver) DoResolveViewerEndpoint(ctx context.Context, contentType, contentID string, viewerIP *string) ([]commodore.ViewerEndpoint, error) {
 	// Call Commodore's viewer endpoint resolution (Commodore will handle tenant resolution internally)
 	endpoints, err := r.Clients.Commodore.ResolveViewerEndpoint(ctx, contentType, contentID, viewerIP)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve viewer endpoints: %v", err)
 	}
 
-	// Convert to resolver ViewerEndpoint type
-	result := make([]ViewerEndpoint, len(endpoints))
-	for i, endpoint := range endpoints {
-		result[i] = ViewerEndpoint{
-			NodeID:      endpoint.NodeID,
-			BaseURL:     endpoint.BaseURL,
-			Protocol:    endpoint.Protocol,
-			URL:         endpoint.URL,
-			GeoDistance: endpoint.GeoDistance,
-			LoadScore:   endpoint.LoadScore,
-			HealthScore: endpoint.HealthScore,
-		}
-	}
-
-	return result, nil
-}
-
-// ViewerEndpoint represents a single viewer endpoint for the resolver
-type ViewerEndpoint struct {
-	NodeID      string
-	BaseURL     string
-	Protocol    string
-	URL         string
-	GeoDistance float64
-	LoadScore   float64
-	HealthScore float64
+	// Return the endpoints directly - no need for conversion since we're using shared types
+	return endpoints, nil
 }

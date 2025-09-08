@@ -4,16 +4,27 @@ import (
 	"time"
 
 	"frameworks/pkg/api/common"
-	"frameworks/pkg/validation"
+	pb "frameworks/pkg/proto"
 )
+
+// EventData contains typed protobuf payloads for different event types
+type EventData struct {
+	ClientLifecycle *pb.ClientLifecycleUpdate  `json:"client_lifecycle,omitempty"`
+	NodeLifecycle   *pb.NodeLifecycleUpdate    `json:"node_lifecycle,omitempty"`
+	TrackList       *pb.StreamTrackListTrigger `json:"track_list,omitempty"`
+	ClipLifecycle   *pb.ClipLifecycleData      `json:"clip_lifecycle,omitempty"`
+	DVRLifecycle    *pb.DVRLifecycleData       `json:"dvr_lifecycle,omitempty"`
+	LoadBalancing   *pb.LoadBalancingData      `json:"load_balancing,omitempty"`
+}
 
 // Message represents a real-time message sent to clients
 type Message struct {
-	Type      string               `json:"type"`
-	Channel   string               `json:"channel"`
-	Data      validation.EventData `json:"data"`
-	Timestamp time.Time            `json:"timestamp"`
-	TenantID  *string              `json:"tenant_id,omitempty"` // For tenant-scoped messages
+	Type      string                 `json:"type"`
+	Channel   string                 `json:"channel"`
+	Data      EventData              `json:"data"` // Typed protobuf payloads
+	RawData   map[string]interface{} `json:"-"`    // Raw data for backwards compatibility
+	Timestamp time.Time              `json:"timestamp"`
+	TenantID  *string                `json:"tenant_id,omitempty"` // For tenant-scoped messages
 }
 
 // SubscriptionMessage represents a subscription request from client
@@ -48,11 +59,6 @@ type HubStats struct {
 	TotalClients         int            `json:"total_clients"`
 	ChannelSubscriptions map[string]int `json:"channel_subscriptions"`
 }
-
-// EventData is now provided by validation.EventData for type safety
-
-// Event types are now provided by the shared validation package
-// Use validation.StreamLifecyclePayload, validation.TrackListPayload, etc.
 
 // Channel constants for subscription
 const (

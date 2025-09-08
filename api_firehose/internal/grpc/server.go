@@ -2,7 +2,8 @@ package grpc
 
 import (
 	"context"
-	"io"
+	"encoding/json"
+	"fmt"
 	"time"
 
 	"frameworks/pkg/logging"
@@ -10,240 +11,17 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/types/known/timestamppb"
+	"google.golang.org/grpc/health"
+	"google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/emptypb"
 
-	"frameworks/pkg/geoip"
 	"frameworks/pkg/kafka"
 	pb "frameworks/pkg/proto"
-	"frameworks/pkg/validation"
+	"github.com/google/uuid"
 )
-
-// mapProtoEventTypeToValidation converts protobuf enum to our validation.EventType strings
-func mapProtoEventTypeToValidation(t pb.EventType) validation.EventType {
-	switch t {
-	case pb.EventType_EVENT_TYPE_STREAM_INGEST:
-		return validation.EventStreamIngest
-	case pb.EventType_EVENT_TYPE_STREAM_VIEW:
-		return validation.EventStreamView
-	case pb.EventType_EVENT_TYPE_STREAM_LIFECYCLE:
-		return validation.EventStreamLifecycle
-	case pb.EventType_EVENT_TYPE_USER_CONNECTION:
-		return validation.EventUserConnection
-	case pb.EventType_EVENT_TYPE_PUSH_LIFECYCLE:
-		return validation.EventPushLifecycle
-	case pb.EventType_EVENT_TYPE_RECORDING_LIFECYCLE:
-		return validation.EventRecordingLifecycle
-	case pb.EventType_EVENT_TYPE_CLIENT_LIFECYCLE:
-		return validation.EventClientLifecycle
-	case pb.EventType_EVENT_TYPE_NODE_LIFECYCLE:
-		return validation.EventNodeLifecycle
-	case pb.EventType_EVENT_TYPE_LOAD_BALANCING:
-		return validation.EventLoadBalancing
-	case pb.EventType_EVENT_TYPE_TRACK_LIST:
-		return validation.EventTrackList
-	case pb.EventType_EVENT_TYPE_STREAM_BUFFER:
-		return validation.EventStreamBuffer
-	case pb.EventType_EVENT_TYPE_STREAM_END:
-		return validation.EventStreamEnd
-	case pb.EventType_EVENT_TYPE_BANDWIDTH_THRESHOLD:
-		return validation.EventBandwidthThreshold
-	case pb.EventType_EVENT_TYPE_CLIP_LIFECYCLE:
-		return validation.EventClipLifecycle
-	case pb.EventType_EVENT_TYPE_DVR_LIFECYCLE:
-		// Treat DVR lifecycle as clip lifecycle for analytics
-		return validation.EventClipLifecycle
-	default:
-		return validation.EventType("unknown")
-	}
-}
-
-// convertProtoEventToAnalytics converts a protobuf EventData to kafka.AnalyticsEvent
-func convertProtoEventToAnalytics(protoEvent *pb.EventData, _ string, batchTenantID string) (*kafka.AnalyticsEvent, error) {
-	event := &kafka.AnalyticsEvent{
-		EventID:       protoEvent.EventId,
-		EventType:     string(mapProtoEventTypeToValidation(protoEvent.EventType)),
-		Timestamp:     protoEvent.Timestamp.AsTime(),
-		Source:        protoEvent.Source,
-		TenantID:      batchTenantID,
-		SchemaVersion: protoEvent.SchemaVersion,
-		Region:        protoEvent.Region,
-	}
-
-	// Set optional string fields
-	if protoEvent.StreamId != nil {
-		event.StreamID = protoEvent.StreamId
-	}
-	if protoEvent.UserId != nil {
-		event.UserID = protoEvent.UserId
-	}
-	if protoEvent.PlaybackId != nil {
-		event.PlaybackID = protoEvent.PlaybackId
-	}
-	if protoEvent.InternalName != nil {
-		event.InternalName = protoEvent.InternalName
-	}
-	if protoEvent.NodeUrl != nil {
-		event.NodeURL = protoEvent.NodeUrl
-	}
-
-	// Populate typed payloads from protobuf oneof
-	switch protoEvent.EventType {
-	case pb.EventType_EVENT_TYPE_LOAD_BALANCING:
-		lb := protoEvent.GetLoadBalancingData()
-		if lb != nil {
-			event.Data.LoadBalancing = &validation.LoadBalancingPayload{
-				StreamID:          getOptionalString(protoEvent.StreamId),
-				TenantID:          batchTenantID,
-				SelectedNode:      lb.GetSelectedNode(),
-				SelectedNodeID:    getOptionalString(lb.SelectedNodeId),
-				Latitude:          lb.GetLatitude(),
-				Longitude:         lb.GetLongitude(),
-				Status:            lb.GetStatus(),
-				Details:           lb.GetDetails(),
-				Score:             lb.GetScore(),
-				ClientIP:          lb.GetClientIp(),
-				ClientCountry:     lb.GetClientCountry(),
-				NodeLatitude:      lb.GetNodeLatitude(),
-				NodeLongitude:     lb.GetNodeLongitude(),
-				NodeName:          lb.GetNodeName(),
-				RoutingDistanceKm: lb.GetRoutingDistanceKm(),
-			}
-		}
-	case pb.EventType_EVENT_TYPE_NODE_LIFECYCLE:
-		nm := protoEvent.GetNodeMonitoringData()
-		if nm != nil {
-			event.Data.NodeLifecycle = &validation.NodeLifecyclePayload{
-				NodeID:         getOptionalString(nm.NodeId),
-				IsHealthy:      getOptionalBool(nm.IsHealthy),
-				GeoData:        geoip.GeoData{CountryCode: getOptionalString(nm.CountryCode), City: getOptionalString(nm.City), Latitude: nm.GetLatitude(), Longitude: nm.GetLongitude()},
-				Location:       getOptionalString(nm.Location),
-				CPUUsage:       float64(nm.GetCpuLoad()),
-				RAMMax:         nm.GetMemoryTotal(),
-				RAMCurrent:     nm.GetMemoryUsed(),
-				BandwidthUp:    nm.GetNetworkOutBps(),
-				BandwidthDown:  nm.GetNetworkInBps(),
-				ActiveStreams:  int(nm.GetActiveStreams()),
-				BandwidthLimit: getOptionalUint64(nm.BandwidthLimitBps),
-			}
-		}
-	case pb.EventType_EVENT_TYPE_CLIP_LIFECYCLE:
-		cl := protoEvent.GetClipLifecycleData()
-		if cl != nil {
-			stage := ""
-			switch cl.GetStage() {
-			case pb.ClipLifecycleData_STAGE_REQUESTED:
-				stage = "requested"
-			case pb.ClipLifecycleData_STAGE_QUEUED:
-				stage = "queued"
-			case pb.ClipLifecycleData_STAGE_PROGRESS:
-				stage = "progress"
-			case pb.ClipLifecycleData_STAGE_DONE:
-				stage = "done"
-			case pb.ClipLifecycleData_STAGE_FAILED:
-				stage = "failed"
-			}
-			event.Data.ClipLifecycle = &validation.ClipLifecyclePayload{
-				InternalName:  getOptionalString(protoEvent.InternalName),
-				RequestID:     cl.GetRequestId(),
-				Stage:         stage,
-				ContentType:   "clip",
-				Title:         getOptionalString(cl.Title),
-				Format:        getOptionalString(cl.Format),
-				StartUnix:     getOptionalInt64(cl.StartUnix),
-				StopUnix:      getOptionalInt64(cl.StopUnix),
-				StartMs:       getOptionalInt64(cl.StartMs),
-				StopMs:        getOptionalInt64(cl.StopMs),
-				DurationSec:   getOptionalInt64(cl.DurationSec),
-				IngestNodeID:  getOptionalString(cl.IngestNodeId),
-				StorageNodeID: getOptionalString(cl.StorageNodeId),
-				RoutingDistanceKm: func() float64 {
-					if cl.RoutingDistanceKm != nil {
-						return *cl.RoutingDistanceKm
-					}
-					return 0
-				}(),
-				Percent: func() uint32 {
-					if cl.Percent != nil {
-						return *cl.Percent
-					}
-					return 0
-				}(),
-				Message:  getOptionalString(cl.Message),
-				FilePath: getOptionalString(cl.FilePath),
-				S3URL:    getOptionalString(cl.S3Url),
-				SizeBytes: func() uint64 {
-					if cl.SizeBytes != nil {
-						return *cl.SizeBytes
-					}
-					return 0
-				}(),
-				Error: getOptionalString(cl.Error),
-			}
-		}
-	case pb.EventType_EVENT_TYPE_DVR_LIFECYCLE:
-		dvr := protoEvent.GetDvrLifecycleData()
-		if dvr != nil {
-			stage := ""
-			switch dvr.GetStage() {
-			case pb.DVRLifecycleData_STAGE_REQUESTED:
-				stage = "requested"
-			case pb.DVRLifecycleData_STAGE_RECORDING:
-				stage = "progress"
-			case pb.DVRLifecycleData_STAGE_PROGRESS:
-				stage = "progress"
-			case pb.DVRLifecycleData_STAGE_STOPPING:
-				stage = "progress"
-			case pb.DVRLifecycleData_STAGE_COMPLETED:
-				stage = "done"
-			case pb.DVRLifecycleData_STAGE_FAILED:
-				stage = "failed"
-			}
-			// Map DVR lifecycle to clip lifecycle payload to reuse pipeline
-			event.Data.ClipLifecycle = &validation.ClipLifecyclePayload{
-				InternalName:  getOptionalString(protoEvent.InternalName),
-				RequestID:     dvr.GetRequestId(),
-				Stage:         stage,
-				ContentType:   "dvr",
-				DurationSec:   dvr.GetDurationSec(),
-				IngestNodeID:  dvr.GetIngestNodeId(),
-				StorageNodeID: dvr.GetStorageNodeId(),
-				FilePath:      dvr.GetManifestPath(),
-				SizeBytes:     dvr.GetSizeBytes(),
-				Message:       dvr.GetError(),
-			}
-		}
-	}
-
-	return event, nil
-}
-
-func getOptionalString(p *string) string {
-	if p == nil {
-		return ""
-	}
-	return *p
-}
-func getOptionalBool(p *bool) bool {
-	if p == nil {
-		return false
-	}
-	return *p
-}
-func getOptionalUint64(p *uint64) uint64 {
-	if p == nil {
-		return 0
-	}
-	return *p
-}
-func getOptionalInt64(p *int64) int64 {
-	if p == nil {
-		return 0
-	}
-	return *p
-}
 
 // DecklogMetrics holds all Prometheus metrics for Decklog
 type DecklogMetrics struct {
@@ -257,193 +35,139 @@ type DecklogMetrics struct {
 
 type DecklogServer struct {
 	pb.UnimplementedDecklogServiceServer
-	producer  kafka.ProducerInterface
-	validator *validation.EventValidator
-	logger    logging.Logger
-	metrics   *DecklogMetrics
+	producer kafka.ProducerInterface
+	logger   logging.Logger
+	metrics  *DecklogMetrics
 }
 
 func NewDecklogServer(producer kafka.ProducerInterface, logger logging.Logger, metrics *DecklogMetrics) *DecklogServer {
 	return &DecklogServer{
-		producer:  producer,
-		validator: validation.NewEventValidator(),
-		logger:    logger,
-		metrics:   metrics,
+		producer: producer,
+		logger:   logger,
+		metrics:  metrics,
 	}
 }
 
-// StreamEvents handles streaming events from Helmsman
-func (s *DecklogServer) StreamEvents(stream pb.DecklogService_StreamEventsServer) error {
-	// Track gRPC request
-	if s.metrics != nil {
-		s.metrics.GRPCRequests.WithLabelValues("StreamEvents", "requested").Inc()
+// convertProtobufToKafkaEvent converts any protobuf message to kafka.AnalyticsEvent with transparent JSON serialization
+func (s *DecklogServer) convertProtobufToKafkaEvent(msg interface{}, eventType, source, tenantID string) (*kafka.AnalyticsEvent, error) {
+	// Normalize tenantID: ensure valid UUID to avoid downstream CH failures
+	normalized := tenantID
+	if normalized == "" || !isValidUUID(normalized) {
+		normalized = "00000000-0000-0000-0000-000000000000"
+		// best-effort warning so we can trace missing enrichment
+		s.logger.WithFields(logging.Fields{"event_type": eventType}).Warn("Missing tenant_id; using zero UUID")
+	}
+	// Serialize the entire protobuf message to JSON transparently
+	marshaler := protojson.MarshalOptions{
+		UseProtoNames:   true,
+		EmitUnpopulated: false,
 	}
 
-	for {
-		start := time.Now()
-		protoEvent, err := stream.Recv()
-		if err == io.EOF {
-			return nil
-		}
-		if err != nil {
-			s.logger.WithError(err).Error("Failed to receive event")
-			if s.metrics != nil {
-				s.metrics.GRPCRequests.WithLabelValues("StreamEvents", "error").Inc()
-			}
-			return status.Error(codes.Internal, "failed to receive event")
-		}
-
-		// Track events ingested
-		if s.metrics != nil {
-			s.metrics.EventsIngested.WithLabelValues(protoEvent.Source, "received").Add(float64(len(protoEvent.Events)))
-		}
-
-		// Convert protobuf events to typed kafka events
-		var analyticsEvents []kafka.AnalyticsEvent
-		for _, protoEventData := range protoEvent.Events {
-			ke, err := convertProtoEventToAnalytics(protoEventData, protoEvent.Source, protoEvent.TenantId)
-			if err != nil {
-				s.logger.WithError(err).WithFields(logging.Fields{
-					"event_id":   protoEventData.EventId,
-					"event_type": protoEventData.EventType,
-				}).Error("Failed to convert proto event to analytics event")
-				continue
-			}
-			analyticsEvents = append(analyticsEvents, *ke)
-		}
-
-		// Skip empty batches
-		if len(analyticsEvents) == 0 {
-			if err := stream.Send(&pb.EventResponse{
-				Status:  "error",
-				Message: "no valid events in batch",
-			}); err != nil {
-				return err
-			}
-			continue
-		}
-
-		// Validate events using existing validation logic
-		// Convert to BatchedEvents for validation compatibility
-		batch := &validation.BatchedEvents{
-			BatchID:   protoEvent.BatchId,
-			Source:    protoEvent.Source,
-			Timestamp: protoEvent.Timestamp.AsTime(),
-			Events:    make([]validation.BaseEvent, len(analyticsEvents)),
-		}
-
-		// Convert AnalyticsEvents to BaseEvents for validation
-		for i, analyticsEvent := range analyticsEvents {
-			be := validation.BaseEvent{
-				EventID:       analyticsEvent.EventID,
-				EventType:     validation.EventType(analyticsEvent.EventType),
-				Timestamp:     analyticsEvent.Timestamp,
-				Source:        analyticsEvent.Source,
-				StreamID:      analyticsEvent.StreamID,
-				UserID:        analyticsEvent.UserID,
-				PlaybackID:    analyticsEvent.PlaybackID,
-				InternalName:  analyticsEvent.InternalName,
-				NodeURL:       analyticsEvent.NodeURL,
-				SchemaVersion: analyticsEvent.SchemaVersion,
-			}
-			// Map typed payloads into BaseEvent for validator
-			switch be.EventType {
-			case validation.EventStreamIngest:
-				be.StreamIngest = analyticsEvent.Data.StreamIngest
-			case validation.EventStreamView:
-				be.StreamView = analyticsEvent.Data.StreamView
-			case validation.EventStreamLifecycle:
-				be.StreamLifecycle = analyticsEvent.Data.StreamLifecycle
-			case validation.EventStreamBuffer:
-				be.StreamLifecycle = analyticsEvent.Data.StreamLifecycle
-			case validation.EventStreamEnd:
-				be.StreamLifecycle = analyticsEvent.Data.StreamLifecycle
-			case validation.EventUserConnection:
-				be.UserConnection = analyticsEvent.Data.UserConnection
-			case validation.EventClientLifecycle:
-				be.ClientLifecycle = analyticsEvent.Data.ClientLifecycle
-			case validation.EventTrackList:
-				be.TrackList = analyticsEvent.Data.TrackList
-			case validation.EventRecordingLifecycle:
-				be.Recording = analyticsEvent.Data.Recording
-			case validation.EventPushLifecycle:
-				be.PushLifecycle = analyticsEvent.Data.PushLifecycle
-			case validation.EventNodeLifecycle:
-				be.NodeLifecycle = analyticsEvent.Data.NodeLifecycle
-			case validation.EventBandwidthThreshold:
-				be.BandwidthThreshold = analyticsEvent.Data.BandwidthThreshold
-			case validation.EventLoadBalancing:
-				be.LoadBalancing = analyticsEvent.Data.LoadBalancing
-			case validation.EventClipLifecycle:
-				be.ClipLifecycle = analyticsEvent.Data.ClipLifecycle
-			}
-			batch.Events[i] = be
-		}
-
-		// Validate event batch
-		if err := s.validator.ValidateBatch(batch); err != nil {
-			s.logger.WithError(err).Error("Event validation failed")
-			if s.metrics != nil {
-				s.metrics.EventsIngested.WithLabelValues(protoEvent.Source, "validation_error").Add(float64(len(protoEvent.Events)))
-			}
-			if err := stream.Send(&pb.EventResponse{
-				Status:  "error",
-				Message: err.Error(),
-			}); err != nil {
-				return err
-			}
-			continue
-		}
-
-		// Publish typed events to Kafka
-		kafkaStart := time.Now()
-		if s.metrics != nil {
-			s.metrics.KafkaMessages.WithLabelValues("analytics_events", "publish", "attempt").Inc()
-		}
-
-		if err := s.producer.PublishTypedBatch(analyticsEvents); err != nil {
-			s.logger.WithError(err).Error("Failed to publish typed events to Kafka")
-			if s.metrics != nil {
-				s.metrics.KafkaMessages.WithLabelValues("analytics_events", "publish", "error").Inc()
-				s.metrics.EventsIngested.WithLabelValues(protoEvent.Source, "kafka_error").Add(float64(len(protoEvent.Events)))
-			}
-			if err := stream.Send(&pb.EventResponse{Status: "error", Message: "failed to publish events"}); err != nil {
-				return err
-			}
-			continue
-		}
-
-		// Track successful Kafka publishing
-		if s.metrics != nil {
-			s.metrics.KafkaMessages.WithLabelValues("analytics_events", "publish", "success").Inc()
-			s.metrics.KafkaDuration.WithLabelValues("analytics_events").Observe(time.Since(kafkaStart).Seconds())
-		}
-
-		s.logger.WithFields(logging.Fields{
-			"batch_id": protoEvent.BatchId,
-			"source":   protoEvent.Source,
-			"count":    len(analyticsEvents),
-		}).Info("Published typed analytics events to Kafka")
-
-		// Track successful processing
-		if s.metrics != nil {
-			s.metrics.EventsIngested.WithLabelValues(protoEvent.Source, "processed").Add(float64(len(analyticsEvents)))
-			s.metrics.ProcessingDuration.WithLabelValues(protoEvent.Source).Observe(time.Since(start).Seconds())
-			s.metrics.GRPCRequests.WithLabelValues("StreamEvents", "success").Inc()
-		}
-
-		// Send success response
-		if err := stream.Send(&pb.EventResponse{
-			Status:         "success",
-			ProcessedCount: uint32(len(analyticsEvents)),
-		}); err != nil {
-			return err
-		}
+	jsonBytes, err := marshaler.Marshal(msg.(proto.Message))
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal protobuf message: %w", err)
 	}
+
+	// Parse JSON into map for Data field - this is the transparent representation
+	var dataMap map[string]interface{}
+	if err := json.Unmarshal(jsonBytes, &dataMap); err != nil {
+		return nil, fmt.Errorf("failed to parse JSON to map: %w", err)
+	}
+
+	event := &kafka.AnalyticsEvent{
+		EventID:   generateEventID(),
+		EventType: eventType,
+		Timestamp: time.Now(),
+		Source:    source,
+		TenantID:  normalized,
+		Data:      dataMap, // Transparent protobuf message as JSON
+	}
+
+	return event, nil
 }
 
-// SendEvent handles single events from Foghorn (replaces SendBalancingEvent)
-func (s *DecklogServer) SendEvent(ctx context.Context, event *pb.Event) (*pb.EventResponse, error) {
+func isValidUUID(s string) bool {
+	if s == "" {
+		return false
+	}
+	_, err := uuid.Parse(s)
+	return err == nil
+}
+
+func generateEventID() string {
+	return fmt.Sprintf("%d.%06d", time.Now().Unix(), time.Now().Nanosecond()/1000)
+}
+
+// unwrapMistTrigger picks the inner payload and canonical (current-compatible) event type.
+// Note: We publish only the inner payload to Kafka Data to avoid consumer confusion.
+func (s *DecklogServer) unwrapMistTrigger(trigger *pb.MistTrigger) (proto.Message, string, string) {
+	tenantID := ""
+	var eventType string
+
+	switch payload := trigger.GetTriggerPayload().(type) {
+	case *pb.MistTrigger_PushRewrite:
+		eventType = "push_rewrite"
+	case *pb.MistTrigger_ViewerResolve:
+		eventType = "viewer_resolve"
+	case *pb.MistTrigger_StreamSource:
+		eventType = "stream_source"
+	case *pb.MistTrigger_PushOutStart:
+		eventType = "push_out_start"
+	case *pb.MistTrigger_PushEnd:
+		eventType = "push_end"
+	case *pb.MistTrigger_ViewerConnect:
+		eventType = "viewer_connect"
+	case *pb.MistTrigger_ViewerDisconnect:
+		eventType = "viewer_disconnect"
+	case *pb.MistTrigger_StreamBuffer:
+		eventType = "stream_buffer"
+	case *pb.MistTrigger_StreamEnd:
+		eventType = "stream_end"
+	case *pb.MistTrigger_TrackList:
+		eventType = "stream_track_list"
+	case *pb.MistTrigger_StreamBandwidth:
+		eventType = "stream_bandwidth"
+	case *pb.MistTrigger_RecordingComplete:
+		eventType = "recording_complete"
+	case *pb.MistTrigger_StreamLifecycleUpdate:
+		eventType = "stream_lifecycle_update"
+		if payload.StreamLifecycleUpdate.TenantId != nil {
+			tenantID = *payload.StreamLifecycleUpdate.TenantId
+		}
+	case *pb.MistTrigger_ClientLifecycleUpdate:
+		eventType = "client_lifecycle_update"
+		if payload.ClientLifecycleUpdate.TenantId != nil {
+			tenantID = *payload.ClientLifecycleUpdate.TenantId
+		}
+	case *pb.MistTrigger_NodeLifecycleUpdate:
+		eventType = "node_lifecycle_update"
+		if payload.NodeLifecycleUpdate.TenantId != nil {
+			tenantID = *payload.NodeLifecycleUpdate.TenantId
+		}
+	case *pb.MistTrigger_LoadBalancingData:
+		eventType = "load_balancing"
+		if payload.LoadBalancingData.TenantId != nil {
+			tenantID = *payload.LoadBalancingData.TenantId
+		}
+	case *pb.MistTrigger_ClipLifecycleData:
+		eventType = "clip_lifecycle"
+		if payload.ClipLifecycleData.TenantId != nil {
+			tenantID = *payload.ClipLifecycleData.TenantId
+		}
+	case *pb.MistTrigger_DvrLifecycleData:
+		eventType = "dvr_lifecycle"
+		if payload.DvrLifecycleData.TenantId != nil {
+			tenantID = *payload.DvrLifecycleData.TenantId
+		}
+	default:
+		eventType = "unknown"
+	}
+
+	return trigger, eventType, tenantID
+}
+
+// SendEvent handles all enriched events through a unified MistTrigger envelope
+func (s *DecklogServer) SendEvent(ctx context.Context, trigger *pb.MistTrigger) (*emptypb.Empty, error) {
 	start := time.Now()
 
 	// Track gRPC request
@@ -451,71 +175,57 @@ func (s *DecklogServer) SendEvent(ctx context.Context, event *pb.Event) (*pb.Eve
 		s.metrics.GRPCRequests.WithLabelValues("SendEvent", "requested").Inc()
 	}
 
-	// Process single event the same way as batched events
-	if len(event.Events) == 0 {
-		if s.metrics != nil {
-			s.metrics.GRPCRequests.WithLabelValues("SendEvent", "empty_batch").Inc()
-		}
-		return &pb.EventResponse{
-			Status:  "error",
-			Message: "no events in batch",
-		}, nil
-	}
+	// Unwrap inner payload and determine event type + tenant
+	msg, eventType, tenantID := s.unwrapMistTrigger(trigger)
 
-	// Take the first (and should be only) event
-	protoEventData := event.Events[0]
-
-	// Convert to typed event
-	analyticsEvent, err := convertProtoEventToAnalytics(protoEventData, event.Source, event.TenantId)
+	// Convert to analytics event with transparent protobuf serialization of the full envelope
+	analyticsEvent, err := s.convertProtobufToKafkaEvent(msg, eventType, "foghorn", tenantID)
 	if err != nil {
-		s.logger.WithError(err).Error("Failed to convert proto event to analytics event")
+		s.logger.WithError(err).WithFields(logging.Fields{
+			"trigger_type": trigger.GetTriggerType(),
+			"node_id":      trigger.GetNodeId(),
+		}).Error("Failed to convert event to analytics message")
 		if s.metrics != nil {
 			s.metrics.GRPCRequests.WithLabelValues("SendEvent", "conversion_error").Inc()
 		}
-		return &pb.EventResponse{
-			Status:  "error",
-			Message: "failed to convert event",
-		}, nil
+		return nil, err
 	}
 
-	// Track Kafka publishing
-	if s.metrics != nil {
-		s.metrics.KafkaMessages.WithLabelValues("analytics_events", "publish", "single_event").Inc()
-		s.metrics.EventsIngested.WithLabelValues(event.Source, "received").Inc()
-	}
+	// Note: stream-level fields are in the protobuf data, not top-level Kafka fields
 
+	// Publish to Kafka
 	kafkaStart := time.Now()
-	// Publish typed event to Kafka
 	if err := s.producer.PublishTypedEvent(analyticsEvent); err != nil {
-		s.logger.WithError(err).Error("Failed to publish typed event")
+		s.logger.WithError(err).WithFields(logging.Fields{
+			"trigger_type": trigger.GetTriggerType(),
+			"node_id":      trigger.GetNodeId(),
+		}).Error("Failed to publish event")
 		if s.metrics != nil {
 			s.metrics.GRPCRequests.WithLabelValues("SendEvent", "kafka_error").Inc()
-			s.metrics.EventsIngested.WithLabelValues(event.Source, "kafka_error").Inc()
+			s.metrics.KafkaMessages.WithLabelValues("analytics_events", "publish", "error").Inc()
 		}
-		return nil, status.Error(codes.Internal, "failed to publish event")
+		return nil, err
 	}
 
-	// Track successful processing
+	// Track success
 	if s.metrics != nil {
-		s.metrics.KafkaDuration.WithLabelValues("analytics_events").Observe(time.Since(kafkaStart).Seconds())
-		s.metrics.EventsIngested.WithLabelValues(event.Source, "processed").Inc()
-		s.metrics.ProcessingDuration.WithLabelValues(event.Source).Observe(time.Since(start).Seconds())
+		// Operation label = publish, topic accounted in KafkaMessages
+		s.metrics.KafkaDuration.WithLabelValues("publish").Observe(time.Since(kafkaStart).Seconds())
+		// event_type label should use the derived eventType, not the source
+		s.metrics.EventsIngested.WithLabelValues(eventType, "processed").Inc()
+		s.metrics.ProcessingDuration.WithLabelValues(eventType).Observe(time.Since(start).Seconds())
 		s.metrics.GRPCRequests.WithLabelValues("SendEvent", "success").Inc()
+		s.metrics.KafkaMessages.WithLabelValues("analytics_events", "publish", "success").Inc()
 	}
 
-	return &pb.EventResponse{
-		Status:         "success",
-		ProcessedCount: 1,
-	}, nil
-}
+	s.logger.WithFields(logging.Fields{
+		"trigger_type": trigger.GetTriggerType(),
+		"node_id":      trigger.GetNodeId(),
+		"tenant_id":    tenantID,
+		"event_id":     analyticsEvent.EventID,
+	}).Debug("Event sent to Kafka")
 
-// CheckHealth implements health check
-func (s *DecklogServer) CheckHealth(ctx context.Context, req *pb.HealthRequest) (*pb.HealthResponse, error) {
-	return &pb.HealthResponse{
-		Status:    "healthy",
-		Version:   "1.0.0",
-		Timestamp: timestamppb.Now(),
-	}, nil
+	return &emptypb.Empty{}, nil
 }
 
 // NewGRPCServer creates a new gRPC server with proper TLS configuration
@@ -537,6 +247,9 @@ func NewGRPCServer(producer kafka.ProducerInterface, logger logging.Logger, metr
 
 	server := grpc.NewServer(opts...)
 	pb.RegisterDecklogServiceServer(server, NewDecklogServer(producer, logger, metrics))
+	// Register gRPC health checking service
+	hs := health.NewServer()
+	grpc_health_v1.RegisterHealthServer(server, hs)
 	return server, nil
 }
 
@@ -549,7 +262,7 @@ func unaryInterceptor(logger logging.Logger) grpc.UnaryServerInterceptor {
 			"method":   info.FullMethod,
 			"duration": time.Since(start),
 			"error":    err,
-		}).Info("gRPC request processed")
+		}).Debug("gRPC request processed")
 		return resp, err
 	}
 }
@@ -562,7 +275,7 @@ func streamInterceptor(logger logging.Logger) grpc.StreamServerInterceptor {
 			"method":   info.FullMethod,
 			"duration": time.Since(start),
 			"error":    err,
-		}).Info("gRPC stream processed")
+		}).Debug("gRPC stream processed")
 		return err
 	}
 }

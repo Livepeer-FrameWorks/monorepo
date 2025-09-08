@@ -2,7 +2,7 @@
 
 The FrameWorks web application dashboard — a SvelteKit frontend for managing streams, analytics, and account settings.
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Prerequisites
 - Node.js 18+
@@ -34,10 +34,10 @@ npm run dev
 ```
 App: http://localhost:18030
 
-## 🔧 Configuration
-Copy `env.example` to `.env` and configure as needed. See `env.example` for all available environment variables and their defaults.
+## Configuration
+Copy `env.example` to `.env` and adjust as needed. Use the comments in `env.example` as the source of truth. Do not commit secrets.
 
-## 🏗️ Architecture
+## Architecture
 - **SvelteKit** frontend with server-side rendering
 - **GraphQL** client connecting to Bridge API Gateway
 - **Authentication** handled via JWT tokens with Bridge auth proxy

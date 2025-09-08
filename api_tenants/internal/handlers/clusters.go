@@ -296,3 +296,53 @@ func UpdateCluster(c *gin.Context) {
 	logger.WithField("cluster_id", clusterID).Info("Updated cluster successfully")
 	c.JSON(http.StatusOK, qmapi.SuccessResponse{Message: "Cluster updated successfully"})
 }
+
+// GetNodeOwner returns the tenant that owns/manages a specific node
+func GetNodeOwner(c *gin.Context) {
+	nodeID := c.Param("id")
+
+	query := `
+		SELECT 
+			c.owner_tenant_id,
+			c.cluster_id,
+			c.cluster_name,
+			t.name as tenant_name
+		FROM quartermaster.infrastructure_nodes n
+		JOIN quartermaster.infrastructure_clusters c ON n.cluster_id = c.cluster_id
+		LEFT JOIN quartermaster.tenants t ON c.owner_tenant_id = t.id
+		WHERE n.node_id = $1 AND n.is_active = true AND c.is_active = true
+	`
+
+	var ownerTenantID sql.NullString
+	var clusterID, clusterName string
+	var tenantName sql.NullString
+
+	err := db.QueryRow(query, nodeID).Scan(&ownerTenantID, &clusterID, &clusterName, &tenantName)
+
+	if err == sql.ErrNoRows {
+		c.JSON(http.StatusNotFound, qmapi.ErrorResponse{Error: "Node not found or not active"})
+		return
+	}
+
+	if err != nil {
+		logger.WithError(err).WithField("node_id", nodeID).Error("Failed to get node owner")
+		c.JSON(http.StatusInternalServerError, qmapi.ErrorResponse{Error: "Failed to get node owner"})
+		return
+	}
+
+	response := qmapi.NodeOwnerResponse{
+		NodeID:      nodeID,
+		ClusterID:   clusterID,
+		ClusterName: clusterName,
+	}
+
+	if ownerTenantID.Valid {
+		response.OwnerTenantID = &ownerTenantID.String
+	}
+
+	if tenantName.Valid {
+		response.TenantName = &tenantName.String
+	}
+
+	c.JSON(http.StatusOK, response)
+}

@@ -44,10 +44,40 @@ BEGIN
     END IF;
 END $$;
 
+-- Ensure cluster is owned by demo tenant to allow fingerprint-based association
+UPDATE quartermaster.infrastructure_clusters
+SET owner_tenant_id = '00000000-0000-0000-0000-000000000001'
+WHERE cluster_id = 'central-primary';
+
+-- Pre-provision a demo infrastructure node that matches the default NODE_NAME in docker-compose
+INSERT INTO quartermaster.infrastructure_nodes (node_id, cluster_id, node_name, node_type, status, health_score, tags, metadata)
+VALUES ('edge-node-1', 'central-primary', 'edge-node-1', 'edge', 'active', 1.0, '{}', '{}')
+ON CONFLICT (node_id) DO NOTHING;
+
 -- Demo subscription in Purser
 INSERT INTO purser.tenant_subscriptions (tenant_id, tier_id, status, billing_email, started_at, next_billing_date)
 SELECT '00000000-0000-0000-0000-000000000001', bt.id, 'active', 'demo@frameworks.dev', NOW(), NOW() + INTERVAL '1 month'
-FROM purser.billing_tiers bt WHERE bt.tier_name = 'developer'
-ON CONFLICT (tenant_id) DO NOTHING;
+FROM purser.billing_tiers bt 
+WHERE bt.tier_name = 'developer'
+  AND NOT EXISTS (SELECT 1 FROM purser.tenant_subscriptions WHERE tenant_id = '00000000-0000-0000-0000-000000000001');
 
-
+-- Bind Helmsman demo node fingerprint (machine-id SHA-256) to demo tenant for immediate matching
+-- machine-id contents: frameworks-demo-helmsman
+-- sha256: 3d0800fc0eb588967e6c6e03228815bbb59559107890b4799cc563a69f2f9d03
+INSERT INTO quartermaster.node_fingerprints (
+    tenant_id,
+    node_id,
+    fingerprint_machine_sha256,
+    fingerprint_macs_sha256,
+    seen_ips,
+    attrs
+) VALUES (
+    '00000000-0000-0000-0000-000000000001',
+    'edge-node-1',
+    '3d0800fc0eb588967e6c6e03228815bbb59559107890b4799cc563a69f2f9d03',
+    NULL,
+    '{}',
+    '{}'
+) ON CONFLICT (node_id) DO UPDATE SET
+    fingerprint_machine_sha256 = EXCLUDED.fingerprint_machine_sha256,
+    last_seen = NOW();

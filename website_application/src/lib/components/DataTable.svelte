@@ -1,7 +1,9 @@
 <script>
   import { createEventDispatcher } from 'svelte';
   
+  /** @type {any[]} */
   export let data = [];
+  /** @type {any[]} */
   export let columns = [];
   export let loading = false;
   export let error = null;
@@ -12,12 +14,14 @@
   export let searchQuery = '';
   export let currentPage = 1;
   export let selectable = false;
+  /** @type {any[]} */
   export let selectedItems = [];
   export let emptyMessage = 'No data available';
   export let loadingMessage = 'Loading...';
   
   const dispatch = createEventDispatcher();
   
+  /** @type {any} */
   let sortBy = null;
   let sortOrder = 'asc';
   
@@ -29,6 +33,12 @@
   $: startIndex = paginated ? (currentPage - 1) * pageSize + 1 : 1;
   $: endIndex = paginated ? Math.min(currentPage * pageSize, totalItems) : totalItems;
   
+  /**
+   * @param {any[]} items
+   * @param {string} query
+   * @param {any[]} columns
+   * @returns {any[]}
+   */
   function filterData(items, query, columns) {
     if (!query || !filterable) return items;
     
@@ -41,6 +51,12 @@
     });
   }
   
+  /**
+   * @param {any[]} items
+   * @param {any} column
+   * @param {string} order
+   * @returns {any[]}
+   */
   function sortData(items, column, order) {
     if (!column || !sortable) return items;
     
@@ -62,16 +78,30 @@
     });
   }
   
+  /**
+   * @param {any[]} items
+   * @param {number} page
+   * @param {number} size
+   * @returns {any[]}
+   */
   function paginateData(items, page, size) {
     const start = (page - 1) * size;
     const end = start + size;
     return items.slice(start, end);
   }
   
+  /**
+   * @param {any} obj
+   * @param {string} key
+   * @returns {any}
+   */
   function getNestedValue(obj, key) {
     return key.split('.').reduce((o, k) => o?.[k], obj);
   }
   
+  /**
+   * @param {any} column
+   */
   function handleSort(column) {
     if (!sortable || !column.sortable) return;
     
@@ -85,6 +115,10 @@
     dispatch('sort', { column: column.key, order: sortOrder });
   }
   
+  /**
+   * @param {any} item
+   * @param {boolean} checked
+   */
   function handleSelect(item, checked) {
     if (checked) {
       selectedItems = [...selectedItems, item];
@@ -95,11 +129,17 @@
     dispatch('select', { item, selected: checked, selectedItems });
   }
   
+  /**
+   * @param {boolean} checked
+   */
   function handleSelectAll(checked) {
     selectedItems = checked ? [...paginatedData] : [];
     dispatch('selectAll', { selected: checked, selectedItems });
   }
   
+  /**
+   * @param {number} page
+   */
   function goToPage(page) {
     if (page >= 1 && page <= totalPages) {
       currentPage = page;
@@ -159,7 +199,7 @@
                   type="checkbox"
                   checked={selectedItems.length === paginatedData.length && paginatedData.length > 0}
                   indeterminate={selectedItems.length > 0 && selectedItems.length < paginatedData.length}
-                  on:change={(e) => handleSelectAll(e.target.checked)}
+                  on:change={(e) => handleSelectAll(/** @type {HTMLInputElement} */ (e.target).checked)}
                   class="rounded border-slate-600 bg-slate-700 text-blue-600 focus:ring-blue-500"
                 />
               </th>
@@ -195,7 +235,7 @@
                   <input
                     type="checkbox"
                     checked={selectedItems.includes(item)}
-                    on:change={(e) => handleSelect(item, e.target.checked)}
+                    on:change={(e) => handleSelect(item, /** @type {HTMLInputElement} */ (e.target).checked)}
                     class="rounded border-slate-600 bg-slate-700 text-blue-600 focus:ring-blue-500"
                   />
                 </td>

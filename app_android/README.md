@@ -2,7 +2,7 @@
 
 <TBA>> is a comprehensive Android streaming application that supports multiple streaming protocols and provides professional-grade camera controls. Built for content creators, broadcasters, and streaming professionals who need reliable mobile streaming capabilities.
 
-## ⚠️ HERE BE DRAGONS ⚠️
+## Work in Progress
 
 **Mostly stub functions - just a start to scope out what it would look like.**
 
@@ -10,11 +10,11 @@
 
 ## Features
 
-### 🎥 **Multi-Protocol Streaming Support**
+### Multi-Protocol Streaming Support
 - **SRT**: Low-latency streaming with error correction for professional broadcasting
 - **WHIP (WebRTC)**: Modern web-based streaming ingestion with ultra-low latency
 
-### 📱 **Professional Camera Controls**
+### Professional Camera Controls
 - **Manual Focus**: Precise focus control with distance adjustment
 - **Exposure Control**: Manual exposure time, ISO, and compensation settings
 - **White Balance**: Multiple presets (Auto, Daylight, Cloudy, Tungsten, etc.) and manual control
@@ -24,25 +24,25 @@
 - **Zoom Control**: Smooth zoom with real-time adjustment
 - **Flash/Torch**: Configurable flash modes and torch control
 
-### 🎛️ **Flexible Input Sources**
+### Flexible Input Sources
 - **Camera Input**: Front and rear cameras with seamless switching
 - **Screen Capture**: Stream your device screen (coming soon)
 - **Audio Sources**: Multiple audio input options (Microphone, Camcorder, etc.)
 - **Audio Controls**: Gain adjustment and source selection
 
-### 🔗 **Provider System**
+### Provider System
 - **FrameWorks Integration**: Native support for FrameWorks streaming service
 - **Static Targets**: Direct streaming to RTMP/SRT/WHIP endpoints
 - **Custom Services**: Support for any streaming service with configurable endpoints
 - **Multiple Authentication**: JWT, OAuth 2.0, API Key, and Basic Auth support
 
-### ⚙️ **Stream Configuration**
+### Stream Configuration
 - **Resolution Options**: 480p, 720p, 1080p, 4K support
 - **Frame Rates**: 15, 24, 30, 60 FPS options
 - **Bitrate Control**: Adjustable bitrate from 500 kbps to 10+ Mbps
 - **Quality Presets**: Optimized settings for different use cases
 
-### 📊 **Real-time Monitoring**
+### Real-time Monitoring
 - **Stream Statistics**: Bitrate, FPS, duration, dropped frames
 - **Connection Status**: Real-time connection monitoring
 - **Performance Metrics**: Network type, latency information

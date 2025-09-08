@@ -6,6 +6,13 @@ import Pricing from './components/Pricing'
 import About from './components/About'
 import Contact from './components/Contact'
 import ScrollToTop from './components/ScrollToTop'
+import Footer from './components/Footer'
+import StatusPage from './components/StatusPage'
+import RoadmapPage from './components/RoadmapPage'
+import ChangelogPage from './components/ChangelogPage'
+import PrivacyPage from './components/PrivacyPage'
+import TermsPage from './components/TermsPage'
+import AupPage from './components/AupPage'
 
 function App() {
   return (
@@ -19,8 +26,15 @@ function App() {
           <Route path="/pricing" element={<Pricing />} />
           <Route path="/about" element={<About />} />
           <Route path="/contact" element={<Contact />} />
+          <Route path="/status" element={<StatusPage />} />
+          <Route path="/roadmap" element={<RoadmapPage />} />
+          <Route path="/changelog" element={<ChangelogPage />} />
+          <Route path="/privacy" element={<PrivacyPage />} />
+          <Route path="/terms" element={<TermsPage />} />
+          <Route path="/aup" element={<AupPage />} />
         </Routes>
       </div>
+      <Footer />
     </Router>
   )
 }

@@ -108,15 +108,9 @@ resource "compute_instance" "edge" {
 
 ## Configuration
 
-### Agent Configuration
-Environment variables:
-- `QUARTERMASTER_URL` - Quartermaster API endpoint (default: http://10.10.0.1:18002)
-- `WIREGUARD_DEVICE` - WireGuard interface name (default: wg0)
-- `WIREGUARD_PORT` - WireGuard listen port (default: 51820)
-- `MESH_NETWORK` - Mesh network CIDR (default: 10.10.0.0/16)
-- `LOG_LEVEL` - Log level (default: info)
+Configuration will be provided via an `env.example` file (with inline comments) when this service is implemented. Copy it to `.env` and adjust values for your environment.
 
-### Bootstrap Node Configuration
+### Bootstrap Node Example
 ```bash
 privateer init \
   --role=bootstrap \
@@ -125,7 +119,7 @@ privateer init \
   --quartermaster=http://localhost:18002
 ```
 
-### Regular Node Configuration  
+### Regular Node Example  
 ```bash
 privateer join \
   --token=<signed-jwt-token> \

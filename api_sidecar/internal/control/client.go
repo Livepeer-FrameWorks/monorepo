@@ -2,21 +2,27 @@ package control
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/tls"
+	"encoding/hex"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	sidecarcfg "frameworks/api_sidecar/internal/config"
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
-	"frameworks/pkg/validation"
 
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -26,7 +32,13 @@ var (
 	currentStream pb.HelmsmanControl_ConnectClient
 	currentNodeID string
 	currentClient pb.HelmsmanControlClient
+	onSeed        func()
 )
+
+// SetOnSeed sets a callback invoked when Foghorn requests immediate JSON seed
+func SetOnSeed(cb func()) {
+	onSeed = cb
+}
 
 // Start launches the Helmsman control client and maintains the stream to Foghorn
 func Start(logger logging.Logger) {
@@ -34,123 +46,18 @@ func Start(logger logging.Logger) {
 	if addr == "" {
 		addr = "foghorn:18019"
 	}
-	go runClient(addr, logger)
-}
-
-// SendStreamHealth sends stream health updates via the gRPC control stream (replaces HTTP)
-func SendStreamHealth(streamName, internalName string, isHealthy bool, details map[string]interface{}) error {
-	stream := currentStream
-	nodeID := currentNodeID
-	if stream == nil {
-		return fmt.Errorf("gRPC control stream not connected")
-	}
-
-	healthDetails := &pb.StreamHealthDetails{}
-	if bufferState, ok := details["buffer_state"].(string); ok {
-		healthDetails.BufferState = bufferState
-	}
-	if status, ok := details["status"].(string); ok {
-		healthDetails.Status = status
-	}
-	if streamDetails, ok := details["stream_details"].(string); ok {
-		healthDetails.StreamDetails = streamDetails
-	}
-
-	healthUpdate := &pb.StreamHealthUpdate{
-		NodeId:       nodeID,
-		StreamName:   streamName,
-		InternalName: internalName,
-		IsHealthy:    isHealthy,
-		Timestamp:    time.Now().Unix(),
-		Details:      healthDetails,
-	}
-
-	msg := &pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_StreamHealthUpdate{StreamHealthUpdate: healthUpdate}}
-	return stream.Send(msg)
-}
-
-// SendNodeMetrics sends node metrics via the gRPC control stream (replaces HTTP)
-func SendNodeMetrics(nodeMetrics *validation.FoghornNodeUpdate, baseURL, outputsJSON string) error {
-	stream := currentStream
-	nodeID := currentNodeID
-	if stream == nil {
-		return fmt.Errorf("gRPC control stream not connected")
-	}
-
-	pbUpdate := &pb.NodeUpdate{
-		NodeId:      nodeID,
-		CpuTenths:   uint32(nodeMetrics.CPU * 10),
-		RamMax:      uint64(nodeMetrics.RAMMax),
-		RamCurrent:  uint64(nodeMetrics.RAMCurrent),
-		UpSpeed:     uint64(nodeMetrics.UpSpeed),
-		DownSpeed:   uint64(nodeMetrics.DownSpeed),
-		BwLimit:     uint64(nodeMetrics.BWLimit),
-		Latitude:    nodeMetrics.Location.Latitude,
-		Longitude:   nodeMetrics.Location.Longitude,
-		Location:    nodeMetrics.Location.Name,
-		BaseUrl:     baseURL,
-		IsHealthy:   true,
-		EventType:   "node_update",
-		Timestamp:   time.Now().Unix(),
-		OutputsJson: outputsJSON,
-	}
-
-	if nodeMetrics.Capabilities.Ingest || nodeMetrics.Capabilities.Edge || nodeMetrics.Capabilities.Storage || nodeMetrics.Capabilities.Processing {
-		pbUpdate.Capabilities = &pb.NodeCapabilities{
-			Ingest:     nodeMetrics.Capabilities.Ingest,
-			Edge:       nodeMetrics.Capabilities.Edge,
-			Storage:    nodeMetrics.Capabilities.Storage,
-			Processing: nodeMetrics.Capabilities.Processing,
-			Roles:      nodeMetrics.Capabilities.Roles,
-		}
-	}
-
-	if nodeMetrics.Storage.LocalPath != "" || nodeMetrics.Storage.S3Bucket != "" {
-		pbUpdate.Storage = &pb.StorageInfo{
-			LocalPath: nodeMetrics.Storage.LocalPath,
-			S3Bucket:  nodeMetrics.Storage.S3Bucket,
-			S3Prefix:  nodeMetrics.Storage.S3Prefix,
-		}
-	}
-
-	if nodeMetrics.Limits != nil {
-		pbUpdate.Limits = &pb.NodeLimits{
-			MaxTranscodes:        int32(nodeMetrics.Limits.MaxTranscodes),
-			StorageCapacityBytes: nodeMetrics.Limits.StorageCapacityBytes,
-			StorageUsedBytes:     nodeMetrics.Limits.StorageUsedBytes,
-		}
-	}
-
-	if len(nodeMetrics.Streams) > 0 {
-		pbUpdate.Streams = make(map[string]*pb.StreamData)
-		for streamName, streamData := range nodeMetrics.Streams {
-			pbUpdate.Streams[streamName] = &pb.StreamData{
-				Total:     streamData.Total,
-				Inputs:    streamData.Inputs,
-				BytesUp:   streamData.BytesUp,
-				BytesDown: streamData.BytesDown,
-				Bandwidth: streamData.Bandwidth,
+	go func() {
+		backoff := time.Second
+		for {
+			if err := runClient(addr, logger); err != nil {
+				logger.WithError(err).Warn("Helmsman control client disconnected; retrying")
+			}
+			time.Sleep(backoff)
+			if backoff < 30*time.Second {
+				backoff *= 2
 			}
 		}
-	}
-
-	for _, artifact := range nodeMetrics.Artifacts {
-		// Parse stream name and clip hash from artifact path/ID
-		streamName, clipHash := parseArtifactID(artifact.ID, artifact.Path)
-
-		pbUpdate.Artifacts = append(pbUpdate.Artifacts, &pb.StoredArtifact{
-			ClipHash:   clipHash,
-			StreamName: streamName,
-			FilePath:   artifact.Path,
-			S3Url:      artifact.URL,
-			SizeBytes:  artifact.SizeBytes,
-			CreatedAt:  artifact.CreatedAt,
-			Format:     artifact.Format,
-		})
-	}
-
-	msg := &pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_NodeUpdate{NodeUpdate: pbUpdate}}
-	return stream.Send(msg)
+	}()
 }
 
 // ResolveClipHash resolves a clip hash to tenant and stream info via gRPC (replaces HTTP)
@@ -162,6 +69,84 @@ func ResolveClipHash(ctx context.Context, clipHash string) (*pb.ClipHashResponse
 
 	req := &pb.ClipHashRequest{ClipHash: clipHash}
 	return client.ResolveClipHash(ctx, req)
+}
+
+// GetCurrentNodeID returns the current node ID for building triggers
+func GetCurrentNodeID() string {
+	return currentNodeID
+}
+
+// SendMistTrigger forwards a typed MistServer trigger to Foghorn and returns response for blocking triggers
+func SendMistTrigger(mistTrigger *pb.MistTrigger, logger logging.Logger) (string, bool, error) {
+	stream := currentStream
+	if stream == nil {
+		return "", true, fmt.Errorf("gRPC control stream not connected")
+	}
+
+	msg := &pb.ControlMessage{
+		SentAt:  timestamppb.Now(),
+		Payload: &pb.ControlMessage_MistTrigger{MistTrigger: mistTrigger},
+	}
+
+	if err := stream.Send(msg); err != nil {
+		return "", true, fmt.Errorf("failed to send MistTrigger: %w", err)
+	}
+
+	// For non-blocking triggers, return immediately
+	if !mistTrigger.Blocking {
+		return "", false, nil
+	}
+
+	// For blocking triggers, wait for response
+	response, shouldAbort, err := waitForMistTriggerResponse(mistTrigger.RequestId, 5*time.Second)
+	return response, shouldAbort, err
+}
+
+// pendingMistTriggers tracks blocking trigger requests waiting for responses
+var (
+	pendingMistTriggers = make(map[string]chan *pb.MistTriggerResponse)
+	pendingMutex        = make(chan struct{}, 1) // Simple mutex using buffered channel
+)
+
+// waitForMistTriggerResponse waits for a MistTriggerResponse with matching requestID
+func waitForMistTriggerResponse(requestID string, timeout time.Duration) (string, bool, error) {
+	// Create response channel
+	responseChan := make(chan *pb.MistTriggerResponse, 1)
+
+	// Acquire mutex
+	pendingMutex <- struct{}{}
+	pendingMistTriggers[requestID] = responseChan
+	<-pendingMutex // Release mutex
+
+	// Wait for response or timeout
+	select {
+	case response := <-responseChan:
+		// Clean up
+		pendingMutex <- struct{}{}
+		delete(pendingMistTriggers, requestID)
+		<-pendingMutex
+
+		return response.Response, response.Abort, nil
+
+	case <-time.After(timeout):
+		// Clean up on timeout
+		pendingMutex <- struct{}{}
+		delete(pendingMistTriggers, requestID)
+		<-pendingMutex
+
+		return "", true, fmt.Errorf("timeout waiting for MistTrigger response")
+	}
+}
+
+// handleMistTriggerResponse processes MistTriggerResponse messages from the stream
+func handleMistTriggerResponse(response *pb.MistTriggerResponse) {
+	pendingMutex <- struct{}{}
+	responseChan, exists := pendingMistTriggers[response.RequestId]
+	<-pendingMutex
+
+	if exists {
+		responseChan <- response
+	}
 }
 
 // SendDVRStartRequest sends a DVR start notification to Foghorn via the gRPC control stream
@@ -192,19 +177,37 @@ func SendDVRStartRequest(tenantID, internalName, userID string, retentionDays in
 	return stream.Send(msg)
 }
 
-func runClient(addr string, logger logging.Logger) {
-	for {
-		if err := connectOnce(addr, logger); err != nil {
-			logger.WithError(err).Warn("Control client disconnected; retrying")
-			time.Sleep(2 * time.Second)
-		}
-	}
-}
-
-func connectOnce(addr string, logger logging.Logger) error {
+func runClient(addr string, logger logging.Logger) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	conn, err := grpc.DialContext(ctx, addr, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithBlock())
+
+	// Configure TLS based on environment variables
+	var creds credentials.TransportCredentials
+	if os.Getenv("GRPC_USE_TLS") == "true" {
+		certFile := os.Getenv("GRPC_TLS_CERT_PATH")
+		keyFile := os.Getenv("GRPC_TLS_KEY_PATH")
+
+		if certFile != "" && keyFile != "" {
+			// Use client certificate for mutual TLS
+			cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+			if err != nil {
+				return fmt.Errorf("failed to load TLS certificates: %w", err)
+			}
+			creds = credentials.NewTLS(&tls.Config{
+				Certificates: []tls.Certificate{cert},
+			})
+		} else {
+			// Use TLS without client certificate
+			creds = credentials.NewTLS(&tls.Config{})
+		}
+
+		logger.Info("Connecting to gRPC server with TLS")
+	} else {
+		creds = insecure.NewCredentials()
+		logger.Info("Connecting to gRPC server with insecure connection")
+	}
+
+	conn, err := grpc.DialContext(ctx, addr, grpc.WithTransportCredentials(creds), grpc.WithBlock())
 	if err != nil {
 		return err
 	}
@@ -222,15 +225,17 @@ func connectOnce(addr string, logger logging.Logger) error {
 	}
 	roles := splitCSV(os.Getenv("HELMSMAN_ROLES"))
 	reg := &pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_Register{Register: &pb.Register{
-		NodeId:        nodeID,
-		Roles:         roles,
-		CapIngest:     envBoolDefault("HELMSMAN_CAP_INGEST", true),
-		CapEdge:       envBoolDefault("HELMSMAN_CAP_EDGE", true),
-		CapStorage:    envBoolDefault("HELMSMAN_CAP_STORAGE", true),
-		CapProcessing: envBoolDefault("HELMSMAN_CAP_PROCESSING", true),
-		StorageLocal:  os.Getenv("HELMSMAN_STORAGE_LOCAL_PATH"),
-		StorageBucket: os.Getenv("HELMSMAN_STORAGE_S3_BUCKET"),
-		StoragePrefix: os.Getenv("HELMSMAN_STORAGE_S3_PREFIX"),
+		NodeId:          nodeID,
+		Roles:           roles,
+		CapIngest:       envBoolDefault("HELMSMAN_CAP_INGEST", true),
+		CapEdge:         envBoolDefault("HELMSMAN_CAP_EDGE", true),
+		CapStorage:      envBoolDefault("HELMSMAN_CAP_STORAGE", true),
+		CapProcessing:   envBoolDefault("HELMSMAN_CAP_PROCESSING", true),
+		StorageLocal:    os.Getenv("HELMSMAN_STORAGE_LOCAL_PATH"),
+		StorageBucket:   os.Getenv("HELMSMAN_STORAGE_S3_BUCKET"),
+		StoragePrefix:   os.Getenv("HELMSMAN_STORAGE_S3_PREFIX"),
+		EnrollmentToken: os.Getenv("EDGE_ENROLLMENT_TOKEN"),
+		Fingerprint:     collectNodeFingerprint(),
 	}}}
 	if err := stream.Send(reg); err != nil {
 		return err
@@ -266,6 +271,27 @@ func connectOnce(addr string, logger logging.Logger) error {
 				go handleDVRStart(logger, x.DvrStartRequest, func(m *pb.ControlMessage) { _ = stream.Send(m) })
 			case *pb.ControlMessage_DvrStopRequest:
 				go handleDVRStop(logger, x.DvrStopRequest, func(m *pb.ControlMessage) { _ = stream.Send(m) })
+			case *pb.ControlMessage_MistTriggerResponse:
+				// Handle response from Foghorn for blocking triggers
+				go handleMistTriggerResponse(x.MistTriggerResponse)
+			case *pb.ControlMessage_MistTrigger:
+				// Foghorn-initiated command: seed immediate JSON poll/upload
+				if x.MistTrigger != nil {
+					if t := x.MistTrigger.GetTriggerType(); t == "seed_poll" || t == "seed_request" {
+						if onSeed != nil {
+							onSeed()
+						}
+					}
+				}
+			case *pb.ControlMessage_ConfigSeed:
+				// Receive desired config seed and trigger reconcile
+				if x.ConfigSeed != nil {
+					sidecarcfg.ApplySeed(x.ConfigSeed)
+					// Adopt canonical node_id from seed if provided
+					if nid := x.ConfigSeed.GetNodeId(); nid != "" {
+						currentNodeID = nid
+					}
+				}
 			}
 		}
 	}()
@@ -416,12 +442,79 @@ func envBoolDefault(name string, def bool) bool {
 	return v == "1" || v == "true" || v == "yes"
 }
 
+func envFloatDefault(name string, def float64) float64 {
+	v := os.Getenv(name)
+	if v == "" {
+		return def
+	}
+	f, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		return def
+	}
+	return f
+}
+
 func hostnameFallback() string {
 	h, _ := os.Hostname()
 	if h == "" {
 		h = "unknown-helmsman"
 	}
 	return h
+}
+
+// collectNodeFingerprint builds a stable fingerprint from local network/machine info.
+func collectNodeFingerprint() *pb.NodeFingerprint {
+	fp := &pb.NodeFingerprint{}
+	ifaces, _ := net.Interfaces()
+	// Collect local IPs (exclude loopback, link-local)
+	for _, iface := range ifaces {
+		addrs, _ := iface.Addrs()
+		for _, a := range addrs {
+			var ip net.IP
+			switch v := a.(type) {
+			case *net.IPNet:
+				ip = v.IP
+			case *net.IPAddr:
+				ip = v.IP
+			}
+			if ip == nil || ip.IsLoopback() || ip.IsLinkLocalUnicast() {
+				continue
+			}
+			if ip.To4() != nil {
+				fp.LocalIpv4 = append(fp.LocalIpv4, ip.String())
+			} else {
+				fp.LocalIpv6 = append(fp.LocalIpv6, ip.String())
+			}
+		}
+	}
+	// Aggregate physical MACs (filter virtuals) into a single SHA-256
+	var macs []string
+	for _, iface := range ifaces {
+		name := strings.ToLower(iface.Name)
+		if strings.HasPrefix(name, "lo") || strings.HasPrefix(name, "docker") || strings.HasPrefix(name, "veth") || strings.HasPrefix(name, "br-") || strings.HasPrefix(name, "tun") || strings.HasPrefix(name, "tap") || strings.HasPrefix(name, "wg") {
+			continue
+		}
+		if len(iface.HardwareAddr) == 0 {
+			continue
+		}
+		macs = append(macs, strings.ToLower(iface.HardwareAddr.String()))
+	}
+	if len(macs) > 0 {
+		sort.Strings(macs)
+		sum := sha256.Sum256([]byte(strings.Join(macs, ",")))
+		macHex := hex.EncodeToString(sum[:])
+		fp.MacsSha256 = &macHex
+	}
+	// machine-id if present (host-provided, stable)
+	if b, err := os.ReadFile("/etc/machine-id"); err == nil {
+		mid := strings.TrimSpace(string(b))
+		if mid != "" {
+			sum := sha256.Sum256([]byte(mid))
+			midHex := hex.EncodeToString(sum[:])
+			fp.MachineIdSha256 = &midHex
+		}
+	}
+	return fp
 }
 
 func urlEscape(s string) string {

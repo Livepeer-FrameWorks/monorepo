@@ -15,11 +15,11 @@ Authoritative tenant and cluster registry. Other services query Quartermaster ov
 
 All endpoints require `Authorization: Bearer <SERVICE_TOKEN>`.
 
-## Configuration
-- `DATABASE_URL` — PostgreSQL/YugabyteDB DSN
-- `SERVICE_TOKEN` — S2S auth token
-- `PORT` — HTTP port (default 18002)
-- `LOG_LEVEL`, `GIN_MODE`
+## Run (dev)
+- Start the full stack from repo root: `docker-compose up -d`
+- Or run just Quartermaster: `cd api_tenants && go run ./cmd/quartermaster`
+
+Configuration: copy `env.example` to `.env` and use the inline comments as reference. Do not commit secrets.
 
 Health: `GET /health`.
 

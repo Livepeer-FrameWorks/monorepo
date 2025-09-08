@@ -11,7 +11,6 @@ import (
 	signalmanapi "frameworks/pkg/api/signalman"
 	signalmanclient "frameworks/pkg/clients/signalman"
 	"frameworks/pkg/logging"
-	"frameworks/pkg/validation"
 )
 
 // WebSocketManager manages WebSocket connections to Signalman for GraphQL subscriptions
@@ -362,8 +361,10 @@ func (wm *WebSocketManager) convertToViewerMetrics(msg signalmanapi.Message) *mo
 
 	// Extract viewer metrics from ClientLifecycle payload
 	if msg.Data.ClientLifecycle != nil {
-		// Use bandwidth_out as the main bandwidth metric
-		bandwidth = msg.Data.ClientLifecycle.BandwidthOut
+		// Use bandwidth_out_bps as the main bandwidth metric
+		if msg.Data.ClientLifecycle.BandwidthOutBps != nil {
+			bandwidth = float64(*msg.Data.ClientLifecycle.BandwidthOutBps)
+		}
 		// For viewer count, we assume 1 viewer per client lifecycle event
 		currentViewers = 1
 
@@ -403,16 +404,16 @@ func (wm *WebSocketManager) convertToSystemHealthEvent(msg signalmanapi.Message)
 
 	// Extract from NodeLifecycle payload which HAS all the data
 	if msg.Data.NodeLifecycle != nil {
-		nodeID = msg.Data.NodeLifecycle.NodeID
-		clusterID = msg.Data.NodeLifecycle.NodeID    // Use NodeID as cluster for now
-		cpu = msg.Data.NodeLifecycle.CPUUsage / 10.0 // Convert from tenths to percentage
+		nodeID = msg.Data.NodeLifecycle.NodeId
+		clusterID = msg.Data.NodeLifecycle.NodeId              // Use NodeId as cluster for now
+		cpu = float64(msg.Data.NodeLifecycle.CpuTenths) / 10.0 // Convert from tenths to percentage
 
 		// Calculate memory usage percentage
-		if msg.Data.NodeLifecycle.RAMMax > 0 {
-			mem = float64(msg.Data.NodeLifecycle.RAMCurrent) / float64(msg.Data.NodeLifecycle.RAMMax) * 100
+		if msg.Data.NodeLifecycle.RamMax > 0 {
+			mem = float64(msg.Data.NodeLifecycle.RamCurrent) / float64(msg.Data.NodeLifecycle.RamMax) * 100
 		}
 
-		// NodeLifecycle doesn't include disk metrics
+		// NodeLifecycle doesn't include disk metrics in current protobuf definition
 		disk = 0.0
 
 		// Health score based on IsHealthy flag
@@ -458,8 +459,17 @@ func (wm *WebSocketManager) convertToTrackListEvent(msg signalmanapi.Message) *p
 
 	// Extract track list data from TrackList payload
 	if msg.Data.TrackList != nil {
-		trackList = msg.Data.TrackList.TrackListJSON
-		trackCount = msg.Data.TrackList.TrackCount
+		// Prefer explicit total_tracks if present; else derive from tracks length
+		if v := msg.Data.TrackList.GetTotalTracks(); v > 0 {
+			trackCount = int(v)
+		} else {
+			trackCount = len(msg.Data.TrackList.Tracks)
+		}
+		// For backwards compatibility, serialize the tracks to JSON
+		if len(msg.Data.TrackList.Tracks) > 0 {
+			// Simple JSON representation of tracks for now
+			trackList = fmt.Sprintf("{\"tracks\": %d}", len(msg.Data.TrackList.Tracks))
+		}
 	}
 
 	// Ensure timestamp is not zero - GraphQL schema requires non-null timestamp
@@ -564,22 +574,27 @@ func (wm *WebSocketManager) Shutdown() error {
 	return nil
 }
 
-// getStreamIDFromEventData extracts stream ID from typed EventData struct
-func getStreamIDFromEventData(data validation.EventData) string {
-	if data.StreamIngest != nil && data.StreamIngest.InternalName != "" {
-		return data.StreamIngest.InternalName
-	}
-	if data.StreamLifecycle != nil && data.StreamLifecycle.InternalName != "" {
-		return data.StreamLifecycle.InternalName
-	}
-	if data.LoadBalancing != nil && data.LoadBalancing.StreamID != "" {
-		return data.LoadBalancing.StreamID
-	}
-	if data.ClientLifecycle != nil && data.ClientLifecycle.InternalName != "" {
+// getStreamIDFromEventData extracts stream ID from typed event data
+func getStreamIDFromEventData(data signalmanapi.EventData) string {
+	// Check each possible event type for stream identification
+	if data.ClientLifecycle != nil {
 		return data.ClientLifecycle.InternalName
 	}
-	if data.TrackList != nil && data.TrackList.InternalName != "" {
-		return data.TrackList.InternalName
+	if data.NodeLifecycle != nil {
+		// NodeLifecycle doesn't have stream context, return empty
+		return ""
+	}
+	if data.TrackList != nil {
+		return data.TrackList.StreamName
+	}
+	if data.ClipLifecycle != nil && data.ClipLifecycle.InternalName != nil {
+		return *data.ClipLifecycle.InternalName
+	}
+	if data.DVRLifecycle != nil && data.DVRLifecycle.InternalName != nil {
+		return *data.DVRLifecycle.InternalName
+	}
+	if data.LoadBalancing != nil && data.LoadBalancing.InternalName != nil {
+		return *data.LoadBalancing.InternalName
 	}
 	return ""
 }
@@ -603,11 +618,11 @@ func (wm *WebSocketManager) convertToPeriscopeStreamEvent(msg signalmanapi.Messa
 	switch msg.Type {
 	case signalmanapi.TypeStreamStart:
 		status = "LIVE"
-	case signalmanapi.TypeStreamEnd:
+	case signalmanapi.TypeStreamEnd, "stream_end":
 		status = "ENDED"
 	case signalmanapi.TypeStreamError:
 		status = "OFFLINE"
-	case signalmanapi.TypeStreamBuffer, signalmanapi.TypeTrackList:
+	case signalmanapi.TypeStreamBuffer, signalmanapi.TypeTrackList, "stream_buffer", "stream_track_list":
 		status = "LIVE"
 	default:
 		// Unknown message type - return nil to filter out
@@ -625,7 +640,7 @@ func (wm *WebSocketManager) convertToPeriscopeStreamEvent(msg signalmanapi.Messa
 }
 
 func (wm *WebSocketManager) convertToPeriscopeTrackListEvent(msg signalmanapi.Message) *periscope.AnalyticsTrackListEvent {
-	if msg.Type != signalmanapi.TypeTrackList {
+	if msg.Type != signalmanapi.TypeTrackList && msg.Type != "stream_track_list" {
 		return nil
 	}
 	if msg.Timestamp.IsZero() {
@@ -634,8 +649,16 @@ func (wm *WebSocketManager) convertToPeriscopeTrackListEvent(msg signalmanapi.Me
 	count := 0
 	tracks := ""
 	if msg.Data.TrackList != nil {
-		count = msg.Data.TrackList.TrackCount
-		tracks = msg.Data.TrackList.TrackListJSON
+		if v := msg.Data.TrackList.GetTotalTracks(); v > 0 {
+			count = int(v)
+		} else {
+			count = len(msg.Data.TrackList.Tracks)
+		}
+		// For backwards compatibility, serialize the tracks to JSON
+		if len(msg.Data.TrackList.Tracks) > 0 {
+			// Simple JSON representation of tracks for now
+			tracks = fmt.Sprintf("{\"tracks\": %d}", len(msg.Data.TrackList.Tracks))
+		}
 	}
 	streamID := getStreamIDFromEventData(msg.Data)
 	return &periscope.AnalyticsTrackListEvent{
@@ -654,27 +677,33 @@ func (wm *WebSocketManager) convertToClipEvent(msg signalmanapi.Message) *perisc
 	// Clip lifecycle
 	if msg.Data.ClipLifecycle != nil {
 		ct := "clip"
+		// Map protobuf fields to API type; handle optional fields via getters and local variables
+		stage := msg.Data.ClipLifecycle.GetStage().String()
+		reqID := msg.Data.ClipLifecycle.GetRequestId()
+		nodeID := msg.Data.ClipLifecycle.GetNodeId()
+		filePath := msg.Data.ClipLifecycle.GetFilePath()
+		s3url := msg.Data.ClipLifecycle.GetS3Url()
+		errMsg := msg.Data.ClipLifecycle.GetError()
+		// optional numerics -> pointers
+		startedAt := msg.Data.ClipLifecycle.GetStartedAt()
+		completedAt := msg.Data.ClipLifecycle.GetCompletedAt()
+		size := msg.Data.ClipLifecycle.GetSizeBytes()
+		percent := msg.Data.ClipLifecycle.GetProgressPercent()
+
 		return &periscope.ClipEvent{
-			Timestamp:         msg.Timestamp,
-			InternalName:      msg.Data.ClipLifecycle.InternalName,
-			RequestID:         msg.Data.ClipLifecycle.RequestID,
-			Stage:             msg.Data.ClipLifecycle.Stage,
-			ContentType:       &ct,
-			Title:             &msg.Data.ClipLifecycle.Title,
-			Format:            &msg.Data.ClipLifecycle.Format,
-			StartUnix:         int64PtrFrom(&msg.Data.ClipLifecycle.StartUnix),
-			StopUnix:          int64PtrFrom(&msg.Data.ClipLifecycle.StopUnix),
-			StartMs:           int64PtrFrom(&msg.Data.ClipLifecycle.StartMs),
-			StopMs:            int64PtrFrom(&msg.Data.ClipLifecycle.StopMs),
-			DurationSec:       int64PtrFrom(&msg.Data.ClipLifecycle.DurationSec),
-			IngestNodeID:      &msg.Data.ClipLifecycle.IngestNodeID,
-			StorageNodeID:     &msg.Data.ClipLifecycle.StorageNodeID,
-			RoutingDistanceKm: &msg.Data.ClipLifecycle.RoutingDistanceKm,
-			Percent:           uint32PtrFrom(&msg.Data.ClipLifecycle.Percent),
-			Message:           &msg.Data.ClipLifecycle.Message,
-			FilePath:          &msg.Data.ClipLifecycle.FilePath,
-			S3URL:             &msg.Data.ClipLifecycle.S3URL,
-			SizeBytes:         uint64PtrFrom(&msg.Data.ClipLifecycle.SizeBytes),
+			Timestamp:    msg.Timestamp,
+			InternalName: msg.Data.ClipLifecycle.GetInternalName(),
+			RequestID:    reqID,
+			Stage:        stage,
+			ContentType:  &ct,
+			StartUnix:    int64PtrFrom(&startedAt),
+			StopUnix:     int64PtrFrom(&completedAt),
+			IngestNodeID: &nodeID,
+			Percent:      uint32PtrFrom(&percent),
+			Message:      &errMsg,
+			FilePath:     &filePath,
+			S3URL:        &s3url,
+			SizeBytes:    uint64PtrFrom(&size),
 		}
 	}
 	// DVR lifecycle events are handled through ClipLifecycle for now

@@ -308,24 +308,17 @@ type ClipEventsResponse struct {
 
 // ClipEvent represents a single clip lifecycle analytics event
 type ClipEvent struct {
-	Timestamp         time.Time `json:"timestamp"`
-	InternalName      string    `json:"internal_name"`
-	RequestID         string    `json:"request_id"`
-	Stage             string    `json:"stage"`
-	ContentType       *string   `json:"content_type,omitempty"`
-	Title             *string   `json:"title,omitempty"`
-	Format            *string   `json:"format,omitempty"`
-	StartUnix         *int64    `json:"start_unix,omitempty"`
-	StopUnix          *int64    `json:"stop_unix,omitempty"`
-	StartMs           *int64    `json:"start_ms,omitempty"`
-	StopMs            *int64    `json:"stop_ms,omitempty"`
-	DurationSec       *int64    `json:"duration_sec,omitempty"`
-	IngestNodeID      *string   `json:"ingest_node_id,omitempty"`
-	StorageNodeID     *string   `json:"storage_node_id,omitempty"`
-	RoutingDistanceKm *float64  `json:"routing_distance_km,omitempty"`
-	Percent           *uint32   `json:"percent,omitempty"`
-	Message           *string   `json:"message,omitempty"`
-	FilePath          *string   `json:"file_path,omitempty"`
-	S3URL             *string   `json:"s3_url,omitempty"`
-	SizeBytes         *uint64   `json:"size_bytes,omitempty"`
+	Timestamp    time.Time `json:"timestamp"`
+	InternalName string    `json:"internal_name"`
+	RequestID    string    `json:"request_id"`
+	Stage        string    `json:"stage"`
+	ContentType  *string   `json:"content_type,omitempty"`
+	StartUnix    *int64    `json:"start_unix,omitempty"`     // StartedAt from protobuf
+	StopUnix     *int64    `json:"stop_unix,omitempty"`      // CompletedAt from protobuf
+	IngestNodeID *string   `json:"ingest_node_id,omitempty"` // NodeId from protobuf
+	Percent      *uint32   `json:"percent,omitempty"`        // ProgressPercent from protobuf
+	Message      *string   `json:"message,omitempty"`        // Error from protobuf
+	FilePath     *string   `json:"file_path,omitempty"`      // FilePath from protobuf
+	S3URL        *string   `json:"s3_url,omitempty"`         // S3Url from protobuf
+	SizeBytes    *uint64   `json:"size_bytes,omitempty"`     // SizeBytes from protobuf
 }

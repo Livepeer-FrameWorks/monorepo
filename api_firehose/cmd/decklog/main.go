@@ -11,12 +11,15 @@ import (
 	"time"
 
 	"frameworks/api_firehose/internal/grpc"
+	qmapi "frameworks/pkg/api/quartermaster"
+	qmclient "frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/config"
 	"frameworks/pkg/kafka"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/monitoring"
 	"frameworks/pkg/server"
 	"frameworks/pkg/version"
+	"strconv"
 )
 
 func main() {
@@ -88,6 +91,19 @@ func main() {
 	httpSrv := &http.Server{Addr: ":" + metricsPort, Handler: router}
 
 	logger.WithFields(logging.Fields{"grpc_port": port, "http_port": metricsPort}).Info("Starting Decklog servers")
+
+	// Best-effort service registration in Quartermaster
+	go func() {
+		qc := qmclient.NewClient(qmclient.Config{BaseURL: config.GetEnv("QUARTERMASTER_URL", "http://localhost:18002"), ServiceToken: config.GetEnv("SERVICE_TOKEN", ""), Logger: logger})
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		pi, _ := strconv.Atoi(port)
+		if _, err := qc.BootstrapService(ctx, &qmapi.BootstrapServiceRequest{Type: "decklog", Version: version.Version, Protocol: "grpc", Port: pi}); err != nil {
+			logger.WithError(err).Warn("Quartermaster bootstrap (decklog) failed")
+		} else {
+			logger.Info("Quartermaster bootstrap (decklog) ok")
+		}
+	}()
 
 	// Handle graceful shutdown
 	go func() {

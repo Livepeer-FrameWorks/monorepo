@@ -11,7 +11,6 @@ import (
 	"frameworks/pkg/api/signalman"
 	"frameworks/pkg/kafka"
 	"frameworks/pkg/logging"
-	"frameworks/pkg/validation"
 
 	"github.com/gin-gonic/gin"
 )
@@ -118,29 +117,21 @@ func (h *SignalmanHandlers) HandleNotFound(c *gin.Context) {
 
 func mapEventTypeToChannel(eventType string) string {
 	switch eventType {
-	case "stream-lifecycle", "track-list", "stream-buffer", "stream-end":
+	// Streams domain (new unified names)
+	case "stream_lifecycle_update", "stream_track_list", "stream_buffer", "stream_end", "stream_source", "viewer_resolve":
 		return "streams"
-	case "node-lifecycle", "load-balancing":
+	// System/infrastructure domain
+	case "node_lifecycle_update", "load_balancing":
 		return "system"
+	// Everything else (viewer connect/disconnect, client QoE, clips/DVR, push)
+	case "viewer_connect", "viewer_disconnect", "client_lifecycle_update", "clip_lifecycle", "dvr_lifecycle", "push_rewrite", "push_out_start", "push_end", "stream_bandwidth", "recording_complete":
+		return "analytics"
 	default:
 		return "analytics"
 	}
 }
 
-// convertAnalyticsEventToTyped converts a kafka.AnalyticsEvent to a validation.KafkaEvent with typed data
-func (h *SignalmanHandlers) convertAnalyticsEventToTyped(event kafka.AnalyticsEvent) (*validation.KafkaEvent, error) {
-	// Convert kafka.AnalyticsEvent to validation.KafkaEvent structure
-	typedEvent := validation.KafkaEvent{
-		EventID:       event.EventID,
-		EventType:     event.EventType,
-		Timestamp:     event.Timestamp,
-		Source:        event.Source,
-		SchemaVersion: event.SchemaVersion,
-		Data:          event.Data, // Already typed, no conversion needed
-	}
-
-	return &typedEvent, nil
-}
+// convertAnalyticsEventToTyped function is no longer needed - using event.Data directly
 
 // HandleEvent processes incoming events and broadcasts them via WebSocket
 func (h *SignalmanHandlers) HandleEvent(event kafka.AnalyticsEvent) error {
@@ -151,35 +142,21 @@ func (h *SignalmanHandlers) HandleEvent(event kafka.AnalyticsEvent) error {
 		h.metrics.KafkaMessages.WithLabelValues(event.EventType, "consume", "received").Inc()
 	}
 
-	// Convert to typed event with validation
-	typedEvent, err := h.convertAnalyticsEventToTyped(event)
-	if err != nil {
-		h.logger.WithError(err).WithFields(logging.Fields{
-			"event_type": event.EventType,
-			"source":     event.Source,
-		}).Error("Failed to convert event to typed structure")
-
-		// Track validation failures
-		if h.metrics != nil {
-			h.metrics.KafkaMessages.WithLabelValues(event.EventType, "consume", "validation_failed").Inc()
-		}
-		return err
-	}
-
+	// Use event data directly - no conversion needed
 	channel := mapEventTypeToChannel(event.EventType)
-	tenantID := h.extractTenantID(typedEvent, event.TenantID)
+	tenantID := event.TenantID // Use tenant ID directly from clean Kafka format
 
 	// Broadcast typed event
 	if channel == "system" {
 		if tenantID != "" {
 			// Tenant-scoped system message (e.g., tenant's cluster/node events)
-			h.hub.BroadcastTypedToTenant(tenantID, event.EventType, channel, typedEvent.Data)
+			h.hub.BroadcastTypedToTenant(tenantID, event.EventType, channel, event.Data)
 		} else {
 			// Global infrastructure message (e.g., platform-wide events)
-			h.hub.BroadcastTypedInfrastructure(event.EventType, typedEvent.Data)
+			h.hub.BroadcastTypedInfrastructure(event.EventType, event.Data)
 		}
 	} else if tenantID != "" {
-		h.hub.BroadcastTypedToTenant(tenantID, event.EventType, channel, typedEvent.Data)
+		h.hub.BroadcastTypedToTenant(tenantID, event.EventType, channel, event.Data)
 	} else {
 		// No tenant context; drop to avoid cross-tenant leakage
 		h.logger.WithFields(logging.Fields{
@@ -195,7 +172,8 @@ func (h *SignalmanHandlers) HandleEvent(event kafka.AnalyticsEvent) error {
 
 	// Track Kafka processing duration and success
 	if h.metrics != nil {
-		h.metrics.KafkaDuration.WithLabelValues(event.EventType).Observe(time.Since(start).Seconds())
+		// Duration histogram is labeled by operation per CreateKafkaMetrics
+		h.metrics.KafkaDuration.WithLabelValues("consume").Observe(time.Since(start).Seconds())
 		h.metrics.KafkaMessages.WithLabelValues(event.EventType, "consume", "processed").Inc()
 	}
 
@@ -209,56 +187,4 @@ func (h *SignalmanHandlers) HandleEvent(event kafka.AnalyticsEvent) error {
 	return nil
 }
 
-// extractTenantID extracts tenant ID from typed event data, with header fallback
-func (h *SignalmanHandlers) extractTenantID(typedEvent *validation.KafkaEvent, headerTenantID string) string {
-	// Prefer header-provided tenant ID
-	if headerTenantID != "" {
-		return headerTenantID
-	}
-
-	// Extract from typed event data based on event type
-	switch validation.EventType(typedEvent.EventType) {
-	case validation.EventStreamIngest:
-		if typedEvent.Data.StreamIngest != nil {
-			return typedEvent.Data.StreamIngest.TenantID
-		}
-	case validation.EventStreamView:
-		if typedEvent.Data.StreamView != nil {
-			return typedEvent.Data.StreamView.TenantID
-		}
-	case validation.EventStreamLifecycle:
-		if typedEvent.Data.StreamLifecycle != nil {
-			return typedEvent.Data.StreamLifecycle.TenantID
-		}
-	case validation.EventUserConnection:
-		if typedEvent.Data.UserConnection != nil {
-			return typedEvent.Data.UserConnection.TenantID
-		}
-	case validation.EventClientLifecycle:
-		if typedEvent.Data.ClientLifecycle != nil {
-			return typedEvent.Data.ClientLifecycle.TenantID
-		}
-	case validation.EventTrackList:
-		if typedEvent.Data.TrackList != nil {
-			return typedEvent.Data.TrackList.TenantID
-		}
-	case validation.EventRecordingLifecycle:
-		if typedEvent.Data.Recording != nil {
-			return typedEvent.Data.Recording.TenantID
-		}
-	case validation.EventPushLifecycle:
-		if typedEvent.Data.PushLifecycle != nil {
-			return typedEvent.Data.PushLifecycle.TenantID
-		}
-	case validation.EventBandwidthThreshold:
-		if typedEvent.Data.BandwidthThreshold != nil {
-			return typedEvent.Data.BandwidthThreshold.TenantID
-		}
-	case validation.EventLoadBalancing:
-		if typedEvent.Data.LoadBalancing != nil {
-			return typedEvent.Data.LoadBalancing.TenantID
-		}
-	}
-
-	return ""
-}
+// extractTenantID function is no longer needed - using event.TenantID directly

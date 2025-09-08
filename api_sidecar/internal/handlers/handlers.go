@@ -1,28 +1,23 @@
 package handlers
 
 import (
-	"bytes"
-	"context"
-	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"strings"
 	"time"
 
+	"frameworks/api_sidecar/internal/config"
 	"frameworks/api_sidecar/internal/control"
-	commodoreapi "frameworks/pkg/api/commodore"
 	"frameworks/pkg/clients/commodore"
 	"frameworks/pkg/clients/foghorn"
 	"frameworks/pkg/geoip"
 	"frameworks/pkg/logging"
-	"frameworks/pkg/validation"
-
-	"github.com/prometheus/client_golang/prometheus"
+	"frameworks/pkg/mist"
+	pb "frameworks/pkg/proto"
 
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // HandlerMetrics holds the metrics for handler operations
@@ -105,11 +100,16 @@ func Init(log logging.Logger, m *HandlerMetrics) {
 		logger.Debug("No GEOIP_MMDB_PATH provided, geo enrichment disabled")
 	}
 
-	// Initialize the Decklog client for analytics forwarding
-	InitDecklogClient()
-
 	// Initialize Prometheus monitoring
 	InitPrometheusMonitor(logger)
+
+	// Initialize Mist config manager
+	config.InitManager(logger)
+
+	// On gRPC seed request, trigger immediate JSON emission (no re-add)
+	control.SetOnSeed(func() {
+		TriggerImmediatePoll()
+	})
 
 	logger.WithFields(logging.Fields{
 		"commodore_url": apiBaseURL,
@@ -170,50 +170,8 @@ func getCurrentNodeID() string {
 	return nodeID
 }
 
-func validateStreamKeyViaAPI(streamKey string) (*commodoreapi.ValidateStreamKeyResponse, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	return commodoreClient.ValidateStreamKey(ctx, streamKey)
-}
-
-// forwardEventToCommodore forwards stream events to Commodore for processing
-func forwardEventToCommodore(endpoint string, eventData map[string]interface{}) error {
-	enrichedData := enrichEventWithClusterMetadata(eventData)
-
-	jsonData, err := json.Marshal(enrichedData)
-	if err != nil {
-		return fmt.Errorf("failed to marshal event data: %w", err)
-	}
-
-	url := fmt.Sprintf("%s/%s", apiBaseURL, endpoint)
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if serviceToken != "" {
-		req.Header.Set("Authorization", "Bearer "+serviceToken)
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to forward event to Commodore: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(resp.Body)
-		logger.WithFields(logging.Fields{
-			"status_code": resp.StatusCode,
-			"response":    string(body),
-		}).Error("Commodore returned error")
-	}
-
-	return nil
-}
-
 // HandlePushRewrite handles the PUSH_REWRITE trigger from MistServer
-// This is a critical trigger - validates stream keys and routes to wildcard streams
+// This is a critical blocking trigger - validates stream keys and routes to wildcard streams
 func HandlePushRewrite(c *gin.Context) {
 	start := time.Now()
 
@@ -237,190 +195,71 @@ func HandlePushRewrite(c *gin.Context) {
 		return
 	}
 
-	// Parse the parameters - MistServer sends them as newline-separated text
-	params := strings.Split(strings.TrimSpace(string(body)), "\n")
-	if len(params) < 3 {
-		logger.WithFields(logging.Fields{
-			"error": "Invalid PUSH_REWRITE payload: expected 3 parameters, got " + fmt.Sprintf("%d", len(params)),
-		}).Error("Invalid PUSH_REWRITE payload")
-
-		if metrics != nil {
-			metrics.NodeOperations.WithLabelValues("push_rewrite", "invalid_payload").Inc()
-		}
-
-		c.String(http.StatusOK, "") // Empty response denies the push
-		return
-	}
-
-	pushURL := params[0]
-	hostname := params[1]
-	streamName := params[2]
-
 	logger.WithFields(logging.Fields{
-		"push_url":    pushURL,
-		"hostname":    hostname,
-		"stream_name": streamName,
-	}).Info("Received PUSH_REWRITE")
+		"trigger_type": "PUSH_REWRITE",
+		"payload_size": len(body),
+	}).Debug("Forwarding PUSH_REWRITE trigger to Foghorn via gRPC")
 
-	// Extract stream key from the stream name
-	streamKey := streamName
-
-	// Validate stream key via Commodore API
-	streamKeyValidation, err := validateStreamKeyViaAPI(streamKey)
+	// Parse raw webhook data directly
+	mistTrigger, err := mist.ParseTriggerToProtobuf(mist.TriggerPushRewrite, body, control.GetCurrentNodeID(), logger)
 	if err != nil {
 		logger.WithFields(logging.Fields{
-			"stream_key": streamKey,
-			"error":      err,
-		}).Error("Failed to validate stream key via API")
+			"error": err,
+		}).Error("Failed to parse PUSH_REWRITE trigger")
 
 		if metrics != nil {
-			metrics.NodeOperations.WithLabelValues("push_rewrite", "validation_error").Inc()
+			metrics.NodeOperations.WithLabelValues("push_rewrite", "parse_error").Inc()
 		}
 
 		c.String(http.StatusOK, "") // Empty response denies the push
 		return
 	}
 
-	if !streamKeyValidation.Valid {
+	// Forward trigger to Foghorn via gRPC and get response
+	response, shouldAbort, err := control.SendMistTrigger(mistTrigger, logger)
+	if err != nil {
 		logger.WithFields(logging.Fields{
-			"stream_key": streamKey,
-			"api_error":  streamKeyValidation.Error,
-		}).Error("Invalid stream key")
+			"error": err,
+		}).Error("Failed to forward PUSH_REWRITE to Foghorn")
 
 		if metrics != nil {
-			metrics.NodeOperations.WithLabelValues("push_rewrite", "invalid_key").Inc()
+			metrics.NodeOperations.WithLabelValues("push_rewrite", "forwarding_error").Inc()
 		}
 
 		c.String(http.StatusOK, "") // Empty response denies the push
 		return
 	}
 
-	// Get current node ID
-	nodeID := getCurrentNodeID()
-
-	// Extract actual protocol from push URL instead of hardcoding
-	protocol := "unknown"
-	if strings.HasPrefix(pushURL, "rtmp://") {
-		protocol = "rtmp"
-	} else if strings.HasPrefix(pushURL, "srt://") {
-		protocol = "srt"
-	} else if strings.HasPrefix(pushURL, "whip://") {
-		protocol = "whip"
-	} else if strings.HasPrefix(pushURL, "http://") || strings.HasPrefix(pushURL, "https://") {
-		protocol = "http"
-	}
-
-	// Forward stream start event to API for database updates
-	go forwardEventToCommodore("stream-start", map[string]interface{}{
-		"node_id":       nodeID,
-		"stream_key":    streamKey,
-		"internal_name": streamKeyValidation.InternalName,
-		"hostname":      hostname,
-		"push_url":      pushURL,
-		"event_type":    "push_rewrite_success",
-		"timestamp":     time.Now().Unix(),
-	})
-
-	// Create typed StreamIngestPayload
-	ingestPayload := &validation.StreamIngestPayload{
-		StreamKey:    streamKey,
-		InternalName: streamKeyValidation.InternalName,
-		UserID:       streamKeyValidation.UserID,
-		NodeID:       nodeID,
-		TenantID:     streamKeyValidation.TenantID,
-		Hostname:     hostname,
-		PushURL:      pushURL,
-		Protocol:     protocol,
-	}
-
-	// Add geographic data from node location if available
-	if prometheusMonitor != nil {
-		prometheusMonitor.mutex.RLock()
-		if prometheusMonitor.latitude != nil {
-			ingestPayload.Latitude = *prometheusMonitor.latitude
-		}
-		if prometheusMonitor.longitude != nil {
-			ingestPayload.Longitude = *prometheusMonitor.longitude
-		}
-		if prometheusMonitor.location != "" {
-			ingestPayload.Location = prometheusMonitor.location
-		}
-		prometheusMonitor.mutex.RUnlock()
-	}
-
-	// Create typed BaseEvent
-	baseEvent := &validation.BaseEvent{
-		EventID:       uuid.New().String(),
-		EventType:     validation.EventStreamIngest,
-		Timestamp:     time.Now().UTC(),
-		Source:        "mistserver_webhook",
-		InternalName:  &streamKeyValidation.InternalName,
-		UserID:        &streamKeyValidation.UserID,
-		SchemaVersion: "2.0",
-		StreamIngest:  ingestPayload,
-	}
-
-	// Forward to Decklog with typed event
-	go ForwardTypedEventToDecklog(baseEvent)
-
-	// Check if DVR recording is enabled for this stream
-	if streamKeyValidation.Recording != nil && streamKeyValidation.Recording.Enabled {
+	if shouldAbort {
 		logger.WithFields(logging.Fields{
-			"internal_name":    streamKeyValidation.InternalName,
-			"retention_days":   streamKeyValidation.Recording.RetentionDays,
-			"format":           streamKeyValidation.Recording.Format,
-			"segment_duration": streamKeyValidation.Recording.SegmentDuration,
-		}).Info("DVR recording enabled for stream, requesting DVR start")
+			"response": response,
+		}).Info("PUSH_REWRITE aborted by Foghorn")
 
-		// Start DVR recording via Foghorn
-		go requestDVRStart(streamKeyValidation)
+		if metrics != nil {
+			metrics.NodeOperations.WithLabelValues("push_rewrite", "aborted").Inc()
+		}
+
+		c.String(http.StatusOK, "") // Empty response denies the push
+		return
 	}
-
-	// Create wildcard stream name for MistServer routing
-	wildcardStreamName := fmt.Sprintf("live+%s", streamKeyValidation.InternalName)
 
 	logger.WithFields(logging.Fields{
-		"stream_key":           streamKey,
-		"wildcard_stream_name": wildcardStreamName,
-		"user_id":              streamKeyValidation.UserID,
-	}).Info("Stream key validated, routing to wildcard stream")
+		"response": response,
+	}).Info("PUSH_REWRITE approved by Foghorn")
 
-	// Track successful operation and resource allocation duration
+	// Track successful operation
 	if metrics != nil {
 		metrics.NodeOperations.WithLabelValues("push_rewrite", "success").Inc()
 		metrics.ResourceAllocationDuration.WithLabelValues("stream_allocation").Observe(time.Since(start).Seconds())
 		metrics.InfrastructureEvents.WithLabelValues("stream_allocated").Inc()
 	}
 
-	// Return the wildcard stream name for MistServer to use
-	c.String(http.StatusOK, wildcardStreamName)
-}
-
-// getClipFromArtifactIndex performs fast O(1) lookup in the artifact index
-func getClipFromArtifactIndex(clipHash string) *ClipInfo {
-	if prometheusMonitor == nil {
-		return nil
-	}
-	prometheusMonitor.mutex.RLock()
-	defer prometheusMonitor.mutex.RUnlock()
-	return prometheusMonitor.artifactIndex[clipHash]
-}
-
-// isDVRHash checks if a string looks like a DVR hash (32-character hex)
-func isDVRHash(hash string) bool {
-	if len(hash) != 32 {
-		return false
-	}
-	for _, char := range hash {
-		if !((char >= '0' && char <= '9') || (char >= 'a' && char <= 'f') || (char >= 'A' && char <= 'F')) {
-			return false
-		}
-	}
-	return true
+	// Return Foghorn's response to MistServer
+	c.String(http.StatusOK, response)
 }
 
 // HandleDefaultStream handles the DEFAULT_STREAM trigger from MistServer
-// This maps playback IDs to internal stream names for viewing (live streams)
+// This is a critical blocking trigger - maps playback IDs to internal stream names for viewing (live streams)
 // or clip hashes to VOD streams for clip viewing
 func HandleDefaultStream(c *gin.Context) {
 	start := time.Now()
@@ -445,168 +284,57 @@ func HandleDefaultStream(c *gin.Context) {
 		return
 	}
 
-	// Parse the parameters - they come as newline-separated values
-	params := strings.Split(strings.TrimSpace(string(body)), "\n")
-	if len(params) < 2 {
+	logger.WithFields(logging.Fields{
+		"trigger_type": "DEFAULT_STREAM",
+		"payload_size": len(body),
+	}).Debug("Forwarding DEFAULT_STREAM trigger to Foghorn via gRPC")
+
+	// Parse raw webhook data directly
+	mistTrigger, err := mist.ParseTriggerToProtobuf(mist.TriggerDefaultStream, body, control.GetCurrentNodeID(), logger)
+	if err != nil {
 		logger.WithFields(logging.Fields{
-			"param_count": len(params),
-			"expected":    "at least 2",
-		}).Error("Invalid DEFAULT_STREAM payload")
+			"error": err,
+		}).Error("Failed to parse DEFAULT_STREAM trigger")
+
+		if metrics != nil {
+			metrics.NodeOperations.WithLabelValues("default_stream", "parse_error").Inc()
+		}
+
 		c.String(http.StatusOK, "") // Empty response uses default behavior
 		return
 	}
 
-	defaultStream := params[0]
-	requestedStream := params[1]
-	viewerHost := ""
-	outputType := ""
-	requestURL := ""
-
-	if len(params) > 2 {
-		viewerHost = params[2]
-	}
-	if len(params) > 3 {
-		outputType = params[3]
-	}
-	if len(params) > 4 {
-		requestURL = params[4]
-	}
-
-	logger.WithFields(logging.Fields{
-		"default_stream":   defaultStream,
-		"requested_stream": requestedStream,
-		"viewer_host":      viewerHost,
-		"output_type":      outputType,
-		"request_url":      requestURL,
-	}).Info("DEFAULT_STREAM trigger")
-
-	// FIRST: Check if this is a clip hash we have locally (VOD content)
-	if clipInfo := getClipFromArtifactIndex(defaultStream); clipInfo != nil {
-		vodStreamName := fmt.Sprintf("vod+%s", defaultStream)
-
-		logger.WithFields(logging.Fields{
-			"clip_hash":       defaultStream,
-			"vod_stream_name": vodStreamName,
-			"clip_path":       clipInfo.FilePath,
-			"stream_name":     clipInfo.StreamName,
-		}).Info("Clip hash resolved to VOD stream")
-
-		// Track VOD access
-		if metrics != nil {
-			metrics.NodeOperations.WithLabelValues("default_stream", "vod_success").Inc()
-			metrics.ResourceAllocationDuration.WithLabelValues("clip_resolution").Observe(time.Since(start).Seconds())
-			metrics.InfrastructureEvents.WithLabelValues("clip_resolved").Inc()
-		}
-
-		// TODO: Forward clip view analytics to Decklog
-		// This would track clip viewing events similar to stream views
-
-		c.String(http.StatusOK, vodStreamName)
-		return
-	}
-
-	// SECOND: Check if this is a DVR hash we have locally (also VOD content)
-	// DVR hashes are 32-character hex strings, same as clip hashes but point to m3u8 manifests
-	if len(defaultStream) == 32 && isDVRHash(defaultStream) {
-		if dvrInfo := getClipFromArtifactIndex(defaultStream); dvrInfo != nil && dvrInfo.Format == "m3u8" {
-			vodStreamName := fmt.Sprintf("vod+%s", defaultStream)
-
-			logger.WithFields(logging.Fields{
-				"dvr_hash":        defaultStream,
-				"vod_stream_name": vodStreamName,
-				"dvr_path":        dvrInfo.FilePath,
-				"stream_name":     dvrInfo.StreamName,
-			}).Info("DVR hash resolved to VOD stream")
-
-			// Track DVR VOD access
-			if metrics != nil {
-				metrics.NodeOperations.WithLabelValues("default_stream", "dvr_vod_success").Inc()
-				metrics.ResourceAllocationDuration.WithLabelValues("dvr_resolution").Observe(time.Since(start).Seconds())
-				metrics.InfrastructureEvents.WithLabelValues("dvr_resolved").Inc()
-			}
-
-			// TODO: Forward DVR view analytics to Decklog
-			// This would track DVR viewing events similar to stream views
-
-			c.String(http.StatusOK, vodStreamName)
-			return
-		}
-	}
-
-	// THIRD: Fall back to existing live stream resolution via Commodore
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	resolveResponse, err := commodoreClient.ResolvePlaybackID(ctx, defaultStream)
+	// Forward trigger to Foghorn via gRPC and get response
+	response, shouldAbort, err := control.SendMistTrigger(mistTrigger, logger)
 	if err != nil {
 		logger.WithFields(logging.Fields{
-			"error":       err,
-			"playback_id": defaultStream,
-		}).Error("Failed to resolve playback ID")
+			"error": err,
+		}).Error("Failed to forward DEFAULT_STREAM to Foghorn")
 
 		if metrics != nil {
-			metrics.NodeOperations.WithLabelValues("default_stream", "resolution_error").Inc()
+			metrics.NodeOperations.WithLabelValues("default_stream", "forwarding_error").Inc()
 		}
 
-		c.String(http.StatusOK, "")
+		c.String(http.StatusOK, "") // Empty response uses default behavior
 		return
 	}
 
-	// Get current node ID
-	nodeID := getCurrentNodeID()
+	if shouldAbort {
+		logger.WithFields(logging.Fields{
+			"response": response,
+		}).Info("DEFAULT_STREAM aborted by Foghorn")
 
-	// Forward analytics event to Decklog for stream view tracking (data plane only)
-	// Create typed StreamViewPayload
-	viewPayload := &validation.StreamViewPayload{
-		TenantID:     resolveResponse.TenantID,
-		PlaybackID:   defaultStream,
-		InternalName: resolveResponse.InternalName,
-		NodeID:       nodeID,
-		ViewerHost:   viewerHost,
-		OutputType:   outputType,
-		RequestURL:   requestURL,
-	}
-
-	// Add geographic data from viewer IP if available
-	if geoipReader != nil && viewerHost != "" {
-		geoData := geoipReader.Lookup(viewerHost)
-		if geoData != nil {
-			viewPayload.CountryCode = geoData.CountryCode
-			viewPayload.City = geoData.City
-			viewPayload.Latitude = geoData.Latitude
-			viewPayload.Longitude = geoData.Longitude
-
-			logger.WithFields(logging.Fields{
-				"viewer_ip":    viewerHost,
-				"country_code": geoData.CountryCode,
-				"city":         geoData.City,
-				"playback_id":  defaultStream,
-			}).Debug("Enriched DEFAULT_STREAM with viewer geo data")
+		if metrics != nil {
+			metrics.NodeOperations.WithLabelValues("default_stream", "aborted").Inc()
 		}
+
+		c.String(http.StatusOK, "") // Empty response uses default behavior
+		return
 	}
 
-	// Create typed BaseEvent
-	baseEvent := &validation.BaseEvent{
-		EventID:       uuid.New().String(),
-		EventType:     validation.EventStreamView,
-		Timestamp:     time.Now().UTC(),
-		Source:        "mistserver_webhook",
-		PlaybackID:    &defaultStream,
-		InternalName:  &resolveResponse.InternalName,
-		SchemaVersion: "2.0",
-		StreamView:    viewPayload,
-	}
-
-	// Forward to Decklog with typed event
-	go ForwardTypedEventToDecklog(baseEvent)
-
-	// Return the wildcard stream name: live+{internal_name}
-	wildcardStreamName := fmt.Sprintf("live+%s", resolveResponse.InternalName)
 	logger.WithFields(logging.Fields{
-		"playback_id":          defaultStream,
-		"wildcard_stream_name": wildcardStreamName,
-		"internal_name":        resolveResponse.InternalName,
-	}).Info("Playback ID resolved successfully")
+		"response": response,
+	}).Info("DEFAULT_STREAM resolved by Foghorn")
 
 	// Track successful operation
 	if metrics != nil {
@@ -615,11 +343,12 @@ func HandleDefaultStream(c *gin.Context) {
 		metrics.InfrastructureEvents.WithLabelValues("stream_resolved").Inc()
 	}
 
-	c.String(http.StatusOK, wildcardStreamName)
+	// Return Foghorn's response to MistServer
+	c.String(http.StatusOK, response)
 }
 
 // HandleStreamSource handles the STREAM_SOURCE trigger from MistServer
-// This resolves VOD stream names (vod+{artifact_hash}) to actual file paths for playback
+// This is a critical blocking trigger - resolves VOD stream names (vod+{artifact_hash}) to actual file paths for playback
 // Supports both clip hashes (mp4 files) and DVR hashes (m3u8 manifests)
 func HandleStreamSource(c *gin.Context) {
 	start := time.Now()
@@ -644,84 +373,67 @@ func HandleStreamSource(c *gin.Context) {
 		return
 	}
 
-	// Parse the parameters - they come as newline-separated values
-	params := strings.Split(strings.TrimSpace(string(body)), "\n")
-	if len(params) < 1 {
+	logger.WithFields(logging.Fields{
+		"trigger_type": "STREAM_SOURCE",
+		"payload_size": len(body),
+	}).Debug("Forwarding STREAM_SOURCE trigger to Foghorn via gRPC")
+
+	// Parse raw webhook data directly
+	mistTrigger, err := mist.ParseTriggerToProtobuf(mist.TriggerStreamSource, body, control.GetCurrentNodeID(), logger)
+	if err != nil {
 		logger.WithFields(logging.Fields{
-			"param_count": len(params),
-			"expected":    "at least 1",
-		}).Error("Invalid STREAM_SOURCE payload")
+			"error": err,
+		}).Error("Failed to parse STREAM_SOURCE trigger")
+
+		if metrics != nil {
+			metrics.NodeOperations.WithLabelValues("stream_source", "parse_error").Inc()
+		}
+
 		c.String(http.StatusOK, "") // Empty response will cause MistServer to use default source
 		return
 	}
 
-	streamName := params[0]
-
-	logger.WithFields(logging.Fields{
-		"stream_name": streamName,
-		"params":      params,
-	}).Info("STREAM_SOURCE trigger")
-
-	// Check if this is a VOD stream (vod+{artifact_hash})
-	if strings.HasPrefix(streamName, "vod+") {
-		artifactHash := strings.TrimPrefix(streamName, "vod+")
-
-		// Look up artifact (clip or DVR) in artifact index
-		if artifactInfo := getClipFromArtifactIndex(artifactHash); artifactInfo != nil {
-			// Determine artifact type based on format
-			artifactType := "clip"
-			if artifactInfo.Format == "m3u8" {
-				artifactType = "dvr"
-			}
-
-			logger.WithFields(logging.Fields{
-				"artifact_hash":   artifactHash,
-				"artifact_type":   artifactType,
-				"stream_name":     streamName,
-				"artifact_path":   artifactInfo.FilePath,
-				"original_stream": artifactInfo.StreamName,
-				"format":          artifactInfo.Format,
-				"size_bytes":      artifactInfo.SizeBytes,
-			}).Info("VOD artifact resolved to file path")
-
-			// Track successful VOD resolution
-			if metrics != nil {
-				metrics.NodeOperations.WithLabelValues("stream_source", "vod_success").Inc()
-				metrics.ResourceAllocationDuration.WithLabelValues("vod_resolution").Observe(time.Since(start).Seconds())
-				if artifactType == "dvr" {
-					metrics.InfrastructureEvents.WithLabelValues("dvr_source_resolved").Inc()
-				} else {
-					metrics.InfrastructureEvents.WithLabelValues("clip_source_resolved").Inc()
-				}
-			}
-
-			// Return the file path for MistServer to read
-			c.String(http.StatusOK, artifactInfo.FilePath)
-			return
-		}
-
-		// Artifact not found in artifact index
+	// Forward trigger to Foghorn via gRPC and get response
+	response, shouldAbort, err := control.SendMistTrigger(mistTrigger, logger)
+	if err != nil {
 		logger.WithFields(logging.Fields{
-			"artifact_hash": artifactHash,
-			"stream_name":   streamName,
-		}).Warn("VOD artifact not found in artifact index")
+			"error": err,
+		}).Error("Failed to forward STREAM_SOURCE to Foghorn")
 
 		if metrics != nil {
-			metrics.NodeOperations.WithLabelValues("stream_source", "vod_not_found").Inc()
+			metrics.NodeOperations.WithLabelValues("stream_source", "forwarding_error").Inc()
 		}
-	} else {
-		// Not a VOD stream - log for debugging
-		logger.WithFields(logging.Fields{
-			"stream_name": streamName,
-		}).Debug("STREAM_SOURCE called for non-VOD stream")
 
-		if metrics != nil {
-			metrics.NodeOperations.WithLabelValues("stream_source", "non_vod").Inc()
-		}
+		c.String(http.StatusOK, "") // Empty response will cause MistServer to use default source
+		return
 	}
 
-	// Empty response - MistServer will use the default source configured for this stream
-	c.String(http.StatusOK, "")
+	if shouldAbort {
+		logger.WithFields(logging.Fields{
+			"response": response,
+		}).Info("STREAM_SOURCE aborted by Foghorn")
+
+		if metrics != nil {
+			metrics.NodeOperations.WithLabelValues("stream_source", "aborted").Inc()
+		}
+
+		c.String(http.StatusOK, "") // Empty response will cause MistServer to use default source
+		return
+	}
+
+	logger.WithFields(logging.Fields{
+		"response": response,
+	}).Info("STREAM_SOURCE resolved by Foghorn")
+
+	// Track successful operation
+	if metrics != nil {
+		metrics.NodeOperations.WithLabelValues("stream_source", "success").Inc()
+		metrics.ResourceAllocationDuration.WithLabelValues("vod_resolution").Observe(time.Since(start).Seconds())
+		metrics.InfrastructureEvents.WithLabelValues("source_resolved").Inc()
+	}
+
+	// Return Foghorn's response to MistServer
+	c.String(http.StatusOK, response)
 }
 
 // enrichEventWithClusterMetadata adds cluster and node metadata to events
@@ -756,123 +468,550 @@ func enrichEventWithClusterMetadata(eventData map[string]interface{}) map[string
 	return enriched
 }
 
-// updateFoghornStreamHealth immediately updates Foghorn with stream health status via gRPC
-func updateFoghornStreamHealth(streamName string, isHealthy bool, details map[string]interface{}) error {
-	// Extract internal name from wildcard stream
-	var internalName string
-	if plusIndex := strings.Index(streamName, "+"); plusIndex != -1 {
-		internalName = streamName[plusIndex+1:]
-	} else {
-		internalName = streamName
-	}
-
-	// Send stream health update via gRPC control channel
-	if err := control.SendStreamHealth(streamName, internalName, isHealthy, details); err != nil {
-		logger.WithFields(logging.Fields{
-			"stream_name":   streamName,
-			"internal_name": internalName,
-			"is_healthy":    isHealthy,
-			"error":         err,
-		}).Error("Failed to send stream health update via gRPC control channel")
-		return fmt.Errorf("failed to send stream health update: %w", err)
-	}
-
-	logger.WithFields(logging.Fields{
-		"stream_name":   streamName,
-		"internal_name": internalName,
-		"is_healthy":    isHealthy,
-	}).Debug("Sent stream health update via gRPC control channel")
-
-	return nil
+// getNodeID returns the current node ID for building triggers
+func getNodeID() string {
+	return control.GetCurrentNodeID()
 }
 
-// enrichEventWithGeoData adds geo information to event data using IP address
-func enrichEventWithGeoData(eventData map[string]interface{}, ipAddress string) map[string]interface{} {
-	enriched := make(map[string]interface{})
-	for k, v := range eventData {
-		enriched[k] = v
+// HandlePushEnd handles PUSH_END webhook
+// This is a non-blocking trigger that logs push completion status
+func HandlePushEnd(c *gin.Context) {
+	// Track infrastructure event
+	if metrics != nil {
+		metrics.InfrastructureEvents.WithLabelValues("push_end").Inc()
 	}
 
-	// Set geo fields to nil for consistent NULL handling initially
-	enriched["country_code"] = nil
-	enriched["city"] = nil
-	enriched["latitude"] = nil
-	enriched["longitude"] = nil
-
-	geoSource := "none"
-
-	// Try geoip lookup first if available
-	if geoipReader != nil && ipAddress != "" {
-		geoData := geoipReader.Lookup(ipAddress)
-		if geoData != nil {
-			// Add geo data to event, replacing nil values only if we have data
-			if geoData.CountryCode != "" {
-				enriched["country_code"] = geoData.CountryCode
-			}
-
-			if geoData.City != "" {
-				enriched["city"] = geoData.City
-			}
-
-			if geoData.Latitude != 0 || geoData.Longitude != 0 {
-				enriched["latitude"] = geoData.Latitude
-				enriched["longitude"] = geoData.Longitude
-			}
-
-			geoSource = "geoip"
-			logger.WithFields(logging.Fields{
-				"ip_address":   ipAddress,
-				"country_code": geoData.CountryCode,
-				"city":         geoData.City,
-				"latitude":     geoData.Latitude,
-				"longitude":    geoData.Longitude,
-				"source":       geoSource,
-			}).Debug("Enriched event with geo data")
-
-			return enriched
-		}
-	}
-
-	// Fallback to MistServer node location if available
-	if prometheusMonitor != nil && prometheusMonitor.latitude != nil && prometheusMonitor.longitude != nil {
-		enriched["latitude"] = *prometheusMonitor.latitude
-		enriched["longitude"] = *prometheusMonitor.longitude
-		geoSource = "node_fallback"
-
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
 		logger.WithFields(logging.Fields{
-			"ip_address": ipAddress,
-			"latitude":   *prometheusMonitor.latitude,
-			"longitude":  *prometheusMonitor.longitude,
-			"source":     geoSource,
-		}).Debug("Used node location as geo fallback")
-	}
-
-	return enriched
-}
-
-// requestDVRStart requests Foghorn to start DVR recording for a stream via gRPC
-func requestDVRStart(streamValidation *commodoreapi.ValidateStreamKeyResponse) {
-	if err := control.SendDVRStartRequest(
-		streamValidation.TenantID,
-		streamValidation.InternalName,
-		streamValidation.UserID,
-		streamValidation.Recording.RetentionDays,
-		streamValidation.Recording.Format,
-		streamValidation.Recording.SegmentDuration,
-	); err != nil {
-		logger.WithFields(logging.Fields{
-			"internal_name": streamValidation.InternalName,
-			"tenant_id":     streamValidation.TenantID,
-			"error":         err,
-		}).Error("Failed to send DVR start request via gRPC control channel")
+			"error": err,
+		}).Error("Failed to read PUSH_END body")
+		c.String(http.StatusOK, "OK")
 		return
 	}
 
 	logger.WithFields(logging.Fields{
-		"internal_name":    streamValidation.InternalName,
-		"tenant_id":        streamValidation.TenantID,
-		"retention_days":   streamValidation.Recording.RetentionDays,
-		"format":           streamValidation.Recording.Format,
-		"segment_duration": streamValidation.Recording.SegmentDuration,
-	}).Info("Successfully sent DVR start request via gRPC control channel")
+		"trigger_type": "PUSH_END",
+		"payload_size": len(body),
+	}).Debug("Forwarding PUSH_END trigger to Foghorn via gRPC")
+
+	// Parse raw webhook data directly
+	mistTrigger, err := mist.ParseTriggerToProtobuf(mist.TriggerPushEnd, body, getNodeID(), logger)
+	if err != nil {
+		logger.WithFields(logging.Fields{
+			"error": err,
+		}).Error("Failed to parse PUSH_END trigger")
+		c.String(http.StatusOK, "OK")
+		return
+	}
+
+	// Forward trigger to Foghorn via gRPC (non-blocking)
+	_, _, err = control.SendMistTrigger(mistTrigger, logger)
+	if err != nil {
+		logger.WithFields(logging.Fields{
+			"error": err,
+		}).Error("Failed to forward PUSH_END to Foghorn")
+	}
+
+	c.String(http.StatusOK, "OK")
+}
+
+// HandlePushOutStart handles PUSH_OUT_START webhook
+// This is a blocking trigger - validates and routes outbound pushes
+func HandlePushOutStart(c *gin.Context) {
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		logger.WithFields(logging.Fields{
+			"error": err,
+		}).Error("Failed to read PUSH_OUT_START body")
+		c.String(http.StatusOK, "") // Empty response aborts push
+		return
+	}
+
+	logger.WithFields(logging.Fields{
+		"trigger_type": "PUSH_OUT_START",
+		"payload_size": len(body),
+	}).Debug("Forwarding PUSH_OUT_START trigger to Foghorn via gRPC")
+
+	// Parse raw webhook data directly
+	mistTrigger, err := mist.ParseTriggerToProtobuf(mist.TriggerPushOutStart, body, getNodeID(), logger)
+	if err != nil {
+		logger.WithFields(logging.Fields{
+			"error": err,
+		}).Error("Failed to parse PUSH_OUT_START trigger")
+		c.String(http.StatusOK, "") // Empty response aborts push
+		return
+	}
+
+	// Forward trigger to Foghorn via gRPC and get response
+	response, shouldAbort, err := control.SendMistTrigger(mistTrigger, logger)
+	if err != nil {
+		logger.WithFields(logging.Fields{
+			"error": err,
+		}).Error("Failed to forward PUSH_OUT_START to Foghorn")
+		c.String(http.StatusOK, "") // Empty response aborts push
+		return
+	}
+
+	if shouldAbort {
+		logger.WithFields(logging.Fields{
+			"response": response,
+		}).Info("PUSH_OUT_START aborted by Foghorn")
+		c.String(http.StatusOK, "") // Empty response aborts push
+		return
+	}
+
+	logger.WithFields(logging.Fields{
+		"response": response,
+	}).Info("PUSH_OUT_START approved by Foghorn")
+
+	// Return Foghorn's response to MistServer
+	c.String(http.StatusOK, response)
+}
+
+// HandleStreamBuffer handles STREAM_BUFFER webhook
+// This is a non-blocking trigger that monitors stream buffer state and health
+func HandleStreamBuffer(c *gin.Context) {
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		logger.WithFields(logging.Fields{
+			"error": err,
+		}).Error("Failed to read STREAM_BUFFER body")
+		c.String(http.StatusOK, "OK")
+		return
+	}
+
+	logger.WithFields(logging.Fields{
+		"trigger_type": "STREAM_BUFFER",
+		"payload_size": len(body),
+	}).Debug("Forwarding STREAM_BUFFER trigger to Foghorn via gRPC")
+
+	// Parse raw webhook data to protobuf
+	mistTrigger, err := mist.ParseTriggerToProtobuf(mist.TriggerStreamBuffer, body, getNodeID(), logger)
+	if err != nil {
+		logger.WithFields(logging.Fields{
+			"error": err,
+		}).Error("Failed to parse STREAM_BUFFER trigger")
+		c.String(http.StatusOK, "OK")
+		return
+	}
+
+	// Enrich with Helmsman-specific metrics
+	if sb := mistTrigger.GetStreamBuffer(); sb != nil {
+		enrichStreamBufferTrigger(sb)
+	}
+
+	// Forward enriched trigger to Foghorn via gRPC (non-blocking)
+	_, _, err = control.SendMistTrigger(mistTrigger, logger)
+	if err != nil {
+		logger.WithFields(logging.Fields{
+			"error": err,
+		}).Error("Failed to forward STREAM_BUFFER to Foghorn")
+	}
+
+	c.String(http.StatusOK, "OK")
+}
+
+// HandleStreamEnd handles STREAM_END webhook
+// This is a non-blocking trigger that reports stream end metrics
+func HandleStreamEnd(c *gin.Context) {
+	// Track infrastructure event
+	if metrics != nil {
+		metrics.InfrastructureEvents.WithLabelValues("stream_end").Inc()
+	}
+
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		logger.WithFields(logging.Fields{
+			"error": err,
+		}).Error("Failed to read STREAM_END body")
+		c.String(http.StatusOK, "OK")
+		return
+	}
+
+	logger.WithFields(logging.Fields{
+		"trigger_type": "STREAM_END",
+		"payload_size": len(body),
+	}).Debug("Forwarding STREAM_END trigger to Foghorn via gRPC")
+
+	// Parse raw webhook data directly
+	mistTrigger, err := mist.ParseTriggerToProtobuf(mist.TriggerStreamEnd, body, getNodeID(), logger)
+	if err != nil {
+		logger.WithFields(logging.Fields{
+			"error": err,
+		}).Error("Failed to parse STREAM_END trigger")
+		c.String(http.StatusOK, "OK")
+		return
+	}
+
+	// Forward trigger to Foghorn via gRPC (non-blocking)
+	_, _, err = control.SendMistTrigger(mistTrigger, logger)
+	if err != nil {
+		logger.WithFields(logging.Fields{
+			"error": err,
+		}).Error("Failed to forward STREAM_END to Foghorn")
+	}
+
+	c.String(http.StatusOK, "OK")
+}
+
+// HandleUserNew handles USER_NEW webhook
+// This is a blocking trigger that validates new viewer connections
+func HandleUserNew(c *gin.Context) {
+	// Track infrastructure event
+	if metrics != nil {
+		metrics.InfrastructureEvents.WithLabelValues("user_connected").Inc()
+	}
+
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		logger.WithFields(logging.Fields{
+			"error": err,
+		}).Error("Failed to read USER_NEW body")
+		c.String(http.StatusOK, "false") // Deny session on error
+		return
+	}
+
+	logger.WithFields(logging.Fields{
+		"trigger_type": "USER_NEW",
+		"payload_size": len(body),
+	}).Debug("Forwarding USER_NEW trigger to Foghorn via gRPC")
+
+	// Parse raw webhook data directly
+	mistTrigger, err := mist.ParseTriggerToProtobuf(mist.TriggerUserNew, body, getNodeID(), logger)
+	if err != nil {
+		logger.WithFields(logging.Fields{
+			"error": err,
+		}).Error("Failed to parse USER_NEW trigger")
+		c.String(http.StatusOK, "false") // Deny session on error
+		return
+	}
+
+	// Forward trigger to Foghorn via gRPC and get response
+	response, shouldAbort, err := control.SendMistTrigger(mistTrigger, logger)
+	if err != nil {
+		logger.WithFields(logging.Fields{
+			"error": err,
+		}).Error("Failed to forward USER_NEW to Foghorn")
+		c.String(http.StatusOK, "false") // Deny session on error
+		return
+	}
+
+	if shouldAbort {
+		logger.WithFields(logging.Fields{
+			"response": response,
+		}).Info("USER_NEW denied by Foghorn")
+		c.String(http.StatusOK, "false") // Deny session
+		return
+	}
+
+	logger.WithFields(logging.Fields{
+		"response": response,
+	}).Info("USER_NEW approved by Foghorn")
+
+	// Return Foghorn's response to MistServer
+	c.String(http.StatusOK, response)
+}
+
+// HandleUserEnd handles USER_END webhook
+// This is a non-blocking trigger that reports viewer disconnection metrics
+func HandleUserEnd(c *gin.Context) {
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		logger.WithFields(logging.Fields{
+			"error": err,
+		}).Error("Failed to read USER_END body")
+		c.String(http.StatusOK, "OK")
+		return
+	}
+
+	logger.WithFields(logging.Fields{
+		"trigger_type": "USER_END",
+		"payload_size": len(body),
+	}).Debug("Forwarding USER_END trigger to Foghorn via gRPC")
+
+	// Parse raw webhook data directly
+	mistTrigger, err := mist.ParseTriggerToProtobuf(mist.TriggerUserEnd, body, getNodeID(), logger)
+	if err != nil {
+		logger.WithFields(logging.Fields{
+			"error": err,
+		}).Error("Failed to parse USER_END trigger")
+		c.String(http.StatusOK, "OK")
+		return
+	}
+
+	// Forward trigger to Foghorn via gRPC (non-blocking)
+	_, _, err = control.SendMistTrigger(mistTrigger, logger)
+	if err != nil {
+		logger.WithFields(logging.Fields{
+			"error": err,
+		}).Error("Failed to forward USER_END to Foghorn")
+	}
+
+	c.String(http.StatusOK, "OK")
+}
+
+// HandleLiveTrackList handles LIVE_TRACK_LIST webhook
+// Payload: stream name, track list (JSON)
+func HandleLiveTrackList(c *gin.Context) {
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		logger.WithFields(logging.Fields{
+			"error": err,
+		}).Error("Failed to read LIVE_TRACK_LIST body")
+		c.String(http.StatusOK, "OK")
+		return
+	}
+
+	logger.WithFields(logging.Fields{
+		"trigger_type": "LIVE_TRACK_LIST",
+		"payload_size": len(body),
+	}).Debug("Forwarding LIVE_TRACK_LIST trigger to Foghorn via gRPC")
+
+	// Parse raw webhook data directly
+	mistTrigger, err := mist.ParseTriggerToProtobuf(mist.TriggerLiveTrackList, body, getNodeID(), logger)
+	if err != nil {
+		logger.WithFields(logging.Fields{
+			"error": err,
+		}).Error("Failed to parse LIVE_TRACK_LIST trigger")
+		c.String(http.StatusOK, "OK")
+		return
+	}
+
+	// Enrich with track list specific metrics
+	if tp := mistTrigger.GetTrackList(); tp != nil {
+		enrichLiveTrackListTrigger(tp)
+	}
+
+	// Forward trigger to Foghorn via gRPC (non-blocking)
+	_, _, err = control.SendMistTrigger(mistTrigger, logger)
+	if err != nil {
+		logger.WithFields(logging.Fields{
+			"error": err,
+		}).Error("Failed to forward LIVE_TRACK_LIST to Foghorn")
+	}
+
+	c.String(http.StatusOK, "OK")
+}
+
+// HandleLiveBandwidth handles LIVE_BANDWIDTH webhook
+// Payload: stream name, current bytes per second
+func HandleLiveBandwidth(c *gin.Context) {
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		logger.WithFields(logging.Fields{
+			"error": err,
+		}).Error("Failed to read LIVE_BANDWIDTH body")
+		c.String(http.StatusOK, "OK")
+		return
+	}
+
+	logger.WithFields(logging.Fields{
+		"trigger_type": "LIVE_BANDWIDTH",
+		"payload_size": len(body),
+	}).Debug("Forwarding LIVE_BANDWIDTH trigger to Foghorn via gRPC")
+
+	// Parse raw webhook data directly
+	mistTrigger, err := mist.ParseTriggerToProtobuf(mist.TriggerLiveBandwidth, body, getNodeID(), logger)
+	if err != nil {
+		logger.WithFields(logging.Fields{
+			"error": err,
+		}).Error("Failed to parse LIVE_BANDWIDTH trigger")
+		c.String(http.StatusOK, "OK")
+		return
+	}
+
+	// Forward trigger to Foghorn via gRPC (non-blocking)
+	_, _, err = control.SendMistTrigger(mistTrigger, logger)
+	if err != nil {
+		logger.WithFields(logging.Fields{
+			"error": err,
+		}).Error("Failed to forward LIVE_BANDWIDTH to Foghorn")
+	}
+
+	c.String(http.StatusOK, "OK")
+}
+
+// HandleRecordingEnd handles RECORDING_END webhook
+// CORRECT MistServer format: stream name, path to file, output protocol name, bytes written, seconds writing took, unix start time, unix end time, media duration (ms)
+func HandleRecordingEnd(c *gin.Context) {
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		logger.WithFields(logging.Fields{
+			"error": err,
+		}).Error("Failed to read RECORDING_END body")
+		c.String(http.StatusOK, "OK")
+		return
+	}
+
+	logger.WithFields(logging.Fields{
+		"trigger_type": "RECORDING_END",
+		"payload_size": len(body),
+	}).Debug("Forwarding RECORDING_END trigger to Foghorn via gRPC")
+
+	// Parse raw webhook data directly
+	mistTrigger, err := mist.ParseTriggerToProtobuf(mist.TriggerRecordingEnd, body, getNodeID(), logger)
+	if err != nil {
+		logger.WithFields(logging.Fields{
+			"error": err,
+		}).Error("Failed to parse RECORDING_END trigger")
+		c.String(http.StatusOK, "OK")
+		return
+	}
+
+	// Forward trigger to Foghorn via gRPC (non-blocking)
+	_, _, err = control.SendMistTrigger(mistTrigger, logger)
+	if err != nil {
+		logger.WithFields(logging.Fields{
+			"error": err,
+		}).Error("Failed to forward RECORDING_END to Foghorn")
+	}
+
+	c.String(http.StatusOK, "OK")
+}
+
+// enrichStreamBufferTrigger computes Helmsman-specific metrics from parsed tracks
+func enrichStreamBufferTrigger(trigger *pb.StreamBufferTrigger) {
+	if trigger == nil || trigger.Tracks == nil {
+		return
+	}
+
+	tracks := trigger.Tracks
+	trackCount := int32(len(tracks))
+	trigger.TrackCount = &trackCount
+
+	// Calculate health score based on jitter and buffer metrics
+	healthScore := 100.0
+	hasIssues := false
+	var issuesDesc []string
+
+	for _, track := range tracks {
+		// Check for high jitter (>100ms is concerning)
+		if track.Jitter != nil && *track.Jitter > 100 {
+			healthScore -= 20
+			hasIssues = true
+			issuesDesc = append(issuesDesc, "High jitter on track "+track.TrackName)
+		}
+		// Check for low buffer (<50 is concerning)
+		if track.Buffer != nil && *track.Buffer < 50 {
+			healthScore -= 15
+			hasIssues = true
+			issuesDesc = append(issuesDesc, "Low buffer on track "+track.TrackName)
+		}
+	}
+
+	// Ensure health score doesn't go below 0
+	if healthScore < 0 {
+		healthScore = 0
+	}
+
+	// Set computed metrics
+	healthScoreFloat32 := float32(healthScore)
+	trigger.HealthScore = &healthScoreFloat32
+	trigger.HasIssues = &hasIssues
+	if len(issuesDesc) > 0 {
+		issues := strings.Join(issuesDesc, "; ")
+		trigger.IssuesDescription = &issues
+	}
+
+	// Determine quality tier from tracks
+	qualityTier := determineQualityTier(tracks)
+	if qualityTier != "" {
+		trigger.QualityTier = &qualityTier
+	}
+}
+
+// enrichLiveTrackListTrigger computes quality metrics and primary track info from tracks
+func enrichLiveTrackListTrigger(trigger *pb.StreamTrackListTrigger) {
+	if trigger == nil || trigger.Tracks == nil {
+		return
+	}
+
+	tracks := trigger.Tracks
+	totalTracks := int32(len(tracks))
+	trigger.TotalTracks = &totalTracks
+
+	var videoTracks, audioTracks []*pb.StreamTrack
+	for _, track := range tracks {
+		if track.TrackType == "video" {
+			videoTracks = append(videoTracks, track)
+		} else if track.TrackType == "audio" {
+			audioTracks = append(audioTracks, track)
+		}
+	}
+
+	videoTrackCount := int32(len(videoTracks))
+	audioTrackCount := int32(len(audioTracks))
+	trigger.VideoTrackCount = &videoTrackCount
+	trigger.AudioTrackCount = &audioTrackCount
+
+	// Extract primary video track info
+	if len(videoTracks) > 0 {
+		primary := videoTracks[0]
+		if primary.Width != nil {
+			trigger.PrimaryWidth = primary.Width
+		}
+		if primary.Height != nil {
+			trigger.PrimaryHeight = primary.Height
+		}
+		if primary.Fps != nil {
+			trigger.PrimaryFps = primary.Fps
+		}
+		if primary.BitrateKbps != nil {
+			primaryVideoBitrate := *primary.BitrateKbps
+			trigger.PrimaryVideoBitrate = &primaryVideoBitrate
+		}
+		if primary.Codec != "" {
+			trigger.PrimaryVideoCodec = &primary.Codec
+		}
+	}
+
+	// Extract primary audio track info
+	if len(audioTracks) > 0 {
+		primary := audioTracks[0]
+		if primary.BitrateKbps != nil {
+			primaryAudioBitrate := *primary.BitrateKbps
+			trigger.PrimaryAudioBitrate = &primaryAudioBitrate
+		}
+		if primary.Codec != "" {
+			trigger.PrimaryAudioCodec = &primary.Codec
+		}
+		if primary.Channels != nil {
+			trigger.PrimaryAudioChannels = primary.Channels
+		}
+		if primary.SampleRate != nil {
+			trigger.PrimaryAudioSampleRate = primary.SampleRate
+		}
+	}
+
+	// Determine quality tier
+	qualityTier := determineQualityTier(tracks)
+	if qualityTier != "" {
+		trigger.QualityTier = &qualityTier
+	}
+}
+
+// determineQualityTier determines quality tier based on video track resolution
+func determineQualityTier(tracks []*pb.StreamTrack) string {
+	maxHeight := int32(0)
+	for _, track := range tracks {
+		if track.TrackType == "video" && track.Height != nil {
+			if *track.Height > maxHeight {
+				maxHeight = *track.Height
+			}
+		}
+	}
+
+	if maxHeight >= 2160 {
+		return "4K"
+	} else if maxHeight >= 1080 {
+		return "1080p"
+	} else if maxHeight >= 720 {
+		return "720p"
+	} else if maxHeight >= 480 {
+		return "480p"
+	} else if maxHeight > 0 {
+		return "SD"
+	}
+	return ""
 }

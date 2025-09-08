@@ -87,7 +87,7 @@ export const navigationConfig = {
         name: 'Clips',
         href: '/clips',
         icon: 'Scissors',
-        active: 'soon',
+        active: true,
         description: 'Create and manage stream clips'
       },
       recordings: {
@@ -145,7 +145,7 @@ export const navigationConfig = {
         name: 'Node Management',
         href: '/nodes',
         icon: 'Server',
-        active: 'soon',
+        active: true,
         description: 'Manage your Edge nodes worldwide'
       },
       devices: {

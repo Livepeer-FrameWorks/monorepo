@@ -1,19 +1,19 @@
 export { default as Player } from "./components/Player";
-export { default as MistPlayer } from "./components/MistPlayer";
-export { default as DirectSourcePlayer } from "./components/DirectSourcePlayer";
-export { default as WHEPPlayer } from "./components/WHEPPlayer";
+export { default as MistPlayer } from "./components/players/MistPlayer";
 export { default as LoadingScreen } from "./components/LoadingScreen";
 export { default as ThumbnailOverlay } from "./components/ThumbnailOverlay";
+export { default as PlayerControls } from "./components/PlayerControls";
+export * from "./components/Icons";
 
 // Export types
 export type {
   PlayerProps,
   MistPlayerProps,
-  DirectSourcePlayerProps,
-  WHEPPlayerProps,
   PlayerOptions,
   EndpointInfo,
   OutputEndpoint,
   ContentEndpoints,
   ContentMetadata,
+  PlayerState,
+  PlayerStateContext,
 } from "./types"; 

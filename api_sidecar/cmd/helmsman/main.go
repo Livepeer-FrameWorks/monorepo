@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"os"
 	"os/signal"
 	"syscall"
@@ -11,45 +10,41 @@ import (
 
 	"frameworks/api_sidecar/internal/control"
 	"frameworks/api_sidecar/internal/handlers"
-	fclient "frameworks/pkg/clients/foghorn"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/monitoring"
+	pb "frameworks/pkg/proto"
 	"frameworks/pkg/server"
 	"frameworks/pkg/version"
 )
 
 // notifyFoghornShutdown sends a final health update to Foghorn before shutdown using shared client
 func notifyFoghornShutdown() error {
-	foghornURL := os.Getenv("FOGHORN_URL")
-	if foghornURL == "" {
-		foghornURL = "http://localhost:18008"
-	}
-
-	nodeID := os.Getenv("NODE_NAME")
+	nodeID := control.GetCurrentNodeID()
 	if nodeID == "" {
-		nodeID = "unknown-node"
+		nodeID = os.Getenv("NODE_NAME")
+		if nodeID == "" {
+			nodeID = "unknown-node"
+		}
 	}
 
-	// Create shared Foghorn client with short timeout for shutdown
-	client := fclient.NewClient(fclient.Config{
-		BaseURL: foghornURL,
-		Timeout: 2 * time.Second,
-		Logger:  logging.NewLoggerWithService("helmsman-shutdown"),
-	})
-
-	// Build request with EXACT same payload structure as original
-	req := &fclient.NodeShutdownRequest{
-		NodeID:    nodeID,
-		Type:      "node_shutdown",
-		Timestamp: time.Now().Unix(),
-		Reason:    "graceful_shutdown",
-		Details:   nil, // No FoghornNodeShutdown struct defined, using nil
+	trigger := &pb.MistTrigger{
+		TriggerType: "NODE_LIFECYCLE_UPDATE",
+		NodeId:      nodeID,
+		Timestamp:   time.Now().Unix(),
+		Blocking:    false,
+		RequestId:   "",
+		TriggerPayload: &pb.MistTrigger_NodeLifecycleUpdate{
+			NodeLifecycleUpdate: &pb.NodeLifecycleUpdate{
+				NodeId:    nodeID,
+				IsHealthy: false,
+				EventType: "node_shutdown",
+				Timestamp: time.Now().Unix(),
+			},
+		},
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	return client.NotifyShutdown(ctx, req)
+	_, _, err := control.SendMistTrigger(trigger, logging.NewLoggerWithService("helmsman-shutdown"))
+	return err
 }
 
 func main() {
@@ -155,9 +150,6 @@ func main() {
 	go func() {
 		sig := <-quit
 		logger.WithField("signal", sig.String()).Info("Shutdown signal received")
-
-		// Shutdown Decklog client first
-		handlers.ShutdownDecklogClient()
 
 		// Stop cleanup monitor
 		handlers.StopCleanupMonitor()

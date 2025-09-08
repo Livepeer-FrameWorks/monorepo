@@ -1,0 +1,52 @@
+version: "3.9"
+
+services:
+  caddy:
+    image: caddy:2
+    container_name: edge-proxy
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - ACME_AGREE=true
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+
+  mistserver:
+    image: mistserver:latest
+    container_name: mistserver
+    shm_size: "1g"
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576
+    environment:
+      - MIST_DEBUG=3
+    expose:
+      - "8080"
+    restart: unless-stopped
+
+  helmsman:
+    image: frameworks/helmsman:latest
+    container_name: helmsman
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576
+    environment:
+      - EDGE_ENROLLMENT_TOKEN=${EDGE_ENROLLMENT_TOKEN}
+      - FOGHORN_CONTROL_ADDR=${FOGHORN_CONTROL_ADDR}
+      - FOGHORN_HTTP_BASE=${FOGHORN_HTTP_BASE}
+      - HELMSMAN_WEBHOOK_URL=http://helmsman:18007
+      - MISTSERVER_URL=http://mistserver:8080
+    expose:
+      - "18007"
+    restart: unless-stopped
+
+volumes:
+  caddy_data: {}
+  caddy_config: {}
+

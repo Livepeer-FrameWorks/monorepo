@@ -6,9 +6,13 @@
   
   $: statusConfig = getStatusConfig(status);
   
+  /**
+   * @param {string | null | undefined} status
+   */
   function getStatusConfig(status) {
     const normalizedStatus = status?.toLowerCase() || 'unknown';
     
+    /** @type {Record<string, {color: string, label: string, icon: string}>} */
     const configs = {
       // Stream statuses
       'live': { color: 'green', label: 'Live', icon: '●' },
@@ -38,7 +42,11 @@
     return configs[normalizedStatus] || configs.unknown;
   }
   
+  /**
+   * @param {string} color
+   */
   function getColorClasses(color) {
+    /** @type {Record<string, {bg: string, text: string, border: string, dot: string}>} */
     const colors = {
       green: {
         bg: 'bg-green-900/30',
@@ -92,7 +100,11 @@
       dot: 'w-2.5 h-2.5',
       spacing: 'mr-2'
     }
-  }[size];
+  }[size] || {
+    container: 'px-2.5 py-0.5 text-xs',
+    dot: 'w-2 h-2',
+    spacing: 'mr-1.5'
+  };
 </script>
 
 <span class="inline-flex items-center {sizeClasses.container} rounded-full font-medium {colorClasses.bg} {colorClasses.text} border {colorClasses.border}">

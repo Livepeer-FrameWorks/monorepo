@@ -70,6 +70,7 @@ CREATE TABLE IF NOT EXISTS quartermaster.tenants (
     payment_method VARCHAR(50),
     
     -- ===== STATUS & LIFECYCLE =====
+    is_provider BOOLEAN DEFAULT FALSE,
     is_active BOOLEAN DEFAULT TRUE,
     trial_ends_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT NOW(),
@@ -225,6 +226,9 @@ CREATE TABLE IF NOT EXISTS quartermaster.service_instances (
     service_id VARCHAR(100) NOT NULL REFERENCES quartermaster.services(service_id),
     
     -- ===== DEPLOYMENT INFO =====
+    protocol VARCHAR(10) DEFAULT 'http',
+    advertise_host VARCHAR(255),
+    health_endpoint_override VARCHAR(255),
     version VARCHAR(50),
     port INTEGER,
     process_id INTEGER,
@@ -368,3 +372,46 @@ BEGIN
     RETURN result;
 END;
 $$ LANGUAGE plpgsql;
+
+-- ============================================================================
+-- NODE FINGERPRINTS (stable identity mapping)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS quartermaster.node_fingerprints (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID REFERENCES quartermaster.tenants(id),
+    node_id VARCHAR(100) UNIQUE NOT NULL,
+    fingerprint_machine_sha256 TEXT,
+    fingerprint_macs_sha256 TEXT,
+    seen_ips INET[] DEFAULT '{}',
+    attrs JSONB DEFAULT '{}',
+    first_seen TIMESTAMP DEFAULT NOW(),
+    last_seen TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_qm_fingerprints_machine ON quartermaster.node_fingerprints(fingerprint_machine_sha256);
+CREATE INDEX IF NOT EXISTS idx_qm_fingerprints_macs ON quartermaster.node_fingerprints(fingerprint_macs_sha256);
+
+-- ============================================================================
+-- BOOTSTRAP TOKENS (one-use, short-lived)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS quartermaster.bootstrap_tokens (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    token VARCHAR(128) UNIQUE NOT NULL,
+    -- Scope and intended usage
+    kind VARCHAR(32) NOT NULL, -- 'edge_node' | 'service'
+    tenant_id UUID,            -- optional; required for edge_node
+    cluster_id VARCHAR(100),   -- optional; for service bootstrap in provider clusters
+    expected_ip INET,          -- optional hint
+    metadata JSONB DEFAULT '{}',
+    -- Lifecycle
+    expires_at TIMESTAMP NOT NULL,
+    used_at TIMESTAMP,
+    created_by UUID,
+    created_at TIMESTAMP DEFAULT NOW(),
+    CONSTRAINT chk_kind CHECK (kind IN ('edge_node','service'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_qm_bootstrap_tokens_token ON quartermaster.bootstrap_tokens(token);
+CREATE INDEX IF NOT EXISTS idx_qm_bootstrap_tokens_kind ON quartermaster.bootstrap_tokens(kind);

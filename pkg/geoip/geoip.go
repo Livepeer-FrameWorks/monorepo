@@ -22,8 +22,10 @@ package geoip
 
 import (
 	"net"
+	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/oschwald/geoip2-golang"
 )
@@ -204,7 +206,7 @@ func (r *Reader) GetAttributionText() string {
 	return r.attributionText
 }
 
-// GetDatabasePath returns the path to the loaded database file
+// GetDatabasePath returns the path to the loaded database
 func (r *Reader) GetDatabasePath() string {
 	if r == nil {
 		return ""
@@ -223,6 +225,28 @@ func (r *Reader) Close() error {
 // IsLoaded returns true if a database is successfully loaded
 func (r *Reader) IsLoaded() bool {
 	return r != nil && r.db != nil
+}
+
+// Shared reader singleton for process-wide reuse
+var sharedGeo struct {
+	once   sync.Once
+	reader *Reader
+}
+
+// GetSharedReader returns a singleton Reader initialized from GEOIP_MMDB_PATH.
+// Returns nil if the database path is empty or the file cannot be opened.
+func GetSharedReader() *Reader {
+	sharedGeo.once.Do(func() {
+		path := os.Getenv("GEOIP_MMDB_PATH")
+		if path == "" {
+			return
+		}
+		r, err := NewReader(path)
+		if err == nil {
+			sharedGeo.reader = r
+		}
+	})
+	return sharedGeo.reader
 }
 
 // EnrichEvent adds geo fields to an event map if geo data is available

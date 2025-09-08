@@ -19,6 +19,10 @@
     @apply bg-tokyo-night-bg-light/50 backdrop-blur-sm border border-tokyo-night-fg-gutter rounded-lg;
   }
 
+  .input {
+    @apply w-full bg-tokyo-night-bg-dark border border-tokyo-night-fg-gutter rounded-md px-3 py-2 text-sm text-tokyo-night-fg focus:outline-none focus:ring-2 focus:ring-tokyo-night-blue/50;
+  }
+
   .glow-card {
     @apply glass-card transition-all duration-300 hover:shadow-lg hover:shadow-tokyo-night-blue/20;
   }

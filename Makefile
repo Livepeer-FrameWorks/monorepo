@@ -3,7 +3,8 @@
 	proto graphql clean version install-tools verify test coverage
 
 # Version information
-VERSION ?= $(shell git describe --tags --exact-match 2>/dev/null || echo "dev")
+# Prefer annotated git tags like v1.2.3; fallback to describe or dev
+VERSION ?= $(shell git describe --tags --match "v[0-9]*" --exact-match 2>/dev/null || git describe --tags --match "v[0-9]*" --dirty --always 2>/dev/null || echo "0.0.0-dev")
 GIT_COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null || echo "unknown")
 BUILD_DATE ?= $(shell date -u '+%Y-%m-%dT%H:%M:%SZ')
 
@@ -179,6 +180,12 @@ version:
 	@echo "Version: $(VERSION)"
 	@echo "Git Commit: $(GIT_COMMIT)"
 	@echo "Build Date: $(BUILD_DATE)"
+
+# Generate a Release Manifest (releases/$(VERSION).yaml)
+# Optionally provide DIGEST_<SERVICE>=sha256:... to include digests per service.
+manifest:
+	@mkdir -p releases
+	@./scripts/gen_release_manifest.sh "$(VERSION)" "$(GIT_COMMIT)" "$(BUILD_DATE)" "$(SERVICES)"
 
 # Install required development tools
 install-tools:

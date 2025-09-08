@@ -100,7 +100,9 @@ CREATE TABLE IF NOT EXISTS routing_events (
     -- ===== NODE LOCATION =====
     node_latitude Float64,
     node_longitude Float64,
-    node_name LowCardinality(String)
+    node_name LowCardinality(String),
+    selected_node_id Nullable(String),
+    routing_distance_km Nullable(Float64)
 ) ENGINE = MergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (timestamp, stream_name)
@@ -760,28 +762,21 @@ CREATE TABLE IF NOT EXISTS clip_events (
     stage LowCardinality(String),       -- requested, processing, completed, failed
     content_type LowCardinality(String), -- 'clip' or 'dvr'
     
-    -- ===== CLIP DEFINITION =====
-    title Nullable(String),
-    format Nullable(String),            -- mp4, webm, etc.
-    start_unix Nullable(Int64),         -- Unix timestamp
-    stop_unix Nullable(Int64),          -- Unix timestamp
-    start_ms Nullable(Int64),           -- Milliseconds offset
-    stop_ms Nullable(Int64),            -- Milliseconds offset
-    duration_sec Nullable(Int64),       -- Total duration
+    -- ===== TIME RANGE =====
+    start_unix Nullable(Int64),         -- StartedAt from protobuf
+    stop_unix Nullable(Int64),          -- CompletedAt from protobuf
     
     -- ===== NODE ROUTING =====
-    ingest_node_id Nullable(String),    -- Source node
-    storage_node_id Nullable(String),   -- Destination node
-    routing_distance_km Nullable(Float64), -- Geographic distance
+    ingest_node_id Nullable(String),    -- NodeId from protobuf
     
     -- ===== PROCESSING STATUS =====
-    percent Nullable(UInt32),           -- Completion percentage
-    message Nullable(String),           -- Status/error message
+    percent Nullable(UInt32),           -- ProgressPercent from protobuf
+    message Nullable(String),           -- Error from protobuf
     
     -- ===== OUTPUT DETAILS =====
-    file_path Nullable(String),         -- Local file path
-    s3_url Nullable(String),            -- S3 URL if uploaded
-    size_bytes Nullable(UInt64)         -- Final file size
+    file_path Nullable(String),         -- FilePath from protobuf
+    s3_url Nullable(String),            -- S3Url from protobuf
+    size_bytes Nullable(UInt64)         -- SizeBytes from protobuf
 ) ENGINE = MergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (timestamp, internal_name, request_id)
@@ -808,5 +803,4 @@ SELECT
     count() AS count
 FROM clip_events
 GROUP BY hour, tenant_id, internal_name, stage;
-
 

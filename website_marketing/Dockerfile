@@ -8,7 +8,8 @@ RUN apk add --no-cache git ca-certificates tzdata
 
 # Copy package files
 COPY package*.json ./
-RUN npm ci
+# Use ci when lock matches; fall back to install during local dev
+RUN npm ci || npm install
 
 # Copy source code
 COPY . .
@@ -25,6 +26,7 @@ ARG VITE_DISCORD_URL
 ARG VITE_DEMO_STREAM_NAME
 ARG VITE_COMPANY_NAME
 ARG VITE_DOMAIN
+ARG VITE_GATEWAY_URL
 
 ENV VITE_APP_URL=${VITE_APP_URL}
 ENV VITE_API_URL=${VITE_API_URL}
@@ -37,6 +39,7 @@ ENV VITE_DISCORD_URL=${VITE_DISCORD_URL}
 ENV VITE_DEMO_STREAM_NAME=${VITE_DEMO_STREAM_NAME}
 ENV VITE_COMPANY_NAME=${VITE_COMPANY_NAME}
 ENV VITE_DOMAIN=${VITE_DOMAIN}
+ENV VITE_GATEWAY_URL=${VITE_GATEWAY_URL}
 
 # Build the app
 RUN npm run build

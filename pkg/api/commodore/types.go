@@ -32,6 +32,7 @@ type ErrorResponse = common.ErrorResponse
 // StreamEventRequest represents a request to forward stream events
 type StreamEventRequest struct {
 	NodeID       string   `json:"node_id"`
+	StreamID     string   `json:"stream_id,omitempty"`
 	StreamKey    string   `json:"stream_key,omitempty"`
 	InternalName string   `json:"internal_name,omitempty"`
 	Hostname     string   `json:"hostname,omitempty"`
@@ -44,6 +45,31 @@ type StreamEventRequest struct {
 	Latitude     *float64 `json:"latitude,omitempty"`
 	Longitude    *float64 `json:"longitude,omitempty"`
 	Location     string   `json:"location,omitempty"`
+}
+
+// StreamStatusRequest represents stream status update payload
+type StreamStatusRequest struct {
+	InternalName string `json:"internal_name"`
+	NodeID       string `json:"node_id"`
+	Status       string `json:"status"`
+	BufferState  string `json:"buffer_state"`
+}
+
+// RecordingStatusRequest represents recording status update payload
+type RecordingStatusRequest struct {
+	InternalName string `json:"internal_name"`
+	IsRecording  bool   `json:"is_recording"`
+	EventType    string `json:"event_type"`
+	Timestamp    int64  `json:"timestamp"`
+}
+
+// PushStatusRequest represents push status update payload
+type PushStatusRequest struct {
+	InternalName string `json:"internal_name"`
+	NodeID       string `json:"node_id"`
+	Status       string `json:"status"`
+	PushTarget   string `json:"push_target"`
+	PushID       string `json:"push_id"`
 }
 
 // Authentication requests and responses
@@ -366,13 +392,44 @@ type ClipViewingURLs struct {
 
 // === VIEWER ENDPOINT RESOLUTION ===
 
-// ViewerEndpointRequest represents the Gateway request for viewer endpoint resolution
-type ViewerEndpointRequest struct {
-	ContentType string `json:"content_type"`
-	ContentID   string `json:"content_id"`
-	ViewerIP    string `json:"viewer_ip,omitempty"`
-}
+// ViewerEndpointRequest is an alias to the shared Foghorn request type
+// to ensure a single source of truth across services.
+type ViewerEndpointRequest = fapi.ViewerEndpointRequest
 
 // ViewerEndpoint and ViewerEndpointResponse are aliases to Foghorn types to avoid duplication
 type ViewerEndpoint = fapi.ViewerEndpoint
 type ViewerEndpointResponse = fapi.ViewerEndpointResponse
+
+// Stream meta (proxied via Commodore to Foghorn)
+type StreamMetaResponse = fapi.StreamMetaResponse
+
+// StreamMetrics represents internal stream metrics data
+type StreamMetrics struct {
+	Viewers      int       `json:"viewers"`
+	Status       string    `json:"status"`
+	BandwidthIn  *int64    `json:"bandwidth_in"`
+	BandwidthOut *int64    `json:"bandwidth_out"`
+	Resolution   *string   `json:"resolution"`
+	Bitrate      *string   `json:"bitrate"`
+	MaxViewers   *int      `json:"max_viewers"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+// StreamClipRequest represents a request for stream clipping
+type StreamClipRequest struct {
+	InternalName string `json:"internal_name"`
+	StreamID     string `json:"stream_id,omitempty"`
+}
+
+// DVRClipRequest represents a request for DVR clipping
+type DVRClipRequest struct {
+	DVRHash string `json:"dvr_hash"`
+}
+
+// CreateStreamResult represents the result of creating a stream
+type CreateStreamResult struct {
+	StreamID     string `json:"stream_id"`
+	StreamKey    string `json:"stream_key"`
+	PlaybackID   string `json:"playback_id"`
+	InternalName string `json:"internal_name"`
+}

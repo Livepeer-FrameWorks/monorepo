@@ -1,6 +1,13 @@
 # Lookout (Incident Management Service)
 
-> **Status**: 🚧 **Planned** - Essential for production operations
+> **Status**: ⏸️ **Deferred (post‑MVP)** — We plan to revisit this once requirements justify it. Today Prometheus + Grafana cover monitoring and alerting needs.
+>
+> **Current Solution**: 
+> - Prometheus for metrics collection and alert rules
+> - Grafana for dashboards and alert notifications
+> - VictoriaMetrics for high-performance metrics storage
+>
+> This service is deferred as the Prometheus/Grafana stack provides comprehensive monitoring and alerting capabilities that meet our current needs.
 
 ## Overview
 
@@ -27,12 +34,7 @@ Custom ─────┘                            ↓
 
 ## Configuration
 
-Environment variables:
-- `PORT` - API port (default: 18013)
-- `DATABASE_URL` - PostgreSQL connection string
-- `PROMETHEUS_URL` - Prometheus/VictoriaMetrics endpoint
-- `SLACK_WEBHOOK_URL` - Slack notification webhook
-- `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS` - Email config
+Configuration will be provided via an `env.example` file (with inline comments) if/when this service is implemented. Use the file as the source of truth for environment variables.
 
 ## Alert Rules
 

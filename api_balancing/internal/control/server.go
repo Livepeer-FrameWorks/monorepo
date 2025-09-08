@@ -2,26 +2,34 @@ package control
 
 import (
 	"context"
+	"crypto/tls"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net"
+	"os"
 	"strings"
 	"sync"
 	"time"
 
-	"frameworks/pkg/clips"
+	"frameworks/api_balancing/internal/state"
+	qmapi "frameworks/pkg/api/quartermaster"
+	qmclient "frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/dvr"
+	"frameworks/pkg/geoip"
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
-	"frameworks/pkg/validation"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+func streamCtx() context.Context { return context.Background() }
 
 // Registry holds active Helmsman control streams keyed by node_id
 type Registry struct {
@@ -36,10 +44,10 @@ type conn struct {
 }
 
 var registry *Registry
-var nodeService NodeMetricsProcessor
 var streamHealthHandler func(string, string, string, bool, map[string]interface{})
 var clipHashResolver func(string) (string, string, error)
 var db *sql.DB
+var quartermasterClient *qmclient.Client
 
 // Stream health tracking for DVR readiness
 var streamHealthMutex sync.RWMutex
@@ -58,6 +66,27 @@ type StreamHealthStatus struct {
 	LastUpdate    time.Time
 	SourceNodeID  string // Node ID where the stream originates
 	SourceBaseURL string // Base URL of source node
+}
+
+// GetStreamSource returns the source node and base URL for a given internal_name if known
+func GetStreamSource(internalName string) (nodeID string, baseURL string, ok bool) {
+	if s := state.DefaultManager().GetStreamState(internalName); s != nil {
+		nodeID = s.NodeID
+		if ns := state.DefaultManager().GetNodeState(nodeID); ns != nil {
+			baseURL = ns.BaseURL
+		}
+		if nodeID != "" {
+			return nodeID, baseURL, true
+		}
+	}
+
+	streamHealthMutex.RLock()
+	sh, exists := streamHealthMap[internalName]
+	streamHealthMutex.RUnlock()
+	if !exists {
+		return "", "", false
+	}
+	return sh.SourceNodeID, sh.SourceBaseURL, true
 }
 
 // NodeOutputs tracks the MistServer output configurations for each node
@@ -81,17 +110,12 @@ func SetClipHandlers(onProgress func(*pb.ClipProgress), onDone func(*pb.ClipDone
 
 // NodeMetricsProcessor interface for handling node metrics (implemented by handlers)
 type NodeMetricsProcessor interface {
-	ProcessNodeMetrics(nodeID, baseURL string, isHealthy bool, latitude, longitude *float64, location string, metrics *validation.FoghornNodeUpdate) error
+	ProcessNodeMetrics(nodeID, baseURL string, isHealthy bool, latitude, longitude *float64, location string, metrics *pb.NodeLifecycleUpdate) error
 }
 
 // Init initializes the global registry
 func Init(logger logging.Logger) {
 	registry = &Registry{conns: make(map[string]*conn), log: logger}
-}
-
-// SetNodeService sets the node metrics processor
-func SetNodeService(service NodeMetricsProcessor) {
-	nodeService = service
 }
 
 // SetDB sets the database connection for clip operations
@@ -108,6 +132,9 @@ func SetStreamHealthHandler(handler func(string, string, string, bool, map[strin
 func SetClipHashResolver(resolver func(string) (string, string, error)) {
 	clipHashResolver = resolver
 }
+
+// SetQuartermasterClient sets the Quartermaster client for edge enrollment and lookups
+func SetQuartermasterClient(c *qmclient.Client) { quartermasterClient = c }
 
 // Server implements HelmsmanControl
 type Server struct {
@@ -139,26 +166,137 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 			registry.conns[nodeID] = &conn{stream: stream, last: time.Now()}
 			registry.mu.Unlock()
 			registry.log.WithField("node_id", nodeID).Info("Helmsman registered")
-		case *pb.ControlMessage_NodeUpdate:
-			// Update heartbeat and process extended metrics
-			if nodeID != "" {
-				registry.mu.Lock()
-				if c := registry.conns[nodeID]; c != nil {
-					c.last = time.Now()
-				}
-				registry.mu.Unlock()
-
-				// Process extended node metrics
-				go processNodeUpdate(x.NodeUpdate, registry.log)
+			// Mark node healthy in unified state (baseURL unknown at register)
+			state.DefaultManager().SetNodeInfo(nodeID, "", true, nil, nil, "", "", nil)
+			var peerAddr string
+			if p, _ := peer.FromContext(stream.Context()); p != nil {
+				peerAddr = p.Addr.String()
 			}
+
+			// Fingerprint-based tenant resolution (pre-provisioned mappings only; no creation here)
+			tenantID := ""
+			canonicalNodeID := nodeID
+			{
+				// Build resolver request
+				host := ""
+				if md, ok := metadata.FromIncomingContext(stream.Context()); ok {
+					if fwd := md.Get("x-forwarded-for"); len(fwd) > 0 {
+						parts := strings.Split(fwd[0], ",")
+						if len(parts) > 0 {
+							host = strings.TrimSpace(parts[0])
+						}
+					}
+				}
+				if host == "" {
+					h, _, _ := net.SplitHostPort(peerAddr)
+					if h == "" {
+						h = peerAddr
+					}
+					host = h
+				}
+				var country, city string
+				var lat, lon float64
+				geoOnce.Do(func() { geoipReader = geoip.GetSharedReader() })
+				if geoipReader != nil {
+					if gd := geoipReader.Lookup(host); gd != nil {
+						country = gd.CountryCode
+						city = gd.City
+						lat = gd.Latitude
+						lon = gd.Longitude
+					}
+				}
+				fpReq := &qmapi.ResolveNodeFingerprintRequest{PeerIP: host, GeoCountry: country, GeoCity: city, GeoLatitude: lat, GeoLongitude: lon}
+				if x.Register != nil && x.Register.Fingerprint != nil {
+					fp := x.Register.Fingerprint
+					fpReq.LocalIPv4 = append(fpReq.LocalIPv4, fp.GetLocalIpv4()...)
+					fpReq.LocalIPv6 = append(fpReq.LocalIPv6, fp.GetLocalIpv6()...)
+					if fp.GetMacsSha256() != "" {
+						s := fp.GetMacsSha256()
+						fpReq.MacsSHA256 = &s
+					}
+					if fp.GetMachineIdSha256() != "" {
+						s := fp.GetMachineIdSha256()
+						fpReq.MachineIDSHA256 = &s
+					}
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				if resp, err := quartermasterClient.ResolveNodeFingerprint(ctx, fpReq); err == nil && resp != nil {
+					tenantID = resp.TenantID
+					if resp.CanonicalNodeID != "" {
+						canonicalNodeID = resp.CanonicalNodeID
+					}
+					registry.log.WithFields(logging.Fields{"node_id": canonicalNodeID, "tenant_id": tenantID}).Info("Resolved tenant via fingerprint")
+				}
+				cancel()
+			}
+
+			// Edge enrollment handshake: if enrollment token provided, register this node in Quartermaster
+			if tok := strings.TrimSpace(x.Register.GetEnrollmentToken()); tok != "" && quartermasterClient != nil {
+				// Parse client IP from forwarded metadata or peer address
+				host := ""
+				if md, ok := metadata.FromIncomingContext(stream.Context()); ok {
+					if fwd := md.Get("x-forwarded-for"); len(fwd) > 0 {
+						// Use first IP in list
+						parts := strings.Split(fwd[0], ",")
+						if len(parts) > 0 {
+							host = strings.TrimSpace(parts[0])
+						}
+					}
+				}
+				if host == "" {
+					h, _, _ := net.SplitHostPort(peerAddr)
+					if h == "" {
+						h = peerAddr
+					}
+					host = h
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				req := &qmapi.BootstrapEdgeNodeRequest{Token: tok, IPs: []string{host}}
+				// Include client-provided fingerprint to bind mapping at enrollment
+				if x.Register != nil && x.Register.Fingerprint != nil {
+					fp := x.Register.Fingerprint
+					if v := fp.GetLocalIpv4(); len(v) > 0 {
+						req.LocalIPv4 = append(req.LocalIPv4, v...)
+					}
+					if v := fp.GetLocalIpv6(); len(v) > 0 {
+						req.LocalIPv6 = append(req.LocalIPv6, v...)
+					}
+					if fp.GetMacsSha256() != "" {
+						s := fp.GetMacsSha256()
+						req.MacsSHA256 = &s
+					}
+					if fp.GetMachineIdSha256() != "" {
+						s := fp.GetMachineIdSha256()
+						req.MachineIDSHA256 = &s
+					}
+				}
+				if resp, err := quartermasterClient.BootstrapEdgeNode(ctx, req); err == nil && resp != nil {
+					if resp.NodeID != "" {
+						canonicalNodeID = resp.NodeID
+					}
+					tenantID = resp.TenantID
+					registry.log.WithFields(logging.Fields{"node_id": canonicalNodeID, "tenant_id": tenantID}).Info("Edge node enrolled via Quartermaster")
+				} else if err != nil {
+					registry.log.WithError(err).WithField("node_id", nodeID).Warn("Edge enrollment failed; continuing without mapping")
+				}
+			}
+
+			seed := composeConfigSeed(canonicalNodeID, x.Register.GetRoles(), peerAddr)
+			if tenantID != "" {
+				seed.TenantId = tenantID
+			}
+			_ = SendConfigSeed(nodeID, seed)
 		case *pb.ControlMessage_ClipProgress:
 			if clipProgressHandler != nil {
 				go clipProgressHandler(x.ClipProgress)
 			}
+			go handleClipProgress(x.ClipProgress, nodeID, registry.log)
 		case *pb.ControlMessage_ClipDone:
 			if clipDoneHandler != nil {
 				go clipDoneHandler(x.ClipDone)
 			}
+			go handleClipDone(x.ClipDone, nodeID, registry.log)
 		case *pb.ControlMessage_Heartbeat:
 			if nodeID != "" {
 				registry.mu.Lock()
@@ -166,22 +304,24 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 					c.last = time.Now()
 				}
 				registry.mu.Unlock()
+				// Refresh node health/last update
+				state.DefaultManager().SetNodeInfo(nodeID, "", true, nil, nil, "", "", nil)
 			}
-		case *pb.ControlMessage_StreamHealthUpdate:
-			// Handle stream health updates
-			go processStreamHealthUpdate(x.StreamHealthUpdate, registry.log)
 		case *pb.ControlMessage_DvrStartRequest:
 			// Handle DVR start requests from ingest Helmsman
 			go processDVRStartRequest(x.DvrStartRequest, nodeID, registry.log)
 		case *pb.ControlMessage_DvrProgress:
 			// Handle DVR progress updates from storage Helmsman
-			go processDVRProgress(x.DvrProgress, registry.log)
+			go processDVRProgress(x.DvrProgress, nodeID, registry.log)
 		case *pb.ControlMessage_DvrStopped:
 			// Handle DVR completion from storage Helmsman
-			go processDVRStopped(x.DvrStopped, registry.log)
+			go processDVRStopped(x.DvrStopped, nodeID, registry.log)
 		case *pb.ControlMessage_DvrReadyRequest:
 			// Handle DVR readiness check from storage Helmsman
 			go processDVRReadyRequest(x.DvrReadyRequest, nodeID, stream, registry.log)
+		case *pb.ControlMessage_MistTrigger:
+			// Handle MistServer trigger forwarding from Helmsman
+			go processMistTrigger(x.MistTrigger, nodeID, stream, registry.log)
 		}
 	}
 	if nodeID != "" {
@@ -238,13 +378,64 @@ func SendDVRStop(nodeID string, req *pb.DVRStopRequest) error {
 	return c.stream.Send(msg)
 }
 
+// StopDVRByInternalName finds an active DVR for a stream and sends a stop to its storage node
+func StopDVRByInternalName(internalName string, logger logging.Logger) {
+	if db == nil || internalName == "" {
+		return
+	}
+	var dvrHash, storageNodeID string
+	err := db.QueryRow(`
+        SELECT request_hash, COALESCE(storage_node_id,'')
+        FROM foghorn.dvr_requests
+        WHERE internal_name = $1 AND status IN ('requested','starting','recording')
+        ORDER BY created_at DESC
+        LIMIT 1`, internalName).Scan(&dvrHash, &storageNodeID)
+	if err != nil {
+		return
+	}
+	if storageNodeID == "" || dvrHash == "" {
+		return
+	}
+	_ = SendDVRStop(storageNodeID, &pb.DVRStopRequest{DvrHash: dvrHash, RequestId: dvrHash})
+	_, _ = db.Exec(`UPDATE foghorn.dvr_requests SET status = 'stopping', updated_at = NOW() WHERE request_hash = $1`, dvrHash)
+}
+
 // StartGRPCServer starts the control gRPC server on the given addr (e.g., ":18009")
 func StartGRPCServer(addr string, logger logging.Logger) (*grpc.Server, error) {
 	lis, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, err
 	}
-	srv := grpc.NewServer()
+
+	// Configure TLS based on environment variables
+	var opts []grpc.ServerOption
+	if os.Getenv("GRPC_USE_TLS") == "true" {
+		certFile := os.Getenv("GRPC_TLS_CERT_PATH")
+		keyFile := os.Getenv("GRPC_TLS_KEY_PATH")
+
+		if certFile == "" || keyFile == "" {
+			return nil, fmt.Errorf("GRPC_TLS_CERT_PATH and GRPC_TLS_KEY_PATH must be set when GRPC_USE_TLS=true")
+		}
+
+		cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load TLS certificates: %w", err)
+		}
+
+		creds := credentials.NewTLS(&tls.Config{
+			Certificates: []tls.Certificate{cert},
+		})
+		opts = append(opts, grpc.Creds(creds))
+
+		logger.WithFields(logging.Fields{
+			"cert_file": certFile,
+			"key_file":  keyFile,
+		}).Info("Starting gRPC server with TLS")
+	} else {
+		logger.Info("Starting gRPC server with insecure connection")
+	}
+
+	srv := grpc.NewServer(opts...)
 	pb.RegisterHelmsmanControlServer(srv, &Server{})
 	go func() {
 		if err := srv.Serve(lis); err != nil {
@@ -255,117 +446,38 @@ func StartGRPCServer(addr string, logger logging.Logger) (*grpc.Server, error) {
 }
 
 // processNodeUpdate converts gRPC NodeUpdate to validation.FoghornNodeUpdate and forwards to node service
-func processNodeUpdate(update *pb.NodeUpdate, logger logging.Logger) {
-	if nodeService == nil {
-		logger.Warn("NodeService not set, dropping NodeUpdate")
-		return
-	}
-
-	// Convert protobuf message to validation types
-	nodeMetrics := &validation.FoghornNodeUpdate{
-		CPU:        float64(update.GetCpuTenths()) / 10.0, // Convert tenths to percentage
-		RAMMax:     float64(update.GetRamMax()),
-		RAMCurrent: float64(update.GetRamCurrent()),
-		UpSpeed:    float64(update.GetUpSpeed()),
-		DownSpeed:  float64(update.GetDownSpeed()),
-		BWLimit:    float64(update.GetBwLimit()),
-		Location: validation.FoghornLocationData{
-			Latitude:  update.GetLatitude(),
-			Longitude: update.GetLongitude(),
-			Name:      update.GetLocation(),
-		},
-	}
-
-	// Convert capabilities
-	if caps := update.GetCapabilities(); caps != nil {
-		nodeMetrics.Capabilities = validation.FoghornNodeCapabilities{
-			Ingest:     caps.GetIngest(),
-			Edge:       caps.GetEdge(),
-			Storage:    caps.GetStorage(),
-			Processing: caps.GetProcessing(),
-			Roles:      caps.GetRoles(),
-		}
-	}
-
-	// Convert storage info
-	if storage := update.GetStorage(); storage != nil {
-		nodeMetrics.Storage = validation.FoghornStorageInfo{
-			LocalPath: storage.GetLocalPath(),
-			S3Bucket:  storage.GetS3Bucket(),
-			S3Prefix:  storage.GetS3Prefix(),
-		}
-	}
-
-	// Convert limits
-	if limits := update.GetLimits(); limits != nil {
-		nodeMetrics.Limits = &validation.FoghornNodeLimits{
-			MaxTranscodes:        int(limits.GetMaxTranscodes()),
-			StorageCapacityBytes: limits.GetStorageCapacityBytes(),
-			StorageUsedBytes:     limits.GetStorageUsedBytes(),
-		}
-	}
-
-	// Convert stream metrics
-	nodeMetrics.Streams = make(map[string]validation.FoghornStreamData)
+func processNodeUpdate(update *pb.NodeLifecycleUpdate, logger logging.Logger) {
+	// Update stream stats per stream
 	for streamName, streamData := range update.GetStreams() {
-		nodeMetrics.Streams[streamName] = validation.FoghornStreamData{
-			Total:     streamData.GetTotal(),
-			Inputs:    streamData.GetInputs(),
-			BytesUp:   streamData.GetBytesUp(),
-			BytesDown: streamData.GetBytesDown(),
-			Bandwidth: streamData.GetBandwidth(),
-		}
+		state.DefaultManager().UpdateNodeStats(streamName, update.GetNodeId(), int(streamData.GetTotal()), int(streamData.GetInputs()), int64(streamData.GetBytesUp()), int64(streamData.GetBytesDown()))
 	}
 
-	// Convert artifacts (using secure clip hashes)
-	for _, artifact := range update.GetArtifacts() {
-		// Use stream_name/clip_hash as ID (no tenant info exposed)
-		artifactID := artifact.GetStreamName() + "/" + artifact.GetClipHash()
+	// Apply full node lifecycle with write-through
+	_ = state.DefaultManager().ApplyNodeLifecycle(streamCtx(), update)
 
-		nodeMetrics.Artifacts = append(nodeMetrics.Artifacts, validation.FoghornStoredArtifact{
-			ID:        artifactID,
-			Type:      "clip", // Default to clip type
-			Path:      artifact.GetFilePath(),
-			URL:       artifact.GetS3Url(),
-			SizeBytes: artifact.GetSizeBytes(),
-			CreatedAt: artifact.GetCreatedAt(),
-			Format:    artifact.GetFormat(),
-		})
-	}
-
-	// Extract location pointers
-	var latitude, longitude *float64
-	if update.GetLatitude() != 0 {
-		lat := update.GetLatitude()
-		latitude = &lat
-	}
-	if update.GetLongitude() != 0 {
-		lon := update.GetLongitude()
-		longitude = &lon
-	}
-
-	// Track node outputs for DTSC URI resolution
+	// Track node outputs for DTSC URI resolution and update unified node state
 	if outputsJSON := update.GetOutputsJson(); outputsJSON != "" {
 		go updateNodeOutputs(update.GetNodeId(), update.GetBaseUrl(), outputsJSON, logger)
 	}
 
-	// Forward to node service
-	if err := nodeService.ProcessNodeMetrics(
-		update.GetNodeId(),
-		update.GetBaseUrl(),
-		update.GetIsHealthy(),
-		latitude,
-		longitude,
-		update.GetLocation(),
-		nodeMetrics,
-	); err != nil {
-		logger.WithFields(logging.Fields{
-			"node_id": update.GetNodeId(),
-			"error":   err,
-		}).Error("Failed to process node metrics via gRPC")
-	} else {
-		logger.WithField("node_id", update.GetNodeId()).Debug("Processed node metrics via gRPC")
-	}
+	// Trigger sidecar to perform immediate JSON metrics poll & upload
+	go func() {
+		registry.mu.RLock()
+		c := registry.conns[update.GetNodeId()]
+		registry.mu.RUnlock()
+		if c == nil {
+			return
+		}
+		seed := &pb.MistTrigger{
+			TriggerType: "seed_poll",
+			NodeId:      update.GetNodeId(),
+			Timestamp:   time.Now().Unix(),
+			Blocking:    false,
+			RequestId:   fmt.Sprintf("seed-%d", time.Now().UnixNano()),
+		}
+		msg := &pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_MistTrigger{MistTrigger: seed}}
+		_ = c.stream.Send(msg)
+	}()
 }
 
 // Helpers
@@ -373,7 +485,7 @@ func processNodeUpdate(update *pb.NodeUpdate, logger logging.Logger) {
 var ErrNotConnected = status.Error(codes.Unavailable, "node not connected")
 
 // handleClipProgress processes clip progress updates from Helmsman nodes
-func handleClipProgress(progress *pb.ClipProgress, logger logging.Logger) {
+func handleClipProgress(progress *pb.ClipProgress, nodeID string, logger logging.Logger) {
 	requestID := progress.GetRequestId()
 	percent := progress.GetPercent()
 	message := progress.GetMessage()
@@ -384,39 +496,11 @@ func handleClipProgress(progress *pb.ClipProgress, logger logging.Logger) {
 		"message":    message,
 	}).Debug("Clip progress update")
 
-	if db == nil {
-		logger.Warn("Database not set, cannot update clip progress")
-		return
-	}
-
-	// Update clips table with processing progress
-	// Note: We track by request_id which was stored during HandleCreateClip
-	_, err := db.Exec(`
-		UPDATE foghorn.clips 
-		SET status = CASE 
-			WHEN $2 = 100 THEN 'processing'
-			ELSE 'processing'
-		END,
-		updated_at = NOW()
-		WHERE request_id = $1`,
-		requestID, percent)
-
-	if err != nil {
-		logger.WithFields(logging.Fields{
-			"request_id": requestID,
-			"error":      err,
-		}).Error("Failed to update clip progress in database")
-		return
-	}
-
-	logger.WithFields(logging.Fields{
-		"request_id": requestID,
-		"percent":    percent,
-	}).Debug("Updated clip progress in database")
+	_ = state.DefaultManager().ApplyClipProgress(streamCtx(), requestID, percent, message, nodeID)
 }
 
 // handleClipDone processes clip completion notifications from Helmsman nodes
-func handleClipDone(done *pb.ClipDone, logger logging.Logger) {
+func handleClipDone(done *pb.ClipDone, nodeID string, logger logging.Logger) {
 	requestID := done.GetRequestId()
 	filePath := done.GetFilePath()
 	sizeBytes := done.GetSizeBytes()
@@ -431,96 +515,7 @@ func handleClipDone(done *pb.ClipDone, logger logging.Logger) {
 		"error":      errorMsg,
 	}).Info("Clip processing completed")
 
-	if db == nil {
-		logger.Warn("Database not set, cannot update clip completion")
-		return
-	}
-
-	// Update clips table with final status and file info
-	var clipStatus clips.ClipStatus
-	if status == "success" {
-		clipStatus = clips.ClipStatusReady
-	} else {
-		clipStatus = clips.ClipStatusFailed
-	}
-
-	_, err := db.Exec(`
-		UPDATE foghorn.clips 
-		SET status = $1, 
-		    storage_path = $2,
-		    size_bytes = $3,
-		    error_message = NULLIF($4, ''),
-		    updated_at = NOW()
-		WHERE request_id = $5`,
-		clipStatus, filePath, int64(sizeBytes), errorMsg, requestID)
-
-	if err != nil {
-		logger.WithFields(logging.Fields{
-			"request_id": requestID,
-			"error":      err,
-		}).Error("Failed to update clip completion in database")
-		return
-	}
-
-	// Update artifact registry if successful
-	if status == "success" && filePath != "" {
-		// Extract node_id from the request context or stored mapping
-		// For now, we'll skip this as we don't have the node context here
-		// This could be enhanced to track which node processed which request
-		logger.WithField("request_id", requestID).Debug("Clip marked as ready")
-	} else {
-		logger.WithFields(logging.Fields{
-			"request_id": requestID,
-			"error":      errorMsg,
-		}).Warn("Clip processing failed")
-	}
-}
-
-// processStreamHealthUpdate processes stream health updates from Helmsman nodes
-func processStreamHealthUpdate(update *pb.StreamHealthUpdate, logger logging.Logger) {
-	if streamHealthHandler == nil {
-		logger.Warn("StreamHealthHandler not set, dropping StreamHealthUpdate")
-		return
-	}
-
-	// Convert protobuf details to map
-	details := make(map[string]interface{})
-	bufferState := ""
-	status := ""
-
-	if update.Details != nil {
-		details["buffer_state"] = update.Details.BufferState
-		details["status"] = update.Details.Status
-		details["stream_details"] = update.Details.StreamDetails
-		bufferState = update.Details.BufferState
-		status = update.Details.Status
-	}
-
-	// Update stream health tracking for DVR readiness
-	go updateStreamHealthTracking(
-		update.GetInternalName(),
-		update.GetNodeId(),
-		update.GetIsHealthy(),
-		bufferState,
-		status,
-		logger,
-	)
-
-	// Call the handler with converted parameters
-	streamHealthHandler(
-		update.GetNodeId(),
-		update.GetStreamName(),
-		update.GetInternalName(),
-		update.GetIsHealthy(),
-		details,
-	)
-
-	logger.WithFields(logging.Fields{
-		"node_id":       update.GetNodeId(),
-		"stream_name":   update.GetStreamName(),
-		"internal_name": update.GetInternalName(),
-		"is_healthy":    update.GetIsHealthy(),
-	}).Debug("Processed stream health update via gRPC")
+	_ = state.DefaultManager().ApplyClipDone(streamCtx(), requestID, status, filePath, sizeBytes, errorMsg, nodeID)
 }
 
 // processDVRStartRequest handles DVR start requests from ingest Helmsman
@@ -542,6 +537,12 @@ func processDVRStartRequest(req *pb.DVRStartRequest, nodeID string, logger loggi
 		"tenant_id":     req.GetTenantId(),
 		"node_id":       nodeID,
 	}).Info("Processing DVR start request")
+
+	// Tag ingest node stream instance with DVR requested
+	state.DefaultManager().UpdateStreamInstanceInfo(req.GetInternalName(), nodeID, map[string]interface{}{
+		"dvr_status": "requested",
+		"dvr_hash":   dvrHash,
+	})
 
 	// Store minimal state in database
 	_, err := db.Exec(`
@@ -575,19 +576,9 @@ func processDVRStartRequest(req *pb.DVRStartRequest, nodeID string, logger loggi
 		return
 	}
 
-	// Construct source DTSC URL from ingest node
-	ingestNodeURL, err := getNodeBaseURL(nodeID)
-	if err != nil {
-		logger.WithFields(logging.Fields{
-			"dvr_hash": dvrHash,
-			"node_id":  nodeID,
-			"error":    err,
-		}).Error("Failed to get ingest node URL")
-		return
-	}
+	// Construct source DTSC URL from ingest node outputs
 
-	sourceDTSCURL := ingestNodeURL + "/" + req.GetInternalName() + ".dtsc"
-
+	sourceDTSCURL := BuildDTSCURI(nodeID, req.GetInternalName(), true, logger)
 	// Create enhanced DVR request for storage node
 	enhancedReq := &pb.DVRStartRequest{
 		DvrHash:       dvrHash,
@@ -632,10 +623,17 @@ func processDVRStartRequest(req *pb.DVRStartRequest, nodeID string, logger loggi
 		"storage_node_id": storageNodeID,
 		"source_url":      sourceDTSCURL,
 	}).Info("DVR start request forwarded to storage node")
+
+	// Tag storage node stream instance with start info
+	state.DefaultManager().UpdateStreamInstanceInfo(req.GetInternalName(), storageNodeID, map[string]interface{}{
+		"dvr_status":     "starting",
+		"dvr_hash":       dvrHash,
+		"dvr_source_uri": sourceDTSCURL,
+	})
 }
 
 // processDVRProgress handles DVR progress updates from storage Helmsman
-func processDVRProgress(progress *pb.DVRProgress, logger logging.Logger) {
+func processDVRProgress(progress *pb.DVRProgress, storageNodeID string, logger logging.Logger) {
 	dvrHash := progress.GetDvrHash()
 	status := progress.GetStatus()
 	segmentCount := progress.GetSegmentCount()
@@ -650,37 +648,11 @@ func processDVRProgress(progress *pb.DVRProgress, logger logging.Logger) {
 		"message":       message,
 	}).Debug("DVR progress update")
 
-	if db == nil {
-		logger.Warn("Database not set, cannot update DVR progress")
-		return
-	}
-
-	// Update DVR request with progress
-	_, err := db.Exec(`
-		UPDATE foghorn.dvr_requests 
-		SET status = $2,
-		    size_bytes = $3,
-		    updated_at = NOW()
-		WHERE request_hash = $1`,
-		dvrHash, status, sizeBytes)
-
-	if err != nil {
-		logger.WithFields(logging.Fields{
-			"dvr_hash": dvrHash,
-			"error":    err,
-		}).Error("Failed to update DVR progress in database")
-		return
-	}
-
-	logger.WithFields(logging.Fields{
-		"dvr_hash":      dvrHash,
-		"status":        status,
-		"segment_count": segmentCount,
-	}).Debug("Updated DVR progress in database")
+	_ = state.DefaultManager().ApplyDVRProgress(streamCtx(), dvrHash, status, uint64(sizeBytes), uint32(segmentCount), storageNodeID)
 }
 
 // processDVRStopped handles DVR completion from storage Helmsman
-func processDVRStopped(stopped *pb.DVRStopped, logger logging.Logger) {
+func processDVRStopped(stopped *pb.DVRStopped, storageNodeID string, logger logging.Logger) {
 	dvrHash := stopped.GetDvrHash()
 	status := stopped.GetStatus()
 	errorMsg := stopped.GetError()
@@ -697,52 +669,11 @@ func processDVRStopped(stopped *pb.DVRStopped, logger logging.Logger) {
 		"error":            errorMsg,
 	}).Info("DVR recording completed")
 
-	if db == nil {
-		logger.Warn("Database not set, cannot update DVR completion")
-		return
-	}
-
-	// Determine final status
-	var finalStatus string
+	finalStatus := "failed"
 	if status == "success" {
 		finalStatus = "completed"
-	} else {
-		finalStatus = "failed"
 	}
-
-	// Update DVR request with final status and details
-	_, err := db.Exec(`
-		UPDATE foghorn.dvr_requests 
-		SET status = $1,
-		    ended_at = NOW(),
-		    duration_seconds = $2,
-		    size_bytes = $3,
-		    manifest_path = $4,
-		    error_message = NULLIF($5, ''),
-		    updated_at = NOW()
-		WHERE request_hash = $6`,
-		finalStatus, durationSeconds, sizeBytes, manifestPath, errorMsg, dvrHash)
-
-	if err != nil {
-		logger.WithFields(logging.Fields{
-			"dvr_hash": dvrHash,
-			"error":    err,
-		}).Error("Failed to update DVR completion in database")
-		return
-	}
-
-	if status == "success" && manifestPath != "" {
-		logger.WithFields(logging.Fields{
-			"dvr_hash":      dvrHash,
-			"manifest_path": manifestPath,
-			"size_bytes":    sizeBytes,
-		}).Info("DVR recording completed successfully")
-	} else {
-		logger.WithFields(logging.Fields{
-			"dvr_hash": dvrHash,
-			"error":    errorMsg,
-		}).Warn("DVR recording failed")
-	}
+	_ = state.DefaultManager().ApplyDVRStopped(streamCtx(), dvrHash, finalStatus, int64(durationSeconds), uint64(sizeBytes), manifestPath, errorMsg, storageNodeID)
 }
 
 // findStorageNodeForDVR finds an available storage node with DVR capabilities for the given tenant
@@ -919,18 +850,17 @@ func getNodeIDFromLoadBalancer(baseURL string) string {
 
 // updateStreamHealthTracking updates the stream health map for DVR readiness checks
 func updateStreamHealthTracking(internalName, nodeID string, isHealthy bool, bufferState, status string, logger logging.Logger) {
-	streamHealthMutex.Lock()
-	defer streamHealthMutex.Unlock()
-
-	// Get DTSC output URI from node configuration
-	sourceBaseURL := getDTSCOutputURI(nodeID, logger)
-	if sourceBaseURL == "" {
-		logger.WithFields(logging.Fields{
-			"internal_name": internalName,
-			"node_id":       nodeID,
-		}).Debug("Could not resolve DTSC output URI for stream health tracking")
+	// Reflect into unified state manager
+	if status == "live" {
+		_ = state.DefaultManager().UpdateStreamFromBuffer(internalName, internalName, nodeID, "", bufferState, "")
+	} else if status == "offline" {
+		state.DefaultManager().SetOffline(internalName, nodeID)
 	}
 
+	// Maintain legacy map temporarily for callers still reading it
+	streamHealthMutex.Lock()
+	// Get DTSC output URI from node configuration
+	sourceBaseURL := getDTSCOutputURI(nodeID, logger)
 	streamHealthMap[internalName] = &StreamHealthStatus{
 		InternalName:  internalName,
 		IsHealthy:     isHealthy,
@@ -940,14 +870,7 @@ func updateStreamHealthTracking(internalName, nodeID string, isHealthy bool, buf
 		SourceNodeID:  nodeID,
 		SourceBaseURL: sourceBaseURL,
 	}
-
-	logger.WithFields(logging.Fields{
-		"internal_name": internalName,
-		"node_id":       nodeID,
-		"is_healthy":    isHealthy,
-		"buffer_state":  bufferState,
-		"status":        status,
-	}).Debug("Updated stream health tracking")
+	streamHealthMutex.Unlock()
 }
 
 // processDVRReadyRequest handles DVR readiness checks from storage Helmsman
@@ -1037,7 +960,13 @@ func processDVRReadyRequest(req *pb.DVRReadyRequest, requestingNodeID string, st
 	}
 
 	// Stream is ready! Build source URI and potentially mutate config
-	sourceURI := streamHealth.SourceBaseURL + "/" + internalName + ".dtsc"
+	sourceURI := BuildDTSCURI(streamHealth.SourceNodeID, internalName, true, logger)
+
+	// Tag storage node (requesting node) instance as ready with source URI
+	state.DefaultManager().UpdateStreamInstanceInfo(internalName, requestingNodeID, map[string]interface{}{
+		"dvr_status":     "ready",
+		"dvr_source_uri": sourceURI,
+	})
 
 	// Get original config from database and potentially enhance it
 	var configBytes []byte
@@ -1131,6 +1060,9 @@ func updateNodeOutputs(nodeID, baseURL, outputsJSON string, logger logging.Logge
 		LastUpdate:  time.Now(),
 	}
 
+	// also reflect in unified node state
+	state.DefaultManager().SetNodeInfo(nodeID, baseURL, true, nil, nil, "", outputsJSON, outputs)
+
 	logger.WithFields(logging.Fields{
 		"node_id":  nodeID,
 		"base_url": baseURL,
@@ -1195,11 +1127,210 @@ func getDTSCOutputURI(nodeID string, logger logging.Logger) string {
 	return baseDTSCURI
 }
 
+// GetDTSCBase returns the DTSC base URI (e.g., dtsc://HOST:PORT) for a node.
+func GetDTSCBase(nodeID string, logger logging.Logger) string {
+	return getDTSCOutputURI(nodeID, logger)
+}
+
+// BuildDTSCURI returns a full DTSC URI for a stream on a node.
+// When live is true, it prefixes the stream name with "live+".
+func BuildDTSCURI(nodeID, internalName string, live bool, logger logging.Logger) string {
+	base := GetDTSCBase(nodeID, logger)
+	if base == "" || internalName == "" {
+		return ""
+	}
+	name := internalName
+	if live {
+		name = "live+" + internalName
+	}
+	base = strings.TrimSuffix(base, "/")
+	return base + "/" + name
+}
+
 // GetNodeOutputs returns the outputs for a given node ID (for viewer endpoint resolution)
 func GetNodeOutputs(nodeID string) (*NodeOutputs, bool) {
+	ns := state.DefaultManager().GetNodeState(nodeID)
+	if ns != nil && (ns.Outputs != nil || ns.OutputsRaw != "") {
+		return &NodeOutputs{
+			NodeID:      nodeID,
+			BaseURL:     ns.BaseURL,
+			OutputsJSON: ns.OutputsRaw,
+			Outputs:     ns.Outputs,
+			LastUpdate:  ns.LastUpdate,
+		}, true
+	}
+
 	nodeOutputsMutex.RLock()
 	defer nodeOutputsMutex.RUnlock()
 
 	outputs, exists := nodeOutputsMap[nodeID]
 	return outputs, exists
+}
+
+// Global handlers set by handlers package for trigger processing
+var mistTriggerProcessor MistTriggerProcessor
+
+// MistTriggerProcessor interface for handling MistServer triggers
+type MistTriggerProcessor interface {
+	ProcessTrigger(triggerType string, rawPayload []byte, nodeID string) (string, bool, error)
+	ProcessTypedTrigger(trigger *pb.MistTrigger) (string, bool, error)
+}
+
+// SetMistTriggerProcessor sets the trigger processor (called by handlers package)
+func SetMistTriggerProcessor(processor MistTriggerProcessor) {
+	mistTriggerProcessor = processor
+}
+
+// processMistTrigger processes typed MistServer triggers forwarded from Helmsman
+func processMistTrigger(trigger *pb.MistTrigger, nodeID string, stream pb.HelmsmanControl_ConnectServer, logger logging.Logger) {
+	triggerType := trigger.GetTriggerType()
+	requestID := trigger.GetRequestId()
+	blocking := trigger.GetBlocking()
+
+	logger.WithFields(logging.Fields{
+		"trigger_type": triggerType,
+		"request_id":   requestID,
+		"node_id":      nodeID,
+		"blocking":     blocking,
+	}).Debug("Processing typed MistServer trigger")
+
+	if mistTriggerProcessor == nil {
+		logger.Error("MistTriggerProcessor not set, cannot process triggers")
+		if blocking {
+			// Send error response for blocking triggers
+			response := &pb.MistTriggerResponse{
+				RequestId: requestID,
+				Response:  "",
+				Abort:     true,
+			}
+			sendMistTriggerResponse(stream, response, logger)
+		}
+		return
+	}
+
+	// Process the typed trigger directly through the handlers package
+	responseText, shouldAbort, err := mistTriggerProcessor.ProcessTypedTrigger(trigger)
+	if err != nil {
+		logger.WithFields(logging.Fields{
+			"trigger_type": triggerType,
+			"request_id":   requestID,
+			"error":        err,
+		}).Error("Failed to process MistServer trigger")
+
+		if blocking {
+			// Send error response for blocking triggers
+			response := &pb.MistTriggerResponse{
+				RequestId: requestID,
+				Response:  "",
+				Abort:     true,
+			}
+			sendMistTriggerResponse(stream, response, logger)
+		}
+		return
+	}
+
+	// For non-blocking triggers, we're done
+	if !blocking {
+		logger.WithFields(logging.Fields{
+			"trigger_type": triggerType,
+			"request_id":   requestID,
+		}).Debug("Successfully processed non-blocking trigger")
+		return
+	}
+
+	// For blocking triggers, send the response back to Helmsman
+	response := &pb.MistTriggerResponse{
+		RequestId: requestID,
+		Response:  responseText,
+		Abort:     shouldAbort,
+	}
+
+	sendMistTriggerResponse(stream, response, logger)
+
+	logger.WithFields(logging.Fields{
+		"trigger_type": triggerType,
+		"request_id":   requestID,
+		"response":     responseText,
+		"abort":        shouldAbort,
+	}).Debug("Sent MistTrigger response")
+}
+
+// sendMistTriggerResponse sends a MistTriggerResponse back to Helmsman
+func sendMistTriggerResponse(stream pb.HelmsmanControl_ConnectServer, response *pb.MistTriggerResponse, logger logging.Logger) {
+	msg := &pb.ControlMessage{
+		SentAt:  timestamppb.Now(),
+		Payload: &pb.ControlMessage_MistTriggerResponse{MistTriggerResponse: response},
+	}
+
+	if err := stream.Send(msg); err != nil {
+		logger.WithFields(logging.Fields{
+			"request_id": response.RequestId,
+			"error":      err,
+		}).Error("Failed to send MistTrigger response")
+	}
+}
+
+// Config seed composition and sending
+var geoOnce sync.Once
+var geoipReader *geoip.Reader
+
+func composeConfigSeed(nodeID string, _ []string, peerAddr string) *pb.ConfigSeed {
+	var lat, lon float64
+	var loc string
+
+	geoOnce.Do(func() {
+		geoipReader = geoip.GetSharedReader()
+	})
+
+	if geoipReader != nil {
+		if gd := geoipReader.Lookup(peerAddr); gd != nil {
+			lat = gd.Latitude
+			lon = gd.Longitude
+			if gd.City != "" {
+				loc = gd.City
+			} else if gd.CountryName != "" {
+				loc = gd.CountryName
+			}
+		}
+	}
+
+	templates := []*pb.StreamTemplate{
+		{
+			Id:    "live",
+			Def:   &pb.StreamDef{Name: "live+$", Realtime: true, StopSessions: false, Tags: []string{"live"}},
+			Roles: []string{"ingest", "edge"},
+			Caps:  []string{"ingest", "edge"},
+		},
+		{
+			Id:    "vod",
+			Def:   &pb.StreamDef{Name: "vod+$", Realtime: false, StopSessions: false, Tags: []string{"vod"}},
+			Roles: []string{"edge", "storage"},
+			Caps:  []string{"edge", "storage"},
+		},
+	}
+
+	return &pb.ConfigSeed{
+		NodeId:       nodeID,
+		Latitude:     lat,
+		Longitude:    lon,
+		LocationName: loc,
+		Templates:    templates,
+	}
+}
+
+func SendConfigSeed(nodeID string, seed *pb.ConfigSeed) error {
+	if seed == nil {
+		return fmt.Errorf("nil ConfigSeed")
+	}
+	registry.mu.RLock()
+	c := registry.conns[nodeID]
+	registry.mu.RUnlock()
+	if c == nil {
+		return ErrNotConnected
+	}
+	msg := &pb.ControlMessage{
+		Payload: &pb.ControlMessage_ConfigSeed{ConfigSeed: seed},
+		SentAt:  timestamppb.Now(),
+	}
+	return c.stream.Send(msg)
 }

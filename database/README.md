@@ -2,7 +2,7 @@
 
 This directory contains the database schema and initialization scripts for the FrameWorks platform.
 
-## 🚀 Quick Setup
+## Quick Setup
 
 FrameWorks uses:
 - PostgreSQL for local development (port 5432)
@@ -133,7 +133,7 @@ GRANT ALL ON frameworks.* TO frameworks;
 cat database/init_clickhouse_periscope.sql | clickhouse-client --host localhost --port 8123 --user frameworks --password frameworks_dev
 ```
 
-## 🔧 Configuration
+## Configuration
 
 ### Environment Variables
 
@@ -183,7 +183,7 @@ services:
       - "9000:9000"   # Native interface
 ```
 
-## 📊 Database Schema
+## Database Schema
 
 ### PostgreSQL/YugabyteDB Schema (State & Configuration)
 
@@ -251,7 +251,7 @@ Notes:
 - Access: demo tenant granted to `central-primary`
 - Stream: a single demo stream may be created via `create_user_stream`
 
-## 🔍 Verification
+## Verification
 
 ### Test YugabyteDB Connection
 
@@ -279,7 +279,7 @@ clickhouse-client --host localhost --port 8123 --user frameworks --password fram
 clickhouse-client --host localhost --port 8123 --user frameworks --password frameworks_dev -q "SHOW MATERIALIZED VIEWS FROM frameworks;"
 ```
 
-## 🛠️ Troubleshooting
+## Troubleshooting
 
 ### YugabyteDB Issues
 
@@ -325,7 +325,7 @@ curl "http://localhost:8123/?query=SELECT%201"
 clickhouse-client --host localhost --port 8123 --user frameworks --password frameworks_dev -q "SHOW GRANTS"
 ```
 
-## 🔒 Security Best Practices
+## Security Best Practices
 
 1. **Use Strong Passwords**: Never use default passwords in production
 2. **Limit User Privileges**: Users should only have access to their specific databases
@@ -333,7 +333,7 @@ clickhouse-client --host localhost --port 8123 --user frameworks --password fram
 4. **Network Security**: Restrict database access to necessary hosts only
 5. **Regular Backups**: Set up automated database backups for both systems
 
-## 📝 Production Deployment
+## Production Deployment
 
 ### Secure Password Generation
 
@@ -363,13 +363,13 @@ psql_dump -h localhost -p 5432 -U frameworks_user -d frameworks > frameworks_bac
 clickhouse-client --host localhost --port 8123 --user frameworks --password frameworks_dev -q "BACKUP TABLE frameworks.* TO '/backup/clickhouse/'"
 ```
 
-## 🐳 Docker Integration
+## Docker Integration
 
 The database initialization works seamlessly with Docker Compose. The initialization scripts will be automatically executed when the containers start for the first time.
 
 Make sure your `docker-compose.yml` has the correct environment variables and volume mounts as shown in the Configuration section above.
 
-## 📞 Support
+## Support
 
 If you encounter issues with database setup:
 
@@ -381,5 +381,3 @@ If you encounter issues with database setup:
 6. Test ClickHouse connection: `curl "http://localhost:8123/?query=SELECT%201"`
 
 ---
-
-**Built with ❤️ by the FrameWorks team** 

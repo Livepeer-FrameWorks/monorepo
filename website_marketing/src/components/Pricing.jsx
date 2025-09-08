@@ -1,7 +1,18 @@
 import { motion } from 'framer-motion'
 import { Link } from 'react-router-dom'
 import config from '../config'
-import ExternalLinkIcon from './ExternalLinkIcon'
+import InfoTooltip from './InfoTooltip'
+import SavingsCalculator from './SavingsCalculator'
+import React from 'react'
+import {
+  FilmIcon,
+  CpuChipIcon,
+  VideoCameraIcon,
+  CloudIcon,
+  BuildingOfficeIcon,
+  ArrowTopRightOnSquareIcon,
+  // CheckIcon
+} from '@heroicons/react/24/outline'
 
 const Pricing = () => {
   // Free tier - displayed prominently at top
@@ -9,50 +20,44 @@ const Pricing = () => {
     name: "Free Tier",
     price: "Free",
     period: "",
-    description: "Self-hosted features with shared pool access",
+    description: "Self‑hosted features with best‑effort shared demo pool",
     features: [
-      "All self-hosted features",
-      "Shared bandwidth pool",
-      "Transcoded streams via Livepeer network",
+      "All self‑hosted features",
+      "Best‑effort shared bandwidth during beta",
+      "Livepeer‑backed compute",
       "Community support",
       "Stream dashboard",
       "Basic analytics"
     ],
     limitations: [
-      "No subdomain",
-      "No hosted load balancer",
-      "No AI processing or multi-stream compositing",
-      "FrameWorks watermarking in player"
+      "Self‑host only (no SLA)",
+      "No GPU hours",
+      "Watermarked playback in demo pool"
     ],
     cta: "Start Free",
     ctaLink: config.appUrl,
     popular: true,
-    badge: "Most Popular"
+    badge: "No Surprise Bills"
   }
 
   // Main paid tiers - displayed in a row
   const paidTiers = [
     {
       name: "Supporter",
-      price: "€50",
+      price: "€79",
       period: "/month",
-      dailyCost: "~€1.66 per day",
-      description: "Enhanced features and processing access",
+      dailyCost: "~€2.63/day",
+      description: "Starter allowances with hosted LB + subdomain",
       features: [
-        "Everything in Free tier",
-        "~100-250 Mbps sustained bandwidth",
-        "Custom subdomain (yourname.frameworks.network)",
+        <span key="delivery">150,000 delivered minutes included <InfoTooltip>Overage €0.00049/min</InfoTooltip></span>,
+        <span key="gpu">10 GPU‑hours (shared) <InfoTooltip>Shared GPU fair‑use during beta</InfoTooltip></span>,
         "Hosted load balancer",
-        "Calendar integration",
-        "Stream scheduling & automation",
-        "Telemetry & monitoring of self-hosted instances",
-        "90-day analytics retention",
-        "Remove watermarking",
-        "Transparent usage reporting and limits"
+        "Custom subdomain (*.frameworks.network)",
+        "Transparent usage reporting"
       ],
       limitations: [
-        "Suitable for ~100-300 concurrent viewers",
-        "No service level agreement"
+        "Suitable for ~100–300 concurrent viewers (adaptive)",
+        "Best‑effort; no SLA during beta"
       ],
       cta: "Get Started",
       ctaLink: config.appUrl,
@@ -60,45 +65,40 @@ const Pricing = () => {
     },
     {
       name: "Developer",
-      price: "€250",
+      price: "€249",
       period: "/month",
-      dailyCost: "~€8.33 per day",
-      description: "Enhanced capacity for development teams",
+      dailyCost: "~€8.30/day",
+      description: "Bigger allowances + shared GPU priority",
       features: [
-        "Everything in Supporter tier",
-        "~500 Mbps - 1 Gbps sustained bandwidth",
-        "GPU allocation for AI processing and multi-stream compositing",
+        <span key="delivery">500,000 delivered minutes included <InfoTooltip>Overage €0.00047/min</InfoTooltip></span>,
+        <span key="gpu">50 GPU‑hours (shared, priority) <InfoTooltip>Shared GPU fair‑use during beta</InfoTooltip></span>,
         "Team collaboration features",
-        "Priority support",
-        "Advanced analytics with materialized views",
-        "180-day analytics retention",
-        "Your own watermarking"
+        "Advanced analytics",
+        "Priority support"
       ],
       limitations: [
-        "Suitable for ~500-1,000 concurrent viewers",
-        "Standard SLA"
+        "Suitable for ~500–1,000 concurrent viewers (adaptive)",
+        "Standard SLA at GA"
       ],
       cta: "Get Started",
       ctaLink: config.appUrl,
       popular: false
     },
     {
-      name: "Production Ready",
-      price: "€1,000",
+      name: "Production",
+      price: "€999",
       period: "/month",
-      dailyCost: "~€33.33 per day",
-      description: "Reliable enterprise infrastructure with redundancy",
+      dailyCost: "~€33.30/day",
+      description: "High allowances + dedicated options",
       features: [
-        "Everything in Developer tier",
-        "~2-5 Gbps sustained bandwidth",
-        "Dedicated processing allocation",
-        "Enterprise SLA & service contract",
-        "24/7 priority support",
-        "Advanced analytics with live dashboard"
+        <span key="delivery">2,000,000 delivered minutes included <InfoTooltip>Overage €0.00045/min</InfoTooltip></span>,
+        <span key="gpu">250 GPU‑hours <InfoTooltip>Dedicated options quoted</InfoTooltip></span>,
+        "SLA & 24/7 support",
+        "Dedicated capacity options",
+        "Live dashboard"
       ],
       limitations: [
-        "Suitable for ~2,000-5,000 concurrent viewers",
-        "For consistently higher usage (>5 Gbps sustained), we'll discuss custom deployment"
+        "Suitable for ~2,000–5,000 concurrent viewers (adaptive)"
       ],
       cta: "Get Started",
       ctaLink: config.appUrl,
@@ -131,7 +131,7 @@ const Pricing = () => {
 
   const gpuFeatures = [
     {
-      icon: "🎬",
+      icon: FilmIcon,
       title: "Transcoding",
       description: "Real-time video transcoding to multiple formats and bitrates",
       freeAccess: "Powered by Livepeer network",
@@ -140,20 +140,20 @@ const Pricing = () => {
       productionAccess: "Dedicated processing allocation"
     },
     {
-      icon: "🤖",
+      icon: CpuChipIcon,
       title: "AI Processing",
       description: "Advanced video processing and analysis capabilities",
-      freeAccess: "Not available",
-      supporterAccess: "Not available",
+      freeAccess: "Only self-hosting",
+      supporterAccess: "Only self-hosting",
       developerAccess: "Rate-limited access",
       productionAccess: "Dedicated allocation"
     },
     {
-      icon: "🎥",
+      icon: VideoCameraIcon,
       title: "Multi-stream Compositing",
       description: "Combine multiple streams with advanced mixing and effects",
-      freeAccess: "Not available",
-      supporterAccess: "Not available",
+      freeAccess: "Only self-hosting",
+      supporterAccess: "Only self-hosting",
       developerAccess: "Rate-limited access",
       productionAccess: "Dedicated allocation"
     }
@@ -215,7 +215,7 @@ const Pricing = () => {
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
               <a href={config.appUrl} className="btn-primary flex items-center justify-center whitespace-nowrap">
                 Start Free - No Credit Card
-                <ExternalLinkIcon className="w-4 h-4 ml-2 flex-shrink-0" />
+                <ArrowTopRightOnSquareIcon className="w-4 h-4 ml-2 flex-shrink-0" />
               </a>
               <Link to="/contact" className="btn-secondary">
                 Contact Us
@@ -241,9 +241,7 @@ const Pricing = () => {
               <h2 className="text-2xl md:text-3xl font-bold gradient-text mb-2">
                 Start Free Today
               </h2>
-              <p className="text-tokyo-night-fg-dark">
-                Full self-hosting capabilities with shared processing access
-              </p>
+              <p className="text-tokyo-night-fg-dark">Self‑hosting included. Shared demo pool is best‑effort during beta.</p>
             </div>
 
             <div className="max-w-2xl mx-auto">
@@ -266,7 +264,7 @@ const Pricing = () => {
                     <div className="flex">
                       <a href={freeTier.ctaLink} className="btn-primary flex items-center justify-center whitespace-nowrap">
                         {freeTier.cta}
-                        <ExternalLinkIcon className="w-4 h-4 ml-2 flex-shrink-0" />
+                        <ArrowTopRightOnSquareIcon className="w-4 h-4 ml-2 flex-shrink-0" />
                       </a>
                     </div>
                   </div>
@@ -312,9 +310,7 @@ const Pricing = () => {
               <h2 className="text-2xl md:text-3xl font-bold gradient-text mb-2">
                 Upgrade for More
               </h2>
-              <p className="text-tokyo-night-fg-dark">
-                Enhanced features, priority processing, and service level agreements
-              </p>
+              <p className="text-tokyo-night-fg-dark">Allowances + transparent overage. Livepeer‑backed compute. Beta pricing may change.</p>
             </div>
 
             <div className="grid md:grid-cols-3 gap-6">
@@ -370,7 +366,7 @@ const Pricing = () => {
                       className="btn-secondary w-full flex items-center justify-center text-sm whitespace-nowrap"
                     >
                       {plan.cta}
-                      <ExternalLinkIcon className="w-4 h-4 ml-2 flex-shrink-0" />
+                      <ArrowTopRightOnSquareIcon className="w-4 h-4 ml-2 flex-shrink-0" />
                     </a>
                   </div>
                 </motion.div>
@@ -432,6 +428,13 @@ const Pricing = () => {
         </div>
       </section>
 
+    {/* Pricing Calculator */}
+    <section className="section-padding bg-tokyo-night-bg-light/30">
+      <div className="max-w-6xl mx-auto">
+        <SavingsCalculator />
+      </div>
+    </section>
+
       {/* GPU Features */}
       <section className="section-padding bg-tokyo-night-bg-light/30">
         <div className="max-w-7xl mx-auto">
@@ -460,7 +463,12 @@ const Pricing = () => {
                 transition={{ duration: 0.6, delay: index * 0.1 }}
                 className="glow-card p-6"
               >
-                <div className="text-4xl mb-4 text-center">{feature.icon}</div>
+                <div className="mb-4 text-center text-tokyo-night-blue">
+                  {(() => {
+                    const Icon = feature.icon;
+                    return <Icon className="w-10 h-10 mx-auto" />;
+                  })()}
+                </div>
                 <h3 className="text-xl font-bold text-tokyo-night-fg mb-3 text-center">{feature.title}</h3>
                 <p className="text-tokyo-night-fg-dark text-sm mb-6 text-center">{feature.description}</p>
 
@@ -476,7 +484,7 @@ const Pricing = () => {
                   <div className="flex items-center gap-3 p-3 bg-tokyo-night-bg-dark rounded-lg">
                     <div className="w-2 h-2 bg-tokyo-night-green rounded-full"></div>
                     <div>
-                      <div className="text-sm font-medium text-tokyo-night-fg">Supporter (€50)</div>
+                      <div className="text-sm font-medium text-tokyo-night-fg">Supporter</div>
                       <div className="text-xs text-tokyo-night-comment">{feature.supporterAccess}</div>
                     </div>
                   </div>
@@ -484,7 +492,7 @@ const Pricing = () => {
                   <div className="flex items-center gap-3 p-3 bg-tokyo-night-bg-dark rounded-lg">
                     <div className="w-2 h-2 bg-tokyo-night-cyan rounded-full"></div>
                     <div>
-                      <div className="text-sm font-medium text-tokyo-night-fg">Developer (€250)</div>
+                      <div className="text-sm font-medium text-tokyo-night-fg">Developer</div>
                       <div className="text-xs text-tokyo-night-comment">{feature.developerAccess}</div>
                     </div>
                   </div>
@@ -492,7 +500,7 @@ const Pricing = () => {
                   <div className="flex items-center gap-3 p-3 bg-tokyo-night-bg-dark rounded-lg">
                     <div className="w-2 h-2 bg-tokyo-night-yellow rounded-full"></div>
                     <div>
-                      <div className="text-sm font-medium text-tokyo-night-fg">Production (€1000)</div>
+                      <div className="text-sm font-medium text-tokyo-night-fg">Production</div>
                       <div className="text-xs text-tokyo-night-comment">{feature.productionAccess}</div>
                     </div>
                   </div>
@@ -567,14 +575,20 @@ const Pricing = () => {
                   </div>
                 </div>
                 <div className="bg-tokyo-night-bg-dark p-4 rounded-lg">
-                  <h4 className="font-semibold text-tokyo-night-cyan mb-2">☁️ Full FrameWorks Pipeline</h4>
+                  <h4 className="font-semibold text-tokyo-night-cyan mb-2 flex items-center gap-2">
+                    <CloudIcon className="w-5 h-5" />
+                    Full FrameWorks Pipeline
+                  </h4>
                   <div className="text-tokyo-night-fg-dark text-sm space-y-1">
                     <div>• We handle ingest, processing, delivery</div>
                     <div>• You focus on your product</div>
                   </div>
                 </div>
                 <div className="bg-tokyo-night-bg-dark p-4 rounded-lg">
-                  <h4 className="font-semibold text-tokyo-night-yellow mb-2">🏢 Enterprise Custom</h4>
+                  <h4 className="font-semibold text-tokyo-night-yellow mb-2 flex items-center gap-2">
+                    <BuildingOfficeIcon className="w-5 h-5" />
+                    Enterprise Custom
+                  </h4>
                   <div className="text-tokyo-night-fg-dark text-sm space-y-1">
                     <div>• Private deployments in your VPC</div>
                     <div>• White-label everything</div>
@@ -646,7 +660,7 @@ const Pricing = () => {
                 className="btn-primary flex items-center justify-center"
               >
                 Start Free Today
-                <ExternalLinkIcon className="w-4 h-4 ml-2" />
+                <ArrowTopRightOnSquareIcon className="w-4 h-4 ml-2" />
               </a>
               <Link to="/contact" className="btn-secondary">
                 Schedule Demo

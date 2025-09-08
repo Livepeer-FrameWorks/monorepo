@@ -731,7 +731,7 @@ func GenerateLoadBalancingMetrics() []*model.LoadBalancingMetric {
 			Status:          "success",
 			Details:         func() *string { s := "optimal_routing"; return &s }(),
 			RoutingDistance: func() *float64 { f := 42.3; return &f }(), // km
-			EventType:       func() *string { s := "load-balancing"; return &s }(),
+			EventType:       func() *string { s := "load_balancing"; return &s }(),
 			Source:          func() *string { s := "foghorn"; return &s }(),
 		},
 		{
@@ -749,7 +749,7 @@ func GenerateLoadBalancingMetrics() []*model.LoadBalancingMetric {
 			Status:          "success",
 			Details:         func() *string { s := "regional_optimal"; return &s }(),
 			RoutingDistance: func() *float64 { f := 1.2; return &f }(), // km
-			EventType:       func() *string { s := "load-balancing"; return &s }(),
+			EventType:       func() *string { s := "load_balancing"; return &s }(),
 			Source:          func() *string { s := "foghorn"; return &s }(),
 		},
 		{

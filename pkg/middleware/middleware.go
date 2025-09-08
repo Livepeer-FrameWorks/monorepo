@@ -38,18 +38,39 @@ func LoggingMiddleware(logger logging.Logger) gin.HandlerFunc {
 
 // CORSMiddleware handles CORS headers
 func CORSMiddleware() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.Header("Access-Control-Allow-Origin", "*")
-		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+    return func(c *gin.Context) {
+        // Vary for caches/proxies
+        c.Header("Vary", "Origin, Access-Control-Request-Method, Access-Control-Request-Headers")
 
-		if c.Request.Method == "OPTIONS" {
-			c.AbortWithStatus(204)
-			return
-		}
+        // Allow the requesting origin (or * if none specified)
+        origin := c.GetHeader("Origin")
+        if origin != "" {
+            c.Header("Access-Control-Allow-Origin", origin)
+        } else {
+            c.Header("Access-Control-Allow-Origin", "*")
+        }
 
-		c.Next()
-	}
+        // Methods: reflect requested method or provide sane defaults
+        if m := c.GetHeader("Access-Control-Request-Method"); m != "" {
+            c.Header("Access-Control-Allow-Methods", m)
+        } else {
+            c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+        }
+
+        // Headers: reflect requested headers to avoid blocking custom ones (e.g., X-Tenant-Id)
+        if h := c.GetHeader("Access-Control-Request-Headers"); h != "" {
+            c.Header("Access-Control-Allow-Headers", h)
+        } else {
+            c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Tenant-Id, X-Request-Id")
+        }
+
+        if c.Request.Method == http.MethodOptions {
+            c.AbortWithStatus(http.StatusNoContent)
+            return
+        }
+
+        c.Next()
+    }
 }
 
 // RecoveryMiddleware provides panic recovery with logging

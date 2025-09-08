@@ -18,17 +18,21 @@ COPY pkg/ pkg/
 # Copy service source code
 COPY api_realtime/ api_realtime/
 
-# Build the application with version injection
+# Build the application with version and component injection
 ARG VERSION=dev
 ARG GIT_COMMIT=docker
 ARG BUILD_DATE
+ARG COMPONENT_NAME=signalman
+ARG COMPONENT_VERSION=0.0.0
 
 WORKDIR /src/frameworks/api_realtime
 RUN go mod download
 RUN CGO_ENABLED=0 go build \
     -ldflags "-X frameworks/pkg/version.Version=${VERSION} \
               -X frameworks/pkg/version.GitCommit=${GIT_COMMIT} \
-              -X frameworks/pkg/version.BuildDate=${BUILD_DATE}" \
+              -X frameworks/pkg/version.BuildDate=${BUILD_DATE} \
+              -X frameworks/pkg/version.ComponentName=${COMPONENT_NAME} \
+              -X frameworks/pkg/version.ComponentVersion=${COMPONENT_VERSION}" \
     -o signalman ./cmd/signalman
 
 # Final stage

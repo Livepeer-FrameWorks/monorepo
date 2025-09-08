@@ -54,7 +54,10 @@ FrameWorks is a **distributed microservices platform** for **multi-tenant video 
   - **Current solution**: Custom Nginx build with automatic certificate renewal
 - **Navigator** (`api_dnsmgr`): DNS management
   - **Deferred because**: Cloudflare DNS API provides all necessary functionality
-  - **Current solution**: Manual DNS configuration via Cloudflare dashboard, exploring handling this with Caddy or Terraform+Ansible
+  - **Current solution**: Manual DNS configuration via Cloudflare dashboard, MVP DNS management planned for Quartermaster
+- **Lookout** (`api_incidents`): Incident management
+  - **Deferred because**: Prometheus + Grafana provide comprehensive monitoring and alerting
+  - **Current solution**: Prometheus metrics collection with Grafana dashboards and alert rules
 
 **Characteristics**:
 - Lower volume, high-value operations
@@ -184,11 +187,6 @@ FrameWorks is a **distributed microservices platform** for **multi-tenant video 
   - Multi-datasource support
 
 **Planned Services** 🚧:
-- **Lookout** (`api_incidents`): Incident management
-  - Alert aggregation from monitoring systems
-  - Smart deduplication and incident creation
-  - Escalation policies and multi-channel notifications
-  - Public status page integration
 - **Parlor** (`api_rooms`): Interactive room service
   - Room hierarchy with persistent communities
   - Multi-modal interaction (chat, voice, video, games)

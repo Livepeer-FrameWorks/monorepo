@@ -56,7 +56,7 @@
   <div class="max-w-md w-full space-y-8">
     <div class="text-center">
       <div class="flex justify-center mb-4">
-        <img src="/logo.png" alt="FrameWorks" class="h-32 w-32 rounded-lg" />
+        <img src="/frameworks-dark-logomark-transparent.svg" alt="FrameWorks" class="h-32 w-32 rounded-lg" />
       </div>
       <h1 class="text-4xl font-bold gradient-text mb-2">
         {#if verificationStatus === "success"}

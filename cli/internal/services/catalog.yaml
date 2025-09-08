@@ -1,0 +1,116 @@
+profiles:
+  central-all:
+    - quartermaster
+    - gateway
+    - commodore
+    - foghorn
+    - decklog
+    - periscope_ingest
+    - periscope_query
+    - purser
+    - signalman
+  control-core:
+    - quartermaster
+    - gateway
+    - commodore
+  routing-only:
+    - foghorn
+    - decklog
+    - signalman
+  analytics-suite:
+    - periscope_ingest
+    - periscope_query
+  billing-only:
+    - purser
+
+services:
+  quartermaster:
+    name: quartermaster
+    title: Quartermaster
+    role: control
+    image: frameworks/quartermaster:latest
+    ports: ["18002:18002"]
+    health:
+      protocol: http
+      path: /health
+      port: 18002
+  gateway:
+    name: gateway
+    title: Gateway (Bridge)
+    role: control
+    image: frameworks/gateway:latest
+    ports: ["18000:18000"]
+    health:
+      protocol: http
+      path: /health
+      port: 18000
+  commodore:
+    name: commodore
+    title: Commodore (Control API)
+    role: control
+    image: frameworks/commodore:latest
+    ports: ["18001:18001"]
+    health:
+      protocol: http
+      path: /health
+      port: 18001
+  foghorn:
+    name: foghorn
+    title: Foghorn (Routing)
+    role: routing
+    image: frameworks/foghorn:latest
+    ports: ["18008:18008","18019:18019"]
+    health:
+      protocol: http
+      path: /health
+      port: 18008
+  decklog:
+    name: decklog
+    title: Decklog (Firehose)
+    role: routing
+    image: frameworks/decklog:latest
+    ports: ["18006:18006"]
+    health:
+      protocol: grpc
+      port: 18006
+  signalman:
+    name: signalman
+    title: Signalman (WebSocket fan-out)
+    role: routing
+    image: frameworks/signalman:latest
+    ports: ["18009:18009"]
+    health:
+      protocol: http
+      path: /health
+      port: 18009
+  periscope_ingest:
+    name: periscope_ingest
+    title: Periscope Ingest
+    role: analytics
+    image: frameworks/periscope-ingest:latest
+    ports: ["18005:18005"]
+    health:
+      protocol: http
+      path: /health
+      port: 18005
+  periscope_query:
+    name: periscope_query
+    title: Periscope Query
+    role: analytics
+    image: frameworks/periscope-query:latest
+    ports: ["18004:18004"]
+    health:
+      protocol: http
+      path: /health
+      port: 18004
+  purser:
+    name: purser
+    title: Purser (Billing)
+    role: billing
+    image: frameworks/purser:latest
+    ports: ["18003:18003"]
+    health:
+      protocol: http
+      path: /health
+      port: 18003
+

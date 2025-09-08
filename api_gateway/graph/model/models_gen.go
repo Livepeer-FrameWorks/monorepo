@@ -10,6 +10,13 @@ import (
 	"time"
 )
 
+type AvailableCluster struct {
+	ClusterID   string   `json:"clusterId"`
+	ClusterName string   `json:"clusterName"`
+	Tiers       []string `json:"tiers"`
+	AutoEnroll  bool     `json:"autoEnroll"`
+}
+
 type CityMetric struct {
 	City        string   `json:"city"`
 	CountryCode *string  `json:"countryCode,omitempty"`
@@ -24,6 +31,13 @@ type ClipViewingUrls struct {
 	Dash *string `json:"dash,omitempty"`
 	Mp4  *string `json:"mp4,omitempty"`
 	Webm *string `json:"webm,omitempty"`
+}
+
+type ClusterAccess struct {
+	ClusterID      string  `json:"clusterId"`
+	ClusterName    string  `json:"clusterName"`
+	AccessLevel    string  `json:"accessLevel"`
+	ResourceLimits *string `json:"resourceLimits,omitempty"`
 }
 
 type ContentMetadata struct {
@@ -52,6 +66,13 @@ type CountryTimeSeries struct {
 	Timestamp   time.Time `json:"timestamp"`
 	CountryCode string    `json:"countryCode"`
 	ViewerCount int       `json:"viewerCount"`
+}
+
+type CreateBootstrapTokenInput struct {
+	Name       string             `json:"name"`
+	Type       BootstrapTokenType `json:"type"`
+	ExpiresIn  *int               `json:"expiresIn,omitempty"`
+	UsageLimit *int               `json:"usageLimit,omitempty"`
 }
 
 type CreateClipInput struct {
@@ -188,6 +209,18 @@ type RecordingConfig struct {
 	SegmentDuration int    `json:"segmentDuration"`
 }
 
+type ServiceInstanceHealth struct {
+	InstanceID      string     `json:"instanceId"`
+	ServiceID       string     `json:"serviceId"`
+	ClusterID       string     `json:"clusterId"`
+	Protocol        string     `json:"protocol"`
+	Host            *string    `json:"host,omitempty"`
+	Port            int        `json:"port"`
+	HealthEndpoint  *string    `json:"healthEndpoint,omitempty"`
+	Status          string     `json:"status"`
+	LastHealthCheck *time.Time `json:"lastHealthCheck,omitempty"`
+}
+
 type StreamHealthAlert struct {
 	Timestamp            time.Time     `json:"timestamp"`
 	Stream               string        `json:"stream"`
@@ -200,6 +233,39 @@ type StreamHealthAlert struct {
 	IssuesDescription    *string       `json:"issuesDescription,omitempty"`
 	BufferState          *BufferState  `json:"bufferState,omitempty"`
 	QualityTier          *string       `json:"qualityTier,omitempty"`
+}
+
+type StreamMetaResponse struct {
+	MetaSummary *StreamMetaSummary `json:"metaSummary"`
+	Raw         *string            `json:"raw,omitempty"`
+}
+
+type StreamMetaSummary struct {
+	IsLive         bool               `json:"isLive"`
+	BufferWindowMs int                `json:"bufferWindowMs"`
+	JitterMs       int                `json:"jitterMs"`
+	UnixOffsetMs   int                `json:"unixOffsetMs"`
+	NowMs          *int               `json:"nowMs,omitempty"`
+	LastMs         *int               `json:"lastMs,omitempty"`
+	Width          *int               `json:"width,omitempty"`
+	Height         *int               `json:"height,omitempty"`
+	Version        *int               `json:"version,omitempty"`
+	Type           *string            `json:"type,omitempty"`
+	Tracks         []*StreamMetaTrack `json:"tracks"`
+}
+
+type StreamMetaTrack struct {
+	ID         string `json:"id"`
+	Type       string `json:"type"`
+	Codec      string `json:"codec"`
+	Channels   *int   `json:"channels,omitempty"`
+	Rate       *int   `json:"rate,omitempty"`
+	Width      *int   `json:"width,omitempty"`
+	Height     *int   `json:"height,omitempty"`
+	BitrateBps *int   `json:"bitrateBps,omitempty"`
+	NowMs      *int   `json:"nowMs,omitempty"`
+	LastMs     *int   `json:"lastMs,omitempty"`
+	FirstMs    *int   `json:"firstMs,omitempty"`
 }
 
 type StreamQualityChange struct {
@@ -416,6 +482,61 @@ func (e *AlertType) UnmarshalJSON(b []byte) error {
 }
 
 func (e AlertType) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type BootstrapTokenType string
+
+const (
+	BootstrapTokenTypeEdgeNode BootstrapTokenType = "EDGE_NODE"
+	BootstrapTokenTypeService  BootstrapTokenType = "SERVICE"
+)
+
+var AllBootstrapTokenType = []BootstrapTokenType{
+	BootstrapTokenTypeEdgeNode,
+	BootstrapTokenTypeService,
+}
+
+func (e BootstrapTokenType) IsValid() bool {
+	switch e {
+	case BootstrapTokenTypeEdgeNode, BootstrapTokenTypeService:
+		return true
+	}
+	return false
+}
+
+func (e BootstrapTokenType) String() string {
+	return string(e)
+}
+
+func (e *BootstrapTokenType) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = BootstrapTokenType(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid BootstrapTokenType", str)
+	}
+	return nil
+}
+
+func (e BootstrapTokenType) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *BootstrapTokenType) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e BootstrapTokenType) MarshalJSON() ([]byte, error) {
 	var buf bytes.Buffer
 	e.MarshalGQL(&buf)
 	return buf.Bytes(), nil

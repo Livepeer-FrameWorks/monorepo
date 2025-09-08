@@ -12,7 +12,9 @@ import (
 	"frameworks/api_gateway/internal/handlers"
 	"frameworks/api_gateway/internal/middleware"
 	"frameworks/api_gateway/internal/resolvers"
+	qmapi "frameworks/pkg/api/quartermaster"
 	pkgauth "frameworks/pkg/auth"
+	qmclient "frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/config"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/monitoring"
@@ -156,23 +158,21 @@ func main() {
 		auth.POST("/reset-password", authProxy.ProxyToCommodore("/reset-password"))
 	}
 
-	// GraphQL endpoint with optional auth (some queries are public)
+	// GraphQL endpoint (single route group)
 	graphqlGroup := app.Group("/graphql")
 	jwtSecret := config.GetEnv("JWT_SECRET", "default-secret-key-change-in-production")
-	graphqlGroup.Use(middleware.DemoMode(logger))                  // Demo mode detection (must be before auth)
-	graphqlGroup.Use(pkgauth.JWTAuthMiddleware([]byte(jwtSecret))) // Standard auth with WebSocket support
-	graphqlGroup.Use(middleware.GraphQLContextMiddleware())        // Bridge user context to GraphQL
+	graphqlGroup.Use(middleware.DemoMode(logger))                   // Demo mode detection (must be before auth)
+	graphqlGroup.Use(middleware.PublicOrJWTAuth([]byte(jwtSecret))) // Allowlist public queries or require auth
+	graphqlGroup.Use(middleware.GraphQLContextMiddleware())         // Bridge user context to GraphQL
 	graphqlGroup.Use(middleware.GraphQLAttachLoaders(serviceClients))
 	{
-		// GraphQL endpoint
 		graphqlGroup.POST("/", gin.WrapH(gqlHandler))
-
-		// GraphQL playground in development
 		if config.GetEnv("GIN_MODE", "debug") != "release" {
-			// Use a separate route for playground to avoid conflicts
 			app.GET("/graphql/playground", gin.WrapH(playground.Handler("GraphQL Playground", "/graphql/")))
 		}
 	}
+
+	// No separate public route; PublicOrJWTAuth handles allowlisted unauthenticated queries
 
 	// Dedicated WebSocket endpoint for GraphQL subscriptions (no auth middleware)
 	// Authentication is handled in the WebSocket InitFunc via connection params
@@ -190,4 +190,16 @@ func main() {
 	if err := resolver.Shutdown(); err != nil {
 		logger.Error("Error shutting down resolver: " + err.Error())
 	}
+
+	// Best-effort service registration in Quartermaster
+	go func() {
+		qc := qmclient.NewClient(qmclient.Config{BaseURL: config.GetEnv("QUARTERMASTER_URL", "http://localhost:18002"), ServiceToken: config.GetEnv("SERVICE_TOKEN", ""), Logger: logger})
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if _, err := qc.BootstrapService(ctx, &qmapi.BootstrapServiceRequest{Type: "gateway", Version: version.Version, Protocol: "http", HealthEndpoint: func() *string { s := "/health"; return &s }(), Port: 18000}); err != nil {
+			logger.WithError(err).Warn("Quartermaster bootstrap (gateway) failed")
+		} else {
+			logger.Info("Quartermaster bootstrap (gateway) ok")
+		}
+	}()
 }

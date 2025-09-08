@@ -8,9 +8,18 @@ Read‑optimized analytics API. Serves tenant‑scoped queries by reading time�
 - Reads PostgreSQL for control/aggregated state (`stream_analytics`)
 - Produces usage summaries for Purser
 
-## Configuration
-- `CLICKHOUSE_HOST`, `CLICKHOUSE_DB`, `CLICKHOUSE_USER`, `CLICKHOUSE_PASSWORD`
-- `DATABASE_URL` — PostgreSQL/YugabyteDB DSN
-- `JWT_SECRET` (if endpoints are user‑authenticated)
+## Run (dev)
+- Start the full stack from repo root: `docker-compose up -d`
+- Or run just Periscope‑Query: `cd api_analytics_query && go run ./cmd/periscope`
+
+## Health & port
+- Health: `GET /health`
+- HTTP: 18004
+
+Configuration: copy `env.example` to `.env` and use the inline comments as reference. Do not commit secrets.
+
+## Related
+- Root `README.md` (ports, stack overview)
+- `docs/DATABASE.md` (tables/MVs)
 
 Cross‑refs: docs/DATABASE.md (tables/MVs), docs/IMPLEMENTATION.md (event flow), `api_billing` README (usage → invoices). 

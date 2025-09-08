@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"frameworks/pkg/api/quartermaster"
+	"frameworks/pkg/cache"
 	"frameworks/pkg/clients"
 	"frameworks/pkg/logging"
 )
@@ -22,6 +23,7 @@ type Client struct {
 	serviceToken string
 	logger       logging.Logger
 	retryConfig  clients.RetryConfig
+	cache        *cache.Cache
 }
 
 // Config represents the configuration for the Quartermaster client
@@ -32,6 +34,7 @@ type Config struct {
 	Logger               logging.Logger
 	RetryConfig          *clients.RetryConfig
 	CircuitBreakerConfig *clients.CircuitBreakerConfig
+	Cache                *cache.Cache
 }
 
 // NewClient creates a new Quartermaster API client
@@ -60,7 +63,18 @@ func NewClient(config Config) *Client {
 		serviceToken: config.ServiceToken,
 		logger:       config.Logger,
 		retryConfig:  retryConfig,
+		cache:        config.Cache,
 	}
+}
+
+// getWithCache runs loader via cache when available
+func (c *Client) getWithCache(ctx context.Context, key string, loader func() (interface{}, bool, error)) (interface{}, bool, error) {
+	if c.cache == nil {
+		return loader()
+	}
+	return c.cache.Get(ctx, key, func(_ context.Context, _ string) (interface{}, bool, error) {
+		return loader()
+	})
 }
 
 // ValidateTenant validates a tenant and user combination
@@ -95,47 +109,58 @@ func (c *Client) ValidateTenant(ctx context.Context, req *quartermaster.Validate
 
 // ResolveTenant resolves a tenant by domain or subdomain
 func (c *Client) ResolveTenant(ctx context.Context, req *quartermaster.ResolveTenantRequest) (*quartermaster.ResolveTenantResponse, error) {
-	jsonBody, err := json.Marshal(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
-	}
-
-	url := c.baseURL + "/tenant/resolve"
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonBody))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	httpReq.Header.Set("Content-Type", "application/json")
-	if c.serviceToken != "" {
-		httpReq.Header.Set("Authorization", "Bearer "+c.serviceToken)
-	}
-
-	resp, err := clients.DoWithRetry(ctx, c.httpClient, httpReq, c.retryConfig)
-	if err != nil {
-		return nil, fmt.Errorf("failed to call Quartermaster: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		if c.logger != nil {
-			c.logger.WithFields(logging.Fields{
-				"status_code": resp.StatusCode,
-				"response":    string(body),
-			}).Error("Quartermaster tenant resolution failed")
+	key := "ResolveTenant:" + req.Domain + "|" + req.Subdomain
+	val, ok, err := c.getWithCache(ctx, key, func() (interface{}, bool, error) {
+		jsonBody, err := json.Marshal(req)
+		if err != nil {
+			return nil, false, fmt.Errorf("failed to marshal request: %w", err)
 		}
-		return &quartermaster.ResolveTenantResponse{
-			Error: fmt.Sprintf("tenant resolution failed with status %d", resp.StatusCode),
-		}, nil
-	}
 
-	var resolution quartermaster.ResolveTenantResponse
-	if err := json.NewDecoder(resp.Body).Decode(&resolution); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
-	}
+		u := c.baseURL + "/tenant/resolve"
+		httpReq, err := http.NewRequestWithContext(ctx, "POST", u, bytes.NewBuffer(jsonBody))
+		if err != nil {
+			return nil, false, fmt.Errorf("failed to create request: %w", err)
+		}
 
-	return &resolution, nil
+		httpReq.Header.Set("Content-Type", "application/json")
+		if jwtToken := ctx.Value("jwt_token"); jwtToken != nil {
+			if tokenStr, ok := jwtToken.(string); ok && tokenStr != "" {
+				httpReq.Header.Set("Authorization", "Bearer "+tokenStr)
+			}
+		} else if c.serviceToken != "" {
+			httpReq.Header.Set("Authorization", "Bearer "+c.serviceToken)
+		}
+
+		resp, err := clients.DoWithRetry(ctx, c.httpClient, httpReq, c.retryConfig)
+		if err != nil {
+			return nil, false, fmt.Errorf("failed to call Quartermaster: %w", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			if c.logger != nil {
+				c.logger.WithFields(logging.Fields{
+					"status_code": resp.StatusCode,
+					"response":    string(body),
+				}).Error("Quartermaster tenant resolution failed")
+			}
+			return &quartermaster.ResolveTenantResponse{Error: fmt.Sprintf("tenant resolution failed with status %d", resp.StatusCode)}, true, nil
+		}
+
+		var resolution quartermaster.ResolveTenantResponse
+		if err := json.NewDecoder(resp.Body).Decode(&resolution); err != nil {
+			return nil, false, fmt.Errorf("failed to decode response: %w", err)
+		}
+		return &resolution, true, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, nil
+	}
+	return val.(*quartermaster.ResolveTenantResponse), nil
 }
 
 // GetTenantRouting gets routing information for a tenant and stream
@@ -152,7 +177,11 @@ func (c *Client) GetTenantRouting(ctx context.Context, req *quartermaster.Tenant
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
-	if c.serviceToken != "" {
+	if jwtToken := ctx.Value("jwt_token"); jwtToken != nil {
+		if tokenStr, ok := jwtToken.(string); ok && tokenStr != "" {
+			httpReq.Header.Set("Authorization", "Bearer "+tokenStr)
+		}
+	} else if c.serviceToken != "" {
 		httpReq.Header.Set("Authorization", "Bearer "+c.serviceToken)
 	}
 
@@ -281,7 +310,11 @@ func (c *Client) GetClusters(ctx context.Context) (*quartermaster.ClustersRespon
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	if c.serviceToken != "" {
+	if jwtToken := ctx.Value("jwt_token"); jwtToken != nil {
+		if tokenStr, ok := jwtToken.(string); ok && tokenStr != "" {
+			httpReq.Header.Set("Authorization", "Bearer "+tokenStr)
+		}
+	} else if c.serviceToken != "" {
 		httpReq.Header.Set("Authorization", "Bearer "+c.serviceToken)
 	}
 
@@ -313,7 +346,11 @@ func (c *Client) GetCluster(ctx context.Context, clusterID string) (*quartermast
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	if c.serviceToken != "" {
+	if jwtToken := ctx.Value("jwt_token"); jwtToken != nil {
+		if tokenStr, ok := jwtToken.(string); ok && tokenStr != "" {
+			httpReq.Header.Set("Authorization", "Bearer "+tokenStr)
+		}
+	} else if c.serviceToken != "" {
 		httpReq.Header.Set("Authorization", "Bearer "+c.serviceToken)
 	}
 
@@ -356,7 +393,11 @@ func (c *Client) GetNodes(ctx context.Context, filters map[string]string) (*quar
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	if c.serviceToken != "" {
+	if jwtToken := ctx.Value("jwt_token"); jwtToken != nil {
+		if tokenStr, ok := jwtToken.(string); ok && tokenStr != "" {
+			httpReq.Header.Set("Authorization", "Bearer "+tokenStr)
+		}
+	} else if c.serviceToken != "" {
 		httpReq.Header.Set("Authorization", "Bearer "+c.serviceToken)
 	}
 
@@ -388,7 +429,11 @@ func (c *Client) GetNode(ctx context.Context, nodeID string) (*quartermaster.Nod
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	if c.serviceToken != "" {
+	if jwtToken := ctx.Value("jwt_token"); jwtToken != nil {
+		if tokenStr, ok := jwtToken.(string); ok && tokenStr != "" {
+			httpReq.Header.Set("Authorization", "Bearer "+tokenStr)
+		}
+	} else if c.serviceToken != "" {
 		httpReq.Header.Set("Authorization", "Bearer "+c.serviceToken)
 	}
 
@@ -420,7 +465,11 @@ func (c *Client) GetServices(ctx context.Context) (*quartermaster.ServicesRespon
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	if c.serviceToken != "" {
+	if jwtToken := ctx.Value("jwt_token"); jwtToken != nil {
+		if tokenStr, ok := jwtToken.(string); ok && tokenStr != "" {
+			httpReq.Header.Set("Authorization", "Bearer "+tokenStr)
+		}
+	} else if c.serviceToken != "" {
 		httpReq.Header.Set("Authorization", "Bearer "+c.serviceToken)
 	}
 
@@ -452,7 +501,11 @@ func (c *Client) GetClusterServices(ctx context.Context, clusterID string) (*qua
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	if c.serviceToken != "" {
+	if jwtToken := ctx.Value("jwt_token"); jwtToken != nil {
+		if tokenStr, ok := jwtToken.(string); ok && tokenStr != "" {
+			httpReq.Header.Set("Authorization", "Bearer "+tokenStr)
+		}
+	} else if c.serviceToken != "" {
 		httpReq.Header.Set("Authorization", "Bearer "+c.serviceToken)
 	}
 
@@ -495,7 +548,11 @@ func (c *Client) GetServiceInstances(ctx context.Context, filters map[string]str
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	if c.serviceToken != "" {
+	if jwtToken := ctx.Value("jwt_token"); jwtToken != nil {
+		if tokenStr, ok := jwtToken.(string); ok && tokenStr != "" {
+			httpReq.Header.Set("Authorization", "Bearer "+tokenStr)
+		}
+	} else if c.serviceToken != "" {
 		httpReq.Header.Set("Authorization", "Bearer "+c.serviceToken)
 	}
 
@@ -516,4 +573,434 @@ func (c *Client) GetServiceInstances(ctx context.Context, filters map[string]str
 	}
 
 	return &response, nil
+}
+
+// GetServicesHealth returns health for all instances
+func (c *Client) GetServicesHealth(ctx context.Context) (*quartermaster.ServicesHealthResponse, error) {
+	u := c.baseURL + "/services/health"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	if jwtToken := ctx.Value("jwt_token"); jwtToken != nil {
+		if tokenStr, ok := jwtToken.(string); ok && tokenStr != "" {
+			req.Header.Set("Authorization", "Bearer "+tokenStr)
+		}
+	} else if c.serviceToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.serviceToken)
+	}
+	resp, err := clients.DoWithRetry(ctx, c.httpClient, req, c.retryConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call Quartermaster: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("services health failed: %s", string(body))
+	}
+	var out quartermaster.ServicesHealthResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+	return &out, nil
+}
+
+// GetServiceHealth returns health for instances of a specific service
+func (c *Client) GetServiceHealth(ctx context.Context, serviceID string) (*quartermaster.ServicesHealthResponse, error) {
+	u := fmt.Sprintf("%s/services/%s/health", c.baseURL, url.PathEscape(serviceID))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	if jwtToken := ctx.Value("jwt_token"); jwtToken != nil {
+		if tokenStr, ok := jwtToken.(string); ok && tokenStr != "" {
+			req.Header.Set("Authorization", "Bearer "+tokenStr)
+		}
+	} else if c.serviceToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.serviceToken)
+	}
+	resp, err := clients.DoWithRetry(ctx, c.httpClient, req, c.retryConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call Quartermaster: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("service health failed: %s", string(body))
+	}
+	var out quartermaster.ServicesHealthResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+	return &out, nil
+}
+
+// BootstrapEdgeNode registers an edge node via Foghorn using an enrollment token
+func (c *Client) BootstrapEdgeNode(ctx context.Context, req *quartermaster.BootstrapEdgeNodeRequest) (*quartermaster.BootstrapEdgeNodeResponse, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+	u := c.baseURL + "/bootstrap/edge-node"
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewBuffer(body))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	if jwtToken := ctx.Value("jwt_token"); jwtToken != nil {
+		if tokenStr, ok := jwtToken.(string); ok && tokenStr != "" {
+			httpReq.Header.Set("Authorization", "Bearer "+tokenStr)
+		}
+	} else if c.serviceToken != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.serviceToken)
+	}
+	resp, err := clients.DoWithRetry(ctx, c.httpClient, httpReq, c.retryConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call Quartermaster: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("bootstrap edge failed: %s", string(b))
+	}
+	var out quartermaster.BootstrapEdgeNodeResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+	return &out, nil
+}
+
+// BootstrapService registers a service instance in Quartermaster
+func (c *Client) BootstrapService(ctx context.Context, req *quartermaster.BootstrapServiceRequest) (*quartermaster.BootstrapServiceResponse, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+	u := c.baseURL + "/bootstrap/service"
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewBuffer(body))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	if jwtToken := ctx.Value("jwt_token"); jwtToken != nil {
+		if tokenStr, ok := jwtToken.(string); ok && tokenStr != "" {
+			httpReq.Header.Set("Authorization", "Bearer "+tokenStr)
+		}
+	} else if c.serviceToken != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.serviceToken)
+	}
+	resp, err := clients.DoWithRetry(ctx, c.httpClient, httpReq, c.retryConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call Quartermaster: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("bootstrap service failed: %s", string(b))
+	}
+	var out quartermaster.BootstrapServiceResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+	return &out, nil
+}
+
+// ServiceDiscovery returns discovered service instances of a given type and optional cluster
+func (c *Client) ServiceDiscovery(ctx context.Context, serviceType string, clusterID *string) (*quartermaster.ServiceDiscoveryResponse, error) {
+	// Use cache when available
+	cacheKey := "ServiceDiscovery:" + serviceType
+	if clusterID != nil {
+		cacheKey += ":" + *clusterID
+	}
+	val, ok, err := c.getWithCache(ctx, cacheKey, func() (interface{}, bool, error) {
+		u := c.baseURL + "/service-discovery"
+		params := url.Values{}
+		params.Set("type", serviceType)
+		if clusterID != nil && *clusterID != "" {
+			params.Set("cluster_id", *clusterID)
+		}
+		if enc := params.Encode(); enc != "" {
+			u += "?" + enc
+		}
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+		if err != nil {
+			return nil, false, fmt.Errorf("failed to create request: %w", err)
+		}
+		if jwtToken := ctx.Value("jwt_token"); jwtToken != nil {
+			if tokenStr, ok := jwtToken.(string); ok && tokenStr != "" {
+				req.Header.Set("Authorization", "Bearer "+tokenStr)
+			}
+		} else if c.serviceToken != "" {
+			req.Header.Set("Authorization", "Bearer "+c.serviceToken)
+		}
+		resp, err := clients.DoWithRetry(ctx, c.httpClient, req, c.retryConfig)
+		if err != nil {
+			return nil, false, fmt.Errorf("failed to call Quartermaster: %w", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			return nil, false, fmt.Errorf("service discovery failed with status %d: %s", resp.StatusCode, string(body))
+		}
+		var out quartermaster.ServiceDiscoveryResponse
+		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+			return nil, false, fmt.Errorf("failed to decode response: %w", err)
+		}
+		return &out, true, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, nil
+	}
+	return val.(*quartermaster.ServiceDiscoveryResponse), nil
+}
+
+// === BOOTSTRAP TOKEN MANAGEMENT ===
+
+// CreateBootstrapToken creates a one-time bootstrap token for edge/service
+func (c *Client) CreateBootstrapToken(ctx context.Context, req *quartermaster.CreateBootstrapTokenRequest) (*quartermaster.CreateBootstrapTokenResponse, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+	u := c.baseURL + "/admin/bootstrap-tokens"
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewBuffer(body))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	if jwtToken := ctx.Value("jwt_token"); jwtToken != nil {
+		if tokenStr, ok := jwtToken.(string); ok && tokenStr != "" {
+			httpReq.Header.Set("Authorization", "Bearer "+tokenStr)
+		}
+	} else if c.serviceToken != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.serviceToken)
+	}
+	resp, err := clients.DoWithRetry(ctx, c.httpClient, httpReq, c.retryConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call Quartermaster: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		b, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("create bootstrap token failed: %s", string(b))
+	}
+	var out quartermaster.CreateBootstrapTokenResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+	return &out, nil
+}
+
+// ListBootstrapTokens lists bootstrap tokens (optionally filterable via query params in future)
+func (c *Client) ListBootstrapTokens(ctx context.Context) (*quartermaster.BootstrapTokensResponse, error) {
+	u := c.baseURL + "/admin/bootstrap-tokens"
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	if jwtToken := ctx.Value("jwt_token"); jwtToken != nil {
+		if tokenStr, ok := jwtToken.(string); ok && tokenStr != "" {
+			httpReq.Header.Set("Authorization", "Bearer "+tokenStr)
+		}
+	} else if c.serviceToken != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.serviceToken)
+	}
+	resp, err := clients.DoWithRetry(ctx, c.httpClient, httpReq, c.retryConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call Quartermaster: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("list bootstrap tokens failed: %s", string(b))
+	}
+	var out quartermaster.BootstrapTokensResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+	return &out, nil
+}
+
+// RevokeBootstrapToken deletes a bootstrap token by ID
+func (c *Client) RevokeBootstrapToken(ctx context.Context, id string) error {
+	u := c.baseURL + "/admin/bootstrap-tokens/" + url.PathEscape(id)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodDelete, u, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+	if jwtToken := ctx.Value("jwt_token"); jwtToken != nil {
+		if tokenStr, ok := jwtToken.(string); ok && tokenStr != "" {
+			httpReq.Header.Set("Authorization", "Bearer "+tokenStr)
+		}
+	} else if c.serviceToken != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.serviceToken)
+	}
+	resp, err := clients.DoWithRetry(ctx, c.httpClient, httpReq, c.retryConfig)
+	if err != nil {
+		return fmt.Errorf("failed to call Quartermaster: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("revoke bootstrap token failed: %s", string(b))
+	}
+	return nil
+}
+
+// GetClustersAccess returns clusters the tenant can currently use
+func (c *Client) GetClustersAccess(ctx context.Context) (*quartermaster.ClustersAccessResponse, error) {
+	// Cache by tenant if available in context
+	tenantID, _ := ctx.Value("tenant_id").(string)
+	cacheKey := "ClustersAccess:" + tenantID
+	val, ok, err := c.getWithCache(ctx, cacheKey, func() (interface{}, bool, error) {
+		u := c.baseURL + "/clusters/access"
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+		if err != nil {
+			return nil, false, fmt.Errorf("failed to create request: %w", err)
+		}
+		if jwtToken := ctx.Value("jwt_token"); jwtToken != nil {
+			if tokenStr, ok := jwtToken.(string); ok && tokenStr != "" {
+				req.Header.Set("Authorization", "Bearer "+tokenStr)
+			}
+		} else if c.serviceToken != "" {
+			req.Header.Set("Authorization", "Bearer "+c.serviceToken)
+		}
+		resp, err := clients.DoWithRetry(ctx, c.httpClient, req, c.retryConfig)
+		if err != nil {
+			return nil, false, fmt.Errorf("failed to call Quartermaster: %w", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			return nil, false, fmt.Errorf("get clusters access failed with status %d: %s", resp.StatusCode, string(body))
+		}
+		var out quartermaster.ClustersAccessResponse
+		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+			return nil, false, fmt.Errorf("failed to decode response: %w", err)
+		}
+		return &out, true, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, nil
+	}
+	return val.(*quartermaster.ClustersAccessResponse), nil
+}
+
+// GetClustersAvailable returns clusters available for onboarding
+func (c *Client) GetClustersAvailable(ctx context.Context) (*quartermaster.ClustersAvailableResponse, error) {
+	// Use a simple cache key; availability is global
+	cacheKey := "ClustersAvailable"
+	val, ok, err := c.getWithCache(ctx, cacheKey, func() (interface{}, bool, error) {
+		u := c.baseURL + "/clusters/available"
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+		if err != nil {
+			return nil, false, fmt.Errorf("failed to create request: %w", err)
+		}
+		if jwtToken := ctx.Value("jwt_token"); jwtToken != nil {
+			if tokenStr, ok := jwtToken.(string); ok && tokenStr != "" {
+				req.Header.Set("Authorization", "Bearer "+tokenStr)
+			}
+		} else if c.serviceToken != "" {
+			req.Header.Set("Authorization", "Bearer "+c.serviceToken)
+		}
+		resp, err := clients.DoWithRetry(ctx, c.httpClient, req, c.retryConfig)
+		if err != nil {
+			return nil, false, fmt.Errorf("failed to call Quartermaster: %w", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			return nil, false, fmt.Errorf("get clusters available failed with status %d: %s", resp.StatusCode, string(body))
+		}
+		var out quartermaster.ClustersAvailableResponse
+		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+			return nil, false, fmt.Errorf("failed to decode response: %w", err)
+		}
+		return &out, true, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, nil
+	}
+	return val.(*quartermaster.ClustersAvailableResponse), nil
+}
+
+// GetNodeOwner resolves the owner of a node (tenant enrichment), with caching
+func (c *Client) GetNodeOwner(ctx context.Context, nodeID string) (*quartermaster.NodeOwnerResponse, error) {
+	cacheKey := "NodeOwner:" + nodeID
+	val, ok, err := c.getWithCache(ctx, cacheKey, func() (interface{}, bool, error) {
+		u := fmt.Sprintf("%s/nodes/%s/owner", c.baseURL, url.PathEscape(nodeID))
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+		if err != nil {
+			return nil, false, fmt.Errorf("failed to create request: %w", err)
+		}
+		if jwtToken := ctx.Value("jwt_token"); jwtToken != nil {
+			if tokenStr, ok := jwtToken.(string); ok && tokenStr != "" {
+				req.Header.Set("Authorization", "Bearer "+tokenStr)
+			}
+		} else if c.serviceToken != "" {
+			req.Header.Set("Authorization", "Bearer "+c.serviceToken)
+		}
+		resp, err := clients.DoWithRetry(ctx, c.httpClient, req, c.retryConfig)
+		if err != nil {
+			return nil, false, fmt.Errorf("failed to call Quartermaster: %w", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			return nil, false, fmt.Errorf("get node owner failed with status %d: %s", resp.StatusCode, string(body))
+		}
+		var out quartermaster.NodeOwnerResponse
+		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+			return nil, false, fmt.Errorf("failed to decode response: %w", err)
+		}
+		return &out, true, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, nil
+	}
+	return val.(*quartermaster.NodeOwnerResponse), nil
+}
+
+// ResolveNodeFingerprint resolves a node to a tenant and canonical node_id using fingerprint and server-observed IP/Geo
+func (c *Client) ResolveNodeFingerprint(ctx context.Context, req *quartermaster.ResolveNodeFingerprintRequest) (*quartermaster.ResolveNodeFingerprintResponse, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+	u := c.baseURL + "/nodes/resolve-fingerprint"
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewBuffer(body))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	if c.serviceToken != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.serviceToken)
+	}
+	resp, err := clients.DoWithRetry(ctx, c.httpClient, httpReq, c.retryConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call Quartermaster: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("resolve fingerprint failed: %s", string(b))
+	}
+	var out quartermaster.ResolveNodeFingerprintResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+	return &out, nil
 }

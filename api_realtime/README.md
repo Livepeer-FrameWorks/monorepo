@@ -2,13 +2,11 @@
 
 Consumes analytics events from Kafka and broadcasts them to WebSocket channels for dashboards and realtime UIs.
 
-## Configuration
-- `KAFKA_BROKERS` — comma-separated broker list
-- `KAFKA_TOPICS` — defaults to `analytics_events`
-- `KAFKA_CLIENT_ID` — defaults to `signalman`
-- `KAFKA_CONSUMER_GROUP` — e.g. `signalman-group`
-- `PORT` — HTTP port (default 18009)
-- `GIN_MODE`, `LOG_LEVEL`
+## Run (dev)
+- Start the full stack from repo root: `docker-compose up -d`
+- Or run just Signalman: `cd api_realtime && go run ./cmd/signalman`
+
+Configuration: copy `env.example` to `.env` and use the inline comments as reference. Do not commit secrets.
 
 ## WebSocket endpoints
 - `/ws/streams` — stream lifecycle

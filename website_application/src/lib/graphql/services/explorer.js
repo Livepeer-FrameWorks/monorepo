@@ -243,9 +243,9 @@ export const explorerService = {
 
       return {
         data: result.data,
-        loading: result.loading || false,
-        error: result.error || result.errors?.[0]?.message,
-        networkStatus: result.networkStatus || 7, // 7 = ready
+        loading: 'loading' in result ? result.loading : false,
+        error: 'error' in result ? result.error : (result.errors?.[0]?.message || null),
+        networkStatus: 'networkStatus' in result ? result.networkStatus : 7, // 7 = ready
         duration,
         timestamp: new Date().toISOString(),
         demoMode
@@ -727,7 +727,7 @@ ${Object.entries(variables).map(([key, value]) => `        "${key}": ${JSON.stri
 
   /**
    * Format query response for display
-   * @param {Object} result - Query result from executeQuery
+   * @param {any} result - Query result from executeQuery
    */
   formatResponse(result) {
     const { data, error, duration, timestamp, networkStatus } = result || {};

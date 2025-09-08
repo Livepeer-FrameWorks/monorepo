@@ -1,14 +1,18 @@
 package main
 
 import (
+	"context"
 	"frameworks/api_tenants/internal/handlers"
+	qmapi "frameworks/pkg/api/quartermaster"
 	"frameworks/pkg/auth"
+	qmclient "frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/config"
 	"frameworks/pkg/database"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/monitoring"
 	"frameworks/pkg/server"
 	"frameworks/pkg/version"
+	"time"
 )
 
 func main() {
@@ -58,9 +62,9 @@ func main() {
 		// Public routes
 		router.POST("/tenants/validate", handlers.ValidateTenant)
 
-		// Protected routes (require service token authentication)
+		// Protected routes (accept JWT user tokens and service token fallback)
 		protected := router.Group("")
-		protected.Use(auth.ServiceAuthMiddleware(config.GetEnv("SERVICE_TOKEN", "default-service-token")))
+		protected.Use(auth.JWTAuthMiddleware([]byte(config.GetEnv("JWT_SECRET", "default-secret-key-change-in-production"))))
 		{
 			// Tenant management
 			protected.POST("/tenants", handlers.CreateTenant)
@@ -81,17 +85,44 @@ func main() {
 			protected.PUT("/clusters/:id/services/:service_id", handlers.UpdateClusterServiceState)
 			protected.GET("/service-instances", handlers.GetServiceInstances)
 
+			// Discovery & Bootstrap
+			protected.GET("/service-discovery", handlers.ServiceDiscovery)
+			protected.GET("/services/health", handlers.GetServicesHealth)
+			protected.GET("/services/:id/health", handlers.GetServiceHealth)
+			protected.GET("/clusters/access", handlers.GetClustersAccess)
+			protected.GET("/clusters/available", handlers.GetClustersAvailable)
+			protected.POST("/bootstrap/edge-node", handlers.BootstrapEdgeNode)
+			protected.POST("/bootstrap/service", handlers.BootstrapService)
+
+			// Bootstrap token management (provider/admin only)
+			protected.POST("/admin/bootstrap-tokens", handlers.CreateBootstrapToken)
+			protected.GET("/admin/bootstrap-tokens", handlers.ListBootstrapTokens)
+			protected.DELETE("/admin/bootstrap-tokens/:id", handlers.RevokeBootstrapToken)
+
 			// Node management
 			protected.GET("/nodes", handlers.GetNodes)
 			protected.GET("/nodes/:id", handlers.GetNode)
+			protected.POST("/nodes/resolve-fingerprint", handlers.ResolveNodeFingerprint)
 			protected.POST("/nodes", handlers.CreateNode)
 			protected.PUT("/nodes/:id/health", handlers.UpdateNodeHealth)
+			protected.GET("/nodes/:id/owner", handlers.GetNodeOwner)
 		}
 	}
+
+	// Start health poller before serving
+	handlers.StartHealthPoller()
 
 	// Start server with graceful shutdown
 	serverConfig := server.DefaultConfig("quartermaster", "18002")
 	if err := server.Start(serverConfig, router, logger); err != nil {
 		logger.WithError(err).Fatal("Server startup failed")
 	}
+
+	// Best-effort self-registration in Quartermaster (idempotent)
+	go func() {
+		qc := qmclient.NewClient(qmclient.Config{BaseURL: config.GetEnv("QUARTERMASTER_URL", "http://localhost:18002"), ServiceToken: config.GetEnv("SERVICE_TOKEN", ""), Logger: logger})
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, _ = qc.BootstrapService(ctx, &qmapi.BootstrapServiceRequest{Type: "quartermaster", Version: version.Version, Protocol: "http", HealthEndpoint: func() *string { s := "/health"; return &s }(), Port: 18002})
+	}()
 }

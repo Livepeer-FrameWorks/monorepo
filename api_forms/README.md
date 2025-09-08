@@ -2,6 +2,15 @@
 
 Barebones API to deal with insecure form submissions. Should look into integrating third party forms providers.
 
+## Status
+- Minimal utility; consider third‑party integration later. Useful for demos and contact forms.
+
+## Run (dev)
+- From repo root: `docker-compose up -d`
+- Or run just the service: `cd api_forms && npm install && npm run dev`
+
+Configuration: copy `env.example` to `.env` and use the inline comments as reference. Do not commit secrets.
+
 ## Build vs Buy Decision
 
 This service can be either built in-house or use third-party providers:

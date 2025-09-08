@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"frameworks/pkg/api/commodore"
+	"frameworks/pkg/cache"
 	"frameworks/pkg/clients"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/models"
@@ -23,6 +24,7 @@ type Client struct {
 	serviceToken string
 	logger       logging.Logger
 	retryConfig  clients.RetryConfig
+	cache        *cache.Cache
 }
 
 // Config represents the configuration for the Commodore client
@@ -33,6 +35,7 @@ type Config struct {
 	Logger               logging.Logger
 	RetryConfig          *clients.RetryConfig
 	CircuitBreakerConfig *clients.CircuitBreakerConfig
+	Cache                *cache.Cache
 }
 
 // NewClient creates a new Commodore API client
@@ -61,6 +64,7 @@ func NewClient(config Config) *Client {
 		serviceToken: config.ServiceToken,
 		logger:       config.Logger,
 		retryConfig:  retryConfig,
+		cache:        config.Cache,
 	}
 }
 
@@ -69,6 +73,22 @@ func (c *Client) ValidateStreamKey(ctx context.Context, streamKey string) (*comm
 	endpoint := fmt.Sprintf("/validate-stream-key/%s", url.PathEscape(streamKey))
 	url := c.baseURL + endpoint
 
+	// Cache key
+	if c.cache != nil {
+		if v, ok, _ := c.cache.Get(ctx, "commodore:validate:"+streamKey, func(ctx context.Context, _ string) (interface{}, bool, error) {
+			resp, err := c.validateStreamKeyNoCache(ctx, url)
+			if err != nil || !resp.Valid {
+				return nil, false, err
+			}
+			return resp, true, nil
+		}); ok {
+			return v.(*commodore.ValidateStreamKeyResponse), nil
+		}
+	}
+	return c.validateStreamKeyNoCache(ctx, url)
+}
+
+func (c *Client) validateStreamKeyNoCache(ctx context.Context, url string) (*commodore.ValidateStreamKeyResponse, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
@@ -104,14 +124,12 @@ func (c *Client) ValidateStreamKey(ctx context.Context, streamKey string) (*comm
 		// Parse error response
 		var errorResp commodore.ErrorResponse
 		if err := json.Unmarshal(body, &errorResp); err != nil {
-			// Fallback to raw error message
 			validation.Error = string(body)
 		} else {
 			validation.Error = errorResp.Error
 		}
 		validation.Valid = false
 	}
-
 	return &validation, nil
 }
 
@@ -120,6 +138,21 @@ func (c *Client) ResolvePlaybackID(ctx context.Context, playbackID string) (*com
 	endpoint := fmt.Sprintf("/resolve-playback-id/%s", url.PathEscape(playbackID))
 	url := c.baseURL + endpoint
 
+	if c.cache != nil {
+		if v, ok, _ := c.cache.Get(ctx, "commodore:resolve:"+playbackID, func(ctx context.Context, _ string) (interface{}, bool, error) {
+			resp, err := c.resolvePlaybackIDNoCache(ctx, url)
+			if err != nil {
+				return nil, false, err
+			}
+			return resp, true, nil
+		}); ok {
+			return v.(*commodore.ResolvePlaybackIDResponse), nil
+		}
+	}
+	return c.resolvePlaybackIDNoCache(ctx, url)
+}
+
+func (c *Client) resolvePlaybackIDNoCache(ctx context.Context, url string) (*commodore.ResolvePlaybackIDResponse, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
@@ -1226,34 +1259,9 @@ func (c *Client) GetRecordings(ctx context.Context, userToken string, streamID *
 
 // === VIEWER ENDPOINT RESOLUTION ===
 
-// ViewerEndpointRequest represents the request for viewer endpoint resolution
-type ViewerEndpointRequest struct {
-	ContentType string `json:"content_type"`
-	ContentID   string `json:"content_id"`
-	ViewerIP    string `json:"viewer_ip,omitempty"`
-}
-
-// ViewerEndpointResponse represents the response from viewer endpoint resolution
-type ViewerEndpointResponse struct {
-	Primary   ViewerEndpoint         `json:"primary"`
-	Fallbacks []ViewerEndpoint       `json:"fallbacks"`
-	Metadata  map[string]interface{} `json:"metadata"`
-}
-
-// ViewerEndpoint represents a single viewer endpoint
-type ViewerEndpoint struct {
-	NodeID      string  `json:"node_id"`
-	BaseURL     string  `json:"base_url"`
-	Protocol    string  `json:"protocol"`
-	URL         string  `json:"url"`
-	GeoDistance float64 `json:"geo_distance"`
-	LoadScore   float64 `json:"load_score"`
-	HealthScore float64 `json:"health_score"`
-}
-
 // ResolveViewerEndpoint calls Commodore to resolve viewer endpoints (which then calls Foghorn)
-func (c *Client) ResolveViewerEndpoint(ctx context.Context, contentType, contentID string, viewerIP *string) ([]ViewerEndpoint, error) {
-	req := ViewerEndpointRequest{
+func (c *Client) ResolveViewerEndpoint(ctx context.Context, contentType, contentID string, viewerIP *string) ([]commodore.ViewerEndpoint, error) {
+	req := commodore.ViewerEndpointRequest{
 		ContentType: contentType,
 		ContentID:   contentID,
 	}
@@ -1298,14 +1306,115 @@ func (c *Client) ResolveViewerEndpoint(ctx context.Context, contentType, content
 		return nil, fmt.Errorf("failed to resolve viewer endpoints: %s", errorResp.Error)
 	}
 
-	var viewerResp ViewerEndpointResponse
+	var viewerResp commodore.ViewerEndpointResponse
 	if err := json.Unmarshal(body, &viewerResp); err != nil {
 		return nil, fmt.Errorf("failed to parse viewer endpoint response: %w", err)
 	}
 
 	// Combine primary and fallbacks into a single slice
-	endpoints := []ViewerEndpoint{viewerResp.Primary}
+	endpoints := []commodore.ViewerEndpoint{viewerResp.Primary}
 	endpoints = append(endpoints, viewerResp.Fallbacks...)
 
 	return endpoints, nil
+}
+
+// GetStreamMeta fetches Mist JSON meta via Commodore proxy with optional target params
+func (c *Client) GetStreamMeta(ctx context.Context, streamKey string, includeRaw bool, targetBaseURL, targetNodeID *string) (*commodore.StreamMetaResponse, error) {
+	v := url.Values{}
+	if targetBaseURL != nil && *targetBaseURL != "" {
+		v.Set("target_base_url", *targetBaseURL)
+	}
+	if targetNodeID != nil && *targetNodeID != "" {
+		v.Set("target_node_id", *targetNodeID)
+	}
+	if includeRaw {
+		v.Set("include_raw", "1")
+	}
+	endpoint := fmt.Sprintf("%s/streams/%s/meta", c.baseURL, url.PathEscape(streamKey))
+	if len(v) > 0 {
+		endpoint += "?" + v.Encode()
+	}
+	req, err := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	if c.serviceToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.serviceToken)
+	}
+	resp, err := clients.DoWithRetry(ctx, c.httpClient, req, c.retryConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call Commodore: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		var errorResp commodore.ErrorResponse
+		if err := json.Unmarshal(body, &errorResp); err != nil {
+			return nil, fmt.Errorf("Commodore returned error status %d: %s", resp.StatusCode, string(body))
+		}
+		return nil, fmt.Errorf("Commodore returned error: %s", errorResp.Error)
+	}
+	var out commodore.StreamMetaResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+	return &out, nil
+}
+
+// ResolveInternalName resolves an internal_name to tenant_id and user_id for enrichment
+func (c *Client) ResolveInternalName(ctx context.Context, internalName string) (*commodore.InternalNameResponse, error) {
+	endpoint := fmt.Sprintf("/resolve-internal-name/%s", url.PathEscape(internalName))
+	url := c.baseURL + endpoint
+
+	if c.cache != nil {
+		if v, ok, _ := c.cache.Get(ctx, "commodore:internal:"+internalName, func(ctx context.Context, _ string) (interface{}, bool, error) {
+			resp, err := c.resolveInternalNameNoCache(ctx, url)
+			if err != nil {
+				return nil, false, err
+			}
+			return resp, true, nil
+		}); ok {
+			return v.(*commodore.InternalNameResponse), nil
+		}
+	}
+	return c.resolveInternalNameNoCache(ctx, url)
+}
+
+func (c *Client) resolveInternalNameNoCache(ctx context.Context, url string) (*commodore.InternalNameResponse, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	// Use service token for internal name resolution
+	if c.serviceToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.serviceToken)
+	}
+
+	resp, err := clients.DoWithRetry(ctx, c.httpClient, req, c.retryConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call Commodore: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		var errorResp commodore.ErrorResponse
+		if err := json.Unmarshal(body, &errorResp); err != nil {
+			return nil, fmt.Errorf("Commodore returned error status %d: %s", resp.StatusCode, string(body))
+		}
+		return nil, fmt.Errorf("Commodore returned error: %s", errorResp.Error)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	var response commodore.InternalNameResponse
+	if err := json.Unmarshal(body, &response); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return &response, nil
 }

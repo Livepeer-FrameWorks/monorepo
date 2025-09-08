@@ -13,7 +13,6 @@ import (
 	fapi "frameworks/pkg/api/foghorn"
 	"frameworks/pkg/clients"
 	"frameworks/pkg/logging"
-	"frameworks/pkg/validation"
 )
 
 // Client represents a Foghorn API client
@@ -60,55 +59,6 @@ func NewClient(config Config) *Client {
 		logger:       config.Logger,
 		retryConfig:  retryConfig,
 	}
-}
-
-// NodeShutdownRequest represents a node shutdown notification to Foghorn
-// Must match exactly what Foghorn expects: node_id, type, timestamp, reason, details
-type NodeShutdownRequest struct {
-	NodeID    string                          `json:"node_id"`
-	Type      string                          `json:"type"`
-	Timestamp int64                           `json:"timestamp"`
-	Reason    string                          `json:"reason"`
-	Details   *validation.FoghornNodeShutdown `json:"details"`
-}
-
-// NotifyShutdown sends a shutdown notification to Foghorn
-func (c *Client) NotifyShutdown(ctx context.Context, req *NodeShutdownRequest) error {
-	jsonData, err := json.Marshal(req)
-	if err != nil {
-		return fmt.Errorf("failed to marshal shutdown notification: %w", err)
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/node/shutdown", bytes.NewBuffer(jsonData))
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-
-	httpReq.Header.Set("Content-Type", "application/json")
-	// Use user's JWT from context if available, otherwise fall back to service token
-	if jwtToken := ctx.Value("jwt_token"); jwtToken != nil {
-		if tokenStr, ok := jwtToken.(string); ok && tokenStr != "" {
-			httpReq.Header.Set("Authorization", "Bearer "+tokenStr)
-		}
-	} else if c.serviceToken != "" {
-		httpReq.Header.Set("Authorization", "Bearer "+c.serviceToken)
-	}
-
-	resp, err := clients.DoWithRetry(ctx, c.httpClient, httpReq, c.retryConfig)
-	if err != nil {
-		return fmt.Errorf("failed to send shutdown notification: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		c.logger.WithFields(logging.Fields{
-			"status": resp.StatusCode,
-			"body":   string(body),
-		}).Warn("Foghorn shutdown notification failed")
-	}
-
-	return nil
 }
 
 // CreateClip sends a typed clip creation request to Foghorn
@@ -418,6 +368,48 @@ func (c *Client) ResolveViewerEndpoint(ctx context.Context, req *fapi.ViewerEndp
 	}
 
 	var out fapi.ViewerEndpointResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+	return &out, nil
+}
+
+// GetStreamMeta fetches Mist JSON meta summary via Foghorn
+func (c *Client) GetStreamMeta(ctx context.Context, internalName string, includeRaw bool, targetBaseURL string, targetNodeID string) (*fapi.StreamMetaResponse, error) {
+	payload := map[string]interface{}{
+		"internal_name": internalName,
+		"include_raw":   includeRaw,
+	}
+	if targetBaseURL != "" {
+		payload["target_base_url"] = targetBaseURL
+	}
+	if targetNodeID != "" {
+		payload["target_node_id"] = targetNodeID
+	}
+	jsonData, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal stream meta request: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/viewer/stream-meta", bytes.NewBuffer(jsonData))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	if c.serviceToken != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.serviceToken)
+	}
+
+	resp, err := clients.DoWithRetry(ctx, c.httpClient, httpReq, c.retryConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call foghorn: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("Foghorn error (%d): %s", resp.StatusCode, string(body))
+	}
+	var out fapi.StreamMetaResponse
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}

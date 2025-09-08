@@ -12,29 +12,22 @@ The Bridge is the GraphQL API Gateway that provides a unified interface for all 
 
 ## Architecture
 - Framework: gqlgen (Go GraphQL server)
-- Caching: Redis for query results
+- Caching: optional Redis for query results
 - Auth: JWT validation via Commodore
-- Subscriptions: WebSocket connection to Signalman
-- Service calls: HTTP to internal services over WireGuard mesh
+- Subscriptions: WebSocket via Signalman
+- Service calls: HTTP to internal services
 
-## Configuration
+## Run (dev)
+- Start the full stack from repo root: `docker-compose up -d`
+- Or run just Bridge: `cd api_gateway && go run ./cmd/bridge`
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `BRIDGE_PORT` | No | HTTP port (default: 18000) |
-| `COMMODORE_URL` | Yes | Commodore API URL |
-| `PERISCOPE_QUERY_URL` | Yes | Periscope Query API URL |
-| `PURSER_URL` | Yes | Purser API URL |
-| `SIGNALMAN_WS_URL` | Yes | Signalman WebSocket URL |
-| `JWT_SECRET` | Yes | JWT validation secret |
-| `SERVICE_TOKEN` | Yes | Service-to-service auth token |
-| `REDIS_URL` | No | Redis connection URL for caching |
-| `GRAPHQL_PLAYGROUND_ENABLED` | No | Enable GraphQL playground (default: false) |
-| `GRAPHQL_COMPLEXITY_LIMIT` | No | Max query complexity (default: 200) |
-| `LOG_LEVEL` | No | `debug|info|warn|error` |
+## Health & endpoints
+- Health: `GET /health`
+- HTTP: 18000 (see root README “Ports”)
+- GraphQL: `POST /graphql`, WS: `/graphql/ws`, Playground optional at `/graphql`
 
-Health: `GET /health`.
-GraphQL: `POST /graphql`.
-Playground: `GET /graphql` (if enabled).
+Configuration: copy `env.example` to `.env` and use the inline comments as reference. Do not commit secrets.
 
-Cross-refs: see root README "Ports" and docs/IMPLEMENTATION.md for service boundaries.
+## Related
+- Root `README.md` (ports, stack overview)
+- `docs/IMPLEMENTATION.md` (service boundaries)

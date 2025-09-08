@@ -13,7 +13,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/protobuf/types/known/timestamppb"
+	grpc_health_v1 "google.golang.org/grpc/health/grpc_health_v1"
 
 	pb "frameworks/pkg/proto"
 )
@@ -80,191 +80,210 @@ func (c *Client) Close() error {
 	return c.conn.Close()
 }
 
-// SendEvent sends a prepared event to Decklog.
-// Any missing timestamp will be populated automatically.
-func (c *Client) SendEvent(ctx context.Context, event *pb.Event) error {
-	if event.Timestamp == nil {
-		event.Timestamp = timestamppb.Now()
+// Health queries the gRPC health status of the Decklog server.
+// If service is empty (""), it checks overall server health.
+func (c *Client) Health(ctx context.Context, service string) (grpc_health_v1.HealthCheckResponse_ServingStatus, error) {
+	hc := grpc_health_v1.NewHealthClient(c.conn)
+	resp, err := hc.Check(ctx, &grpc_health_v1.HealthCheckRequest{Service: service})
+	if err != nil {
+		return grpc_health_v1.HealthCheckResponse_UNKNOWN, err
+	}
+	return resp.GetStatus(), nil
+}
+
+// BatchedClient provides direct protobuf event sending for services like Foghorn
+type BatchedClient struct {
+	conn   *grpc.ClientConn
+	client pb.DecklogServiceClient
+	logger logging.Logger
+	source string
+}
+
+// BatchedClientConfig represents configuration for the batched Decklog client
+type BatchedClientConfig struct {
+	Target        string
+	AllowInsecure bool
+	CACertFile    string
+	Timeout       time.Duration
+	Source        string // Source identifier for all events (e.g., "foghorn")
+}
+
+// NewBatchedClient creates a new Decklog gRPC client
+func NewBatchedClient(cfg BatchedClientConfig, logger logging.Logger) (*BatchedClient, error) {
+	var opts []grpc.DialOption
+
+	if cfg.AllowInsecure {
+		opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	} else {
+		// Load CA cert for server verification
+		caCert, err := os.ReadFile(cfg.CACertFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read CA cert: %w", err)
+		}
+
+		certPool := x509.NewCertPool()
+		if !certPool.AppendCertsFromPEM(caCert) {
+			return nil, fmt.Errorf("failed to append CA cert")
+		}
+
+		creds := credentials.NewTLS(&tls.Config{
+			RootCAs: certPool,
+		})
+		opts = append(opts, grpc.WithTransportCredentials(creds))
 	}
 
-	_, err := c.client.SendEvent(ctx, event)
-	if err != nil {
-		return fmt.Errorf("failed to send event: %w", err)
+	// Add timeout
+	if cfg.Timeout > 0 {
+		opts = append(opts, grpc.WithTimeout(cfg.Timeout))
 	}
+
+	// Connect to server
+	conn, err := grpc.Dial(cfg.Target, opts...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to dial server: %w", err)
+	}
+
+	source := cfg.Source
+	if source == "" {
+		source = "unknown"
+	}
+
+	client := &BatchedClient{
+		conn:   conn,
+		client: pb.NewDecklogServiceClient(conn),
+		logger: logger,
+		source: source,
+	}
+
+	logger.WithFields(logging.Fields{
+		"target": cfg.Target,
+		"source": source,
+	}).Info("Decklog client initialized")
+
+	return client, nil
+}
+
+// SendTrigger sends an enriched MistTrigger to Decklog
+func (c *BatchedClient) SendTrigger(trigger *pb.MistTrigger) error {
+	ctx := context.Background()
+	_, err := c.client.SendEvent(ctx, trigger)
+	if err != nil {
+		c.logger.WithFields(logging.Fields{
+			"trigger_type": trigger.GetTriggerType(),
+			"node_id":      trigger.GetNodeId(),
+			"error":        err,
+		}).Error("Failed to send trigger to Decklog")
+		return fmt.Errorf("failed to send trigger: %w", err)
+	}
+
+	c.logger.WithFields(logging.Fields{
+		"trigger_type": trigger.GetTriggerType(),
+		"node_id":      trigger.GetNodeId(),
+		"request_id":   trigger.GetRequestId(),
+	}).Debug("Trigger sent to Decklog")
 
 	return nil
 }
 
-// StreamEvents creates a bidirectional stream for sending events
-func (c *Client) StreamEvents(ctx context.Context) (pb.DecklogService_StreamEventsClient, error) {
-	stream, err := c.client.StreamEvents(ctx)
+// SendLoadBalancing sends load balancing data to Decklog
+func (c *BatchedClient) SendLoadBalancing(data *pb.LoadBalancingData) error {
+	ctx := context.Background()
+	// Wrap into unified envelope
+	trigger := &pb.MistTrigger{
+		TriggerType: "LOAD_BALANCING",
+		TriggerPayload: &pb.MistTrigger_LoadBalancingData{
+			LoadBalancingData: data,
+		},
+	}
+	_, err := c.client.SendEvent(ctx, trigger)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create stream: %w", err)
+		c.logger.WithFields(logging.Fields{
+			"selected_node": data.GetSelectedNode(),
+			"client_ip":     data.GetClientIp(),
+			"error":         err,
+		}).Error("Failed to send load balancing data to Decklog")
+		return fmt.Errorf("failed to send load balancing data: %w", err)
 	}
 
-	return stream, nil
+	c.logger.WithFields(logging.Fields{
+		"selected_node": data.GetSelectedNode(),
+		"client_ip":     data.GetClientIp(),
+	}).Debug("Load balancing data sent to Decklog")
+
+	return nil
 }
 
-// CheckHealth checks Decklog's health
-func (c *Client) CheckHealth(ctx context.Context) (string, error) {
-	resp, err := c.client.CheckHealth(ctx, &pb.HealthRequest{})
+// SendClipLifecycle sends clip lifecycle data to Decklog
+func (c *BatchedClient) SendClipLifecycle(data *pb.ClipLifecycleData) error {
+	ctx := context.Background()
+	trigger := &pb.MistTrigger{
+		TriggerType: "CLIP_LIFECYCLE",
+		TriggerPayload: &pb.MistTrigger_ClipLifecycleData{
+			ClipLifecycleData: data,
+		},
+	}
+	_, err := c.client.SendEvent(ctx, trigger)
 	if err != nil {
-		return "", fmt.Errorf("health check failed: %w", err)
+		c.logger.WithFields(logging.Fields{
+			"clip_hash": data.GetClipHash(),
+			"stage":     data.GetStage().String(),
+			"error":     err,
+		}).Error("Failed to send clip lifecycle data to Decklog")
+		return fmt.Errorf("failed to send clip lifecycle data: %w", err)
 	}
 
-	return resp.Status, nil
+	c.logger.WithFields(logging.Fields{
+		"clip_hash": data.GetClipHash(),
+		"stage":     data.GetStage().String(),
+	}).Debug("Clip lifecycle data sent to Decklog")
+
+	return nil
 }
 
-// Helper methods for creating common event types
-
-// NewStreamIngestEvent creates a new stream ingest event with typed data
-func NewStreamIngestEvent(tenantID, streamKey, userID, internalName, streamID, ingestURL, protocol string) *pb.Event {
-	return &pb.Event{
-		Source:   "mistserver_webhook",
-		TenantId: tenantID,
-		Events: []*pb.EventData{
-			{
-				EventId:       fmt.Sprintf("ingest_%d", time.Now().UnixNano()),
-				EventType:     pb.EventType_EVENT_TYPE_STREAM_INGEST,
-				Timestamp:     timestamppb.Now(),
-				Source:        "mistserver_webhook",
-				StreamId:      &streamID,
-				UserId:        &userID,
-				InternalName:  &internalName,
-				Region:        os.Getenv("REGION"),
-				SchemaVersion: "1.0",
-				EventData: &pb.EventData_StreamIngestData{
-					StreamIngestData: &pb.StreamIngestData{
-						StreamKey: streamKey,
-						Protocol:  protocol,
-						IngestUrl: ingestURL,
-					},
-				},
-			},
+// SendDVRLifecycle sends DVR lifecycle data to Decklog
+func (c *BatchedClient) SendDVRLifecycle(data *pb.DVRLifecycleData) error {
+	ctx := context.Background()
+	trigger := &pb.MistTrigger{
+		TriggerType: "DVR_LIFECYCLE",
+		TriggerPayload: &pb.MistTrigger_DvrLifecycleData{
+			DvrLifecycleData: data,
 		},
-		Timestamp: timestamppb.Now(),
 	}
+	_, err := c.client.SendEvent(ctx, trigger)
+	if err != nil {
+		c.logger.WithFields(logging.Fields{
+			"dvr_hash": data.GetDvrHash(),
+			"status":   data.GetStatus().String(),
+			"error":    err,
+		}).Error("Failed to send DVR lifecycle data to Decklog")
+		return fmt.Errorf("failed to send DVR lifecycle data: %w", err)
+	}
+
+	c.logger.WithFields(logging.Fields{
+		"dvr_hash": data.GetDvrHash(),
+		"status":   data.GetStatus().String(),
+	}).Debug("DVR lifecycle data sent to Decklog")
+
+	return nil
 }
 
-// NewStreamViewEvent creates a new stream view event with typed data
-func NewStreamViewEvent(tenantID, playbackID, internalName, streamID string) *pb.Event {
-	return &pb.Event{
-		Source:   "mistserver_webhook",
-		TenantId: tenantID,
-		Events: []*pb.EventData{
-			{
-				EventId:       fmt.Sprintf("view_%d", time.Now().UnixNano()),
-				EventType:     pb.EventType_EVENT_TYPE_STREAM_VIEW,
-				Timestamp:     timestamppb.Now(),
-				Source:        "mistserver_webhook",
-				StreamId:      &streamID,
-				PlaybackId:    &playbackID,
-				InternalName:  &internalName,
-				Region:        os.Getenv("REGION"),
-				SchemaVersion: "1.0",
-				EventData: &pb.EventData_StreamViewData{
-					StreamViewData: &pb.StreamViewData{},
-				},
-			},
-		},
-		Timestamp: timestamppb.Now(),
+// Close gracefully shuts down the client
+func (c *BatchedClient) Close() error {
+	if c.conn != nil {
+		c.conn.Close()
 	}
+
+	c.logger.WithField("source", c.source).Info("Decklog client closed")
+	return nil
 }
 
-// NewLoadBalancingEvent creates a new load balancing event with typed data
-func NewLoadBalancingEvent(tenantID, streamID, selectedNode, selectedNodeID, clientIP, clientCountry, status, details string, lat, lon float64, score uint64, nodeLat, nodeLon float64, nodeName string, routingDistanceKm float64) *pb.Event {
-	return &pb.Event{
-		Source:   "foghorn",
-		TenantId: tenantID,
-		Events: []*pb.EventData{
-			{
-				EventId:       fmt.Sprintf("lb_%d", time.Now().UnixNano()),
-				EventType:     pb.EventType_EVENT_TYPE_LOAD_BALANCING,
-				Timestamp:     timestamppb.Now(),
-				Source:        "foghorn",
-				StreamId:      &streamID,
-				Region:        os.Getenv("REGION"),
-				SchemaVersion: "1.0",
-				EventData: &pb.EventData_LoadBalancingData{
-					LoadBalancingData: &pb.LoadBalancingData{
-						SelectedNode:  selectedNode,
-						Latitude:      lat,
-						Longitude:     lon,
-						Status:        status,
-						Details:       details,
-						Score:         score,
-						ClientIp:      clientIP,
-						ClientCountry: clientCountry,
-						NodeLatitude:  nodeLat,
-						NodeLongitude: nodeLon,
-						NodeName:      nodeName,
-						SelectedNodeId: func() *string {
-							if selectedNodeID == "" {
-								return nil
-							}
-							return &selectedNodeID
-						}(),
-						RoutingDistanceKm: func() *float64 {
-							if routingDistanceKm == 0 {
-								return nil
-							}
-							v := routingDistanceKm
-							return &v
-						}(),
-					},
-				},
-			},
-		},
-		Timestamp: timestamppb.Now(),
+// Health queries the gRPC health status of the Decklog server.
+// If service is empty (""), it checks overall server health.
+func (c *BatchedClient) Health(ctx context.Context, service string) (grpc_health_v1.HealthCheckResponse_ServingStatus, error) {
+	hc := grpc_health_v1.NewHealthClient(c.conn)
+	resp, err := hc.Check(ctx, &grpc_health_v1.HealthCheckRequest{Service: service})
+	if err != nil {
+		return grpc_health_v1.HealthCheckResponse_UNKNOWN, err
 	}
-}
-
-// NewClipLifecycleEvent creates a new clip lifecycle event
-func NewClipLifecycleEvent(tenantID string, internalName string, requestID string, stage pb.ClipLifecycleData_Stage, opts func(*pb.ClipLifecycleData)) *pb.Event {
-	data := &pb.ClipLifecycleData{Stage: stage, RequestId: requestID}
-	if opts != nil {
-		opts(data)
-	}
-	return &pb.Event{
-		Source:   "clip_orchestrator",
-		TenantId: tenantID,
-		Events: []*pb.EventData{
-			{
-				EventId:       fmt.Sprintf("clip_%d", time.Now().UnixNano()),
-				EventType:     pb.EventType_EVENT_TYPE_CLIP_LIFECYCLE,
-				Timestamp:     timestamppb.Now(),
-				Source:        "clip_orchestrator",
-				InternalName:  &internalName,
-				Region:        os.Getenv("REGION"),
-				SchemaVersion: "1.0",
-				EventData:     &pb.EventData_ClipLifecycleData{ClipLifecycleData: data},
-			},
-		},
-		Timestamp: timestamppb.Now(),
-	}
-}
-
-// NewDVRLifecycleEvent creates a new DVR lifecycle event
-func NewDVRLifecycleEvent(tenantID string, internalName string, requestID string, stage pb.DVRLifecycleData_Stage, opts func(*pb.DVRLifecycleData)) *pb.Event {
-	data := &pb.DVRLifecycleData{Stage: stage, RequestId: requestID}
-	if opts != nil {
-		opts(data)
-	}
-	return &pb.Event{
-		Source:   "dvr_orchestrator",
-		TenantId: tenantID,
-		Events: []*pb.EventData{
-			{
-				EventId:       fmt.Sprintf("dvr_%d", time.Now().UnixNano()),
-				EventType:     pb.EventType_EVENT_TYPE_DVR_LIFECYCLE,
-				Timestamp:     timestamppb.Now(),
-				Source:        "dvr_orchestrator",
-				InternalName:  &internalName,
-				Region:        os.Getenv("REGION"),
-				SchemaVersion: "1.0",
-				EventData:     &pb.EventData_DvrLifecycleData{DvrLifecycleData: data},
-			},
-		},
-		Timestamp: timestamppb.Now(),
-	}
+	return resp.GetStatus(), nil
 }

@@ -14,17 +14,40 @@
   let loading = true;
   
   // Infrastructure data
+  /** @type {any} */
   let tenant = null;
+  /** @type {any[]} */
   let clusters = [];
+  /** @type {any[]} */
   let nodes = [];
+  /** @type {any} */
   let systemHealthSubscription = null;
   
   // Real-time system health data
+  /** @type {Record<string, any>} */
   let systemHealth = {};
   
   // Performance analytics
+  /** @type {any[]} */
   let nodePerformanceMetrics = [];
-  let platformSummary = { totalActiveNodes: 0, avgCpuUsage: 0, avgMemoryUsage: 0, avgHealthScore: 0 };
+  let platformMetrics = {
+    totalActiveNodes: 0,
+    avgCpuUsage: 0,
+    avgMemoryUsage: 0,
+    avgHealthScore: 0
+  };
+  let platformSummary = { 
+    totalViewers: 0,
+    avgViewers: 0,
+    totalStreams: 0,
+    avgConnectionQuality: 0,
+    avgBufferHealth: 0,
+    uniqueCountries: 0,
+    uniqueCities: 0,
+    nodesHealthy: 0,
+    nodesDegraded: 0,
+    nodesUnhealthy: 0
+  };
   
   // Time range for performance metrics (last 24 hours)
   const timeRange = {
@@ -86,6 +109,29 @@
       
       nodePerformanceMetrics = metrics || [];
       platformSummary = summary || platformSummary;
+      
+      // Calculate platform metrics from node performance data
+      if (nodePerformanceMetrics.length > 0) {
+        const totalNodes = nodePerformanceMetrics.length;
+        const avgCpu = nodePerformanceMetrics.reduce((sum, node) => sum + (node.avgCpuUsage || 0), 0) / totalNodes;
+        const avgMem = nodePerformanceMetrics.reduce((sum, node) => sum + (node.avgMemoryUsage || 0), 0) / totalNodes;
+        const avgHealth = nodePerformanceMetrics.reduce((sum, node) => sum + (node.avgHealthScore || 0), 0) / totalNodes;
+        
+        platformMetrics = {
+          totalActiveNodes: totalNodes,
+          avgCpuUsage: avgCpu,
+          avgMemoryUsage: avgMem,
+          avgHealthScore: avgHealth
+        };
+      } else {
+        // Use platform summary node counts if no metrics available
+        platformMetrics = {
+          totalActiveNodes: (platformSummary.nodesHealthy || 0) + (platformSummary.nodesDegraded || 0) + (platformSummary.nodesUnhealthy || 0),
+          avgCpuUsage: 0,
+          avgMemoryUsage: 0,
+          avgHealthScore: 0
+        };
+      }
     } catch (error) {
       console.error("Failed to load performance data:", error);
     }
@@ -93,6 +139,9 @@
 
   function startSystemHealthSubscription() {
     systemHealthSubscription = infrastructureService.subscribeToSystemHealth({
+      /**
+       * @param {any} healthData
+       */
       onSystemHealth: (healthData) => {
         // Update system health data
         systemHealth[healthData.nodeId] = {
@@ -103,6 +152,9 @@
         // Trigger reactivity
         systemHealth = { ...systemHealth };
       },
+      /**
+       * @param {any} error
+       */
       onError: (error) => {
         console.error('System health subscription failed:', error);
         toast.warning("Real-time health monitoring disconnected. Data may be outdated.");
@@ -110,30 +162,50 @@
     });
   }
 
+  /**
+   * @param {string} nodeId
+   * @returns {string}
+   */
   function getNodeStatus(nodeId) {
     const health = systemHealth[nodeId];
     if (!health) return 'UNKNOWN';
     return health.status;
   }
 
+  /**
+   * @param {string} nodeId
+   * @returns {number}
+   */
   function getNodeHealthScore(nodeId) {
     const health = systemHealth[nodeId];
     if (!health) return 0;
     return Math.round(health.healthScore * 100);
   }
 
+  /**
+   * @param {string} nodeId
+   * @returns {string}
+   */
   function formatCpuUsage(nodeId) {
     const health = systemHealth[nodeId];
     if (!health) return '0%';
     return `${Math.round(health.cpuUsage)}%`;
   }
 
+  /**
+   * @param {string} nodeId
+   * @returns {string}
+   */
   function formatMemoryUsage(nodeId) {
     const health = systemHealth[nodeId];
     if (!health) return '0%';
     return `${Math.round(health.memoryUsage)}%`;
   }
 
+  /**
+   * @param {string | null | undefined} status
+   * @returns {string}
+   */
   function getStatusColor(status) {
     switch (status?.toLowerCase()) {
       case 'healthy': return 'text-green-500';
@@ -221,25 +293,25 @@
         <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
           <div class="bg-tokyo-night-bg rounded-lg p-4 border border-tokyo-night-selection">
             <div class="text-2xl font-bold text-tokyo-night-green mb-2">
-              {platformSummary.totalActiveNodes || 0}
+              {platformMetrics.totalActiveNodes || 0}
             </div>
             <div class="text-sm text-tokyo-night-comment">Active Nodes</div>
           </div>
           <div class="bg-tokyo-night-bg rounded-lg p-4 border border-tokyo-night-selection">
             <div class="text-2xl font-bold text-tokyo-night-blue mb-2">
-              {platformSummary.avgCpuUsage?.toFixed(1) || 0}%
+              {platformMetrics.avgCpuUsage?.toFixed(1) || 0}%
             </div>
             <div class="text-sm text-tokyo-night-comment">Avg CPU Usage</div>
           </div>
           <div class="bg-tokyo-night-bg rounded-lg p-4 border border-tokyo-night-selection">
             <div class="text-2xl font-bold text-tokyo-night-purple mb-2">
-              {platformSummary.avgMemoryUsage?.toFixed(1) || 0}%
+              {platformMetrics.avgMemoryUsage?.toFixed(1) || 0}%
             </div>
             <div class="text-sm text-tokyo-night-comment">Avg Memory Usage</div>
           </div>
           <div class="bg-tokyo-night-bg rounded-lg p-4 border border-tokyo-night-selection">
             <div class="text-2xl font-bold text-tokyo-night-orange mb-2">
-              {Math.round(platformSummary.avgHealthScore * 100) || 0}%
+              {Math.round(platformMetrics.avgHealthScore) || 0}%
             </div>
             <div class="text-sm text-tokyo-night-comment">Avg Health Score</div>
           </div>
@@ -291,6 +363,38 @@
             <p class="text-tokyo-night-comment">No performance data available</p>
           </div>
         {/if}
+      </div>
+
+      <!-- Viewer & Stream Metrics -->
+      <div class="bg-tokyo-night-surface rounded-lg p-6 mb-8">
+        <h2 class="text-xl font-semibold mb-6 text-tokyo-night-cyan">Viewer & Stream Metrics (Last 24 Hours)</h2>
+        
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div class="bg-tokyo-night-bg rounded-lg p-4 border border-tokyo-night-selection">
+            <div class="text-2xl font-bold text-tokyo-night-blue mb-2">
+              {platformSummary.totalViewers || 0}
+            </div>
+            <div class="text-sm text-tokyo-night-comment">Total Viewers</div>
+          </div>
+          <div class="bg-tokyo-night-bg rounded-lg p-4 border border-tokyo-night-selection">
+            <div class="text-2xl font-bold text-tokyo-night-purple mb-2">
+              {platformSummary.totalStreams || 0}
+            </div>
+            <div class="text-sm text-tokyo-night-comment">Active Streams</div>
+          </div>
+          <div class="bg-tokyo-night-bg rounded-lg p-4 border border-tokyo-night-selection">
+            <div class="text-2xl font-bold text-tokyo-night-green mb-2">
+              {Math.round(platformSummary.avgConnectionQuality) || 0}%
+            </div>
+            <div class="text-sm text-tokyo-night-comment">Connection Quality</div>
+          </div>
+          <div class="bg-tokyo-night-bg rounded-lg p-4 border border-tokyo-night-selection">
+            <div class="text-2xl font-bold text-tokyo-night-orange mb-2">
+              {platformSummary.uniqueCountries || 0}
+            </div>
+            <div class="text-sm text-tokyo-night-comment">Countries Reached</div>
+          </div>
+        </div>
       </div>
 
       <!-- Clusters Overview -->

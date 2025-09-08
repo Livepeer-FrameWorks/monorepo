@@ -37,6 +37,19 @@ func GraphQLContextMiddleware() gin.HandlerFunc {
 			}
 		}
 
+		// Check for service token in Authorization header
+		// Service tokens are used by providers/admins for bootstrap token management
+		if existingServiceToken := ctx.Value("service_token"); existingServiceToken == nil {
+			auth := c.GetHeader("Authorization")
+			if auth != "" {
+				parts := strings.Split(auth, " ")
+				// Service tokens use "Service" prefix instead of "Bearer"
+				if len(parts) == 2 && parts[0] == "Service" {
+					ctx = context.WithValue(ctx, "service_token", parts[1])
+				}
+			}
+		}
+
 		// Check for user information from Gin context (regular HTTP requests)
 		// or from WebSocket context (WebSocket connections)
 		var userIDStr, tenantIDStr, emailStr, roleStr string
@@ -130,4 +143,18 @@ func RequireAuth(ctx context.Context) (*UserContext, error) {
 		return nil, auth.ErrUnauthenticated
 	}
 	return user, nil
+}
+
+// HasServiceToken checks if the current context has a service token
+func HasServiceToken(ctx context.Context) bool {
+	token, ok := ctx.Value("service_token").(string)
+	return ok && token != ""
+}
+
+// RequireServiceToken checks if service token is present and returns error if not
+func RequireServiceToken(ctx context.Context) error {
+	if !HasServiceToken(ctx) {
+		return auth.ErrUnauthenticated
+	}
+	return nil
 }

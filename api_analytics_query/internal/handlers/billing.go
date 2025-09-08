@@ -219,7 +219,7 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 		SELECT COALESCE(sum(file_size) / (1024*1024*1024), 0) as recording_gb
 		FROM stream_events 
 		WHERE tenant_id = $1 
-		AND event_type = 'recording-lifecycle'
+    AND event_type = 'recording-complete'
 		AND timestamp BETWEEN $2 AND $3
 	`, tenantID, startTime, endTime).Scan(&recordingGB)
 	if err != nil && err != database.ErrNoRows {

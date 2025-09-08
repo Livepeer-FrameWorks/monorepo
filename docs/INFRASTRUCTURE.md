@@ -1,8 +1,8 @@
-# 🏗️ FrameWorks Infrastructure
+# FrameWorks Infrastructure
 
-This document provides a high-level overview of how FrameWorks manages infrastructure at scale. For implementation details, see [infrastructure/README.md](../infrastructure/README.md).
+High‑level overview of how FrameWorks manages infrastructure. For deployment how‑tos, see `docs/provisioning/` and the FrameWorks CLI.
 
-## 📋 Overview
+## Overview
 
 FrameWorks uses a pragmatic approach to infrastructure:
 
@@ -15,7 +15,7 @@ FrameWorks uses a pragmatic approach to infrastructure:
   - Ansible for configuration and service rollout
   - Long term: Kubernetes/GitOps
 
-## 🏛️ Architecture
+## Architecture
 
 ```mermaid
 graph TB
@@ -45,7 +45,7 @@ graph TB
     RUNTIME --> CONFIG
 ```
 
-## 🔄 Component Roles
+## Component Roles
 
 ### Machine Layer (Terraform)
 - Resource provisioning (planned)
@@ -65,7 +65,7 @@ graph TB
 - Dynamic inventory (planned)
 - Health monitoring
 
-## 🌐 Deployment Tiers
+## Deployment Tiers
 
 ### Central Tier
 - Purpose: Control plane and shared services
@@ -79,7 +79,7 @@ graph TB
 - Purpose: Media processing and delivery
 - Components: Media servers, real-time services
 
-## 🔧 Proxy & SSL Strategy
+## Proxy & SSL Strategy
 
 ### Current Approach (Production)
 - **Reverse Proxy**: Custom Nginx build with GeoIP2 module for geographic routing
@@ -98,9 +98,9 @@ graph TB
 - Evaluate Cloudflare geo header passthrough vs MaxMind database approach
 - Test compatibility with Foghorn's geographic routing logic
 
-**Decision**: Continue with current Nginx + MaxMind setup, evaluate Cloudflare geo headers + Caddy as future unified solution.
+Decision: Nginx + MaxMind remains an option; evaluate Cloudflare geo headers + Caddy as a unified solution. Production configs are provided via the CLI templates.
 
-## 🔗 Mesh Networking Strategy
+## Mesh Networking Strategy
 
 ### The Bootstrap Challenge
 FrameWorks services require secure VPN mesh connectivity for inter-service communication, creating a chicken-and-egg problem: the mesh must exist before services can communicate, but something must establish the mesh first.
@@ -120,31 +120,4 @@ FrameWorks services require secure VPN mesh connectivity for inter-service commu
 - **Encrypted mesh**: All inter-service traffic via WireGuard
 
 ### Integration with Automation
-**Manual Deployment**:
-```bash
-# Generate token
-curl -X POST quartermaster.example.com/api/v1/mesh/tokens
-
-# Join mesh
-privateer join --token=eyJhbGc...
-```
-
-**Automated Deployment**:
-```yaml
-# Ansible
-- name: Join mesh
-  command: privateer join --token={{ mesh_token }}
-```
-
-```hcl
-# Terraform
-resource "frameworks_mesh_token" "node" {
-  expires_in = "1h"
-}
-
-resource "compute_instance" "node" {
-  user_data = "privateer join --token=${frameworks_mesh_token.node.token}"
-}
-```
-
-This approach enables secure, automated mesh expansion while maintaining the isolated microservice architecture.
+When implemented, the mesh join flow is designed to support manual and automated paths (Ansible, Terraform). See the CLI and `docs/provisioning/wireguard-mesh.md` for networking guidance.

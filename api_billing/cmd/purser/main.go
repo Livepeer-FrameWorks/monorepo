@@ -4,13 +4,16 @@ import (
 	"context"
 
 	"frameworks/api_billing/internal/handlers"
+	qmapi "frameworks/pkg/api/quartermaster"
 	"frameworks/pkg/auth"
+	qmclient "frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/config"
 	"frameworks/pkg/database"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/monitoring"
 	"frameworks/pkg/server"
 	"frameworks/pkg/version"
+	"time"
 )
 
 func main() {
@@ -97,4 +100,16 @@ func main() {
 	if err := server.Start(serverConfig, router, logger); err != nil {
 		logger.WithError(err).Fatal("Server startup failed")
 	}
+
+	// Best-effort service registration in Quartermaster
+	go func() {
+		qc := qmclient.NewClient(qmclient.Config{BaseURL: config.GetEnv("QUARTERMASTER_URL", "http://localhost:18002"), ServiceToken: config.GetEnv("SERVICE_TOKEN", ""), Logger: logger})
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if _, err := qc.BootstrapService(ctx, &qmapi.BootstrapServiceRequest{Type: "purser", Version: version.Version, Protocol: "http", HealthEndpoint: func() *string { s := "/health"; return &s }(), Port: 18003}); err != nil {
+			logger.WithError(err).Warn("Quartermaster bootstrap (purser) failed")
+		} else {
+			logger.Info("Quartermaster bootstrap (purser) ok")
+		}
+	}()
 }

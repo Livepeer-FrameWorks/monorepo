@@ -168,6 +168,24 @@ type NodeHealthUpdateResponse struct {
 	NodeID  string `json:"node_id"`
 }
 
+// Node fingerprint resolution
+type ResolveNodeFingerprintRequest struct {
+	PeerIP          string   `json:"peer_ip"`
+	GeoCountry      string   `json:"geo_country,omitempty"`
+	GeoCity         string   `json:"geo_city,omitempty"`
+	GeoLatitude     float64  `json:"geo_latitude,omitempty"`
+	GeoLongitude    float64  `json:"geo_longitude,omitempty"`
+	LocalIPv4       []string `json:"local_ipv4,omitempty"`
+	LocalIPv6       []string `json:"local_ipv6,omitempty"`
+	MacsSHA256      *string  `json:"macs_sha256,omitempty"`
+	MachineIDSHA256 *string  `json:"machine_id_sha256,omitempty"`
+}
+
+type ResolveNodeFingerprintResponse struct {
+	TenantID        string `json:"tenant_id"`
+	CanonicalNodeID string `json:"canonical_node_id"`
+}
+
 // Service catalog responses
 type ServicesResponse struct {
 	Services []models.Service `json:"services"`
@@ -201,6 +219,133 @@ type ServiceInstancesResponse struct {
 type ServiceInstanceFilters struct {
 	ClusterID string `json:"cluster_id"`
 	ServiceID string `json:"service_id"`
+}
+
+// === BOOTSTRAP & DISCOVERY ===
+
+// BootstrapEdgeNodeRequest is used by Foghorn to register a new edge node for a tenant
+type BootstrapEdgeNodeRequest struct {
+	Token    string                 `json:"token" binding:"required"`
+	Hostname string                 `json:"hostname"`
+	IPs      []string               `json:"ips,omitempty"`
+	Labels   map[string]interface{} `json:"labels,omitempty"`
+	// Optional fingerprint signals for identity binding at enrollment time
+	LocalIPv4       []string `json:"local_ipv4,omitempty"`
+	LocalIPv6       []string `json:"local_ipv6,omitempty"`
+	MacsSHA256      *string  `json:"macs_sha256,omitempty"`
+	MachineIDSHA256 *string  `json:"machine_id_sha256,omitempty"`
+}
+
+type BootstrapEdgeNodeResponse struct {
+	NodeID    string `json:"node_id"`
+	TenantID  string `json:"tenant_id"`
+	ClusterID string `json:"cluster_id"`
+}
+
+// BootstrapServiceRequest is used by core services to self-register
+type BootstrapServiceRequest struct {
+	Token          *string `json:"token,omitempty"`
+	ServiceToken   *string `json:"service_token,omitempty"`
+	Type           string  `json:"type" binding:"required"` // e.g., foghorn, periscope_ingest
+	Version        string  `json:"version"`
+	BaseURL        *string `json:"base_url,omitempty"`
+	Protocol       string  `json:"protocol,omitempty"` // http (default) | grpc
+	HealthEndpoint *string `json:"health_endpoint,omitempty"`
+	AdvertiseHost  *string `json:"advertise_host,omitempty"`
+	Host           string  `json:"host"`
+	Port           int     `json:"port"`
+}
+
+type BootstrapServiceResponse struct {
+	ServiceID  string  `json:"service_id"`
+	InstanceID string  `json:"instance_id"`
+	ClusterID  string  `json:"cluster_id"`
+	NodeID     *string `json:"node_id,omitempty"`
+}
+
+// ServiceDiscoveryResponse holds discovered instances for a given type/cluster
+type ServiceDiscoveryResponse struct {
+	Instances []models.ServiceInstance `json:"instances"`
+	Count     int                      `json:"count"`
+}
+
+// ClusterAccessEntry represents a cluster accessible to a tenant
+type ClusterAccessEntry struct {
+	ClusterID      string                 `json:"cluster_id"`
+	ClusterName    string                 `json:"cluster_name"`
+	AccessLevel    string                 `json:"access_level"`
+	ResourceLimits map[string]interface{} `json:"resource_limits"`
+}
+
+type ClustersAccessResponse struct {
+	Clusters []ClusterAccessEntry `json:"clusters"`
+	Count    int                  `json:"count"`
+}
+
+// Available cluster entry for onboarding UX
+type AvailableClusterEntry struct {
+	ClusterID   string   `json:"cluster_id"`
+	ClusterName string   `json:"cluster_name"`
+	Tiers       []string `json:"tiers"`
+	AutoEnroll  bool     `json:"auto_enroll"`
+}
+
+type ClustersAvailableResponse struct {
+	Clusters []AvailableClusterEntry `json:"clusters"`
+	Count    int                     `json:"count"`
+}
+
+// === SERVICE HEALTH ===
+
+type ServiceInstanceHealth struct {
+	InstanceID      string     `json:"instance_id"`
+	ServiceID       string     `json:"service_id"`
+	ClusterID       string     `json:"cluster_id"`
+	Protocol        string     `json:"protocol"`
+	Host            *string    `json:"host,omitempty"`
+	Port            int        `json:"port"`
+	HealthEndpoint  *string    `json:"health_endpoint,omitempty"`
+	Status          string     `json:"status"`
+	LastHealthCheck *time.Time `json:"last_health_check,omitempty"`
+}
+
+type ServicesHealthResponse struct {
+	Instances []ServiceInstanceHealth `json:"instances"`
+	Count     int                     `json:"count"`
+}
+
+// === BOOTSTRAP TOKEN MANAGEMENT ===
+
+type BootstrapToken struct {
+	ID         string                 `json:"id"`
+	Token      string                 `json:"token"`
+	Kind       string                 `json:"kind"` // edge_node | service
+	TenantID   *string                `json:"tenant_id,omitempty"`
+	ClusterID  *string                `json:"cluster_id,omitempty"`
+	ExpectedIP *string                `json:"expected_ip,omitempty"`
+	Metadata   map[string]interface{} `json:"metadata,omitempty"`
+	ExpiresAt  time.Time              `json:"expires_at"`
+	UsedAt     *time.Time             `json:"used_at,omitempty"`
+	CreatedBy  *string                `json:"created_by,omitempty"`
+	CreatedAt  time.Time              `json:"created_at"`
+}
+
+type CreateBootstrapTokenRequest struct {
+	Kind       string                 `json:"kind" binding:"required"`
+	TenantID   *string                `json:"tenant_id,omitempty"`
+	ClusterID  *string                `json:"cluster_id,omitempty"`
+	ExpectedIP *string                `json:"expected_ip,omitempty"`
+	Metadata   map[string]interface{} `json:"metadata,omitempty"`
+	TTL        string                 `json:"ttl"` // e.g., "24h"
+}
+
+type CreateBootstrapTokenResponse struct {
+	Token BootstrapToken `json:"token"`
+}
+
+type BootstrapTokensResponse struct {
+	Tokens []BootstrapToken `json:"tokens"`
+	Count  int              `json:"count"`
 }
 
 // Create/Update request types
@@ -267,4 +412,13 @@ type UpdateClusterServiceRequest struct {
 	DesiredReplicas *int                   `json:"desired_replicas,omitempty"`
 	ConfigBlob      map[string]interface{} `json:"config_blob,omitempty"`
 	EnvironmentVars map[string]interface{} `json:"environment_vars,omitempty"`
+}
+
+// NodeOwnerResponse represents the response from node owner lookup API
+type NodeOwnerResponse struct {
+	NodeID        string  `json:"node_id"`
+	ClusterID     string  `json:"cluster_id"`
+	ClusterName   string  `json:"cluster_name"`
+	OwnerTenantID *string `json:"owner_tenant_id,omitempty"`
+	TenantName    *string `json:"tenant_name,omitempty"`
 }

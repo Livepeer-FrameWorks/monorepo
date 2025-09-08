@@ -3,6 +3,7 @@ package clients
 import (
 	"time"
 
+	"frameworks/pkg/cache"
 	"frameworks/pkg/clients"
 	"frameworks/pkg/clients/commodore"
 	"frameworks/pkg/clients/periscope"
@@ -53,6 +54,13 @@ func NewServiceClients(cfg Config) *ServiceClients {
 		circuitBreakerConfig = cfg.CircuitBreakerConfig
 	}
 
+	// Quartermaster cache
+	qmTTL := time.Duration(config.GetEnvInt("QUARTERMASTER_CACHE_TTL_SECONDS", 60)) * time.Second
+	qmSWR := time.Duration(config.GetEnvInt("QUARTERMASTER_CACHE_SWR_SECONDS", 30)) * time.Second
+	qmNeg := time.Duration(config.GetEnvInt("QUARTERMASTER_CACHE_NEG_TTL_SECONDS", 10)) * time.Second
+	qmMax := config.GetEnvInt("QUARTERMASTER_CACHE_MAX", 10000)
+	qmCache := cache.New(cache.Options{TTL: qmTTL, StaleWhileRevalidate: qmSWR, NegativeTTL: qmNeg, MaxEntries: qmMax}, cache.MetricsHooks{})
+
 	return &ServiceClients{
 		Commodore: commodore.NewClient(commodore.Config{
 			BaseURL:              config.GetEnv("COMMODORE_URL", "http://localhost:18001"),
@@ -85,6 +93,7 @@ func NewServiceClients(cfg Config) *ServiceClients {
 			Logger:               cfg.Logger,
 			RetryConfig:          &retryConfig,
 			CircuitBreakerConfig: circuitBreakerConfig,
+			Cache:                qmCache,
 		}),
 		Signalman: signalman.NewClient(signalman.Config{
 			BaseURL:        config.GetEnv("SIGNALMAN_WS_URL", "ws://localhost:18009"),

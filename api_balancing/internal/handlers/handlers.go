@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"net/url"
@@ -16,14 +17,19 @@ import (
 
 	"frameworks/api_balancing/internal/balancer"
 	"frameworks/api_balancing/internal/control"
+	"frameworks/api_balancing/internal/state"
+	"frameworks/api_balancing/internal/triggers"
 	fapi "frameworks/pkg/api/foghorn"
+	qmapi "frameworks/pkg/api/quartermaster"
+	"frameworks/pkg/cache"
+	"frameworks/pkg/clients/commodore"
 	"frameworks/pkg/clients/decklog"
+	qmclient "frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/clips"
 	"frameworks/pkg/dvr"
 	"frameworks/pkg/geoip"
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
-	"frameworks/pkg/validation"
 
 	"github.com/google/uuid"
 
@@ -32,12 +38,15 @@ import (
 )
 
 var (
-	db            *sql.DB
-	logger        logging.Logger
-	lb            *balancer.LoadBalancer
-	decklogClient *decklog.Client
-	metrics       *FoghornMetrics
-	geoipReader   *geoip.Reader
+	db                  *sql.DB
+	logger              logging.Logger
+	lb                  *balancer.LoadBalancer
+	decklogClient       *decklog.BatchedClient
+	commodoreClient     *commodore.Client
+	quartermasterClient *qmclient.Client
+	metrics             *FoghornMetrics
+	geoipReader         *geoip.Reader
+	geoipCache          *cache.Cache
 )
 
 func getClipContextByRequestID(requestID string) (string, string) {
@@ -63,51 +72,6 @@ type FoghornMetrics struct {
 // StreamKeyRegex matches stream keys in format xxxx-xxxx-xxxx-xxxx
 var StreamKeyRegex = regexp.MustCompile(`^(?:\w{4}-){3}\w{4}$`)
 
-// NodeService implements the NodeMetricsProcessor interface
-type NodeService struct{}
-
-// ProcessNodeMetrics implements control.NodeMetricsProcessor
-func (ns *NodeService) ProcessNodeMetrics(nodeID, baseURL string, isHealthy bool, latitude, longitude *float64, location string, nodeMetrics *validation.FoghornNodeUpdate) error {
-	// Process the metrics the same way as the HTTP handler
-	return processNodeUpdateInternal(nodeID, baseURL, isHealthy, latitude, longitude, location, nodeMetrics)
-}
-
-// processNodeUpdateInternal contains the shared logic for processing node updates from both HTTP and gRPC
-func processNodeUpdateInternal(nodeID, baseURL string, _ bool, latitude, longitude *float64, location string, nodeMetrics *validation.FoghornNodeUpdate) error {
-	// Enrich location data from parameters if not in metrics
-	if latitude != nil && longitude != nil {
-		nodeMetrics.Location.Latitude = *latitude
-		nodeMetrics.Location.Longitude = *longitude
-	}
-	if location != "" && nodeMetrics.Location.Name == "" {
-		nodeMetrics.Location.Name = location
-	}
-
-	// Add or update node
-	nodes := lb.GetNodes()
-	if _, exists := nodes[baseURL]; !exists {
-		if err := lb.AddNodeWithID(nodeID, baseURL, 4242); err != nil {
-			logger.WithError(err).Error("Failed to add node")
-			return fmt.Errorf("failed to add node: %w", err)
-		}
-	} else {
-		// Node exists, but update NodeID mapping in case it changed
-		if nodeID != "" {
-			if err := lb.UpdateNodeIDMapping(nodeID, baseURL); err != nil {
-				logger.WithError(err).Warn("Failed to update NodeID mapping")
-			}
-		}
-	}
-
-	// Update node metrics using typed data
-	if err := lb.UpdateNodeMetrics(baseURL, nodeMetrics); err != nil {
-		logger.WithError(err).Error("Failed to update node metrics")
-		return fmt.Errorf("failed to update metrics: %w", err)
-	}
-
-	return nil
-}
-
 // NodeHostRegex matches the first part of hostname before first dot
 var NodeHostRegex = regexp.MustCompile(`^.+?\.`)
 
@@ -130,18 +94,54 @@ func Init(database *sql.DB, log logging.Logger, loadBalancer *balancer.LoadBalan
 	address := strings.TrimPrefix(decklogURL, "http://")
 	address = strings.TrimPrefix(address, "https://")
 
-	config := decklog.ClientConfig{
-		Target:        address,
-		AllowInsecure: true, // Using insecure for internal service communication
-		Timeout:       10 * time.Second,
+	// Configure TLS based on environment variables
+	allowInsecure := true // Default to insecure for backwards compatibility
+	if os.Getenv("DECKLOG_USE_TLS") == "true" {
+		allowInsecure = false
 	}
 
-	client, err := decklog.NewClient(config, logger)
+	config := decklog.BatchedClientConfig{
+		Target:        address,
+		AllowInsecure: allowInsecure,
+		Timeout:       10 * time.Second,
+		Source:        "foghorn",
+	}
+
+	client, err := decklog.NewBatchedClient(config, logger)
 	if err != nil {
 		logger.WithError(err).Error("Failed to initialize Decklog gRPC client")
 		return
 	}
 	decklogClient = client
+
+	// Initialize Quartermaster client for enrollment and service bootstrap
+	quartermasterURL := os.Getenv("QUARTERMASTER_URL")
+	if quartermasterURL == "" {
+		quartermasterURL = "http://localhost:18002"
+	}
+	serviceToken := os.Getenv("SERVICE_TOKEN")
+	if serviceToken == "" {
+		logger.Fatal("SERVICE_TOKEN environment variable is required")
+	}
+	quartermasterClient = qmclient.NewClient(qmclient.Config{
+		BaseURL:      quartermasterURL,
+		ServiceToken: serviceToken,
+		Logger:       logger,
+	})
+	control.SetQuartermasterClient(quartermasterClient)
+
+	// Self-register Foghorn instance in Quartermaster (best-effort)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, _ = quartermasterClient.BootstrapService(ctx, &qmapi.BootstrapServiceRequest{
+			Type:           "foghorn",
+			Version:        os.Getenv("VERSION"),
+			Protocol:       "http",
+			HealthEndpoint: func() *string { s := "/health"; return &s }(),
+			Port:           18008,
+		})
+	}()
 
 	// Register clip progress/done handlers to emit analytics
 	control.SetClipHandlers(
@@ -150,18 +150,33 @@ func Init(database *sql.DB, log logging.Logger, loadBalancer *balancer.LoadBalan
 				return
 			}
 			tenantID, internalName := getClipContextByRequestID(p.GetRequestId())
-			evt := decklog.NewClipLifecycleEvent(tenantID, internalName, p.GetRequestId(), pb.ClipLifecycleData_STAGE_PROGRESS, func(d *pb.ClipLifecycleData) {
-				percent := p.GetPercent()
-				d.Percent = &percent
-				msg := p.GetMessage()
-				if msg != "" {
-					d.Message = &msg
-				}
-			})
+			clipData := &pb.ClipLifecycleData{
+				Stage:     pb.ClipLifecycleData_STAGE_PROGRESS,
+				ClipHash:  "", // Will be set from clip context
+				RequestId: func() *string { s := p.GetRequestId(); return &s }(),
+				StartedAt: func() *int64 { t := time.Now().Unix(); return &t }(),
+				// Enrichment fields added by Foghorn
+				TenantId: func() *string {
+					if tenantID != "" {
+						return &tenantID
+					} else {
+						return nil
+					}
+				}(),
+				InternalName: func() *string {
+					if internalName != "" {
+						return &internalName
+					} else {
+						return nil
+					}
+				}(),
+			}
+			if p.GetPercent() > 0 {
+				percent := uint32(p.GetPercent())
+				clipData.ProgressPercent = &percent
+			}
 			go func() {
-				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-				defer cancel()
-				_ = decklogClient.SendEvent(ctx, evt)
+				_ = decklogClient.SendClipLifecycle(clipData)
 			}()
 		},
 		func(dn *pb.ClipDone) {
@@ -173,48 +188,78 @@ func Init(database *sql.DB, log logging.Logger, loadBalancer *balancer.LoadBalan
 			if dn.GetStatus() != "success" {
 				stage = pb.ClipLifecycleData_STAGE_FAILED
 			}
-			evt := decklog.NewClipLifecycleEvent(tenantID, internalName, dn.GetRequestId(), stage, func(d *pb.ClipLifecycleData) {
-				if fp := dn.GetFilePath(); fp != "" {
-					d.FilePath = &fp
-				}
-				if s3 := dn.GetS3Url(); s3 != "" {
-					d.S3Url = &s3
-				}
-				sz := dn.GetSizeBytes()
-				if sz > 0 {
-					d.SizeBytes = &sz
-				}
-				if er := dn.GetError(); er != "" {
-					d.Error = &er
-				}
-			})
+			clipData := &pb.ClipLifecycleData{
+				Stage:       stage,
+				ClipHash:    "", // Will be set from clip context
+				RequestId:   func() *string { s := dn.GetRequestId(); return &s }(),
+				CompletedAt: func() *int64 { t := time.Now().Unix(); return &t }(),
+				// Enrichment fields added by Foghorn
+				TenantId: func() *string {
+					if tenantID != "" {
+						return &tenantID
+					} else {
+						return nil
+					}
+				}(),
+				InternalName: func() *string {
+					if internalName != "" {
+						return &internalName
+					} else {
+						return nil
+					}
+				}(),
+			}
+			if fp := dn.GetFilePath(); fp != "" {
+				clipData.FilePath = &fp
+			}
+			if s3 := dn.GetS3Url(); s3 != "" {
+				clipData.S3Url = &s3
+			}
+			if sz := dn.GetSizeBytes(); sz > 0 {
+				clipData.SizeBytes = &sz
+			}
+			if er := dn.GetError(); er != "" {
+				clipData.Error = &er
+			}
 			go func() {
-				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-				defer cancel()
-				_ = decklogClient.SendEvent(ctx, evt)
+				_ = decklogClient.SendClipLifecycle(clipData)
 			}()
 		},
 	)
 
-	// Initialize GeoIP reader for fallback geo enrichment
-	geoipPath := os.Getenv("GEOIP_MMDB_PATH")
-	if geoipPath != "" {
-		reader, err := geoip.NewReader(geoipPath)
-		if err != nil {
-			logger.WithFields(logging.Fields{
-				"geoip_path": geoipPath,
-				"error":      err,
-			}).Warn("Failed to initialize GeoIP reader, fallback geo enrichment disabled")
-		} else {
-			geoipReader = reader
-			logger.WithField("geoip_path", geoipPath).Info("GeoIP reader initialized successfully")
+	// Initialize GeoIP reader and cache for fallback geo enrichment
+	geoipReader = geoip.GetSharedReader()
+	if geoipReader != nil {
+		// Configure GeoIP cache
+		gttl := 300 * time.Second
+		gswr := 120 * time.Second
+		gneg := 60 * time.Second
+		gmax := 50000
+		if v := os.Getenv("GEOIP_CACHE_TTL"); v != "" {
+			if d, err := time.ParseDuration(v); err == nil {
+				gttl = d
+			}
 		}
+		if v := os.Getenv("GEOIP_CACHE_SWR"); v != "" {
+			if d, err := time.ParseDuration(v); err == nil {
+				gswr = d
+			}
+		}
+		if v := os.Getenv("GEOIP_CACHE_NEG_TTL"); v != "" {
+			if d, err := time.ParseDuration(v); err == nil {
+				gneg = d
+			}
+		}
+		if v := os.Getenv("GEOIP_CACHE_MAX"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				gmax = n
+			}
+		}
+		geoipCache = cache.New(cache.Options{TTL: gttl, StaleWhileRevalidate: gswr, NegativeTTL: gneg, MaxEntries: gmax}, cache.MetricsHooks{})
+		logger.Info("GeoIP reader initialized successfully with cache")
 	} else {
-		logger.Debug("No GEOIP_MMDB_PATH provided, fallback geo enrichment disabled")
+		logger.Debug("GeoIP disabled (no GEOIP_MMDB_PATH or failed to load)")
 	}
-
-	// Wire up the node service for gRPC
-	control.SetNodeService(&NodeService{})
 
 	// Set clip hash resolver
 	control.SetClipHashResolver(func(clipHash string) (string, string, error) {
@@ -233,6 +278,59 @@ func Init(database *sql.DB, log logging.Logger, loadBalancer *balancer.LoadBalan
 		}
 		return tenantID, name, nil
 	})
+
+	// Initialize Commodore client for trigger processor
+	commodoreURL := os.Getenv("COMMODORE_URL")
+	if commodoreURL == "" {
+		commodoreURL = "http://localhost:18001"
+	}
+
+	// Configure Commodore cache (env overrides)
+	ttl := 60 * time.Second
+	if v := os.Getenv("COMMODORE_CACHE_TTL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			ttl = d
+		}
+	}
+	swr := 30 * time.Second
+	if v := os.Getenv("COMMODORE_CACHE_SWR"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			swr = d
+		}
+	}
+	neg := 10 * time.Second
+	if v := os.Getenv("COMMODORE_CACHE_NEG_TTL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			neg = d
+		}
+	}
+	maxEntries := 10000
+	if v := os.Getenv("COMMODORE_CACHE_MAX"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			maxEntries = n
+		}
+	}
+	commodoreCache := cache.New(cache.Options{TTL: ttl, StaleWhileRevalidate: swr, NegativeTTL: neg, MaxEntries: maxEntries}, cache.MetricsHooks{})
+
+	commodoreConfig := commodore.Config{
+		BaseURL:      commodoreURL,
+		ServiceToken: serviceToken,
+		Timeout:      30 * time.Second,
+		Logger:       logger,
+		Cache:        commodoreCache,
+	}
+	commodoreClient = commodore.NewClient(commodoreConfig)
+
+	// Initialize trigger processor with GeoIP reader - reuse the same Decklog client
+	triggerProcessor := triggers.NewProcessor(logger, commodoreClient, decklogClient, lb, geoipReader)
+	if geoipReader != nil && geoipCache != nil {
+		triggerProcessor.SetGeoIPCache(geoipCache)
+	}
+
+	// Wire up the trigger processor to the control server
+	control.SetMistTriggerProcessor(triggerProcessor)
+
+	logger.Info("Initialized trigger processor with Commodore and Decklog clients")
 }
 
 // MistServerCompatibilityHandler handles ALL MistServer requests
@@ -276,179 +374,6 @@ func MistServerCompatibilityHandler(c *gin.Context) {
 	handleStreamBalancing(c, streamName)
 }
 
-// HandleNodeUpdate receives node updates from Helmsman - TYPED VERSION
-func HandleNodeUpdate(c *gin.Context) {
-	start := time.Now()
-	if metrics != nil {
-		metrics.DBQueries.WithLabelValues("node_update", "received").Inc()
-	}
-
-	var update struct {
-		NodeID    string                        `json:"node_id"`
-		BaseURL   string                        `json:"base_url"`
-		IsHealthy bool                          `json:"is_healthy"`
-		Latitude  *float64                      `json:"latitude"`
-		Longitude *float64                      `json:"longitude"`
-		Location  string                        `json:"location"`
-		EventType string                        `json:"event_type"`
-		Timestamp int64                         `json:"timestamp"`
-		Metrics   *validation.FoghornNodeUpdate `json:"metrics"`
-	}
-
-	if err := c.ShouldBindJSON(&update); err != nil {
-		logger.WithError(err).Error("Failed to parse node update")
-		if metrics != nil {
-			metrics.DBQueries.WithLabelValues("node_update", "error").Inc()
-		}
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid update format"})
-		return
-	}
-
-	// Validate required fields
-	if update.Metrics == nil {
-		logger.Error("Node update missing metrics data")
-		if metrics != nil {
-			metrics.DBQueries.WithLabelValues("node_update", "error").Inc()
-		}
-		c.JSON(http.StatusBadRequest, gin.H{"error": "missing metrics data"})
-		return
-	}
-
-	// Enrich location data from request if not in metrics
-	if update.Latitude != nil && update.Longitude != nil {
-		update.Metrics.Location.Latitude = *update.Latitude
-		update.Metrics.Location.Longitude = *update.Longitude
-	}
-	if update.Location != "" && update.Metrics.Location.Name == "" {
-		update.Metrics.Location.Name = update.Location
-	}
-
-	// Add or update node
-	nodes := lb.GetNodes()
-	if _, exists := nodes[update.BaseURL]; !exists {
-		if err := lb.AddNodeWithID(update.NodeID, update.BaseURL, 4242); err != nil {
-			logger.WithError(err).Error("Failed to add node")
-			if metrics != nil {
-				metrics.DBQueries.WithLabelValues("node_update", "error").Inc()
-			}
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to add node"})
-			return
-		}
-	} else {
-		// Node exists, but update NodeID mapping in case it changed
-		if update.NodeID != "" {
-			if err := lb.UpdateNodeIDMapping(update.NodeID, update.BaseURL); err != nil {
-				logger.WithError(err).Warn("Failed to update NodeID mapping")
-			}
-		}
-	}
-
-	// Update node metrics using typed data
-	if err := lb.UpdateNodeMetrics(update.BaseURL, update.Metrics); err != nil {
-		logger.WithError(err).Error("Failed to update node metrics")
-		if metrics != nil {
-			metrics.DBQueries.WithLabelValues("node_update", "error").Inc()
-		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update metrics"})
-		return
-	}
-
-	if metrics != nil {
-		metrics.DBQueries.WithLabelValues("node_update", "success").Inc()
-		metrics.DBDuration.WithLabelValues("node_update").Observe(time.Since(start).Seconds())
-	}
-
-	c.JSON(http.StatusOK, gin.H{"status": "updated"})
-}
-
-// HandleStreamHealth receives immediate stream health updates from Helmsman - TYPED VERSION
-func HandleStreamHealth(c *gin.Context) {
-	start := time.Now()
-	if metrics != nil {
-		metrics.HealthScoreCalculations.WithLabelValues().Inc()
-	}
-
-	var update struct {
-		NodeID       string                          `json:"node_id"`
-		StreamName   string                          `json:"stream_name"`
-		InternalName string                          `json:"internal_name"`
-		IsHealthy    bool                            `json:"is_healthy"`
-		Timestamp    int64                           `json:"timestamp"`
-		Details      *validation.FoghornStreamHealth `json:"details,omitempty"`
-	}
-
-	if err := c.ShouldBindJSON(&update); err != nil {
-		logger.WithError(err).Error("Failed to parse stream health update")
-		if metrics != nil {
-			metrics.DBQueries.WithLabelValues("stream_health", "error").Inc()
-		}
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid update format"})
-		return
-	}
-
-	// Get node info using NodeID lookup
-	nodeHost, err := lb.GetNodeByID(update.NodeID)
-	if err != nil {
-		logger.WithField("node_id", update.NodeID).Error("Node not found for stream health update")
-		if metrics != nil {
-			metrics.DBQueries.WithLabelValues("stream_health", "error").Inc()
-		}
-		c.JSON(http.StatusNotFound, gin.H{"error": "node not found"})
-		return
-	}
-
-	// Update stream health in the balancer using typed data
-	if err := lb.UpdateStreamHealth(nodeHost, update.StreamName, update.IsHealthy, update.Details); err != nil {
-		logger.WithError(err).Error("Failed to update stream health")
-		if metrics != nil {
-			metrics.DBQueries.WithLabelValues("stream_health", "error").Inc()
-		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update stream health"})
-		return
-	}
-
-	if metrics != nil {
-		metrics.DBQueries.WithLabelValues("stream_health", "success").Inc()
-		metrics.DBDuration.WithLabelValues("stream_health").Observe(time.Since(start).Seconds())
-	}
-
-	c.JSON(http.StatusOK, gin.H{"status": "updated"})
-}
-
-// HandleNodeShutdown receives graceful shutdown notifications from Helmsman - TYPED VERSION
-func HandleNodeShutdown(c *gin.Context) {
-	var update struct {
-		NodeID    string                          `json:"node_id"`
-		Type      string                          `json:"type"`
-		Timestamp int64                           `json:"timestamp"`
-		Reason    string                          `json:"reason"`
-		Details   *validation.FoghornNodeShutdown `json:"details,omitempty"`
-	}
-
-	if err := c.ShouldBindJSON(&update); err != nil {
-		logger.WithError(err).Error("Failed to parse node shutdown update")
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid update format"})
-		return
-	}
-
-	// Get node info using NodeID lookup
-	nodeHost, err := lb.GetNodeByID(update.NodeID)
-	if err != nil {
-		logger.WithField("node_id", update.NodeID).Error("Node not found for shutdown update")
-		c.JSON(http.StatusNotFound, gin.H{"error": "node not found"})
-		return
-	}
-
-	// Mark node as inactive and clear its streams using typed data
-	if err := lb.HandleNodeShutdown(nodeHost, update.Reason, update.Details); err != nil {
-		logger.WithError(err).Error("Failed to handle node shutdown")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to handle shutdown"})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{"status": "handled"})
-}
-
 // HandleNodesOverview receives a request for an overview of all nodes with capabilities, limits, and artifacts.
 func HandleNodesOverview(c *gin.Context) {
 	capFilter := c.Query("cap")
@@ -462,101 +387,103 @@ func HandleNodesOverview(c *gin.Context) {
 		limit = v
 	}
 
-	nodes := lb.GetAllNodes()
+	snapshot := state.DefaultManager().GetBalancerSnapshotAtomic()
 	var out []map[string]interface{}
-	for _, n := range nodes {
-		if capFilter != "" {
-			reqs := strings.Split(capFilter, ",")
-			roleSet := map[string]bool{}
-			for _, r := range n.Roles {
-				roleSet[r] = true
-			}
-			ok := true
-			for _, r := range reqs {
-				r = strings.TrimSpace(r)
-				switch r {
-				case "ingest":
-					ok = ok && (n.CapIngest || roleSet["ingest"])
-				case "edge":
-					ok = ok && (n.CapEdge || roleSet["edge"])
-				case "storage":
-					ok = ok && (n.CapStorage || roleSet["storage"])
-				case "processing":
-					ok = ok && (n.CapProcessing || roleSet["processing"])
-				default:
-					ok = ok && roleSet[r]
+	if snapshot != nil {
+		for _, n := range snapshot.Nodes {
+			if capFilter != "" {
+				reqs := strings.Split(capFilter, ",")
+				roleSet := map[string]bool{}
+				for _, r := range n.Roles {
+					roleSet[r] = true
+				}
+				ok := true
+				for _, r := range reqs {
+					r = strings.TrimSpace(r)
+					switch r {
+					case "ingest":
+						ok = ok && (n.CapIngest || roleSet["ingest"])
+					case "edge":
+						ok = ok && (n.CapEdge || roleSet["edge"])
+					case "storage":
+						ok = ok && (n.CapStorage || roleSet["storage"])
+					case "processing":
+						ok = ok && (n.CapProcessing || roleSet["processing"])
+					default:
+						ok = ok && roleSet[r]
+					}
+				}
+				if !ok {
+					continue
 				}
 			}
-			if !ok {
-				continue
+
+			// Streams detail list
+			streams := make([]map[string]interface{}, 0, len(n.Streams))
+			for name, s := range n.Streams {
+				streams = append(streams, map[string]interface{}{
+					"name":       name,
+					"total":      s.Total,
+					"inputs":     s.Inputs,
+					"bandwidth":  s.Bandwidth,
+					"bytes_up":   s.BytesUp,
+					"bytes_down": s.BytesDown,
+					"replicated": s.Replicated,
+				})
 			}
-		}
 
-		// Streams detail list
-		streams := make([]map[string]interface{}, 0, len(n.Streams))
-		for name, s := range n.Streams {
-			streams = append(streams, map[string]interface{}{
-				"name":       name,
-				"total":      s.Total,
-				"inputs":     s.Inputs,
-				"bandwidth":  s.Bandwidth,
-				"bytes_up":   s.BytesUp,
-				"bytes_down": s.BytesDown,
-				"replicated": s.Replicated,
-			})
-		}
+			entry := map[string]interface{}{
+				"host":  n.Host,
+				"roles": n.Roles,
+				// capabilities
+				"cap_ingest":     n.CapIngest,
+				"cap_edge":       n.CapEdge,
+				"cap_storage":    n.CapStorage,
+				"cap_processing": n.CapProcessing,
+				// hardware summary
+				"gpu_vendor": n.GPUVendor,
+				"gpu_count":  n.GPUCount,
+				"gpu_mem_mb": n.GPUMemMB,
+				"gpu_cc":     n.GPUCC,
+				// geo/location
+				"geo_latitude":  n.GeoLatitude,
+				"geo_longitude": n.GeoLongitude,
+				"location_name": n.LocationName,
+				// status and timing
+				"is_active":   n.IsActive,
+				"last_update": n.LastUpdate,
+				// resource metrics
+				"cpu_tenths":  uint64(n.CPU * 10),
+				"cpu_percent": uint64(n.CPU),
+				"ram_max":     n.RAMMax,
+				"ram_current": n.RAMCurrent,
+				"ram_percent": func() uint64 {
+					if n.RAMMax > 0 {
+						return uint64((n.RAMCurrent * 100) / n.RAMMax)
+					}
+					return 0
+				}(),
+				"up_speed":        n.UpSpeed,
+				"down_speed":      n.DownSpeed,
+				"avail_bandwidth": n.AvailBandwidth,
+				"add_bandwidth":   n.AddBandwidth,
+				"tags":            n.Tags,
+				// storage
+				"storage_local":  n.StorageLocal,
+				"storage_bucket": n.StorageBucket,
+				"storage_prefix": n.StoragePrefix,
+				// limits and artifacts
+				"max_transcodes":         n.MaxTranscodes,
+				"current_transcodes":     n.CurrentTranscodes,
+				"storage_capacity_bytes": n.StorageCapacityBytes,
+				"storage_used_bytes":     n.StorageUsedBytes,
+				"artifacts":              n.Artifacts,
+				// streams
+				"streams": streams,
+			}
 
-		entry := map[string]interface{}{
-			"host":  n.Host,
-			"roles": n.Roles,
-			// capabilities
-			"cap_ingest":     n.CapIngest,
-			"cap_edge":       n.CapEdge,
-			"cap_storage":    n.CapStorage,
-			"cap_processing": n.CapProcessing,
-			// hardware summary
-			"gpu_vendor": n.GPUVendor,
-			"gpu_count":  n.GPUCount,
-			"gpu_mem_mb": n.GPUMemMB,
-			"gpu_cc":     n.GPUCC,
-			// geo/location
-			"geo_latitude":  n.GeoLatitude,
-			"geo_longitude": n.GeoLongitude,
-			"location_name": n.LocationName,
-			// status and timing
-			"is_active":   n.IsActive,
-			"last_update": n.LastUpdate,
-			// resource metrics
-			"cpu_tenths":  n.CPU,
-			"cpu_percent": n.CPU / 10,
-			"ram_max":     n.RAMMax,
-			"ram_current": n.RAMCurrent,
-			"ram_percent": func() uint64 {
-				if n.RAMMax > 0 {
-					return (n.RAMCurrent * 100) / n.RAMMax
-				}
-				return 0
-			}(),
-			"up_speed":        n.UpSpeed,
-			"down_speed":      n.DownSpeed,
-			"avail_bandwidth": n.AvailBandwidth,
-			"add_bandwidth":   n.AddBandwidth,
-			"tags":            n.Tags,
-			// storage
-			"storage_local":  n.StorageLocal,
-			"storage_bucket": n.StorageBucket,
-			"storage_prefix": n.StoragePrefix,
-			// limits and artifacts
-			"max_transcodes":         n.MaxTranscodes,
-			"current_transcodes":     n.CurrentTranscodes,
-			"storage_capacity_bytes": n.StorageCapacityBytes,
-			"storage_used_bytes":     n.StorageUsedBytes,
-			"artifacts":              n.Artifacts,
-			// streams
-			"streams": streams,
+			out = append(out, entry)
 		}
-
-		out = append(out, entry)
 	}
 	if limit > 0 {
 		start := offset
@@ -588,18 +515,6 @@ func handleRootQueries(c *gin.Context, query url.Values) {
 	// List servers: /?lstserver=1 (EXACT C++ implementation)
 	if query.Get("lstserver") != "" {
 		handleListServers(c)
-		return
-	}
-
-	// Remove server: /?delserver=<url> (EXACT C++ implementation)
-	if delServer := query.Get("delserver"); delServer != "" {
-		handleDeleteServer(c, delServer)
-		return
-	}
-
-	// Add server: /?addserver=<url> (EXACT C++ implementation)
-	if addServer := query.Get("addserver"); addServer != "" {
-		handleAddServer(c, addServer)
 		return
 	}
 
@@ -686,46 +601,6 @@ func handleListServers(c *gin.Context) {
 		}
 	}
 
-	jsonBytes, _ := json.MarshalIndent(result, "", "  ")
-	c.String(http.StatusOK, string(jsonBytes))
-}
-
-// handleDeleteServer implements /?delserver=<url> (EXACT C++ implementation)
-func handleDeleteServer(c *gin.Context, serverURL string) {
-	err := lb.RemoveNode(serverURL)
-	if err != nil {
-		c.String(http.StatusOK, "Server not monitored - could not delete from monitored server list!")
-	} else {
-		c.String(http.StatusOK, "Offline")
-	}
-}
-
-// handleAddServer implements /?addserver=<url> (EXACT C++ implementation)
-func handleAddServer(c *gin.Context, serverURL string) {
-	if len(serverURL) >= 1024 {
-		c.String(http.StatusOK, "Host length too long for monitoring")
-		return
-	}
-
-	// Check if already exists
-	nodes := lb.GetAllNodes()
-	for _, node := range nodes {
-		if node.Host == serverURL {
-			result := map[string]string{"message": "Server already monitored - add request ignored"}
-			jsonBytes, _ := json.MarshalIndent(result, "", "  ")
-			c.String(http.StatusOK, string(jsonBytes))
-			return
-		}
-	}
-
-	// Add new node
-	err := lb.AddNode(serverURL, 4242)
-	if err != nil {
-		c.String(http.StatusInternalServerError, "Failed to add server")
-		return
-	}
-
-	result := map[string]string{serverURL: "Starting monitoring"}
 	jsonBytes, _ := json.MarshalIndent(result, "", "  ")
 	c.String(http.StatusOK, string(jsonBytes))
 }
@@ -831,7 +706,7 @@ func handleFindIngest(c *gin.Context, cpuUsage string, query url.Values) {
 		nodes := lb.GetAllNodes()
 		for _, node := range nodes {
 			if node.Host == bestNode {
-				if node.CPU+uint64(minCpu) >= 1000 {
+				if uint64(node.CPU*10)+uint64(minCpu) >= 1000 {
 					// Node would be overloaded, return fallback (like C++ FAIL_MSG("No ingest point found!"))
 					go postBalancingEvent(c, "ingest", "", 0, lat, lon, "failed", "CPU overload", 0, 0, "")
 					c.String(http.StatusOK, "FULL") // C++ fallback for CPU overload
@@ -921,9 +796,9 @@ func handleHostStatus(c *gin.Context, hostname string) {
 			if node.RAMMax > 0 && node.AvailBandwidth > 0 {
 				weights := lb.GetWeights()
 				status["score"] = map[string]uint64{
-					"cpu": weights["cpu"] - (node.CPU*weights["cpu"])/1000,
-					"ram": weights["ram"] - ((node.RAMCurrent * weights["ram"]) / node.RAMMax),
-					"bw":  weights["bw"] - (((node.UpSpeed + node.AddBandwidth) * weights["bw"]) / node.AvailBandwidth),
+					"cpu": weights["cpu"] - (uint64(node.CPU*10)*weights["cpu"])/1000,
+					"ram": weights["ram"] - ((uint64(node.RAMCurrent) * weights["ram"]) / uint64(node.RAMMax)),
+					"bw":  weights["bw"] - (((uint64(node.UpSpeed) + uint64(node.AddBandwidth)) * weights["bw"]) / node.AvailBandwidth),
 				}
 			}
 
@@ -1004,17 +879,7 @@ func handleStreamBalancing(c *gin.Context, streamName string) {
 
 // Orchestrate clip creation: select ingest and storage, then call Helmsman on storage to pull clip from Mist
 func HandleCreateClip(c *gin.Context) {
-	var req struct {
-		TenantID     string `json:"tenant_id"`
-		InternalName string `json:"internal_name"`
-		Format       string `json:"format"`
-		Title        string `json:"title"`
-		StartUnix    *int64 `json:"start_unix,omitempty"`
-		StopUnix     *int64 `json:"stop_unix,omitempty"`
-		StartMS      *int64 `json:"start_ms,omitempty"`
-		StopMS       *int64 `json:"stop_ms,omitempty"`
-		DurationSec  *int64 `json:"duration_sec,omitempty"`
-	}
+	var req fapi.CreateClipRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid payload"})
 		return
@@ -1052,27 +917,39 @@ func HandleCreateClip(c *gin.Context) {
 	// Generate request_id for correlation and emit ClipRequested
 	reqID := uuid.New().String()
 	if decklogClient != nil {
-		evt := decklog.NewClipLifecycleEvent(c.GetString("tenant_id"), req.InternalName, reqID, pb.ClipLifecycleData_STAGE_REQUESTED, func(d *pb.ClipLifecycleData) {
-			d.Title = func() *string {
-				if req.Title == "" {
+		// TODO: Create proper ClipLifecycleData for STAGE_REQUESTED
+		clipData := &pb.ClipLifecycleData{
+			Stage:     pb.ClipLifecycleData_STAGE_REQUESTED,
+			ClipHash:  "", // Will be set from clip context
+			RequestId: func() *string { s := reqID; return &s }(),
+			StartedAt: func() *int64 { t := time.Now().Unix(); return &t }(),
+			// Enrichment fields added by Foghorn
+			TenantId: func() *string {
+				if req.TenantID != "" {
+					return &req.TenantID
+				} else {
 					return nil
 				}
-				v := req.Title
-				return &v
-			}()
-			d.Format = &format
-			d.StartUnix = req.StartUnix
-			d.StopUnix = req.StopUnix
-			d.StartMs = req.StartMS
-			d.StopMs = req.StopMS
-			d.DurationSec = req.DurationSec
-		})
+			}(),
+			InternalName: func() *string {
+				if req.InternalName != "" {
+					return &req.InternalName
+				} else {
+					return nil
+				}
+			}(),
+		}
 		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			defer cancel()
-			_ = decklogClient.SendEvent(ctx, evt)
+			_ = decklogClient.SendClipLifecycle(clipData)
 		}()
 	}
+
+	// Reflect clip requested into state manager
+	state.DefaultManager().UpdateStreamInstanceInfo(req.InternalName, lb.GetNodeIDByHost(storageHost), map[string]interface{}{
+		"clip_status":     "requested",
+		"clip_request_id": reqID,
+		"clip_format":     format,
+	})
 
 	// Send gRPC control message to storage Helmsman via registry using NodeID
 	storageNodeID := lb.GetNodeIDByHost(storageHost)
@@ -1144,19 +1021,30 @@ func HandleCreateClip(c *gin.Context) {
 
 	// Emit ClipQueued event to Decklog
 	if decklogClient != nil {
-		evt := decklog.NewClipLifecycleEvent(c.GetString("tenant_id"), req.InternalName, reqID, pb.ClipLifecycleData_STAGE_QUEUED, func(d *pb.ClipLifecycleData) {
-			d.IngestNodeId = &ingestHost
-			d.StorageNodeId = &storageNodeID
-			d.RoutingDistanceKm = func() *float64 { v := 0.0; return &v }()
-			d.Format = &format
-			if req.DurationSec != nil {
-				d.DurationSec = req.DurationSec
-			}
-		})
+		// TODO: Create proper ClipLifecycleData for STAGE_QUEUED
+		clipData := &pb.ClipLifecycleData{
+			Stage:       pb.ClipLifecycleData_STAGE_QUEUED,
+			ClipHash:    clipHash,
+			RequestId:   func() *string { s := reqID; return &s }(),
+			CompletedAt: func() *int64 { t := time.Now().Unix(); return &t }(),
+			// Enrichment fields added by Foghorn
+			TenantId: func() *string {
+				if req.TenantID != "" {
+					return &req.TenantID
+				} else {
+					return nil
+				}
+			}(),
+			InternalName: func() *string {
+				if req.InternalName != "" {
+					return &req.InternalName
+				} else {
+					return nil
+				}
+			}(),
+		}
 		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			defer cancel()
-			_ = decklogClient.SendEvent(ctx, evt)
+			_ = decklogClient.SendClipLifecycle(clipData)
 		}()
 	}
 
@@ -1239,9 +1127,6 @@ func postBalancingEvent(c *gin.Context, streamName, selectedNode string, score u
 		clientIP = cfConnectingIP
 	}
 
-	// Determine tenant ID from headers (service-to-service calls must set X-Tenant-ID)
-	tenantID := c.GetHeader("X-Tenant-ID")
-
 	// Determine NodeID for selected node if known
 	selectedNodeID := ""
 	if lb != nil {
@@ -1269,8 +1154,49 @@ func postBalancingEvent(c *gin.Context, streamName, selectedNode string, score u
 		routingDistanceKm = 6371.0 * angle
 	}
 
-	// Create Event with LoadBalancingData
-	event := decklog.NewLoadBalancingEvent(tenantID, streamName, selectedNode, selectedNodeID, clientIP, country, status, details, lat, lon, score, nodeLat, nodeLon, nodeName, routingDistanceKm)
+	// Enrich with tenant info via Commodore
+	var tenantID, internalName string
+	if commodoreClient != nil && streamName != "" {
+		ctx := context.Background()
+		if resolveResp, err := commodoreClient.ResolveInternalName(ctx, streamName); err == nil {
+			tenantID = resolveResp.TenantID
+			internalName = resolveResp.InternalName
+		} else {
+			logger.WithError(err).WithField("stream_name", streamName).Debug("Failed to resolve tenant via Commodore")
+		}
+	}
+
+	// Create LoadBalancingData event
+	event := &pb.LoadBalancingData{
+		SelectedNode:      selectedNode,
+		SelectedNodeId:    func() *string { s := selectedNodeID; return &s }(),
+		Latitude:          lat,
+		Longitude:         lon,
+		Status:            status,
+		Details:           details,
+		Score:             score,
+		ClientIp:          clientIP,
+		ClientCountry:     country,
+		NodeLatitude:      nodeLat,
+		NodeLongitude:     nodeLon,
+		NodeName:          nodeName,
+		RoutingDistanceKm: func() *float64 { d := routingDistanceKm; return &d }(),
+		// Enrichment fields added by Foghorn
+		TenantId: func() *string {
+			if tenantID != "" {
+				return &tenantID
+			} else {
+				return nil
+			}
+		}(),
+		InternalName: func() *string {
+			if internalName != "" {
+				return &internalName
+			} else {
+				return nil
+			}
+		}(),
+	}
 
 	if decklogClient == nil {
 		logger.Error("Decklog gRPC client not initialized")
@@ -1278,10 +1204,7 @@ func postBalancingEvent(c *gin.Context, streamName, selectedNode string, score u
 	}
 
 	// Send event via gRPC
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	err := decklogClient.SendEvent(ctx, event)
+	err := decklogClient.SendLoadBalancing(event)
 	if err != nil {
 		logger.WithFields(logging.Fields{
 			"error":       err,
@@ -1353,7 +1276,7 @@ func getTagAdjustments(c *gin.Context, query url.Values) map[string]int {
 	return make(map[string]int)
 }
 
-func getTotalViewers(node *balancer.Node) uint64 {
+func getTotalViewers(node state.EnhancedBalancerNodeSnapshot) uint64 {
 	total := uint64(0)
 	for _, stream := range node.Streams {
 		total += stream.Total
@@ -1742,11 +1665,7 @@ func getDVRContextByRequestID(requestID string) (string, string) {
 
 // HandleStartDVRRecording orchestrates DVR recording start
 func HandleStartDVRRecording(c *gin.Context) {
-	var req struct {
-		TenantID     string `json:"tenant_id"`
-		InternalName string `json:"internal_name"`
-		StreamID     string `json:"stream_id,omitempty"`
-	}
+	var req fapi.StartDVRRequest
 
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid payload"})
@@ -1763,16 +1682,12 @@ func HandleStartDVRRecording(c *gin.Context) {
 		return
 	}
 
-	q := c.Request.URL.Query()
-	lat := getLatLon(c, q, "lat", "X-Latitude")
-	lon := getLatLon(c, q, "lon", "X-Longitude")
-	tagAdjust := getTagAdjustments(c, q)
+	_ = c.Request.URL.Query()
 
-	// Select ingest node (where stream is active)
-	ictx := context.WithValue(c.Request.Context(), "cap", "ingest")
-	ingestHost, _, _, _, _, err := lb.GetBestNodeWithScore(ictx, req.InternalName, lat, lon, tagAdjust, c.ClientIP())
-	if err != nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "no ingest node available", "details": err.Error()})
+	// Resolve actual source node for this stream
+	sourceNodeID, baseURL, ok := control.GetStreamSource(req.InternalName)
+	if !ok {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "no source node available"})
 		return
 	}
 
@@ -1787,6 +1702,14 @@ func HandleStartDVRRecording(c *gin.Context) {
 	storageNodeID := lb.GetNodeIDByHost(storageHost)
 	if storageNodeID == "" {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "storage node not connected"})
+		return
+	}
+
+	// Idempotency: check for existing active DVR for this stream
+	var existingHash string
+	_ = db.QueryRow(`SELECT request_hash FROM foghorn.dvr_requests WHERE internal_name=$1 AND status IN ('requested','starting','recording') ORDER BY created_at DESC LIMIT 1`, req.InternalName).Scan(&existingHash)
+	if existingHash != "" {
+		c.JSON(http.StatusOK, fapi.StartDVRResponse{Status: "already_started", DVRHash: existingHash, IngestHost: baseURL, StorageHost: storageHost, StorageNodeID: storageNodeID})
 		return
 	}
 
@@ -1811,7 +1734,6 @@ func HandleStartDVRRecording(c *gin.Context) {
 		                                 storage_node_id, storage_node_url, status, created_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
 	`, dvrHash, req.TenantID, streamID, req.InternalName, storageNodeID, storageHost, "requested")
-
 	if err != nil {
 		logger.WithError(err).Error("Failed to store DVR request in database")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to store DVR request"})
@@ -1826,11 +1748,18 @@ func HandleStartDVRRecording(c *gin.Context) {
 		SegmentDuration: 6,
 	}
 
+	// Build DTSC full URL using unified helper
+	fullDTSC := control.BuildDTSCURI(sourceNodeID, req.InternalName, true, logger)
+	if fullDTSC == "" {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "DTSC output not available on source node"})
+		return
+	}
+
 	// Send gRPC control message to storage Helmsman
 	dvrReq := &pb.DVRStartRequest{
 		DvrHash:       dvrHash,
 		InternalName:  req.InternalName,
-		SourceBaseUrl: deriveMistHTTPBase(ingestHost),
+		SourceBaseUrl: fullDTSC,
 		RequestId:     dvrHash,
 		Config: &pb.DVRConfig{
 			Enabled:         config.Enabled,
@@ -1841,30 +1770,35 @@ func HandleStartDVRRecording(c *gin.Context) {
 	}
 
 	if err := control.SendDVRStart(storageNodeID, dvrReq); err != nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "storage node unavailable", "details": err.Error()})
+		logger.WithFields(logging.Fields{"storage_node_id": storageNodeID, "error": err}).Error("Failed to send DVR start to storage node")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to start dvr on storage node"})
 		return
 	}
 
-	// Emit DVR started event to analytics
+	state.DefaultManager().UpdateStreamInstanceInfo(req.InternalName, storageNodeID, map[string]interface{}{"dvr_status": "requested", "dvr_hash": dvrReq.GetDvrHash()})
+
 	if decklogClient != nil {
-		evt := decklog.NewDVRLifecycleEvent(req.TenantID, req.InternalName, dvrHash, pb.DVRLifecycleData_STAGE_REQUESTED, func(d *pb.DVRLifecycleData) {
-			d.IngestNodeId = &ingestHost
-			d.StorageNodeId = &storageNodeID
-		})
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			defer cancel()
-			_ = decklogClient.SendEvent(ctx, evt)
-		}()
+		// Enrich with tenant info via Commodore
+		var tenantID, internalName string
+		if commodoreClient != nil && req.InternalName != "" {
+			ctx := context.Background()
+			if resolveResp, err := commodoreClient.ResolveInternalName(ctx, req.InternalName); err == nil {
+				tenantID = resolveResp.TenantID
+				internalName = resolveResp.InternalName
+			}
+		}
+
+		dvrData := &pb.DVRLifecycleData{
+			Status:       pb.DVRLifecycleData_STATUS_STARTED,
+			DvrHash:      dvrHash,
+			StartedAt:    func() *int64 { t := time.Now().Unix(); return &t }(),
+			TenantId:     &tenantID,
+			InternalName: &internalName,
+		}
+		go func() { _ = decklogClient.SendDVRLifecycle(dvrData) }()
 	}
 
-	c.JSON(http.StatusOK, fapi.StartDVRResponse{
-		Status:        "started",
-		DVRHash:       dvrHash,
-		IngestHost:    ingestHost,
-		StorageHost:   storageHost,
-		StorageNodeID: storageNodeID,
-	})
+	c.JSON(http.StatusOK, fapi.StartDVRResponse{Status: "started", DVRHash: dvrHash, IngestHost: baseURL, StorageHost: storageHost, StorageNodeID: storageNodeID})
 }
 
 // HandleStopDVRRecording orchestrates DVR recording stop
@@ -1925,11 +1859,25 @@ func HandleStopDVRRecording(c *gin.Context) {
 
 	// Emit DVR stopping event to analytics
 	if decklogClient != nil {
-		evt := decklog.NewDVRLifecycleEvent(tenantID, internalName, dvrHash, pb.DVRLifecycleData_STAGE_STOPPING, nil)
+		// Enrich with tenant info via Commodore
+		var tenantID, internalName string
+		if commodoreClient != nil && internalName != "" {
+			ctx := context.Background()
+			if resolveResp, err := commodoreClient.ResolveInternalName(ctx, internalName); err == nil {
+				tenantID = resolveResp.TenantID
+				internalName = resolveResp.InternalName
+			}
+		}
+
+		dvrData := &pb.DVRLifecycleData{
+			Status:       pb.DVRLifecycleData_STATUS_STOPPED,
+			DvrHash:      dvrHash,
+			EndedAt:      func() *int64 { t := time.Now().Unix(); return &t }(),
+			TenantId:     &tenantID,
+			InternalName: &internalName,
+		}
 		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			defer cancel()
-			_ = decklogClient.SendEvent(ctx, evt)
+			_ = decklogClient.SendDVRLifecycle(dvrData)
 		}()
 	}
 
@@ -2002,167 +1950,9 @@ func HandleGetDVRStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, dvr)
 }
 
-// HandleUpdateDVRProgress handles progress updates from Helmsman
-func HandleUpdateDVRProgress(c *gin.Context) {
-	var update struct {
-		DVRHash         string `json:"dvr_hash"`
-		NodeID          string `json:"node_id"`
-		Status          string `json:"status"`
-		StartedAt       *int64 `json:"started_at,omitempty"`
-		EndedAt         *int64 `json:"ended_at,omitempty"`
-		DurationSeconds *int32 `json:"duration_seconds,omitempty"`
-		SizeBytes       *int64 `json:"size_bytes,omitempty"`
-		ManifestPath    string `json:"manifest_path,omitempty"`
-		ErrorMessage    string `json:"error_message,omitempty"`
-	}
-
-	if err := c.ShouldBindJSON(&update); err != nil {
-		logger.WithError(err).Error("Failed to parse DVR progress update")
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid update format"})
-		return
-	}
-
-	// Validate required fields
-	if update.DVRHash == "" || update.NodeID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "dvr_hash and node_id are required"})
-		return
-	}
-
-	// Update DVR request status in database
-	query := `
-		UPDATE foghorn.dvr_requests 
-		SET status = $2, started_at = $3, ended_at = $4, duration_seconds = $5, 
-		    size_bytes = $6, manifest_path = $7, error_message = $8, updated_at = NOW()
-		WHERE request_hash = $1 AND storage_node_id = $9
-	`
-
-	var startedAt, endedAt interface{}
-	if update.StartedAt != nil {
-		t := time.Unix(*update.StartedAt, 0)
-		startedAt = t
-	}
-	if update.EndedAt != nil {
-		t := time.Unix(*update.EndedAt, 0)
-		endedAt = t
-	}
-
-	result, err := db.Exec(query, update.DVRHash, update.Status, startedAt, endedAt,
-		update.DurationSeconds, update.SizeBytes, update.ManifestPath, update.ErrorMessage, update.NodeID)
-
-	if err != nil {
-		logger.WithError(err).Error("Failed to update DVR progress")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update DVR progress"})
-		return
-	}
-
-	rowsAffected, _ := result.RowsAffected()
-	if rowsAffected == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"error": "DVR request not found or node mismatch"})
-		return
-	}
-
-	// Get tenant and stream info for analytics
-	tenantID, internalName := getDVRContextByRequestID(update.DVRHash)
-
-	// Emit appropriate lifecycle event
-	if decklogClient != nil && tenantID != "" {
-		var stage pb.DVRLifecycleData_Stage
-		switch update.Status {
-		case "recording":
-			stage = pb.DVRLifecycleData_STAGE_RECORDING
-		case "completed":
-			stage = pb.DVRLifecycleData_STAGE_COMPLETED
-		case "failed":
-			stage = pb.DVRLifecycleData_STAGE_FAILED
-		default:
-			stage = pb.DVRLifecycleData_STAGE_PROGRESS
-		}
-
-		evt := decklog.NewDVRLifecycleEvent(tenantID, internalName, update.DVRHash, stage, func(d *pb.DVRLifecycleData) {
-			if update.DurationSeconds != nil {
-				duration := int64(*update.DurationSeconds)
-				d.DurationSec = &duration
-			}
-			if update.SizeBytes != nil {
-				sizeBytes := uint64(*update.SizeBytes)
-				d.SizeBytes = &sizeBytes
-			}
-			if update.ManifestPath != "" {
-				d.ManifestPath = &update.ManifestPath
-			}
-			if update.ErrorMessage != "" {
-				d.Error = &update.ErrorMessage
-			}
-		})
-
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			defer cancel()
-			_ = decklogClient.SendEvent(ctx, evt)
-		}()
-	}
-
-	logger.WithFields(logging.Fields{
-		"dvr_hash": update.DVRHash,
-		"node_id":  update.NodeID,
-		"status":   update.Status,
-	}).Info("DVR progress updated")
-
-	c.JSON(http.StatusOK, gin.H{"status": "updated"})
-}
-
-// ViewerEndpointRequest represents the request for viewer endpoint resolution
-type ViewerEndpointRequest struct {
-	ContentType    string                 `json:"content_type" binding:"required"`
-	ContentID      string                 `json:"content_id" binding:"required"`
-	ViewerIP       string                 `json:"viewer_ip,omitempty"` // Real viewer IP passed from Gateway
-	ViewerLocation *ViewerLocationRequest `json:"viewer_location,omitempty"`
-}
-
-type ViewerLocationRequest struct {
-	Latitude  *float64 `json:"latitude,omitempty"`
-	Longitude *float64 `json:"longitude,omitempty"`
-	Country   string   `json:"country,omitempty"`
-	City      string   `json:"city,omitempty"`
-}
-
-// ViewerEndpointResponse represents the resolved viewing endpoints
-type ViewerEndpointResponse struct {
-	Primary   ViewerEndpoint   `json:"primary"`
-	Fallbacks []ViewerEndpoint `json:"fallbacks"`
-	Metadata  ContentMetadata  `json:"metadata"`
-}
-
-type ViewerEndpoint struct {
-	NodeID       string                    `json:"node_id"`
-	BaseURL      string                    `json:"base_url"`
-	Protocol     string                    `json:"protocol"`
-	URL          string                    `json:"url"`
-	GeoDistance  float64                   `json:"geo_distance"`
-	LoadScore    float64                   `json:"load_score"`
-	HealthScore  float64                   `json:"health_score"`
-	Capabilities OutputCapability          `json:"capabilities"`
-	Outputs      map[string]OutputEndpoint `json:"outputs,omitempty"`
-}
-
-type OutputCapability struct {
-	SupportsSeek          bool     `json:"supports_seek"`
-	SupportsQualitySwitch bool     `json:"supports_quality_switch"`
-	MaxBitrate            int      `json:"max_bitrate,omitempty"`
-	HasAudio              bool     `json:"has_audio"`
-	HasVideo              bool     `json:"has_video"`
-	Codecs                []string `json:"codecs,omitempty"`
-}
-
-type OutputEndpoint struct {
-	Protocol     string           `json:"protocol"`
-	URL          string           `json:"url"`
-	Capabilities OutputCapability `json:"capabilities"`
-}
-
 // buildOutputCapabilities returns default capabilities for a given protocol and content type
-func buildOutputCapabilities(protocol string, isLive bool) OutputCapability {
-	caps := OutputCapability{
+func buildOutputCapabilities(protocol string, isLive bool) fapi.OutputCapability {
+	caps := fapi.OutputCapability{
 		SupportsSeek:          !isLive,
 		SupportsQualitySwitch: true,
 		HasAudio:              true,
@@ -2243,70 +2033,58 @@ func resolveTemplateURL(raw interface{}, baseURL, streamName string) string {
 }
 
 // buildOutputsMap constructs the per-protocol outputs for a node/stream
-func buildOutputsMap(baseURL string, rawOutputs map[string]interface{}, streamName string, isLive bool) map[string]OutputEndpoint {
-	outputs := make(map[string]OutputEndpoint)
+func buildOutputsMap(baseURL string, rawOutputs map[string]interface{}, streamName string, isLive bool) map[string]fapi.OutputEndpoint {
+	outputs := make(map[string]fapi.OutputEndpoint)
 
 	base := ensureTrailingSlash(baseURL)
 	html := base + streamName + ".html"
-	outputs["MIST_HTML"] = OutputEndpoint{Protocol: "MIST_HTML", URL: html, Capabilities: buildOutputCapabilities("MIST_HTML", isLive)}
-	outputs["PLAYER_JS"] = OutputEndpoint{Protocol: "PLAYER_JS", URL: base + "player.js", Capabilities: buildOutputCapabilities("PLAYER_JS", isLive)}
+	outputs["MIST_HTML"] = fapi.OutputEndpoint{Protocol: "MIST_HTML", URL: html, Capabilities: buildOutputCapabilities("MIST_HTML", isLive)}
+	outputs["PLAYER_JS"] = fapi.OutputEndpoint{Protocol: "PLAYER_JS", URL: base + "player.js", Capabilities: buildOutputCapabilities("PLAYER_JS", isLive)}
 
 	// Prefer explicit WHEP if present; otherwise derive from HTML
 	if raw, ok := rawOutputs["WHEP"]; ok {
 		if u := resolveTemplateURL(raw, base, streamName); u != "" {
-			outputs["WHEP"] = OutputEndpoint{Protocol: "WHEP", URL: u, Capabilities: buildOutputCapabilities("WHEP", isLive)}
+			outputs["WHEP"] = fapi.OutputEndpoint{Protocol: "WHEP", URL: u, Capabilities: buildOutputCapabilities("WHEP", isLive)}
 		}
 	}
 	if _, ok := outputs["WHEP"]; !ok {
 		if u := deriveWHEPFromHTML(html); u != "" {
-			outputs["WHEP"] = OutputEndpoint{Protocol: "WHEP", URL: u, Capabilities: buildOutputCapabilities("WHEP", isLive)}
+			outputs["WHEP"] = fapi.OutputEndpoint{Protocol: "WHEP", URL: u, Capabilities: buildOutputCapabilities("WHEP", isLive)}
 		}
 	}
 
 	if raw, ok := rawOutputs["HLS"]; ok {
 		if u := resolveTemplateURL(raw, base, streamName); u != "" {
-			outputs["HLS"] = OutputEndpoint{Protocol: "HLS", URL: u, Capabilities: buildOutputCapabilities("HLS", isLive)}
+			outputs["HLS"] = fapi.OutputEndpoint{Protocol: "HLS", URL: u, Capabilities: buildOutputCapabilities("HLS", isLive)}
 		}
 	}
 	if raw, ok := rawOutputs["DASH"]; ok {
 		if u := resolveTemplateURL(raw, base, streamName); u != "" {
-			outputs["DASH"] = OutputEndpoint{Protocol: "DASH", URL: u, Capabilities: buildOutputCapabilities("DASH", isLive)}
+			outputs["DASH"] = fapi.OutputEndpoint{Protocol: "DASH", URL: u, Capabilities: buildOutputCapabilities("DASH", isLive)}
 		}
 	}
 	if raw, ok := rawOutputs["MP4"]; ok {
 		if u := resolveTemplateURL(raw, base, streamName); u != "" {
-			outputs["MP4"] = OutputEndpoint{Protocol: "MP4", URL: u, Capabilities: buildOutputCapabilities("MP4", isLive)}
+			outputs["MP4"] = fapi.OutputEndpoint{Protocol: "MP4", URL: u, Capabilities: buildOutputCapabilities("MP4", isLive)}
 		}
 	}
 	if raw, ok := rawOutputs["WEBM"]; ok {
 		if u := resolveTemplateURL(raw, base, streamName); u != "" {
-			outputs["WEBM"] = OutputEndpoint{Protocol: "WEBM", URL: u, Capabilities: buildOutputCapabilities("WEBM", isLive)}
+			outputs["WEBM"] = fapi.OutputEndpoint{Protocol: "WEBM", URL: u, Capabilities: buildOutputCapabilities("WEBM", isLive)}
 		}
 	}
 	if raw, ok := rawOutputs["HTTP"]; ok {
 		if u := resolveTemplateURL(raw, base, streamName); u != "" {
-			outputs["HTTP"] = OutputEndpoint{Protocol: "HTTP", URL: u, Capabilities: buildOutputCapabilities("HTTP", isLive)}
+			outputs["HTTP"] = fapi.OutputEndpoint{Protocol: "HTTP", URL: u, Capabilities: buildOutputCapabilities("HTTP", isLive)}
 		}
 	}
 
 	return outputs
 }
 
-type ContentMetadata struct {
-	Title         string `json:"title,omitempty"`
-	Description   string `json:"description,omitempty"`
-	Duration      *int   `json:"duration,omitempty"` // seconds, null for live
-	Status        string `json:"status"`
-	CreatedAt     string `json:"created_at,omitempty"`
-	IsLive        bool   `json:"is_live"`
-	ViewCount     *int   `json:"view_count,omitempty"`
-	RecordingSize *int64 `json:"recording_size,omitempty"` // for DVR, bytes
-	ClipSource    string `json:"clip_source,omitempty"`    // for clips
-}
-
 // HandleResolveViewerEndpoint resolves optimal viewing endpoints for different content types
 func HandleResolveViewerEndpoint(c *gin.Context) {
-	var req ViewerEndpointRequest
+	var req fapi.ViewerEndpointRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Invalid request: %v", err)})
 		return
@@ -2351,16 +2129,16 @@ func HandleResolveViewerEndpoint(c *gin.Context) {
 		}
 	}
 
-	var response ViewerEndpointResponse
+	var response fapi.ViewerEndpointResponse
 	var err error
 
 	switch req.ContentType {
 	case "live":
 		response, err = resolveLiveViewerEndpoint(req, lat, lon)
 	case "dvr":
-		response, err = resolveDVRViewerEndpoint(req, lat, lon)
+		response, err = resolveDVRViewerEndpoint(req)
 	case "clip":
-		response, err = resolveClipViewerEndpoint(req, lat, lon)
+		response, err = resolveClipViewerEndpoint(req)
 	default:
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid content type"})
 		return
@@ -2373,6 +2151,20 @@ func HandleResolveViewerEndpoint(c *gin.Context) {
 		}).Error("Failed to resolve viewer endpoint")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
+	}
+
+	// Enrich live metadata from unified state when available
+	if req.ContentType == "live" {
+		st := state.DefaultManager().GetStreamState(req.ContentID)
+		if st != nil {
+			response.Metadata.IsLive = st.Status == "live"
+			response.Metadata.Status = st.Status
+			response.Metadata.Viewers = st.Viewers
+			response.Metadata.BufferState = st.BufferState
+			if st.HealthScore > 0 {
+				response.Metadata.HealthScore = &st.HealthScore
+			}
+		}
 	}
 
 	// Record metrics
@@ -2390,16 +2182,193 @@ func HandleResolveViewerEndpoint(c *gin.Context) {
 	c.JSON(http.StatusOK, response)
 }
 
+// HandleStreamMeta fetches Mist JSON meta for an internal_name without affecting viewer counts
+func HandleStreamMeta(c *gin.Context) {
+	var req fapi.StreamMetaRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
+		return
+	}
+	internalName := strings.TrimSpace(req.InternalName)
+	if internalName == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "internal_name is required"})
+		return
+	}
+
+	// Determine base URL without invoking the load balancer
+	base := strings.TrimSpace(req.TargetBaseURL)
+	if base == "" && req.TargetNodeID != "" {
+		if no, ok := control.GetNodeOutputs(req.TargetNodeID); ok {
+			base = no.BaseURL
+		}
+	}
+	if base == "" {
+		if nodeID, _, ok := control.GetStreamSource(internalName); ok {
+			if no, ok2 := control.GetNodeOutputs(nodeID); ok2 {
+				base = no.BaseURL
+			}
+		}
+	}
+	if base == "" {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "no source node available"})
+		return
+	}
+
+	// Build json_<encoded>.js at the node's reported base path (no hardcoded "/view")
+	encoded := url.PathEscape("live+" + internalName)
+	jsonURL, err := url.JoinPath(strings.TrimRight(base, "/"), "json_"+encoded+".js")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to build meta URL"})
+		return
+	}
+
+	httpClient := &http.Client{Timeout: 4 * time.Second}
+	httpReq, err := http.NewRequestWithContext(c.Request.Context(), http.MethodGet, jsonURL, nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to build request"})
+		return
+	}
+	httpReq.Header.Set("Accept", "application/json, text/javascript")
+
+	resp, err := httpClient.Do(httpReq)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "failed to fetch meta"})
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		c.JSON(http.StatusBadGateway, gin.H{"error": "edge response error", "status": resp.StatusCode, "body": string(body)})
+		return
+	}
+
+	var raw map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "failed to parse meta"})
+		return
+	}
+
+	// Extract summary
+	summary := map[string]interface{}{
+		"is_live":          false,
+		"buffer_window_ms": 0,
+		"jitter_ms":        0,
+		"unix_offset_ms":   0,
+		"type":             "",
+		"tracks":           []map[string]interface{}{},
+	}
+	if meta, ok := raw["meta"].(map[string]interface{}); ok {
+		if live, ok := meta["live"].(float64); ok {
+			summary["is_live"] = live != 0
+		}
+		if bw, ok := meta["buffer_window"].(float64); ok {
+			summary["buffer_window_ms"] = int64(bw)
+		}
+		if jit, ok := meta["jitter"].(float64); ok {
+			summary["jitter_ms"] = int64(jit)
+		}
+		if uo, ok := raw["unixoffset"].(float64); ok {
+			summary["unix_offset_ms"] = int64(uo)
+		}
+		if t, ok := raw["type"].(string); ok {
+			summary["type"] = t
+		}
+		if w, ok := raw["width"].(float64); ok {
+			v := int(w)
+			summary["width"] = v
+		}
+		if h, ok := raw["height"].(float64); ok {
+			v := int(h)
+			summary["height"] = v
+		}
+		// tracks
+		if tracks, ok := meta["tracks"].(map[string]interface{}); ok {
+			list := []map[string]interface{}{}
+			for id, tv := range tracks {
+				if tm, ok := tv.(map[string]interface{}); ok {
+					item := map[string]interface{}{
+						"id":    id,
+						"type":  stringOr(tm["type"]),
+						"codec": stringOr(tm["codec"]),
+					}
+					if ch, ok := toInt(tm["channels"]); ok {
+						item["channels"] = ch
+					}
+					if rate, ok := toInt(tm["rate"]); ok {
+						item["rate"] = rate
+					}
+					if bw, ok := toInt(tm["bps"]); ok {
+						item["bitrate_bps"] = bw
+					}
+					if w, ok := toInt(tm["width"]); ok {
+						item["width"] = w
+					}
+					if h, ok := toInt(tm["height"]); ok {
+						item["height"] = h
+					}
+					if now, ok := toInt64(tm["nowms"]); ok {
+						item["now_ms"] = now
+					}
+					if last, ok := toInt64(tm["lastms"]); ok {
+						item["last_ms"] = last
+					}
+					if first, ok := toInt64(tm["firstms"]); ok {
+						item["first_ms"] = first
+					}
+					list = append(list, item)
+				}
+			}
+			summary["tracks"] = list
+		}
+	}
+
+	out := map[string]interface{}{"meta_summary": summary}
+	if req.IncludeRaw {
+		out["raw"] = raw
+	}
+
+	c.JSON(http.StatusOK, out)
+}
+
+func stringOr(v interface{}) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return ""
+}
+func toInt(v interface{}) (int, bool) {
+	switch x := v.(type) {
+	case float64:
+		return int(x), true
+	case int:
+		return x, true
+	default:
+		return 0, false
+	}
+}
+func toInt64(v interface{}) (int64, bool) {
+	switch x := v.(type) {
+	case float64:
+		return int64(x), true
+	case int64:
+		return x, true
+	case int:
+		return int64(x), true
+	default:
+		return 0, false
+	}
+}
+
 // resolveLiveViewerEndpoint uses load balancer to find optimal edge nodes with fallbacks
-func resolveLiveViewerEndpoint(req ViewerEndpointRequest, lat, lon float64) (ViewerEndpointResponse, error) {
+func resolveLiveViewerEndpoint(req fapi.ViewerEndpointRequest, lat, lon float64) (fapi.ViewerEndpointResponse, error) {
 	// Use load balancer to get top 5 edge nodes for fallbacks
 	ctx := context.WithValue(context.Background(), "cap", "edge")
 	nodes, err := lb.GetTopNodesWithScores(ctx, req.ContentID, lat, lon, make(map[string]int), "", 5)
 	if err != nil {
-		return ViewerEndpointResponse{}, fmt.Errorf("no suitable edge nodes available: %v", err)
+		return fapi.ViewerEndpointResponse{}, fmt.Errorf("no suitable edge nodes available: %v", err)
 	}
 
-	var endpoints []ViewerEndpoint
+	var endpoints []fapi.ViewerEndpoint
 	streamName := "live+" + req.ContentID
 
 	for _, node := range nodes {
@@ -2443,33 +2412,32 @@ func resolveLiveViewerEndpoint(req ViewerEndpointRequest, lat, lon float64) (Vie
 			geoDistance = 6371.0 * angle
 		}
 
-		endpoint := ViewerEndpoint{
-			NodeID:       node.NodeID,
-			BaseURL:      nodeOutputs.BaseURL,
-			Protocol:     protocol,
-			URL:          url,
-			GeoDistance:  geoDistance,
-			LoadScore:    float64(node.Score),
-			HealthScore:  1.0,
-			Capabilities: OutputCapability{},
-			Outputs:      buildOutputsMap(nodeOutputs.BaseURL, nodeOutputs.Outputs, streamName, true),
+		endpoint := fapi.ViewerEndpoint{
+			NodeID:      node.NodeID,
+			BaseURL:     nodeOutputs.BaseURL,
+			Protocol:    protocol,
+			URL:         url,
+			GeoDistance: geoDistance,
+			LoadScore:   float64(node.Score),
+			HealthScore: 1.0,
+			Outputs:     buildOutputsMap(nodeOutputs.BaseURL, nodeOutputs.Outputs, streamName, true),
 		}
 		endpoints = append(endpoints, endpoint)
 	}
 
 	if len(endpoints) == 0 {
-		return ViewerEndpointResponse{}, fmt.Errorf("no nodes with suitable outputs available")
+		return fapi.ViewerEndpointResponse{}, fmt.Errorf("no nodes with suitable outputs available")
 	}
 
-	return ViewerEndpointResponse{
+	return fapi.ViewerEndpointResponse{
 		Primary:   endpoints[0],
 		Fallbacks: endpoints[1:],
-		Metadata:  ContentMetadata{Status: "live", IsLive: true},
+		Metadata:  &fapi.PlaybackMetadata{Status: "live", IsLive: true},
 	}, nil
 }
 
 // resolveDVRViewerEndpoint queries database for DVR storage node
-func resolveDVRViewerEndpoint(req ViewerEndpointRequest, lat, lon float64) (ViewerEndpointResponse, error) {
+func resolveDVRViewerEndpoint(req fapi.ViewerEndpointRequest) (fapi.ViewerEndpointResponse, error) {
 	var nodeID, status string
 	var duration *int
 	var recordingSize *int64
@@ -2483,15 +2451,15 @@ func resolveDVRViewerEndpoint(req ViewerEndpointRequest, lat, lon float64) (View
 
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return ViewerEndpointResponse{}, fmt.Errorf("DVR recording not found")
+			return fapi.ViewerEndpointResponse{}, fmt.Errorf("DVR recording not found")
 		}
-		return ViewerEndpointResponse{}, fmt.Errorf("failed to query DVR: %v", err)
+		return fapi.ViewerEndpointResponse{}, fmt.Errorf("failed to query DVR: %v", err)
 	}
 
 	nodeOutputs, exists := control.GetNodeOutputs(nodeID)
 
 	if !exists || nodeOutputs.Outputs == nil {
-		return ViewerEndpointResponse{}, fmt.Errorf("storage node outputs not available")
+		return fapi.ViewerEndpointResponse{}, fmt.Errorf("storage node outputs not available")
 	}
 
 	streamName := "vod+" + req.ContentID
@@ -2508,32 +2476,28 @@ func resolveDVRViewerEndpoint(req ViewerEndpointRequest, lat, lon float64) (View
 	}
 
 	if url == "" {
-		return ViewerEndpointResponse{}, fmt.Errorf("no suitable outputs for DVR playback")
+		return fapi.ViewerEndpointResponse{}, fmt.Errorf("no suitable outputs for DVR playback")
 	}
 
-	endpoint := ViewerEndpoint{
-		NodeID:       nodeID,
-		BaseURL:      nodeOutputs.BaseURL,
-		Protocol:     protocol,
-		URL:          url,
-		Capabilities: OutputCapability{},
-		Outputs:      buildOutputsMap(nodeOutputs.BaseURL, nodeOutputs.Outputs, streamName, false),
+	endpoint := fapi.ViewerEndpoint{
+		NodeID:   nodeID,
+		BaseURL:  nodeOutputs.BaseURL,
+		Protocol: protocol,
+		URL:      url,
+		Outputs:  buildOutputsMap(nodeOutputs.BaseURL, nodeOutputs.Outputs, streamName, false),
 	}
 
-	return ViewerEndpointResponse{
+	return fapi.ViewerEndpointResponse{
 		Primary: endpoint,
-		Metadata: ContentMetadata{
-			Status:        status,
-			IsLive:        false,
-			Duration:      duration,
-			RecordingSize: recordingSize,
-			CreatedAt:     createdAt.Format(time.RFC3339),
+		Metadata: &fapi.PlaybackMetadata{
+			Status: "dvr",
+			IsLive: false,
 		},
 	}, nil
 }
 
 // resolveClipViewerEndpoint queries database for clip storage node
-func resolveClipViewerEndpoint(req ViewerEndpointRequest, lat, lon float64) (ViewerEndpointResponse, error) {
+func resolveClipViewerEndpoint(req fapi.ViewerEndpointRequest) (fapi.ViewerEndpointResponse, error) {
 	var nodeID, status, sourceStream string
 	var duration *int
 	var fileSize *int64
@@ -2547,15 +2511,15 @@ func resolveClipViewerEndpoint(req ViewerEndpointRequest, lat, lon float64) (Vie
 
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return ViewerEndpointResponse{}, fmt.Errorf("clip not found")
+			return fapi.ViewerEndpointResponse{}, fmt.Errorf("clip not found")
 		}
-		return ViewerEndpointResponse{}, fmt.Errorf("failed to query clip: %v", err)
+		return fapi.ViewerEndpointResponse{}, fmt.Errorf("failed to query clip: %v", err)
 	}
 
 	nodeOutputs, exists := control.GetNodeOutputs(nodeID)
 
 	if !exists || nodeOutputs.Outputs == nil {
-		return ViewerEndpointResponse{}, fmt.Errorf("storage node outputs not available")
+		return fapi.ViewerEndpointResponse{}, fmt.Errorf("storage node outputs not available")
 	}
 
 	streamName := "vod+" + req.ContentID
@@ -2572,26 +2536,22 @@ func resolveClipViewerEndpoint(req ViewerEndpointRequest, lat, lon float64) (Vie
 	}
 
 	if url == "" {
-		return ViewerEndpointResponse{}, fmt.Errorf("no suitable outputs for clip playback")
+		return fapi.ViewerEndpointResponse{}, fmt.Errorf("no suitable outputs for clip playback")
 	}
 
-	endpoint := ViewerEndpoint{
-		NodeID:       nodeID,
-		BaseURL:      nodeOutputs.BaseURL,
-		Protocol:     protocol,
-		URL:          url,
-		Capabilities: OutputCapability{},
-		Outputs:      buildOutputsMap(nodeOutputs.BaseURL, nodeOutputs.Outputs, streamName, false),
+	endpoint := fapi.ViewerEndpoint{
+		NodeID:   nodeID,
+		BaseURL:  nodeOutputs.BaseURL,
+		Protocol: protocol,
+		URL:      url,
+		Outputs:  buildOutputsMap(nodeOutputs.BaseURL, nodeOutputs.Outputs, streamName, false),
 	}
 
-	return ViewerEndpointResponse{
+	return fapi.ViewerEndpointResponse{
 		Primary: endpoint,
-		Metadata: ContentMetadata{
-			Status:     status,
-			IsLive:     false,
-			Duration:   duration,
-			ClipSource: sourceStream,
-			CreatedAt:  createdAt.Format(time.RFC3339),
+		Metadata: &fapi.PlaybackMetadata{
+			Status: "clip",
+			IsLive: false,
 		},
 	}, nil
 }

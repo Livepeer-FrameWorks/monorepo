@@ -8,12 +8,11 @@ Billing and subscriptions. Orchestrates usage → invoice drafts → payments. K
 - Integrates with Stripe, Mollie, and crypto flows
 - Webhooks update invoice state
 
-## Configuration
-- `DATABASE_URL` — PostgreSQL/YugabyteDB DSN
-- `SERVICE_TOKEN` — S2S auth
-- `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`
-- `MOLLIE_API_KEY`
-- Optional crypto keys as applicable
+## Run (dev)
+- Start the full stack from repo root: `docker-compose up -d`
+- Or run just Purser: `cd api_billing && go run ./cmd/purser`
+
+Configuration: copy `env.example` to `.env` and use the inline comments as reference. Do not commit secrets.
 
 Health: `GET /health`.
 

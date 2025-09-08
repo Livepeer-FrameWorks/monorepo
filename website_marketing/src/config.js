@@ -19,6 +19,10 @@ const config = {
   // Demo configuration
   demoStreamName: import.meta.env.VITE_DEMO_STREAM_NAME || 'live+frameworks-demo',
 
+  // Gateway GraphQL URL (used by Status page and Player)
+  // Example: http://localhost:18090/graphql/
+  gatewayUrl: import.meta.env.VITE_GATEWAY_URL || 'http://localhost:18090/graphql/',
+
   // Company information
   companyName: import.meta.env.VITE_COMPANY_NAME || 'FrameWorks',
   domain: import.meta.env.VITE_DOMAIN || 'frameworks.network'

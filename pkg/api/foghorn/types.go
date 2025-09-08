@@ -118,19 +118,117 @@ type ViewerEndpointRequest struct {
 
 // ViewerEndpoint represents a single resolved endpoint from Foghorn
 type ViewerEndpoint struct {
-	NodeID      string                 `json:"node_id"`
-	BaseURL     string                 `json:"base_url"`
-	Protocol    string                 `json:"protocol"`
-	URL         string                 `json:"url"`
-	GeoDistance float64                `json:"geo_distance"`
-	LoadScore   float64                `json:"load_score"`
-	HealthScore float64                `json:"health_score"`
-	Outputs     map[string]interface{} `json:"outputs,omitempty"`
+	NodeID      string                    `json:"node_id"`
+	BaseURL     string                    `json:"base_url"`
+	Protocol    string                    `json:"protocol"`
+	URL         string                    `json:"url"`
+	GeoDistance float64                   `json:"geo_distance"`
+	LoadScore   float64                   `json:"load_score"`
+	HealthScore float64                   `json:"health_score"`
+	Outputs     map[string]OutputEndpoint `json:"outputs,omitempty"`
+}
+
+// OutputCapability describes capabilities for a given protocol output
+type OutputCapability struct {
+	SupportsSeek          bool     `json:"supports_seek"`
+	SupportsQualitySwitch bool     `json:"supports_quality_switch"`
+	MaxBitrate            int      `json:"max_bitrate,omitempty"`
+	HasAudio              bool     `json:"has_audio"`
+	HasVideo              bool     `json:"has_video"`
+	Codecs                []string `json:"codecs,omitempty"`
+}
+
+// OutputEndpoint represents a concrete endpoint for a protocol with capabilities
+type OutputEndpoint struct {
+	Protocol     string           `json:"protocol"`
+	URL          string           `json:"url"`
+	Capabilities OutputCapability `json:"capabilities"`
 }
 
 // ViewerEndpointResponse is the response from viewer endpoint resolution
 type ViewerEndpointResponse struct {
-	Primary   ViewerEndpoint   `json:"primary"`
-	Fallbacks []ViewerEndpoint `json:"fallbacks"`
-	Metadata  interface{}      `json:"metadata,omitempty"`
+	Primary   ViewerEndpoint    `json:"primary"`
+	Fallbacks []ViewerEndpoint  `json:"fallbacks"`
+	Metadata  *PlaybackMetadata `json:"metadata,omitempty"`
+}
+
+// PlaybackMetadata is a richer, player-oriented metadata payload
+type PlaybackMetadata struct {
+	Status        string             `json:"status"`
+	IsLive        bool               `json:"is_live"`
+	Viewers       int                `json:"viewers"`
+	BufferState   string             `json:"buffer_state,omitempty"`
+	HealthScore   *float64           `json:"health_score,omitempty"`
+	Tracks        []PlaybackTrack    `json:"tracks,omitempty"`
+	ProtocolHints []string           `json:"protocol_hints,omitempty"`
+	Instances     []PlaybackInstance `json:"instances,omitempty"`
+	DvrStatus     string             `json:"dvr_status,omitempty"`
+	DvrSourceURI  string             `json:"dvr_source_uri,omitempty"`
+}
+
+type PlaybackTrack struct {
+	Type        string `json:"type"`
+	Codec       string `json:"codec"`
+	BitrateKbps int    `json:"bitrate_kbps,omitempty"`
+	Width       int    `json:"width,omitempty"`
+	Height      int    `json:"height,omitempty"`
+	Channels    int    `json:"channels,omitempty"`
+	SampleRate  int    `json:"sample_rate,omitempty"`
+}
+
+type PlaybackInstance struct {
+	NodeID           string    `json:"node_id"`
+	Viewers          int       `json:"viewers"`
+	BufferState      string    `json:"buffer_state,omitempty"`
+	BytesUp          int64     `json:"bytes_up,omitempty"`
+	BytesDown        int64     `json:"bytes_down,omitempty"`
+	TotalConnections int       `json:"total_connections,omitempty"`
+	Inputs           int       `json:"inputs,omitempty"`
+	LastUpdate       time.Time `json:"last_update"`
+}
+
+// StreamMetaRequest requests Mist JSON meta for a given internal name
+// ContentType should be one of: "live" | "dvr" | "clip". Defaults to "live".
+type StreamMetaRequest struct {
+	InternalName  string `json:"internal_name" binding:"required"`
+	ContentType   string `json:"content_type,omitempty"`
+	IncludeRaw    bool   `json:"include_raw,omitempty"`
+	TargetNodeID  string `json:"target_node_id,omitempty"`
+	TargetBaseURL string `json:"target_base_url,omitempty"`
+}
+
+// TrackSummary is a concise description of an available track
+type TrackSummary struct {
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Codec    string `json:"codec"`
+	Channels *int   `json:"channels,omitempty"`
+	Rate     *int   `json:"rate,omitempty"`
+	Width    *int   `json:"width,omitempty"`
+	Height   *int   `json:"height,omitempty"`
+	Bitrate  *int   `json:"bitrate_bps,omitempty"`
+	NowMs    *int64 `json:"now_ms,omitempty"`
+	LastMs   *int64 `json:"last_ms,omitempty"`
+	FirstMs  *int64 `json:"first_ms,omitempty"`
+}
+
+// MetaSummary contains the key values the player/UI needs
+type MetaSummary struct {
+	IsLive         bool           `json:"is_live"`
+	BufferWindowMs int64          `json:"buffer_window_ms"`
+	JitterMs       int64          `json:"jitter_ms"`
+	UnixOffset     int64          `json:"unix_offset_ms"`
+	NowMs          *int64         `json:"now_ms,omitempty"`
+	LastMs         *int64         `json:"last_ms,omitempty"`
+	Width          *int           `json:"width,omitempty"`
+	Height         *int           `json:"height,omitempty"`
+	Version        *int           `json:"version,omitempty"`
+	Type           string         `json:"type,omitempty"`
+	Tracks         []TrackSummary `json:"tracks,omitempty"`
+}
+
+// StreamMetaResponse returns the summarized meta and optional raw JSON
+type StreamMetaResponse struct {
+	MetaSummary MetaSummary `json:"meta_summary"`
+	Raw         any         `json:"raw,omitempty"`
 }

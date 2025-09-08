@@ -144,6 +144,15 @@ CREATE INDEX IF NOT EXISTS idx_foghorn_storage_policies_active ON foghorn.storag
 -- Node output cache index
 CREATE INDEX IF NOT EXISTS idx_foghorn_node_outputs_updated ON foghorn.node_outputs(last_updated);
 
+-- Full node lifecycle snapshot storage for readiness and audit
+CREATE TABLE IF NOT EXISTS foghorn.node_lifecycle (
+    node_id VARCHAR(100) PRIMARY KEY,
+    lifecycle JSONB NOT NULL,
+    last_updated TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_foghorn_node_lifecycle_updated ON foghorn.node_lifecycle(last_updated);
+
 -- ============================================================================
 -- DVR (DIGITAL VIDEO RECORDING) REQUESTS
 -- ============================================================================

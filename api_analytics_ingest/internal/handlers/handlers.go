@@ -10,9 +10,10 @@ import (
 	"frameworks/pkg/database"
 	"frameworks/pkg/kafka"
 	"frameworks/pkg/logging"
-	"frameworks/pkg/validation"
-
+	pb "frameworks/pkg/proto"
 	"github.com/prometheus/client_golang/prometheus"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 )
 
 // PeriscopeMetrics holds all Prometheus metrics for Periscope Ingest
@@ -41,48 +42,20 @@ func NewAnalyticsHandler(clickhouse database.ClickHouseNativeConn, logger loggin
 	}
 }
 
-// convertKafkaEventToTyped converts a kafka.AnalyticsEvent to a validation.KafkaEvent with typed data
-func (h *AnalyticsHandler) convertKafkaEventToTyped(event kafka.AnalyticsEvent) (*validation.KafkaEvent, error) {
-	// Create typed event structure
-	typedEvent := &validation.KafkaEvent{
-		ID:            event.EventID,
-		Type:          event.EventType,
-		EventID:       event.EventID,
-		EventType:     event.EventType,
-		Timestamp:     event.Timestamp,
-		Source:        event.Source,
-		SchemaVersion: "1.0",
+// parseProtobufData parses the transparent protobuf JSON data from the Kafka event
+func (h *AnalyticsHandler) parseProtobufData(event kafka.AnalyticsEvent, target proto.Message) error {
+	// Convert the Data map back to JSON
+	jsonData, err := json.Marshal(event.Data)
+	if err != nil {
+		return fmt.Errorf("failed to marshal event data: %w", err)
 	}
 
-	// Event already carries typed payloads; copy through
-	switch validation.EventType(event.EventType) {
-	case validation.EventStreamIngest:
-		typedEvent.Data.StreamIngest = event.Data.StreamIngest
-	case validation.EventStreamView:
-		typedEvent.Data.StreamView = event.Data.StreamView
-	case validation.EventStreamLifecycle, validation.EventStreamBuffer, validation.EventStreamEnd:
-		typedEvent.Data.StreamLifecycle = event.Data.StreamLifecycle
-	case validation.EventUserConnection:
-		typedEvent.Data.UserConnection = event.Data.UserConnection
-	case validation.EventClientLifecycle:
-		typedEvent.Data.ClientLifecycle = event.Data.ClientLifecycle
-	case validation.EventTrackList:
-		typedEvent.Data.TrackList = event.Data.TrackList
-	case validation.EventRecordingLifecycle:
-		typedEvent.Data.Recording = event.Data.Recording
-	case validation.EventPushLifecycle:
-		typedEvent.Data.PushLifecycle = event.Data.PushLifecycle
-	case validation.EventNodeLifecycle:
-		typedEvent.Data.NodeLifecycle = event.Data.NodeLifecycle
-	case validation.EventBandwidthThreshold:
-		typedEvent.Data.BandwidthThreshold = event.Data.BandwidthThreshold
-	case validation.EventLoadBalancing:
-		typedEvent.Data.LoadBalancing = event.Data.LoadBalancing
-	case validation.EventClipLifecycle:
-		typedEvent.Data.ClipLifecycle = event.Data.ClipLifecycle
+	// Parse JSON using protojson to maintain proper protobuf semantics
+	unmarshaler := protojson.UnmarshalOptions{
+		DiscardUnknown: false,
 	}
 
-	return typedEvent, nil
+	return unmarshaler.Unmarshal(jsonData, target)
 }
 
 // HandleAnalyticsEvent processes analytics events and writes to appropriate databases
@@ -95,141 +68,92 @@ func (h *AnalyticsHandler) HandleAnalyticsEvent(ydb database.PostgresConn, event
 		h.metrics.AnalyticsEvents.WithLabelValues(event.EventType, "received").Inc()
 	}
 
-	// Convert to typed event for validation and type safety
-	typedEvent, err := h.convertKafkaEventToTyped(event)
+	// Process based on event type using direct protobuf parsing
+	var err error
+	switch event.EventType {
+	// Unified naming (no legacy)
+	case "viewer_connect":
+		err = h.processViewerConnection(ctx, ydb, event, true)
+	case "viewer_disconnect":
+		err = h.processViewerConnection(ctx, ydb, event, false)
+	case "stream_buffer":
+		err = h.processStreamBuffer(ctx, event)
+	case "stream_end":
+		err = h.processStreamEnd(ctx, ydb, event)
+	case "push_rewrite":
+		err = h.processPushRewrite(ctx, event)
+	case "viewer_resolve":
+		err = h.processStreamIngest(ctx, event)
+	case "stream_source":
+		err = h.processStreamView(ctx, event)
+	case "push_end":
+		err = h.processPushLifecycle(ctx, event)
+	case "push_out_start":
+		err = h.processPushLifecycle(ctx, event)
+	case "stream_track_list":
+		err = h.processTrackList(ctx, event)
+	case "stream_bandwidth":
+		err = h.processBandwidthThreshold(ctx, event)
+	case "recording_complete":
+		err = h.processRecordingLifecycle(ctx, event)
+	case "stream_lifecycle_update":
+		err = h.processStreamLifecycle(ctx, ydb, event)
+	case "node_lifecycle_update":
+		err = h.processNodeLifecycle(ctx, event)
+	case "client_lifecycle_update":
+		err = h.processClientLifecycle(ctx, event)
+	case "load_balancing":
+		err = h.processLoadBalancing(ctx, event)
+	case "clip_lifecycle":
+		err = h.processClipLifecycle(ctx, event)
+	case "dvr_lifecycle":
+		err = h.processDVRLifecycle(ctx, event)
+	default:
+		h.logger.WithFields(logging.Fields{
+			"event_type": event.EventType,
+			"event_id":   event.EventID,
+		}).Debug("Unknown event type, skipping")
+		if h.metrics != nil {
+			h.metrics.AnalyticsEvents.WithLabelValues(event.EventType, "skipped").Inc()
+		}
+		return nil
+	}
+
 	if err != nil {
 		h.logger.WithError(err).WithFields(logging.Fields{
 			"event_type": event.EventType,
 			"event_id":   event.EventID,
-		}).Error("Failed to convert event to typed structure")
-
+		}).Error("Failed to process event")
 		if h.metrics != nil {
-			h.metrics.AnalyticsEvents.WithLabelValues(event.EventType, "validation_failed").Inc()
-		}
-		return err
-	}
-
-	// Validate typed event against shared schema
-	v := validation.NewEventValidator()
-	be := validation.BaseEvent{
-		EventID:       event.EventID,
-		EventType:     validation.EventType(event.EventType),
-		Timestamp:     event.Timestamp,
-		Source:        event.Source,
-		StreamID:      event.StreamID,
-		UserID:        event.UserID,
-		PlaybackID:    event.PlaybackID,
-		InternalName:  event.InternalName,
-		NodeURL:       event.NodeURL,
-		SchemaVersion: event.SchemaVersion,
-	}
-	// Populate typed payloads for validator
-	switch be.EventType {
-	case validation.EventStreamIngest:
-		be.StreamIngest = typedEvent.Data.StreamIngest
-	case validation.EventStreamView:
-		be.StreamView = typedEvent.Data.StreamView
-	case validation.EventStreamLifecycle, validation.EventStreamBuffer, validation.EventStreamEnd:
-		be.StreamLifecycle = typedEvent.Data.StreamLifecycle
-	case validation.EventUserConnection:
-		be.UserConnection = typedEvent.Data.UserConnection
-	case validation.EventClientLifecycle:
-		be.ClientLifecycle = typedEvent.Data.ClientLifecycle
-	case validation.EventTrackList:
-		be.TrackList = typedEvent.Data.TrackList
-	case validation.EventRecordingLifecycle:
-		be.Recording = typedEvent.Data.Recording
-	case validation.EventPushLifecycle:
-		be.PushLifecycle = typedEvent.Data.PushLifecycle
-	case validation.EventNodeLifecycle:
-		be.NodeLifecycle = typedEvent.Data.NodeLifecycle
-	case validation.EventBandwidthThreshold:
-		be.BandwidthThreshold = typedEvent.Data.BandwidthThreshold
-	case validation.EventLoadBalancing:
-		be.LoadBalancing = typedEvent.Data.LoadBalancing
-	case validation.EventClipLifecycle:
-		be.ClipLifecycle = typedEvent.Data.ClipLifecycle
-	}
-	batch := validation.BatchedEvents{
-		BatchID:   event.EventID,
-		Source:    event.Source,
-		Timestamp: event.Timestamp,
-		Events:    []validation.BaseEvent{be},
-	}
-	if err := v.ValidateBatch(&batch); err != nil {
-		h.logger.WithError(err).WithFields(logging.Fields{
-			"event_type": event.EventType,
-			"event_id":   event.EventID,
-		}).Error("Event validation failed")
-		if h.metrics != nil {
-			h.metrics.AnalyticsEvents.WithLabelValues(event.EventType, "validation_failed").Inc()
-		}
-		return err
-	}
-
-	// Process based on event type using typed data
-	switch validation.EventType(event.EventType) {
-	case validation.EventStreamLifecycle:
-		err = h.processStreamLifecycle(ctx, ydb, typedEvent)
-	case validation.EventStreamIngest:
-		err = h.processStreamIngest(ctx, typedEvent)
-	case validation.EventUserConnection:
-		err = h.processUserConnection(ctx, ydb, typedEvent)
-	case validation.EventPushLifecycle:
-		err = h.processPushLifecycle(ctx, typedEvent)
-	case validation.EventRecordingLifecycle:
-		err = h.processRecordingLifecycle(ctx, typedEvent)
-	case validation.EventClientLifecycle:
-		err = h.processClientLifecycle(ctx, typedEvent)
-	case validation.EventNodeLifecycle:
-		err = h.processNodeLifecycle(ctx, typedEvent)
-	case validation.EventStreamBuffer:
-		err = h.processStreamBuffer(ctx, typedEvent)
-	case validation.EventStreamEnd:
-		err = h.processStreamEnd(ctx, ydb, typedEvent)
-	case validation.EventStreamView:
-		err = h.processStreamView(ctx, typedEvent)
-	case validation.EventLoadBalancing:
-		err = h.processLoadBalancing(ctx, typedEvent)
-	case validation.EventTrackList:
-		err = h.processTrackList(ctx, typedEvent)
-	case validation.EventBandwidthThreshold:
-		err = h.processBandwidthThreshold(ctx, typedEvent)
-	case validation.EventClipLifecycle:
-		err = h.processClipLifecycle(ctx, typedEvent)
-	default:
-		h.logger.Warnf("Unknown event type: %s", event.EventType)
-		if h.metrics != nil {
-			h.metrics.AnalyticsEvents.WithLabelValues(event.EventType, "unknown_type").Inc()
-		}
-		return nil
-	}
-
-	// Track processing metrics
-	if h.metrics != nil {
-		if err != nil {
 			h.metrics.AnalyticsEvents.WithLabelValues(event.EventType, "error").Inc()
-		} else {
-			h.metrics.AnalyticsEvents.WithLabelValues(event.EventType, "processed").Inc()
 		}
-		h.metrics.BatchProcessingDuration.WithLabelValues().Observe(time.Since(start).Seconds())
+		return err
 	}
 
-	return err
+	// Track success
+	if h.metrics != nil {
+		h.metrics.AnalyticsEvents.WithLabelValues(event.EventType, "processed").Inc()
+		h.metrics.BatchProcessingDuration.WithLabelValues(event.Source).Observe(time.Since(start).Seconds())
+	}
+
+	return nil
 }
 
 // processStreamLifecycle handles stream lifecycle events
-func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, ydb database.PostgresConn, event *validation.KafkaEvent) error {
+func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, ydb database.PostgresConn, event kafka.AnalyticsEvent) error {
 	h.logger.Infof("Processing stream lifecycle event: %s", event.EventID)
 
-	// Get typed stream lifecycle payload
-	if event.Data.StreamLifecycle == nil {
-		h.logger.Warnf("No stream lifecycle data in event: %s", event.EventID)
-		return nil
+	// Parse MistTrigger envelope -> StreamLifecycleUpdate
+	var mt pb.MistTrigger
+	if err := h.parseProtobufData(event, &mt); err != nil {
+		return fmt.Errorf("failed to parse MistTrigger: %w", err)
 	}
-
-	streamLifecycle := event.Data.StreamLifecycle
-	internalName := streamLifecycle.InternalName
+	tp, ok := mt.GetTriggerPayload().(*pb.MistTrigger_StreamLifecycleUpdate)
+	if !ok || tp == nil {
+		return fmt.Errorf("unexpected payload for stream_lifecycle_update")
+	}
+	streamLifecycle := tp.StreamLifecycleUpdate
+	internalName := streamLifecycle.GetInternalName()
 
 	// Write ONLY to ClickHouse - no PostgreSQL writes for events
 	if h.metrics != nil {
@@ -254,26 +178,26 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, ydb datab
 	if err := batch.Append(
 		event.Timestamp,
 		event.EventID,
-		getTenantIDFromKafkaEvent(*event),
+		event.TenantID,
 		internalName,
-		streamLifecycle.NodeID,
-		"stream-lifecycle",
-		streamLifecycle.BufferState,
-		streamLifecycle.DownloadedBytes,
-		streamLifecycle.UploadedBytes,
-		streamLifecycle.TotalViewers,
-		streamLifecycle.TotalInputs,
-		streamLifecycle.TotalOutputs,
-		streamLifecycle.ViewerSeconds,
-		streamLifecycle.HealthScore,
-		streamLifecycle.HasIssues,
-		streamLifecycle.IssuesDesc,
-		streamLifecycle.TrackCount,
-		streamLifecycle.QualityTier,
-		streamLifecycle.PrimaryWidth,
-		streamLifecycle.PrimaryHeight,
-		streamLifecycle.PrimaryFPS,
-		marshalTypedEventData(streamLifecycle),
+		mt.GetNodeId(),
+		"stream_lifecycle",
+		streamLifecycle.GetBufferState(),
+		streamLifecycle.GetDownloadedBytes(),
+		streamLifecycle.GetUploadedBytes(),
+		streamLifecycle.GetTotalViewers(),
+		streamLifecycle.GetTotalInputs(),
+		0, // total_outputs not in StreamLifecycleUpdate
+		streamLifecycle.GetViewerSeconds(),
+		streamLifecycle.GetHealthScore(),
+		streamLifecycle.GetHasIssues(),
+		streamLifecycle.GetIssuesDescription(),
+		streamLifecycle.GetTrackCount(),
+		streamLifecycle.GetQualityTier(),
+		streamLifecycle.GetPrimaryWidth(),
+		streamLifecycle.GetPrimaryHeight(),
+		streamLifecycle.GetPrimaryFps(),
+		marshalTypedEventData(&streamLifecycle),
 	); err != nil {
 		h.logger.Errorf("Failed to append to ClickHouse batch: %v", err)
 		if h.metrics != nil {
@@ -294,7 +218,7 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, ydb datab
 		h.metrics.ClickHouseInserts.WithLabelValues("stream_events", "success").Inc()
 	}
 
-	if err := h.reduceStreamLifecycle(ctx, ydb, *event); err != nil {
+	if err := h.reduceStreamLifecycle(ctx, ydb, event, streamLifecycle); err != nil {
 		h.logger.Errorf("Failed to reduce stream lifecycle: %v", err)
 	}
 
@@ -302,44 +226,53 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, ydb datab
 }
 
 // processStreamIngest handles stream ingest events
-func (h *AnalyticsHandler) processStreamIngest(ctx context.Context, event *validation.KafkaEvent) error {
+func (h *AnalyticsHandler) processStreamIngest(ctx context.Context, event kafka.AnalyticsEvent) error {
 	h.logger.Infof("Processing stream ingest event: %s", event.EventID)
 
-	// Get typed stream ingest payload
-	if event.Data.StreamIngest == nil {
-		h.logger.Warnf("No stream ingest data in event: %s", event.EventID)
-		return nil
+	// Parse ViewerResolveTrigger from protobuf (viewer-side resolve)
+	var vr pb.MistTrigger
+	if err := h.parseProtobufData(event, &vr); err != nil {
+		return fmt.Errorf("failed to parse MistTrigger envelope: %w", err)
 	}
-
-	streamIngest := event.Data.StreamIngest
+	payload, ok := vr.GetTriggerPayload().(*pb.MistTrigger_ViewerResolve)
+	if !ok || payload == nil {
+		return fmt.Errorf("event is not ViewerResolveTrigger")
+	}
+	streamIngest := payload.ViewerResolve
 
 	// Write to ClickHouse for time-series analysis - ONLY fields that exist in ingest events
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
-		INSERT INTO stream_events (
-			timestamp, event_id, tenant_id, internal_name, node_id, event_type,
-			stream_key, user_id, hostname, push_url, protocol, latitude, longitude, location, event_data
-		)`)
+        INSERT INTO stream_events (
+            timestamp, event_id, tenant_id, internal_name, node_id, event_type,
+            stream_key, user_id, hostname, push_url, protocol, latitude, longitude, location, event_data
+        )`)
 	if err != nil {
 		h.logger.Errorf("Failed to prepare ClickHouse batch: %v", err)
 		return err
 	}
 
+	// Viewer resolve is not ingest; set ingest-only fields to NULL
+	var nodeID interface{}
+	if streamIngest.GetNodeId() != "" {
+		nodeID = streamIngest.GetNodeId()
+	}
+
 	if err := batch.Append(
 		event.Timestamp,
 		event.EventID,
-		getTenantIDFromKafkaEvent(*event),
-		streamIngest.InternalName,
-		streamIngest.NodeID,
-		"stream-ingest",
-		streamIngest.StreamKey,
-		streamIngest.UserID,
-		streamIngest.Hostname,
-		streamIngest.PushURL,
-		streamIngest.Protocol, // Protocol EXISTS in ingest events!
-		streamIngest.Latitude,
-		streamIngest.Longitude,
-		streamIngest.Location,
-		marshalTypedEventData(streamIngest),
+		event.TenantID,
+		streamIngest.GetRequestedStream(),
+		nodeID,
+		"stream_view",
+		nil, // stream_key N/A
+		nil, // user_id N/A
+		streamIngest.GetViewerHost(),
+		streamIngest.GetRequestUrl(),
+		nil, // protocol N/A
+		nilIfZeroFloat64(streamIngest.GetLatitude()),
+		nilIfZeroFloat64(streamIngest.GetLongitude()),
+		streamIngest.GetCity(),
+		marshalTypedEventData(&streamIngest),
 	); err != nil {
 		h.logger.Errorf("Failed to append to ClickHouse batch: %v", err)
 		return err
@@ -354,32 +287,70 @@ func (h *AnalyticsHandler) processStreamIngest(ctx context.Context, event *valid
 }
 
 // processUserConnection handles user connection events
-func (h *AnalyticsHandler) processUserConnection(ctx context.Context, ydb database.PostgresConn, event *validation.KafkaEvent) error {
+func (h *AnalyticsHandler) processUserConnection(ctx context.Context, ydb database.PostgresConn, event kafka.AnalyticsEvent) error {
 	h.logger.Infof("Processing user connection event: %s", event.EventID)
 
-	// Get typed user connection payload
-	if event.Data.UserConnection == nil {
-		h.logger.Warnf("No user connection data in event: %s", event.EventID)
-		return nil
+	// Parse UserNewTrigger or UserEndTrigger from protobuf
+	var tp pb.MistTrigger
+	var userNew pb.ViewerConnectTrigger
+	var userEnd pb.ViewerDisconnectTrigger
+	var isNewUser bool
+
+	// Try parsing as UserNewTrigger first
+	if err := h.parseProtobufData(event, &tp); err == nil {
+		tp, ok := tp.GetTriggerPayload().(*pb.MistTrigger_ViewerConnect)
+		if !ok || tp == nil {
+			return fmt.Errorf("unexpected payload for user_new")
+		}
+		userNew = *tp.ViewerConnect
+		isNewUser = true
+	} else {
+		// Try parsing as UserEndTrigger
+		if err := h.parseProtobufData(event, &tp); err != nil {
+			tp, ok := tp.GetTriggerPayload().(*pb.MistTrigger_ViewerDisconnect)
+			if !ok || tp == nil {
+				return fmt.Errorf("unexpected payload for user_end")
+			}
+			userEnd = *tp.ViewerDisconnect
+			return fmt.Errorf("failed to parse UserTrigger: %w", err)
+		}
+		isNewUser = false
 	}
 
-	userConn := event.Data.UserConnection
-
-	// Extract geographic data from typed payload (embedded periscope.ConnectionEvent)
+	// Extract data based on trigger type
+	var streamName, sessionID, connector, nodeID, host, requestURL string
 	var countryCode, city interface{}
 	var latitude, longitude interface{}
+	var duration, upBytes, downBytes int64
 
-	if userConn.CountryCode != "" {
-		countryCode = userConn.CountryCode
-	}
-	if userConn.City != "" {
-		city = userConn.City
-	}
-	if userConn.Latitude != 0 {
-		latitude = userConn.Latitude
-	}
-	if userConn.Longitude != 0 {
-		longitude = userConn.Longitude
+	if isNewUser {
+		streamName = userNew.GetStreamName()
+		sessionID = userNew.GetSessionId()
+		connector = userNew.GetConnector()
+		host = userNew.GetHost()
+		requestURL = userNew.GetRequestUrl()
+	} else {
+		streamName = userEnd.GetStreamName()
+		sessionID = userEnd.GetSessionId()
+		connector = userEnd.GetConnector()
+		host = userEnd.GetHost()
+		nodeID = userEnd.GetNodeId()
+		duration = userEnd.GetDuration()
+		upBytes = userEnd.GetUpBytes()
+		downBytes = userEnd.GetDownBytes()
+
+		if userEnd.GetCountryCode() != "" {
+			countryCode = userEnd.GetCountryCode()
+		}
+		if userEnd.GetCity() != "" {
+			city = userEnd.GetCity()
+		}
+		if userEnd.GetLatitude() != 0 {
+			latitude = userEnd.GetLatitude()
+		}
+		if userEnd.GetLongitude() != 0 {
+			longitude = userEnd.GetLongitude()
+		}
 	}
 
 	// Write to ClickHouse for time-series analysis
@@ -398,21 +369,21 @@ func (h *AnalyticsHandler) processUserConnection(ctx context.Context, ydb databa
 	if err := batch.Append(
 		event.EventID,
 		event.Timestamp,
-		getTenantIDFromKafkaEvent(*event),
-		userConn.InternalName,
-		userConn.SessionID,
-		userConn.ConnectionAddr,
-		userConn.Connector,
-		userConn.NodeID,
-		userConn.RequestURL,
+		event.TenantID,
+		streamName,
+		sessionID,
+		host, // connection_addr -> host
+		connector,
+		nodeID,
+		requestURL,
 		// Geographic data from typed payload
 		countryCode,
 		city,
 		latitude,
 		longitude,
-		userConn.Action,
-		int(userConn.SecondsConnected),
-		int64(userConn.DownloadedBytes+userConn.UploadedBytes),
+		map[bool]string{true: "connect", false: "disconnect"}[isNewUser],
+		int(duration),
+		upBytes+downBytes,
 	); err != nil {
 		h.logger.Errorf("Failed to append to ClickHouse batch: %v", err)
 		return err
@@ -423,65 +394,204 @@ func (h *AnalyticsHandler) processUserConnection(ctx context.Context, ydb databa
 		return err
 	}
 
-	if err := h.reduceUserConnection(ctx, ydb, *event); err != nil {
+	if err := h.reduceUserConnection(ctx, ydb, event, streamName, sessionID, connector, nodeID, host, requestURL, countryCode, city, latitude, longitude, duration, upBytes, downBytes, isNewUser); err != nil {
 		h.logger.Errorf("Failed to reduce user connection: %v", err)
 	}
 
 	return nil
 }
 
-// processPushLifecycle handles push lifecycle events
-func (h *AnalyticsHandler) processPushLifecycle(ctx context.Context, event *validation.KafkaEvent) error {
-	h.logger.Infof("Processing push lifecycle event: %s", event.EventID)
-
-	// Get typed push lifecycle payload
-	if event.Data.PushLifecycle == nil {
-		h.logger.Warnf("No push lifecycle data in event: %s", event.EventID)
-		return nil
+// processViewerConnection writes connection_events (connect/disconnect) and reduces state
+func (h *AnalyticsHandler) processViewerConnection(ctx context.Context, ydb database.PostgresConn, event kafka.AnalyticsEvent, isConnect bool) error {
+	var mt pb.MistTrigger
+	if err := h.parseProtobufData(event, &mt); err != nil {
+		return fmt.Errorf("failed to parse MistTrigger: %w", err)
 	}
 
-	pushLifecycle := event.Data.PushLifecycle
+	var streamName, sessionID, connector, nodeID, host, requestURL string
+	var duration, upBytes, downBytes int64
+	var countryCode, city interface{}
+	var latitude, longitude interface{}
+
+	switch p := mt.GetTriggerPayload().(type) {
+	case *pb.MistTrigger_ViewerConnect:
+		vc := p.ViewerConnect
+		streamName = vc.GetStreamName()
+		sessionID = vc.GetSessionId()
+		connector = vc.GetConnector()
+		host = vc.GetHost()
+		requestURL = vc.GetRequestUrl()
+		nodeID = mt.GetNodeId()
+	case *pb.MistTrigger_ViewerDisconnect:
+		vd := p.ViewerDisconnect
+		streamName = vd.GetStreamName()
+		sessionID = vd.GetSessionId()
+		connector = vd.GetConnector()
+		host = vd.GetHost()
+		nodeID = vd.GetNodeId()
+		duration = vd.GetDuration()
+		upBytes = vd.GetUpBytes()
+		downBytes = vd.GetDownBytes()
+		if vd.GetCountryCode() != "" {
+			countryCode = vd.GetCountryCode()
+		}
+		if vd.GetCity() != "" {
+			city = vd.GetCity()
+		}
+		if vd.GetLatitude() != 0 {
+			latitude = vd.GetLatitude()
+		}
+		if vd.GetLongitude() != 0 {
+			longitude = vd.GetLongitude()
+		}
+	default:
+		return fmt.Errorf("unexpected payload for viewer connection")
+	}
+
+	batch, err := h.clickhouse.PrepareBatch(ctx, `
+        INSERT INTO connection_events (
+            event_id, timestamp, tenant_id, internal_name,
+            session_id, connection_addr, connector, node_id, request_url,
+            country_code, city, latitude, longitude,
+            event_type, session_duration, bytes_transferred
+        )`)
+	if err != nil {
+		return err
+	}
+
+	eventType := map[bool]string{true: "connect", false: "disconnect"}[isConnect]
+	var durationUI interface{}
+	var bytesTransferred interface{}
+	if !isConnect {
+		durationUI = duration
+		bytesTransferred = uint64(max64(0, upBytes) + max64(0, downBytes))
+	}
+
+	if err := batch.Append(
+		event.EventID,
+		event.Timestamp,
+		event.TenantID,
+		streamName,
+		sessionID,
+		host,
+		connector,
+		nodeID,
+		requestURL,
+		countryCode,
+		city,
+		latitude,
+		longitude,
+		eventType,
+		durationUI,
+		bytesTransferred,
+	); err != nil {
+		return err
+	}
+	if err := batch.Send(); err != nil {
+		return err
+	}
+
+	// Reduce Postgres state
+	return h.reduceUserConnection(ctx, ydb, event, streamName, sessionID, connector, nodeID, host, requestURL, countryCode, city, latitude, longitude, duration, upBytes, downBytes, isConnect)
+}
+
+func max64(a, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func nilIfZeroFloat64(v float64) interface{} {
+	if v == 0 {
+		return nil
+	}
+	return v
+}
+func nilIfZeroFloat32(v float32) interface{} {
+	if v == 0 {
+		return nil
+	}
+	return v
+}
+func nilIfZeroBool(v bool) interface{} {
+	if !v {
+		return nil
+	}
+	return v
+}
+func nilIfZeroUint64(v uint64) interface{} {
+	if v == 0 {
+		return nil
+	}
+	return v
+}
+func nilIfZeroUint32(v uint32) interface{} {
+	if v == 0 {
+		return nil
+	}
+	return v
+}
+func nilIfFalse(v bool) interface{} {
+	if !v {
+		return nil
+	}
+	return v
+}
+
+// processPushLifecycle handles push lifecycle events
+func (h *AnalyticsHandler) processPushLifecycle(ctx context.Context, event kafka.AnalyticsEvent) error {
+	h.logger.Infof("Processing push lifecycle event: %s", event.EventID)
+
+	// Parse MistTrigger envelope
+	var mt pb.MistTrigger
+	if err := h.parseProtobufData(event, &mt); err != nil {
+		return fmt.Errorf("failed to parse MistTrigger: %w", err)
+	}
+	_, isPushStart := mt.GetTriggerPayload().(*pb.MistTrigger_PushOutStart)
 
 	// Write to ClickHouse for time-series analysis - ONLY fields that exist in push events
 	var batchSQL string
 	var values []interface{}
 
-	if pushLifecycle.Action == "start" {
+	if isPushStart {
 		// PUSH_OUT_START: only has push_target
 		batchSQL = `INSERT INTO stream_events (
-			timestamp, event_id, tenant_id, internal_name, node_id, event_type, 
-			push_target, event_data
-		)`
+            timestamp, event_id, tenant_id, internal_name, node_id, event_type, 
+            push_target, event_data
+        )`
+		p := mt.GetPushOutStart()
 		values = []interface{}{
 			event.Timestamp,
 			event.EventID,
-			getTenantIDFromKafkaEvent(*event),
-			pushLifecycle.InternalName,
-			pushLifecycle.NodeID,
-			"push-start",
-			pushLifecycle.PushTarget,
-			marshalTypedEventData(pushLifecycle),
+			event.TenantID,
+			p.GetStreamName(),
+			mt.GetNodeId(),
+			"push_out_start",
+			p.GetPushTarget(),
+			marshalTypedEventData(p),
 		}
 	} else {
 		// PUSH_END: has push_id, target URIs, status, log_messages
 		batchSQL = `INSERT INTO stream_events (
-			timestamp, event_id, tenant_id, internal_name, node_id, event_type,
-			push_id, push_target, target_uri_before, target_uri_after, push_status, log_messages, event_data
-		)`
+            timestamp, event_id, tenant_id, internal_name, node_id, event_type,
+            push_id, push_target, target_uri_before, target_uri_after, push_status, log_messages, event_data
+        )`
+		p := mt.GetPushEnd()
 		values = []interface{}{
 			event.Timestamp,
 			event.EventID,
-			getTenantIDFromKafkaEvent(*event),
-			pushLifecycle.InternalName,
-			pushLifecycle.NodeID,
-			"push-end",
-			pushLifecycle.PushID,
-			pushLifecycle.PushTarget,
-			pushLifecycle.TargetURIBefore,
-			pushLifecycle.TargetURIAfter,
-			pushLifecycle.Status,
-			pushLifecycle.LogMessages,
-			marshalTypedEventData(pushLifecycle),
+			event.TenantID,
+			p.GetStreamName(),
+			mt.GetNodeId(),
+			"push_end",
+			p.GetPushId(),
+			nil, // push_target not present
+			p.GetTargetUriBefore(),
+			p.GetTargetUriAfter(),
+			p.GetPushStatus(),
+			p.GetLogMessages(),
+			marshalTypedEventData(p),
 		}
 	}
 
@@ -504,17 +614,80 @@ func (h *AnalyticsHandler) processPushLifecycle(ctx context.Context, event *vali
 	return nil
 }
 
-// processRecordingLifecycle handles recording lifecycle events
-func (h *AnalyticsHandler) processRecordingLifecycle(ctx context.Context, event *validation.KafkaEvent) error {
-	h.logger.Infof("Processing recording lifecycle event: %s", event.EventID)
+// processPushRewrite handles PUSH_REWRITE events (publisher ingest start)
+func (h *AnalyticsHandler) processPushRewrite(ctx context.Context, event kafka.AnalyticsEvent) error {
+	h.logger.Infof("Processing push rewrite event: %s", event.EventID)
+	var mt pb.MistTrigger
+	if err := h.parseProtobufData(event, &mt); err != nil {
+		return fmt.Errorf("failed to parse MistTrigger: %w", err)
+	}
+	tp, ok := mt.GetTriggerPayload().(*pb.MistTrigger_PushRewrite)
+	if !ok || tp == nil {
+		return fmt.Errorf("unexpected payload for push_rewrite")
+	}
+	pr := tp.PushRewrite
 
-	// Get typed recording payload
-	if event.Data.Recording == nil {
-		h.logger.Warnf("No recording data in event: %s", event.EventID)
-		return nil
+	batch, err := h.clickhouse.PrepareBatch(ctx, `
+        INSERT INTO stream_events (
+            timestamp, event_id, tenant_id, internal_name, node_id, event_type,
+            stream_key, hostname, push_url, protocol, latitude, longitude, location, event_data
+        )`)
+	if err != nil {
+		return err
 	}
 
-	recording := event.Data.Recording
+	var prot interface{}
+	if pr.Protocol != nil && *pr.Protocol != "" {
+		prot = *pr.Protocol
+	}
+	var lat interface{}
+	if pr.Latitude != nil && *pr.Latitude != 0 {
+		lat = *pr.Latitude
+	}
+	var lon interface{}
+	if pr.Longitude != nil && *pr.Longitude != 0 {
+		lon = *pr.Longitude
+	}
+	var loc interface{}
+	if pr.Location != nil && *pr.Location != "" {
+		loc = *pr.Location
+	}
+
+	if err := batch.Append(
+		event.Timestamp,
+		event.EventID,
+		event.TenantID,
+		pr.GetStreamName(),
+		mt.GetNodeId(),
+		"push-rewrite",
+		pr.GetStreamName(),
+		pr.GetHostname(),
+		pr.GetPushUrl(),
+		prot,
+		lat,
+		lon,
+		loc,
+		marshalTypedEventData(pr),
+	); err != nil {
+		return err
+	}
+	return batch.Send()
+}
+
+// processRecordingLifecycle handles recording lifecycle events
+func (h *AnalyticsHandler) processRecordingLifecycle(ctx context.Context, event kafka.AnalyticsEvent) error {
+	h.logger.Infof("Processing recording lifecycle event: %s", event.EventID)
+
+	// Parse RecordingEndTrigger from protobuf
+	var mt pb.MistTrigger
+	if err := h.parseProtobufData(event, &mt); err != nil {
+		return fmt.Errorf("failed to parse MistTrigger: %w", err)
+	}
+	tp, ok := mt.GetTriggerPayload().(*pb.MistTrigger_RecordingComplete)
+	if !ok || tp == nil {
+		return fmt.Errorf("unexpected payload for recording_complete")
+	}
+	recording := tp.RecordingComplete
 
 	// Write to ClickHouse for time-series analysis - ONLY fields that exist in recording events
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
@@ -530,14 +703,14 @@ func (h *AnalyticsHandler) processRecordingLifecycle(ctx context.Context, event 
 	if err := batch.Append(
 		event.Timestamp,
 		event.EventID,
-		getTenantIDFromKafkaEvent(*event),
-		recording.InternalName,
-		recording.NodeID,
-		"recording-lifecycle",
-		uint64(recording.BytesWritten),   // file_size = bytes_written
-		uint32(recording.SecondsWriting), // duration = seconds_writing
-		recording.FilePath,               // output_file = file_path
-		marshalTypedEventData(recording),
+		event.TenantID,
+		recording.GetStreamName(),
+		recording.GetNodeId(),
+		"recording-complete",
+		nilIfZeroUint64(uint64(recording.GetBytesWritten())),   // file_size
+		nilIfZeroUint32(uint32(recording.GetSecondsWriting())), // duration
+		recording.GetFilePath(),                                // output_file = file_path
+		marshalTypedEventData(&recording),
 	); err != nil {
 		h.logger.Errorf("Failed to append to ClickHouse batch: %v", err)
 		return err
@@ -552,16 +725,19 @@ func (h *AnalyticsHandler) processRecordingLifecycle(ctx context.Context, event 
 }
 
 // processStreamView handles stream view events
-func (h *AnalyticsHandler) processStreamView(ctx context.Context, event *validation.KafkaEvent) error {
+func (h *AnalyticsHandler) processStreamView(ctx context.Context, event kafka.AnalyticsEvent) error {
 	h.logger.Infof("Processing stream view event: %s", event.EventID)
 
-	// Get typed stream view payload
-	if event.Data.StreamView == nil {
-		h.logger.Warnf("No stream view data in event: %s", event.EventID)
-		return nil
+	// Parse StreamSourceTrigger from protobuf
+	var mt pb.MistTrigger
+	if err := h.parseProtobufData(event, &mt); err != nil {
+		return fmt.Errorf("failed to parse MistTrigger: %w", err)
 	}
-
-	streamView := event.Data.StreamView
+	tp, ok := mt.GetTriggerPayload().(*pb.MistTrigger_StreamSource)
+	if !ok || tp == nil {
+		return fmt.Errorf("unexpected payload for stream_source")
+	}
+	streamView := tp.StreamSource
 
 	// Write to ClickHouse for time-series analysis - basic stream view event
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
@@ -576,11 +752,11 @@ func (h *AnalyticsHandler) processStreamView(ctx context.Context, event *validat
 	if err := batch.Append(
 		event.Timestamp,
 		event.EventID,
-		getTenantIDFromKafkaEvent(*event),
-		streamView.InternalName,
-		streamView.NodeID,
-		"stream-view",
-		marshalTypedEventData(streamView),
+		event.TenantID,
+		streamView.GetStreamName(),
+		mt.GetNodeId(),
+		"stream_view",
+		marshalTypedEventData(&streamView),
 	); err != nil {
 		h.logger.Errorf("Failed to append to ClickHouse batch: %v", err)
 		return err
@@ -595,44 +771,59 @@ func (h *AnalyticsHandler) processStreamView(ctx context.Context, event *validat
 }
 
 // processLoadBalancing handles load balancing events
-func (h *AnalyticsHandler) processLoadBalancing(ctx context.Context, event *validation.KafkaEvent) error {
+func (h *AnalyticsHandler) processLoadBalancing(ctx context.Context, event kafka.AnalyticsEvent) error {
 	h.logger.Infof("Processing load balancing event: %s", event.EventID)
 
-	// Get typed load balancing payload
-	if event.Data.LoadBalancing == nil {
-		h.logger.Warnf("No load balancing data in event: %s", event.EventID)
-		return nil
+	// Parse MistTrigger envelope
+	var mt pb.MistTrigger
+	if err := h.parseProtobufData(event, &mt); err != nil {
+		return fmt.Errorf("failed to parse MistTrigger: %w", err)
 	}
-
-	loadBalancing := event.Data.LoadBalancing
+	tp, ok := mt.GetTriggerPayload().(*pb.MistTrigger_LoadBalancingData)
+	if !ok || tp == nil {
+		return fmt.Errorf("unexpected payload for load_balancing")
+	}
+	loadBalancing := tp.LoadBalancingData
 
 	// Write to ClickHouse routing_events table - using ACTUAL fields from LoadBalancingPayload
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
-		INSERT INTO routing_events (
-			timestamp, tenant_id, stream_name, selected_node, status, details, score, 
-			client_ip, client_country, client_latitude, client_longitude,
-			node_latitude, node_longitude, node_name
-		)`)
+        INSERT INTO routing_events (
+            timestamp, tenant_id, stream_name, selected_node, status, details, score, 
+            client_ip, client_country, client_latitude, client_longitude,
+            node_latitude, node_longitude, node_name,
+            selected_node_id, routing_distance_km
+        )`)
 	if err != nil {
 		h.logger.Errorf("Failed to prepare ClickHouse batch: %v", err)
 		return err
 	}
 
+	var selID interface{}
+	if loadBalancing.SelectedNodeId != nil && *loadBalancing.SelectedNodeId != "" {
+		selID = *loadBalancing.SelectedNodeId
+	}
+	var routeKm interface{}
+	if loadBalancing.RoutingDistanceKm != nil && *loadBalancing.RoutingDistanceKm != 0 {
+		routeKm = *loadBalancing.RoutingDistanceKm
+	}
+
 	if err := batch.Append(
 		event.Timestamp,
-		getTenantIDFromKafkaEvent(*event),
-		loadBalancing.StreamID,
-		loadBalancing.SelectedNode,
-		loadBalancing.Status,
-		loadBalancing.Details,
-		int64(loadBalancing.Score),
-		loadBalancing.ClientIP,
-		loadBalancing.ClientCountry,
-		loadBalancing.Latitude,
-		loadBalancing.Longitude,
-		loadBalancing.NodeLatitude,
-		loadBalancing.NodeLongitude,
-		loadBalancing.NodeName,
+		event.TenantID,
+		loadBalancing.GetInternalName(), // stream_name -> internal_name
+		loadBalancing.GetSelectedNode(),
+		loadBalancing.GetStatus(),
+		loadBalancing.GetDetails(),
+		int64(loadBalancing.GetScore()),
+		loadBalancing.GetClientIp(),
+		loadBalancing.GetClientCountry(),
+		loadBalancing.GetLatitude(),
+		loadBalancing.GetLongitude(),
+		loadBalancing.GetNodeLatitude(),
+		loadBalancing.GetNodeLongitude(),
+		loadBalancing.GetNodeName(),
+		selID,
+		routeKm,
 	); err != nil {
 		h.logger.Errorf("Failed to append to ClickHouse batch: %v", err)
 		return err
@@ -649,28 +840,31 @@ func (h *AnalyticsHandler) processLoadBalancing(ctx context.Context, event *vali
 
 	h.logger.WithFields(logging.Fields{
 		"event_id":    event.EventID,
-		"stream_name": loadBalancing.StreamID,
+		"stream_name": loadBalancing.GetInternalName(),
 	}).Debug("Processed load balancing event")
 
 	return nil
 }
 
 // processClientLifecycle handles per-client bandwidth and connection metrics
-func (h *AnalyticsHandler) processClientLifecycle(ctx context.Context, event *validation.KafkaEvent) error {
+func (h *AnalyticsHandler) processClientLifecycle(ctx context.Context, event kafka.AnalyticsEvent) error {
 	h.logger.Infof("Processing client lifecycle event: %s", event.EventID)
 
-	// Get typed client lifecycle payload
-	if event.Data.ClientLifecycle == nil {
-		h.logger.Warnf("No client lifecycle data in event: %s", event.EventID)
-		return nil
+	// Parse MistTrigger envelope -> ClientLifecycleUpdate
+	var mt pb.MistTrigger
+	if err := h.parseProtobufData(event, &mt); err != nil {
+		return fmt.Errorf("failed to parse MistTrigger: %w", err)
 	}
-
-	clientLifecycle := event.Data.ClientLifecycle
+	tp, ok := mt.GetTriggerPayload().(*pb.MistTrigger_ClientLifecycleUpdate)
+	if !ok || tp == nil {
+		return fmt.Errorf("unexpected payload for client_lifecycle_update")
+	}
+	clientLifecycle := tp.ClientLifecycleUpdate
 
 	// Calculate connection quality if packets were sent
 	var connectionQuality *float32
-	if clientLifecycle.PacketsSent > 0 {
-		quality := float32(1.0 - (float64(clientLifecycle.PacketsLost) / float64(clientLifecycle.PacketsSent)))
+	if clientLifecycle.GetPacketsSent() > 0 {
+		quality := float32(1.0 - (float64(clientLifecycle.GetPacketsLost()) / float64(clientLifecycle.GetPacketsSent())))
 		connectionQuality = &quality
 	}
 
@@ -688,20 +882,20 @@ func (h *AnalyticsHandler) processClientLifecycle(ctx context.Context, event *va
 
 	if err := batch.Append(
 		event.Timestamp,
-		getTenantIDFromKafkaEvent(*event),
-		clientLifecycle.InternalName,
-		clientLifecycle.SessionID,
-		clientLifecycle.NodeID,
-		clientLifecycle.Protocol,
-		clientLifecycle.Host,
-		clientLifecycle.ConnectionTime,
-		uint64(clientLifecycle.BandwidthIn),
-		uint64(clientLifecycle.BandwidthOut),
-		uint64(clientLifecycle.BytesDown),
-		uint64(clientLifecycle.BytesUp),
-		uint64(clientLifecycle.PacketsSent),
-		uint64(clientLifecycle.PacketsLost),
-		uint64(clientLifecycle.PacketsRetransmitted),
+		event.TenantID,
+		clientLifecycle.GetInternalName(),
+		clientLifecycle.GetSessionId(),
+		mt.GetNodeId(),
+		clientLifecycle.GetProtocol(),
+		clientLifecycle.GetHost(),
+		clientLifecycle.GetConnectionTime(),
+		uint64(clientLifecycle.GetBandwidthInBps()),
+		uint64(clientLifecycle.GetBandwidthOutBps()),
+		uint64(clientLifecycle.GetBytesDownloaded()),
+		uint64(clientLifecycle.GetBytesUploaded()),
+		uint64(clientLifecycle.GetPacketsSent()),
+		uint64(clientLifecycle.GetPacketsLost()),
+		uint64(clientLifecycle.GetPacketsRetransmitted()),
 		connectionQuality,
 	); err != nil {
 		h.logger.Errorf("Failed to append to ClickHouse batch: %v", err)
@@ -721,16 +915,19 @@ func (h *AnalyticsHandler) processClientLifecycle(ctx context.Context, event *va
 }
 
 // processNodeLifecycle handles node health and resource metrics
-func (h *AnalyticsHandler) processNodeLifecycle(ctx context.Context, event *validation.KafkaEvent) error {
+func (h *AnalyticsHandler) processNodeLifecycle(ctx context.Context, event kafka.AnalyticsEvent) error {
 	h.logger.Infof("Processing node lifecycle event: %s", event.EventID)
 
-	// Get typed node lifecycle payload
-	if event.Data.NodeLifecycle == nil {
-		h.logger.Warnf("No node lifecycle data in event: %s", event.EventID)
-		return nil
+	// Parse MistTrigger envelope -> NodeLifecycleUpdate
+	var mt pb.MistTrigger
+	if err := h.parseProtobufData(event, &mt); err != nil {
+		return fmt.Errorf("failed to parse MistTrigger: %w", err)
 	}
-
-	nodeLifecycle := event.Data.NodeLifecycle
+	tp, ok := mt.GetTriggerPayload().(*pb.MistTrigger_NodeLifecycleUpdate)
+	if !ok || tp == nil {
+		return fmt.Errorf("unexpected payload for node_lifecycle_update")
+	}
+	nodeLifecycle := tp.NodeLifecycleUpdate
 
 	// Write to ClickHouse for time-series analysis using typed data
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
@@ -745,15 +942,15 @@ func (h *AnalyticsHandler) processNodeLifecycle(ctx context.Context, event *vali
 
 	if err := batch.Append(
 		event.Timestamp,
-		getTenantIDFromKafkaEvent(*event),
-		nodeLifecycle.NodeID,
-		float32(nodeLifecycle.CPUUsage),
-		int64(nodeLifecycle.RAMMax),
-		int64(nodeLifecycle.RAMCurrent),
-		int64(nodeLifecycle.BandwidthUp),   // UpSpeed -> BandwidthUp
-		int64(nodeLifecycle.BandwidthDown), // DownSpeed -> BandwidthDown
-		int(nodeLifecycle.ActiveStreams),   // StreamCount -> ActiveStreams
-		nodeLifecycle.IsHealthy,
+		event.TenantID,
+		nodeLifecycle.GetNodeId(),
+		float32(nodeLifecycle.GetCpuTenths())/10.0, // cpu_tenths (0-1000) -> percentage
+		int64(nodeLifecycle.GetRamMax()),
+		int64(nodeLifecycle.GetRamCurrent()),
+		int64(nodeLifecycle.GetUpSpeed()),
+		int64(nodeLifecycle.GetDownSpeed()),
+		int(nodeLifecycle.GetActiveStreams()),
+		nodeLifecycle.GetIsHealthy(),
 	); err != nil {
 		h.logger.Errorf("Failed to append to ClickHouse batch: %v", err)
 		return err
@@ -768,16 +965,19 @@ func (h *AnalyticsHandler) processNodeLifecycle(ctx context.Context, event *vali
 }
 
 // processStreamBuffer handles STREAM_BUFFER webhook events with rich health metrics
-func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event *validation.KafkaEvent) error {
+func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event kafka.AnalyticsEvent) error {
 	h.logger.Infof("Processing stream buffer event: %s", event.EventID)
 
-	// Get typed stream lifecycle payload (StreamBuffer events use this payload type)
-	if event.Data.StreamLifecycle == nil {
-		h.logger.Warnf("No stream lifecycle data in stream buffer event: %s", event.EventID)
-		return nil
+	// Parse MistTrigger envelope and extract StreamBufferTrigger
+	var mt pb.MistTrigger
+	if err := h.parseProtobufData(event, &mt); err != nil {
+		return fmt.Errorf("failed to parse MistTrigger: %w", err)
 	}
-
-	streamLifecycle := event.Data.StreamLifecycle
+	payload, ok := mt.GetTriggerPayload().(*pb.MistTrigger_StreamBuffer)
+	if !ok || payload == nil {
+		return fmt.Errorf("unexpected payload for stream_buffer")
+	}
+	streamBuffer := payload.StreamBuffer
 
 	// Write to ClickHouse stream_events table
 	streamEventsBatch, err := h.clickhouse.PrepareBatch(ctx, `
@@ -794,20 +994,20 @@ func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event *valid
 	if err := streamEventsBatch.Append(
 		event.Timestamp,
 		event.EventID,
-		getTenantIDFromKafkaEvent(*event),
-		streamLifecycle.InternalName,
-		streamLifecycle.NodeID,
-		"stream-buffer",
-		streamLifecycle.BufferState,
-		streamLifecycle.HealthScore,
-		streamLifecycle.HasIssues,
-		streamLifecycle.IssuesDesc,
-		streamLifecycle.TrackCount,
-		streamLifecycle.QualityTier,
-		streamLifecycle.PrimaryWidth,
-		streamLifecycle.PrimaryHeight,
-		streamLifecycle.PrimaryFPS,
-		marshalTypedEventData(streamLifecycle),
+		event.TenantID,
+		streamBuffer.GetStreamName(),
+		mt.GetNodeId(),
+		"stream_buffer",
+		streamBuffer.GetBufferState(),
+		nilIfZeroFloat32(streamBuffer.GetHealthScore()),
+		nilIfZeroBool(streamBuffer.GetHasIssues()),
+		streamBuffer.GetIssuesDescription(),
+		streamBuffer.GetTrackCount(),
+		streamBuffer.GetQualityTier(),
+		nil, // width N/A
+		nil, // height N/A
+		nil, // fps N/A
+		marshalTypedEventData(&streamBuffer),
 	); err != nil {
 		h.logger.Errorf("Failed to append to stream_events batch: %v", err)
 		return err
@@ -833,26 +1033,26 @@ func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event *valid
 
 	if err := healthBatch.Append(
 		event.Timestamp,
-		getTenantIDFromKafkaEvent(*event),
-		streamLifecycle.InternalName,
-		streamLifecycle.NodeID,
-		streamLifecycle.BufferState,
-		streamLifecycle.HealthScore,
-		streamLifecycle.HasIssues,
-		streamLifecycle.IssuesDesc,
-		streamLifecycle.TrackCount,
-		streamLifecycle.FrameJitterMS,
-		streamLifecycle.KeyFrameStabilityMS,
-		streamLifecycle.PrimaryCodec,
-		streamLifecycle.PrimaryBitrate,
-		streamLifecycle.PrimaryFPS,
-		streamLifecycle.PrimaryWidth,
-		streamLifecycle.PrimaryHeight,
-		streamLifecycle.FrameMSMax,
-		streamLifecycle.FrameMSMin,
-		streamLifecycle.FramesMax,
-		streamLifecycle.FramesMin,
-		streamLifecycle.KeyFrameIntervalMS,
+		event.TenantID,
+		streamBuffer.GetStreamName(),
+		mt.GetNodeId(),
+		streamBuffer.GetBufferState(),
+		nilIfZeroFloat32(streamBuffer.GetHealthScore()),
+		nilIfZeroBool(streamBuffer.GetHasIssues()),
+		streamBuffer.GetIssuesDescription(),
+		streamBuffer.GetTrackCount(),
+		nil, // frame_jitter_ms N/A
+		nil, // keyframe_stability_ms N/A
+		nil, // codec N/A
+		nil, // bitrate N/A
+		nil, // fps N/A
+		nil, // width N/A
+		nil, // height N/A
+		nil, // frame_ms_max N/A
+		nil, // frame_ms_min N/A
+		nil, // frames_max N/A
+		nil, // frames_min N/A
+		nil, // keyframe_interval_ms N/A
 	); err != nil {
 		h.logger.Errorf("Failed to append to stream_health_metrics batch: %v", err)
 		return err
@@ -863,21 +1063,24 @@ func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event *valid
 		return err
 	}
 
-	h.logger.Debugf("Successfully processed stream buffer event for stream: %s (written to both stream_events and stream_health_metrics)", streamLifecycle.InternalName)
+	h.logger.Debugf("Successfully processed stream buffer event for stream: %s (written to both stream_events and stream_health_metrics)", streamBuffer.GetStreamName())
 	return nil
 }
 
 // processStreamEnd handles STREAM_END webhook events
-func (h *AnalyticsHandler) processStreamEnd(ctx context.Context, ydb database.PostgresConn, event *validation.KafkaEvent) error {
+func (h *AnalyticsHandler) processStreamEnd(ctx context.Context, ydb database.PostgresConn, event kafka.AnalyticsEvent) error {
 	h.logger.Infof("Processing stream end event: %s", event.EventID)
 
-	// Get typed stream lifecycle payload (StreamEnd events use this payload type)
-	if event.Data.StreamLifecycle == nil {
-		h.logger.Warnf("No stream lifecycle data in stream end event: %s", event.EventID)
-		return nil
+	// Parse MistTrigger envelope and extract StreamEndTrigger
+	var mt pb.MistTrigger
+	if err := h.parseProtobufData(event, &mt); err != nil {
+		return fmt.Errorf("failed to parse MistTrigger: %w", err)
 	}
-
-	streamLifecycle := event.Data.StreamLifecycle
+	tp, ok := mt.GetTriggerPayload().(*pb.MistTrigger_StreamEnd)
+	if !ok || tp == nil {
+		return fmt.Errorf("unexpected payload for stream_end")
+	}
+	streamEnd := tp.StreamEnd
 
 	// Write to ClickHouse stream_events table using ONLY end-specific fields
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
@@ -891,20 +1094,40 @@ func (h *AnalyticsHandler) processStreamEnd(ctx context.Context, ydb database.Po
 		return err
 	}
 
+	var downloaded, uploaded, totalViewers, totalInputs, totalOutputs, viewerSeconds interface{}
+	if streamEnd.DownloadedBytes != nil {
+		downloaded = streamEnd.GetDownloadedBytes()
+	}
+	if streamEnd.UploadedBytes != nil {
+		uploaded = streamEnd.GetUploadedBytes()
+	}
+	if streamEnd.TotalViewers != nil {
+		totalViewers = streamEnd.GetTotalViewers()
+	}
+	if streamEnd.TotalInputs != nil {
+		totalInputs = streamEnd.GetTotalInputs()
+	}
+	if streamEnd.TotalOutputs != nil {
+		totalOutputs = streamEnd.GetTotalOutputs()
+	}
+	if streamEnd.ViewerSeconds != nil {
+		viewerSeconds = streamEnd.GetViewerSeconds()
+	}
+
 	if err := batch.Append(
 		event.Timestamp,
 		event.EventID,
-		getTenantIDFromKafkaEvent(*event),
-		streamLifecycle.InternalName,
-		streamLifecycle.NodeID,
-		"stream-end",
-		streamLifecycle.DownloadedBytes,
-		streamLifecycle.UploadedBytes,
-		streamLifecycle.TotalViewers,
-		streamLifecycle.TotalInputs,
-		streamLifecycle.TotalOutputs,
-		streamLifecycle.ViewerSeconds,
-		marshalTypedEventData(streamLifecycle),
+		event.TenantID,
+		streamEnd.GetStreamName(),
+		mt.GetNodeId(),
+		"stream_end",
+		downloaded,
+		uploaded,
+		totalViewers,
+		totalInputs,
+		totalOutputs,
+		viewerSeconds,
+		marshalTypedEventData(&streamEnd),
 	); err != nil {
 		h.logger.Errorf("Failed to append to ClickHouse batch: %v", err)
 		return err
@@ -916,21 +1139,16 @@ func (h *AnalyticsHandler) processStreamEnd(ctx context.Context, ydb database.Po
 	}
 
 	// Also update PostgreSQL reduced state
-	if err := h.reduceStreamEnd(ctx, ydb, *event); err != nil {
+	if err := h.reduceStreamEnd(ctx, ydb, event, streamEnd); err != nil {
 		h.logger.Errorf("Failed to reduce stream end: %v", err)
 	}
 
-	h.logger.Debugf("Successfully processed stream end event for stream: %s", streamLifecycle.InternalName)
+	h.logger.Debugf("Successfully processed stream end event for stream: %s", streamEnd.GetStreamName())
 	return nil
 }
 
-func (h *AnalyticsHandler) reduceStreamLifecycle(ctx context.Context, ydb database.PostgresConn, event validation.KafkaEvent) error {
-	if event.Data.StreamLifecycle == nil {
-		return nil
-	}
-
-	streamLifecycle := event.Data.StreamLifecycle
-	status := streamLifecycle.Status
+func (h *AnalyticsHandler) reduceStreamLifecycle(ctx context.Context, ydb database.PostgresConn, event kafka.AnalyticsEvent, streamLifecycle *pb.StreamLifecycleUpdate) error {
+	status := streamLifecycle.GetStatus()
 	var startTime interface{}
 	switch status {
 	case "start", "started", "ingest_start", "live":
@@ -939,34 +1157,31 @@ func (h *AnalyticsHandler) reduceStreamLifecycle(ctx context.Context, ydb databa
 		startTime = nil
 	}
 
-	// Extract metrics from detailed stream lifecycle events using typed data
-	if event.Data.StreamLifecycle != nil {
-		// Use available typed data from StreamLifecyclePayload
-		streamLifecycle := event.Data.StreamLifecycle
-		nodeID := streamLifecycle.NodeID
-		viewers := streamLifecycle.TotalViewers
-		trackCount := streamLifecycle.TrackCount
-		upBytes := streamLifecycle.UploadedBytes
-		downBytes := streamLifecycle.DownloadedBytes
-		inputs := streamLifecycle.TotalInputs
-		outputs := streamLifecycle.TotalOutputs
+	// Extract metrics from detailed stream lifecycle events using protobuf data
+	nodeID := streamLifecycle.GetNodeId()
+	viewers := streamLifecycle.GetTotalViewers()
+	trackCount := streamLifecycle.GetTrackCount()
+	upBytes := streamLifecycle.GetUploadedBytes()
+	downBytes := streamLifecycle.GetDownloadedBytes()
+	inputs := streamLifecycle.GetTotalInputs()
+	var outputs uint32 = 0 // total_outputs not in StreamLifecycleUpdate
 
-		// Calculate bitrate from bandwidth (convert bytes to kbps)
-		var avgBitrateKbps int
-		if upBytes > 0 {
-			avgBitrateKbps = int((upBytes * 8) / 1000) // Convert bytes to kbps, round down
-		}
+	// Calculate bitrate from bandwidth (convert bytes to kbps)
+	var avgBitrateKbps int
+	if upBytes > 0 {
+		avgBitrateKbps = int((upBytes * 8) / 1000) // Convert bytes to kbps, round down
+	}
 
-		// Map Mist status strictly to enum when it matches known values
-		var mistStatus interface{}
-		switch status {
-		case "offline", "init", "boot", "wait", "ready", "shutdown", "invalid":
-			mistStatus = status
-		default:
-			mistStatus = nil
-		}
+	// Map Mist status strictly to enum when it matches known values
+	var mistStatus interface{}
+	switch status {
+	case "offline", "init", "boot", "wait", "ready", "shutdown", "invalid":
+		mistStatus = status
+	default:
+		mistStatus = nil
+	}
 
-		_, err := ydb.ExecContext(ctx, `
+	_, err := ydb.ExecContext(ctx, `
 			INSERT INTO periscope.stream_analytics (
 				tenant_id, internal_name, stream_id, status, mist_status, session_start_time, 
 				current_viewers, total_connections, track_count,
@@ -991,29 +1206,17 @@ func (h *AnalyticsHandler) reduceStreamLifecycle(ctx context.Context, ydb databa
 				bitrate_kbps = EXCLUDED.bitrate_kbps,
 				node_id = EXCLUDED.node_id,
 				last_updated = EXCLUDED.last_updated
-		`, getTenantIDFromKafkaEvent(event), streamLifecycle.InternalName, streamLifecycle.InternalName, status, mistStatus, startTime,
-			viewers, viewers, trackCount, downBytes, upBytes, upBytes, downBytes,
-			inputs, outputs, avgBitrateKbps, nodeID, event.Timestamp)
-		return err
-	} else {
-		// No StreamLifecycle data available - this shouldn't happen for stream lifecycle events
-		h.logger.Warnf("StreamLifecycle event with no StreamLifecycle data: %s", event.EventID)
-		return nil
-	}
+		`, event.TenantID, streamLifecycle.GetInternalName(), streamLifecycle.GetInternalName(), status, mistStatus, startTime,
+		viewers, viewers, trackCount, downBytes, upBytes, upBytes, downBytes,
+		inputs, outputs, avgBitrateKbps, nodeID, event.Timestamp)
+	return err
 }
 
-func (h *AnalyticsHandler) reduceUserConnection(ctx context.Context, ydb database.PostgresConn, event validation.KafkaEvent) error {
-	if event.Data.UserConnection == nil {
-		return nil
-	}
-
-	userConn := event.Data.UserConnection
-	action := userConn.Action
-	tenantID := getTenantIDFromKafkaEvent(event)
-	internal := userConn.InternalName // From embedded periscope.ConnectionEvent
-	upBytes := int64(userConn.UploadedBytes)
-	downBytes := int64(userConn.DownloadedBytes)
-	duration := int(userConn.SecondsConnected)
+func (h *AnalyticsHandler) reduceUserConnection(ctx context.Context, ydb database.PostgresConn, event kafka.AnalyticsEvent, streamName, sessionID, connector, nodeID, host, requestURL string, countryCode, city, latitude, longitude interface{}, duration, upBytes, downBytes int64, isConnect bool) error {
+	// Data is already passed as parameters from the calling handler
+	action := map[bool]string{true: "connect", false: "disconnect"}[isConnect]
+	tenantID := event.TenantID
+	internal := streamName
 
 	switch action {
 	case "connect":
@@ -1052,13 +1255,8 @@ func (h *AnalyticsHandler) reduceUserConnection(ctx context.Context, ydb databas
 	}
 }
 
-func (h *AnalyticsHandler) reduceStreamEnd(ctx context.Context, ydb database.PostgresConn, event validation.KafkaEvent) error {
-	if event.Data.StreamLifecycle == nil {
-		return nil
-	}
-
-	streamLifecycle := event.Data.StreamLifecycle
-	status := streamLifecycle.Status
+func (h *AnalyticsHandler) reduceStreamEnd(ctx context.Context, ydb database.PostgresConn, event kafka.AnalyticsEvent, streamEnd *pb.StreamEndTrigger) error {
+	status := "ended" // Stream end events indicate the stream has ended
 	_, err := ydb.ExecContext(ctx, `
                 INSERT INTO periscope.stream_analytics (tenant_id, internal_name, stream_id, status, session_end_time, last_updated)
                 VALUES ($1,$2,NULLIF($3,'')::uuid,$4,$5,$5)
@@ -1066,7 +1264,7 @@ func (h *AnalyticsHandler) reduceStreamEnd(ctx context.Context, ydb database.Pos
                         status = EXCLUDED.status,
                         session_end_time = EXCLUDED.session_end_time,
                         last_updated = EXCLUDED.last_updated
-        `, getTenantIDFromKafkaEvent(event), streamLifecycle.InternalName, streamLifecycle.InternalName, status, event.Timestamp)
+        `, event.TenantID, streamEnd.GetStreamName(), streamEnd.GetStreamName(), status, event.Timestamp)
 	return err
 }
 
@@ -1081,16 +1279,19 @@ func appendAndSend(batch interface {
 }
 
 // processTrackList handles track list events with quality metrics
-func (h *AnalyticsHandler) processTrackList(ctx context.Context, event *validation.KafkaEvent) error {
+func (h *AnalyticsHandler) processTrackList(ctx context.Context, event kafka.AnalyticsEvent) error {
 	h.logger.Infof("Processing track list event: %s", event.EventID)
 
-	// Get typed track list payload
-	if event.Data.TrackList == nil {
-		h.logger.Warnf("No track list data in event: %s", event.EventID)
-		return nil
+	// Parse LiveTrackListTrigger from protobuf
+	var mt pb.MistTrigger
+	if err := h.parseProtobufData(event, &mt); err != nil {
+		return fmt.Errorf("failed to parse MistTrigger: %w", err)
 	}
-
-	trackList := event.Data.TrackList
+	tp, ok := mt.GetTriggerPayload().(*pb.MistTrigger_TrackList)
+	if !ok || tp == nil {
+		return fmt.Errorf("unexpected payload for track_list")
+	}
+	trackList := tp.TrackList
 
 	// Write to track_list_events with enhanced quality metrics using typed data
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
@@ -1109,23 +1310,23 @@ func (h *AnalyticsHandler) processTrackList(ctx context.Context, event *validati
 	if err := batch.Append(
 		event.Timestamp,
 		event.EventID,
-		getTenantIDFromKafkaEvent(*event),
-		trackList.InternalName,
-		trackList.NodeID,
-		trackList.TrackListJSON,
-		trackList.TrackCount,
-		trackList.VideoTrackCount,
-		trackList.AudioTrackCount,
-		trackList.PrimaryWidth,
-		trackList.PrimaryHeight,
-		float32(trackList.PrimaryFPS),
-		trackList.PrimaryVideoCodec,
-		trackList.PrimaryVideoBitrate,
-		trackList.QualityTier,
-		trackList.PrimaryAudioChannels,
-		trackList.PrimaryAudioSampleRate,
-		trackList.PrimaryAudioCodec,
-		trackList.PrimaryAudioBitrate,
+		event.TenantID,
+		trackList.GetStreamName(),
+		mt.GetNodeId(),
+		marshalTypedEventData(trackList.GetTracks()), // serialize tracks as JSON
+		trackList.GetTotalTracks(),
+		trackList.GetVideoTrackCount(),
+		trackList.GetAudioTrackCount(),
+		trackList.GetPrimaryWidth(),
+		trackList.GetPrimaryHeight(),
+		float32(trackList.GetPrimaryFps()),
+		trackList.GetPrimaryVideoCodec(),
+		trackList.GetPrimaryVideoBitrate(),
+		trackList.GetQualityTier(),
+		trackList.GetPrimaryAudioChannels(),
+		trackList.GetPrimaryAudioSampleRate(),
+		trackList.GetPrimaryAudioCodec(),
+		trackList.GetPrimaryAudioBitrate(),
 	); err != nil {
 		h.logger.Errorf("Failed to append track list data: %v", err)
 		return err
@@ -1142,21 +1343,24 @@ func (h *AnalyticsHandler) processTrackList(ctx context.Context, event *validati
 		// Don't fail the main operation for this
 	}
 
-	h.logger.Debugf("Successfully processed track list for stream: %s", trackList.InternalName)
+	h.logger.Debugf("Successfully processed track list for stream: %s", trackList.GetStreamName())
 	return nil
 }
 
 // processBandwidthThreshold handles bandwidth threshold events
-func (h *AnalyticsHandler) processBandwidthThreshold(ctx context.Context, event *validation.KafkaEvent) error {
+func (h *AnalyticsHandler) processBandwidthThreshold(ctx context.Context, event kafka.AnalyticsEvent) error {
 	h.logger.Infof("Processing bandwidth threshold event: %s", event.EventID)
 
-	// Get typed bandwidth threshold payload
-	if event.Data.BandwidthThreshold == nil {
-		h.logger.Warnf("No bandwidth threshold data in event: %s", event.EventID)
-		return nil
+	// Parse StreamBandwidthTrigger from MistTrigger envelope
+	var mt pb.MistTrigger
+	if err := h.parseProtobufData(event, &mt); err != nil {
+		return fmt.Errorf("failed to parse MistTrigger: %w", err)
 	}
-
-	bandwidthThreshold := event.Data.BandwidthThreshold
+	tp, ok := mt.GetTriggerPayload().(*pb.MistTrigger_StreamBandwidth)
+	if !ok || tp == nil {
+		return fmt.Errorf("unexpected payload for stream_bandwidth")
+	}
+	bandwidthThreshold := tp.StreamBandwidth
 
 	// Write to stream_events for threshold alerts using typed data
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
@@ -1172,14 +1376,14 @@ func (h *AnalyticsHandler) processBandwidthThreshold(ctx context.Context, event 
 	if err := batch.Append(
 		event.Timestamp,
 		event.EventID,
-		getTenantIDFromKafkaEvent(*event),
-		bandwidthThreshold.InternalName,
-		"bandwidth-threshold",
-		bandwidthThreshold.NodeID,
-		bandwidthThreshold.CurrentBytesPerSec,
-		bandwidthThreshold.ThresholdExceeded,
-		bandwidthThreshold.ThresholdValue,
-		marshalTypedEventData(bandwidthThreshold),
+		event.TenantID,
+		bandwidthThreshold.GetStreamName(),
+		"stream_bandwidth",
+		mt.GetNodeId(),
+		bandwidthThreshold.GetCurrentBytesPerSecond(),
+		nilIfFalse(bandwidthThreshold.GetThresholdExceeded()),
+		nilIfZeroUint64(bandwidthThreshold.GetThresholdValue()),
+		marshalTypedEventData(&bandwidthThreshold),
 	); err != nil {
 		h.logger.Errorf("Failed to append bandwidth threshold event: %v", err)
 		return err
@@ -1190,26 +1394,31 @@ func (h *AnalyticsHandler) processBandwidthThreshold(ctx context.Context, event 
 		return err
 	}
 
-	h.logger.Debugf("Successfully processed bandwidth threshold for stream: %s", bandwidthThreshold.InternalName)
+	h.logger.Debugf("Successfully processed bandwidth threshold for stream: %s", bandwidthThreshold.GetStreamName())
 	return nil
 }
 
 // detectQualityChanges detects and records quality tier changes
-func (h *AnalyticsHandler) detectQualityChanges(ctx context.Context, event *validation.KafkaEvent) error {
+func (h *AnalyticsHandler) detectQualityChanges(ctx context.Context, event kafka.AnalyticsEvent) error {
 	// For now, we'll record every track list event as a potential change
 	// In a full implementation, we'd query the previous state and compare
 
-	// Get typed track list payload
-	if event.Data.TrackList == nil {
-		return nil // No track list data to process
+	// Parse LiveTrackListTrigger from MistTrigger envelope
+	var mt pb.MistTrigger
+	if err := h.parseProtobufData(event, &mt); err != nil {
+		return fmt.Errorf("failed to parse MistTrigger: %w", err)
 	}
+	tp, ok := mt.GetTriggerPayload().(*pb.MistTrigger_TrackList)
+	if !ok || tp == nil {
+		return fmt.Errorf("unexpected payload for track_list")
+	}
+	trackList := tp.TrackList
 
-	trackList := event.Data.TrackList
-	currentQuality := trackList.QualityTier
-	currentCodec := trackList.PrimaryVideoCodec
+	currentQuality := trackList.GetQualityTier()
+	currentCodec := trackList.GetPrimaryVideoCodec()
 	currentResolution := ""
-	if trackList.PrimaryWidth > 0 && trackList.PrimaryHeight > 0 {
-		currentResolution = fmt.Sprintf("%dx%d", trackList.PrimaryWidth, trackList.PrimaryHeight)
+	if trackList.GetPrimaryWidth() > 0 && trackList.GetPrimaryHeight() > 0 {
+		currentResolution = fmt.Sprintf("%dx%d", trackList.GetPrimaryWidth(), trackList.GetPrimaryHeight())
 	}
 
 	// Simple change detection - record when we have quality info
@@ -1226,11 +1435,11 @@ func (h *AnalyticsHandler) detectQualityChanges(ctx context.Context, event *vali
 		if err := batch.Append(
 			event.Timestamp,
 			event.EventID,
-			getTenantIDFromKafkaEvent(*event),
-			trackList.InternalName,
-			trackList.NodeID,
+			event.TenantID,
+			trackList.GetStreamName(),
+			"",             // node_id not in LiveTrackListTrigger
 			"track_update", // Generic change type
-			trackList.TrackListJSON,
+			marshalTypedEventData(trackList.GetTracks()),
 			currentQuality,
 			currentResolution,
 			currentCodec,
@@ -1244,58 +1453,6 @@ func (h *AnalyticsHandler) detectQualityChanges(ctx context.Context, event *vali
 	}
 
 	return nil
-}
-
-// getTenantIDFromKafkaEvent extracts tenant_id from typed KafkaEvent
-func getTenantIDFromKafkaEvent(event validation.KafkaEvent) string {
-	// Extract tenant ID based on event type from typed payload
-	switch validation.EventType(event.EventType) {
-	case validation.EventStreamIngest:
-		if event.Data.StreamIngest != nil {
-			return event.Data.StreamIngest.TenantID
-		}
-	case validation.EventStreamView:
-		if event.Data.StreamView != nil {
-			return event.Data.StreamView.TenantID
-		}
-	case validation.EventStreamLifecycle:
-		if event.Data.StreamLifecycle != nil {
-			return event.Data.StreamLifecycle.TenantID
-		}
-	case validation.EventUserConnection:
-		if event.Data.UserConnection != nil {
-			return event.Data.UserConnection.TenantID
-		}
-	case validation.EventClientLifecycle:
-		if event.Data.ClientLifecycle != nil {
-			return event.Data.ClientLifecycle.TenantID
-		}
-	case validation.EventTrackList:
-		if event.Data.TrackList != nil {
-			return event.Data.TrackList.TenantID
-		}
-	case validation.EventRecordingLifecycle:
-		if event.Data.Recording != nil {
-			return event.Data.Recording.TenantID
-		}
-	case validation.EventPushLifecycle:
-		if event.Data.PushLifecycle != nil {
-			return event.Data.PushLifecycle.TenantID
-		}
-	case validation.EventBandwidthThreshold:
-		if event.Data.BandwidthThreshold != nil {
-			return event.Data.BandwidthThreshold.TenantID
-		}
-	case validation.EventLoadBalancing:
-		if event.Data.LoadBalancing != nil {
-			return event.Data.LoadBalancing.TenantID
-		}
-	case validation.EventClipLifecycle:
-		if event.Data.ClipLifecycle != nil {
-			return event.Data.ClipLifecycle.TenantID
-		}
-	}
-	return "00000000-0000-0000-0000-000000000001"
 }
 
 // nilIfZero returns nil if the value is zero/empty, otherwise returns the value
@@ -1383,12 +1540,19 @@ func marshalTypedEventData(data interface{}) string {
 	return string(b)
 }
 
-func (h *AnalyticsHandler) processClipLifecycle(ctx context.Context, event *validation.KafkaEvent) error {
+func (h *AnalyticsHandler) processClipLifecycle(ctx context.Context, event kafka.AnalyticsEvent) error {
 	h.logger.Infof("Processing clip lifecycle event: %s", event.EventID)
-	if event.Data.ClipLifecycle == nil {
-		return nil
+
+	// Parse MistTrigger envelope -> ClipLifecycleData
+	var mt pb.MistTrigger
+	if err := h.parseProtobufData(event, &mt); err != nil {
+		return fmt.Errorf("failed to parse MistTrigger: %w", err)
 	}
-	cl := event.Data.ClipLifecycle
+	tp, ok := mt.GetTriggerPayload().(*pb.MistTrigger_ClipLifecycleData)
+	if !ok || tp == nil {
+		return fmt.Errorf("unexpected payload for clip_lifecycle")
+	}
+	cl := tp.ClipLifecycleData
 
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO clip_events (
@@ -1403,10 +1567,10 @@ func (h *AnalyticsHandler) processClipLifecycle(ctx context.Context, event *vali
 
 	// Required
 	internalName := ""
-	if event.Data.ClipLifecycle.InternalName != "" {
-		internalName = event.Data.ClipLifecycle.InternalName
+	if cl.GetInternalName() != "" {
+		internalName = cl.GetInternalName()
 	}
-	tenantID := getTenantIDFromKafkaEvent(*event)
+	tenantID := event.TenantID
 
 	// Optional
 	var (
@@ -1416,59 +1580,44 @@ func (h *AnalyticsHandler) processClipLifecycle(ctx context.Context, event *vali
 		message, filePath, s3url                          interface{}
 		sizeBytes                                         interface{}
 	)
-	if cl.Title != "" {
-		title = cl.Title
+	// No title or format in ClipLifecycleData
+	// Use optional fields
+	if cl.GetStartedAt() != 0 {
+		startUnix = cl.GetStartedAt()
 	}
-	if cl.Format != "" {
-		format = cl.Format
+	if cl.GetCompletedAt() != 0 {
+		stopUnix = cl.GetCompletedAt()
 	}
-	if cl.StartUnix != 0 {
-		startUnix = cl.StartUnix
+	// No start_ms/stop_ms in ClipLifecycleData
+	// No duration_sec in ClipLifecycleData
+	if cl.GetNodeId() != "" {
+		ingestNode = cl.GetNodeId()
 	}
-	if cl.StopUnix != 0 {
-		stopUnix = cl.StopUnix
+	// No storage node in ClipLifecycleData
+	// No routing distance in ClipLifecycleData
+	if cl.GetProgressPercent() != 0 {
+		percent = cl.GetProgressPercent()
 	}
-	if cl.StartMs != 0 {
-		startMs = cl.StartMs
+	if cl.GetError() != "" {
+		message = cl.GetError()
 	}
-	if cl.StopMs != 0 {
-		stopMs = cl.StopMs
+	if cl.GetFilePath() != "" {
+		filePath = cl.GetFilePath()
 	}
-	if cl.DurationSec != 0 {
-		durationSec = cl.DurationSec
+	if cl.GetS3Url() != "" {
+		s3url = cl.GetS3Url()
 	}
-	if cl.IngestNodeID != "" {
-		ingestNode = cl.IngestNodeID
-	}
-	if cl.StorageNodeID != "" {
-		storageNode = cl.StorageNodeID
-	}
-	if cl.RoutingDistanceKm != 0 {
-		routeKm = cl.RoutingDistanceKm
-	}
-	if cl.Percent != 0 {
-		percent = cl.Percent
-	}
-	if cl.Message != "" {
-		message = cl.Message
-	}
-	if cl.FilePath != "" {
-		filePath = cl.FilePath
-	}
-	if cl.S3URL != "" {
-		s3url = cl.S3URL
-	}
-	if cl.SizeBytes != 0 {
-		sizeBytes = cl.SizeBytes
+	if cl.GetSizeBytes() != 0 {
+		sizeBytes = cl.GetSizeBytes()
 	}
 
 	if err := batch.Append(
 		event.Timestamp,
 		tenantID,
 		internalName,
-		cl.RequestID,
-		cl.Stage,
-		cl.ContentType,
+		cl.GetRequestId(),
+		cl.GetStage().String(),
+		"", // content_type not in ClipLifecycleData
 		title,
 		format,
 		startUnix,
@@ -1487,5 +1636,55 @@ func (h *AnalyticsHandler) processClipLifecycle(ctx context.Context, event *vali
 	); err != nil {
 		return err
 	}
+	return batch.Send()
+}
+
+// processDVRLifecycle handles DVR lifecycle events
+func (h *AnalyticsHandler) processDVRLifecycle(ctx context.Context, event kafka.AnalyticsEvent) error {
+	h.logger.Infof("Processing DVR lifecycle event: %s", event.EventID)
+
+	// Parse MistTrigger envelope -> DVRLifecycleData
+	var mt pb.MistTrigger
+	if err := h.parseProtobufData(event, &mt); err != nil {
+		return fmt.Errorf("failed to parse MistTrigger: %w", err)
+	}
+	tp, ok := mt.GetTriggerPayload().(*pb.MistTrigger_DvrLifecycleData)
+	if !ok || tp == nil {
+		return fmt.Errorf("unexpected payload for dvr_lifecycle")
+	}
+	dvrData := tp.DvrLifecycleData
+
+	// Write to ClickHouse dvr_events table
+	batch, err := h.clickhouse.PrepareBatch(ctx, `
+		INSERT INTO dvr_events (
+			timestamp, tenant_id, internal_name, event_type, source,
+			dvr_hash, status, node_id, storage_path
+		)`)
+	if err != nil {
+		return err
+	}
+
+	var tenantID, internalName string
+	if dvrData.TenantId != nil {
+		tenantID = *dvrData.TenantId
+	}
+	if dvrData.InternalName != nil {
+		internalName = *dvrData.InternalName
+	}
+
+	if err := batch.Append(
+		event.Timestamp,
+		tenantID,
+		internalName,
+		event.EventType,
+		event.Source,
+		dvrData.GetDvrHash(),
+		dvrData.GetStatus().String(),
+		mt.GetNodeId(),
+		dvrData.GetManifestPath(), // use manifest_path instead of storage_path
+	); err != nil {
+		return err
+	}
+
 	return batch.Send()
 }

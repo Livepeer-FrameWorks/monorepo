@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"frameworks/api_sidecar/internal/mist"
 	"frameworks/pkg/logging"
+	"frameworks/pkg/mist"
 	pb "frameworks/pkg/proto"
 
 	"google.golang.org/protobuf/types/known/timestamppb"

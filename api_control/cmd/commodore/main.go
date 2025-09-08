@@ -1,15 +1,19 @@
 package main
 
 import (
+	"context"
 	internalauth "frameworks/api_control/internal/auth"
 	"frameworks/api_control/internal/handlers"
+	qmapi "frameworks/pkg/api/quartermaster"
 	"frameworks/pkg/auth"
+	qmclient "frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/config"
 	"frameworks/pkg/database"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/monitoring"
 	"frameworks/pkg/server"
 	"frameworks/pkg/version"
+	"time"
 )
 
 func main() {
@@ -52,20 +56,8 @@ func main() {
 		StreamOperations: metricsCollector.NewCounter("stream_operations_total", "Stream CRUD operations", []string{"operation", "status"}),
 	}
 
-	// Create database metrics
-	metrics.DBQueries, metrics.DBDuration, metrics.DBConnections = metricsCollector.CreateDatabaseMetrics()
-
-	// Convert metrics to handler format and initialize handlers
-	handlerMetrics := &handlers.HandlerMetrics{
-		AuthOperations:   metrics.AuthOperations,
-		AuthDuration:     metrics.AuthDuration,
-		ActiveSessions:   metrics.ActiveSessions,
-		StreamOperations: metrics.StreamOperations,
-		DBQueries:        metrics.DBQueries,
-		DBDuration:       metrics.DBDuration,
-		DBConnections:    metrics.DBConnections,
-	}
-	handlers.Init(db, logger, router, handlerMetrics)
+	// Initialize handlers with metrics
+	handlers.Init(db, logger, router, metrics)
 
 	// Setup router with unified monitoring
 	app := server.SetupServiceRouter(logger, "commodore", healthChecker, metricsCollector)
@@ -114,8 +106,8 @@ func main() {
 			protected.GET("/dvr/requests", handlers.ListDVRRequests)
 
 			// Recording config
-			protected.GET("/streams/:internal_name/recording-config", handlers.GetRecordingConfig)
-			protected.PUT("/streams/:internal_name/recording-config", handlers.UpdateRecordingConfig)
+			protected.GET("/streams/:id/recording-config", handlers.GetRecordingConfig)
+			protected.PUT("/streams/:id/recording-config", handlers.UpdateRecordingConfig)
 
 			// API tokens
 			protected.POST("/developer/tokens", handlers.CreateAPIToken)
@@ -139,6 +131,9 @@ func main() {
 
 		// Stream node discovery (cluster-aware)
 		app.GET("/stream-node/:stream_key", handlers.GetStreamNode)
+
+		// Stream meta by stream key (service-to-service safe proxy)
+		app.GET("/stream-meta/:stream_key", handlers.StreamMetaByKey)
 
 		// Developer API routes (using API token authentication)
 		devAPI := app.Group("/dev")
@@ -165,4 +160,16 @@ func main() {
 	if err := server.Start(serverConfig, app, logger); err != nil {
 		logger.WithError(err).Fatal("Server startup failed")
 	}
+
+	// Best-effort service registration in Quartermaster
+	go func() {
+		qc := qmclient.NewClient(qmclient.Config{BaseURL: config.GetEnv("QUARTERMASTER_URL", "http://localhost:18002"), ServiceToken: config.GetEnv("SERVICE_TOKEN", ""), Logger: logger})
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if _, err := qc.BootstrapService(ctx, &qmapi.BootstrapServiceRequest{Type: "commodore", Version: version.Version, Protocol: "http", HealthEndpoint: func() *string { s := "/health"; return &s }(), Port: 18001}); err != nil {
+			logger.WithError(err).Warn("Quartermaster bootstrap (commodore) failed")
+		} else {
+			logger.Info("Quartermaster bootstrap (commodore) ok")
+		}
+	}()
 }

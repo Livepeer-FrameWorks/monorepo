@@ -125,7 +125,7 @@
     <!-- Header -->
     <div class="text-center">
       <div class="flex justify-center mb-4">
-        <img src="/logo.png" alt="FrameWorks" class="h-64 w-64 rounded-lg" />
+        <img src="/frameworks-dark-logomark-transparent.svg" alt="FrameWorks" class="h-64 w-64 rounded-lg" />
       </div>
       <h1 class="text-4xl font-bold gradient-text mb-2">Join FrameWorks</h1>
       <p class="text-tokyo-night-fg-dark">

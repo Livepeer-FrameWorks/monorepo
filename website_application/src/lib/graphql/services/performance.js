@@ -117,7 +117,67 @@ export const performanceService = {
     }
   },
 
+  // Get node performance metrics
+  /**
+   * @param {string | null} nodeId
+   * @param {{ start: string, end: string }} timeRange
+   */
+  async getNodePerformanceMetrics(nodeId, timeRange) {
+    try {
+      const performance = await this.getPlatformPerformance(timeRange);
+      
+      // If nodeId is specified, filter for that node
+      if (nodeId) {
+        return performance.nodeMetrics.filter(metric => metric.nodeId === nodeId);
+      }
+      
+      // Otherwise, aggregate metrics by node
+      const nodeMetricsMap = performance.nodeMetrics.reduce((acc, metric) => {
+        if (!acc[metric.nodeId]) {
+          acc[metric.nodeId] = {
+            nodeId: metric.nodeId,
+            avgCpuUsage: 0,
+            avgMemoryUsage: 0,
+            avgDiskUsage: 0,
+            avgHealthScore: 0,
+            avgStreamLoad: 0,
+            peakActiveStreams: 0,
+            count: 0
+          };
+        }
+        
+        const node = acc[metric.nodeId];
+        node.avgCpuUsage += metric.cpuUsage || 0;
+        node.avgMemoryUsage += metric.memoryUsage || 0;
+        node.avgDiskUsage += metric.diskUsage || 0;
+        node.avgHealthScore += metric.healthScore || 0;
+        node.avgStreamLoad += metric.activeStreams || 0;
+        node.peakActiveStreams = Math.max(node.peakActiveStreams, metric.activeStreams || 0);
+        node.count++;
+        
+        return acc;
+      }, {});
+      
+      // Calculate averages
+      return Object.values(nodeMetricsMap).map(node => ({
+        nodeId: node.nodeId,
+        avgCpuUsage: node.count > 0 ? node.avgCpuUsage / node.count : 0,
+        avgMemoryUsage: node.count > 0 ? node.avgMemoryUsage / node.count : 0,
+        avgDiskUsage: node.count > 0 ? node.avgDiskUsage / node.count : 0,
+        avgHealthScore: node.count > 0 ? node.avgHealthScore / node.count : 0,
+        avgStreamLoad: node.count > 0 ? node.avgStreamLoad / node.count : 0,
+        peakActiveStreams: node.peakActiveStreams
+      }));
+    } catch (error) {
+      console.error('Failed to fetch node performance metrics:', error);
+      return [];
+    }
+  },
+
   // Helper method to calculate platform performance summary
+  /**
+   * @param {{ start: string, end: string }} timeRange
+   */
   async getPlatformSummary(timeRange) {
     try {
       const performance = await this.getPlatformPerformance(timeRange);
