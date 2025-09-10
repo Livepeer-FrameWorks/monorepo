@@ -2,7 +2,7 @@ import { motion } from 'framer-motion'
 import { Link } from 'react-router-dom'
 import config from '../config'
 import BetaBadge from './BetaBadge'
-import { RocketLaunchIcon, SparklesIcon, ArrowTopRightOnSquareIcon } from '@heroicons/react/24/outline'
+import { RocketLaunchIcon, SparklesIcon, ArrowTopRightOnSquareIcon, VideoCameraIcon } from '@heroicons/react/24/outline'
 
 const Documentation = () => {
   const sections = [
@@ -227,7 +227,10 @@ const Documentation = () => {
                 <div className="text-tokyo-night-yellow mb-2">console.log('<span className="text-tokyo-night-green">Playback URL:</span>', stream.playback_url);</div>
                 <div className="text-tokyo-night-comment mb-4">→ http://localhost:8080/hls/live_abc123def456.m3u8</div>
 
-                <div className="text-tokyo-night-cyan">🎥 Ready to stream! Configure OBS with the ingest URL above</div>
+                <div className="text-tokyo-night-cyan flex items-center gap-2">
+                  <VideoCameraIcon className="w-5 h-5" />
+                  Ready to stream! Configure OBS with the ingest URL above
+                </div>
               </div>
             </motion.div>
           </div>

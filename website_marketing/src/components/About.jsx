@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import config from '../config'
 import BetaBadge from './BetaBadge'
 import InfoTooltip from './InfoTooltip'
-import { ChartBarIcon, ArrowTopRightOnSquareIcon } from '@heroicons/react/24/outline'
+import { ChartBarIcon, ArrowTopRightOnSquareIcon, SparklesIcon, FilmIcon, GlobeAltIcon, VideoCameraIcon, LockOpenIcon, CpuChipIcon } from '@heroicons/react/24/outline'
 
 const About = () => {
   const team = [
@@ -197,7 +197,9 @@ const About = () => {
                   Treasury Backed
                 </span>
               </div>
-              <div className="text-4xl mb-4">💎</div>
+              <div className="mb-4">
+                <SparklesIcon className="w-12 h-12 text-tokyo-night-cyan" />
+              </div>
               <h3 className="text-xl font-bold text-tokyo-night-fg mb-3">Livepeer Network Integration</h3>
               <p className="text-tokyo-night-fg-dark">Subsidized by the Livepeer treasury and powered by the world's largest decentralized video network for transcoding and AI processing.</p>
             </motion.div>
@@ -214,7 +216,9 @@ const About = () => {
                   Industry First
                 </span>
               </div>
-              <div className="text-4xl mb-4">📹</div>
+              <div className="mb-4">
+                <VideoCameraIcon className="w-12 h-12 text-tokyo-night-cyan" />
+              </div>
               <h3 className="text-xl font-bold text-tokyo-night-fg mb-3">Auto-Discovery App</h3>
               <p className="text-tokyo-night-fg-dark">The only platform with a drop-in app that automatically discovers and connects ONVIF cameras, VISCA PTZ controls, NDI sources, USB webcams, and HDMI inputs. Zero configuration required - it just works.</p>
             </motion.div>
@@ -231,7 +235,9 @@ const About = () => {
                   Advanced Feature
                 </span>
               </div>
-              <div className="text-4xl mb-4">🎬</div>
+              <div className="mb-4">
+                <FilmIcon className="w-12 h-12 text-tokyo-night-cyan" />
+              </div>
               <h3 className="text-xl font-bold text-tokyo-night-fg mb-3">Multi-stream Compositing</h3>
               <p className="text-tokyo-night-fg-dark">Combine multiple input streams into one composite output with picture-in-picture, overlays, and OBS-style mixing capabilities. Most platforms don't offer this at all.</p>
             </motion.div>
@@ -248,7 +254,9 @@ const About = () => {
                   Unique Model
                 </span>
               </div>
-              <div className="text-4xl mb-4">🌐</div>
+              <div className="mb-4">
+                <GlobeAltIcon className="w-12 h-12 text-tokyo-night-cyan" />
+              </div>
               <h3 className="text-xl font-bold text-tokyo-night-fg mb-3">Architectural Freedom</h3>
               <p className="text-tokyo-night-fg-dark">Deploy your own edge nodes for maximum performance and control or use our complete pipeline. Scale however works best for your use case.</p>
             </motion.div>
@@ -265,7 +273,9 @@ const About = () => {
                   Open Source
                 </span>
               </div>
-              <div className="text-4xl mb-4">🔓</div>
+              <div className="mb-4">
+                <LockOpenIcon className="w-12 h-12 text-tokyo-night-cyan" />
+              </div>
               <h3 className="text-xl font-bold text-tokyo-night-fg mb-3">Public Domain Licensed</h3>
               <p className="text-tokyo-night-fg-dark">Unlike typical "open source" with restrictive licenses, our entire stack is public domain. No attribution required, no copyleft restrictions - you truly own what you deploy, including for commercial use.</p>
             </motion.div>
@@ -301,7 +311,9 @@ const About = () => {
                   AI-powered
                 </span>
               </div>
-              <div className="text-4xl mb-4">🤖</div>
+              <div className="mb-4">
+                <CpuChipIcon className="w-12 h-12 text-tokyo-night-cyan" />
+              </div>
               <h3 className="text-xl font-bold text-tokyo-night-fg mb-3">Live AI Processing</h3>
               <p className="text-tokyo-night-fg-dark">Real-time speech-to-text, object detection, content classification, and automated clipping with AI segmentation. Process video intelligence at the edge while streaming live.</p>
             </motion.div>

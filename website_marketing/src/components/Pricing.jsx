@@ -11,6 +11,8 @@ import {
   CloudIcon,
   BuildingOfficeIcon,
   ArrowTopRightOnSquareIcon,
+  GlobeAltIcon,
+  HomeIcon,
   // CheckIcon
 } from '@heroicons/react/24/outline'
 
@@ -561,14 +563,20 @@ const Pricing = () => {
               <h3 className="text-2xl font-bold text-tokyo-night-fg mb-6">Architecture Options</h3>
               <div className="space-y-4">
                 <div className="bg-tokyo-night-bg-dark p-4 rounded-lg">
-                  <h4 className="font-semibold text-tokyo-night-blue mb-2">🏠 Self-Hosted Everything</h4>
+                  <h4 className="font-semibold text-tokyo-night-blue mb-2 flex items-center gap-2">
+                    <HomeIcon className="w-5 h-5" />
+                    Self-Hosted Everything
+                  </h4>
                   <div className="text-tokyo-night-fg-dark text-sm space-y-1">
                     <div>• Your servers, your control</div>
                     <div>• Docker deployment anywhere</div>
                   </div>
                 </div>
                 <div className="bg-tokyo-night-bg-dark p-4 rounded-lg">
-                  <h4 className="font-semibold text-tokyo-night-green mb-2">🌐 Your Network + Our Network</h4>
+                  <h4 className="font-semibold text-tokyo-night-green mb-2 flex items-center gap-2">
+                    <GlobeAltIcon className="w-5 h-5" />
+                    Your Network + Our Network
+                  </h4>
                   <div className="text-tokyo-night-fg-dark text-sm space-y-1">
                     <div>• Your network nodes for delivery</div>
                     <div>• Our network for AI, transcoding, compositing</div>

@@ -161,8 +161,7 @@
         Welcome back, {user?.email?.split("@")[0] || "Streamer"}!
       </h1>
       <p class="text-tokyo-night-fg-dark">
-        Your streams are looking great today. Here's what's happening across
-        your platform.
+        Stream dashboard and control panel
       </p>
     </div>
 
@@ -475,7 +474,7 @@
             Platform Status
           </h2>
           <p class="text-tokyo-night-fg-dark">
-            Everything's running smoothly - here's what's powering your streams
+            Service health and real-time metrics
           </p>
         </div>
 
@@ -627,7 +626,7 @@
             New to Streaming?
           </h2>
           <p class="text-tokyo-night-fg-dark">
-            No worries! Get your first stream up and running in just 3 steps
+            Quick setup guide for streaming with OBS
           </p>
         </div>
 
@@ -695,10 +694,9 @@
               3
             </div>
             <div>
-              <h3 class="font-semibold text-tokyo-night-fg">Hit "Go Live"!</h3>
+              <h3 class="font-semibold text-tokyo-night-fg">Start Streaming</h3>
               <p class="text-sm text-tokyo-night-fg-dark">
-                That's it! Click "Start Streaming" in OBS and you'll be
-                broadcasting to the world
+                Click "Start Streaming" in OBS to begin broadcasting
               </p>
             </div>
           </div>

@@ -11,7 +11,9 @@ import {
   VideoCameraIcon,
   FilmIcon,
   GlobeAltIcon,
-  LockOpenIcon
+  LockOpenIcon,
+  HomeIcon,
+  ArrowsRightLeftIcon
 } from '@heroicons/react/24/outline'
 
 const LandingPage = () => {
@@ -339,8 +341,8 @@ const LandingPage = () => {
                     ✓ AI processing enabled (STT, object detection)<br/>
                     ✓ Adaptive bitrate configured
                   </div>
-                  <div className="text-tokyo-night-yellow mb-2">🎥 Live: 1,247 viewers • 3 sources composited</div>
-                  <div className="text-tokyo-night-cyan">🤖 AI: Detected 'person', 'microphone' | STT: "Welcome to my stream!"</div>
+                  <div className="text-tokyo-night-yellow mb-2">Live: 1,247 viewers • 3 sources composited</div>
+                  <div className="text-tokyo-night-cyan">AI: Detected 'person', 'microphone' | STT: "Welcome to my stream!"</div>
                 </div>
               ) : (
                 <div className="text-tokyo-night-comment">
@@ -691,15 +693,24 @@ const LandingPage = () => {
               <h3 className="text-2xl font-bold text-tokyo-night-fg mb-6">Deployment Options</h3>
               <div className="space-y-6">
                 <div className="border-l-4 border-tokyo-night-blue pl-4">
-                  <h4 className="font-semibold text-tokyo-night-fg mb-2">🌐 Fully Hosted</h4>
+                  <h4 className="font-semibold text-tokyo-night-fg mb-2 flex items-center gap-2">
+                    <GlobeAltIcon className="w-5 h-5" />
+                    Fully Hosted
+                  </h4>
                   <p className="text-tokyo-night-fg-dark text-sm">Use our global infrastructure with generous free tier</p>
                 </div>
                 <div className="border-l-4 border-tokyo-night-green pl-4">
-                  <h4 className="font-semibold text-tokyo-night-fg mb-2">🏠 Self-Hosted</h4>
+                  <h4 className="font-semibold text-tokyo-night-fg mb-2 flex items-center gap-2">
+                    <HomeIcon className="w-5 h-5" />
+                    Self-Hosted
+                  </h4>
                   <p className="text-tokyo-night-fg-dark text-sm">Deploy on your own infrastructure and manage everything through one web console</p>
                 </div>
                 <div className="border-l-4 border-tokyo-night-yellow pl-4">
-                  <h4 className="font-semibold text-tokyo-night-fg mb-2">🔄 Hybrid</h4>
+                  <h4 className="font-semibold text-tokyo-night-fg mb-2 flex items-center gap-2">
+                    <ArrowsRightLeftIcon className="w-5 h-5" />
+                    Hybrid
+                  </h4>
                   <p className="text-tokyo-night-fg-dark text-sm">Combine both for optimal cost and performance</p>
                 </div>
               </div>
