@@ -1,51 +1,14 @@
-# <TBA>> - Professional Mobile Streaming App
+# Android App (Scaffold)
 
-<TBA>> is a comprehensive Android streaming application that supports multiple streaming protocols and provides professional-grade camera controls. Built for content creators, broadcasters, and streaming professionals who need reliable mobile streaming capabilities.
-
-## Work in Progress
-
-**Mostly stub functions - just a start to scope out what it would look like.**
+Status: Scaffold only. This module currently contains initial structure and placeholder code. It is not feature‑complete and should not be used in production.
 
 ---
 
-## Features
+## Current State
 
-### Multi-Protocol Streaming Support
-- **SRT**: Low-latency streaming with error correction for professional broadcasting
-- **WHIP (WebRTC)**: Modern web-based streaming ingestion with ultra-low latency
-
-### Professional Camera Controls
-- **Manual Focus**: Precise focus control with distance adjustment
-- **Exposure Control**: Manual exposure time, ISO, and compensation settings
-- **White Balance**: Multiple presets (Auto, Daylight, Cloudy, Tungsten, etc.) and manual control
-- **Scene Modes**: Optimized settings for Portrait, Landscape, Night, Sports, and more
-- **Image Stabilization**: Both optical and digital stabilization support
-- **Advanced Settings**: Noise reduction, edge enhancement, hot pixel correction
-- **Zoom Control**: Smooth zoom with real-time adjustment
-- **Flash/Torch**: Configurable flash modes and torch control
-
-### Flexible Input Sources
-- **Camera Input**: Front and rear cameras with seamless switching
-- **Screen Capture**: Stream your device screen (coming soon)
-- **Audio Sources**: Multiple audio input options (Microphone, Camcorder, etc.)
-- **Audio Controls**: Gain adjustment and source selection
-
-### Provider System
-- **FrameWorks Integration**: Native support for FrameWorks streaming service
-- **Static Targets**: Direct streaming to RTMP/SRT/WHIP endpoints
-- **Custom Services**: Support for any streaming service with configurable endpoints
-- **Multiple Authentication**: JWT, OAuth 2.0, API Key, and Basic Auth support
-
-### Stream Configuration
-- **Resolution Options**: 480p, 720p, 1080p, 4K support
-- **Frame Rates**: 15, 24, 30, 60 FPS options
-- **Bitrate Control**: Adjustable bitrate from 500 kbps to 10+ Mbps
-- **Quality Presets**: Optimized settings for different use cases
-
-### Real-time Monitoring
-- **Stream Statistics**: Bitrate, FPS, duration, dropped frames
-- **Connection Status**: Real-time connection monitoring
-- **Performance Metrics**: Network type, latency information
+- Project scaffolding and placeholder code only
+- No supported streaming protocols yet
+- No camera pipeline or controls yet
 
 ## Quick Start
 
@@ -56,9 +19,8 @@
 
 ### Installation
 1. Clone the repository
-2. Open in Android Studio
-3. Build and install on your device
-4. Grant camera and microphone permissions
+2. Open `app_android` in Android Studio
+3. Build succeeds with stubs; the app is not functional
 
 ### Basic Usage
 1. **Select a Provider**: Choose FrameWorks (default) or add a custom streaming target
@@ -66,35 +28,14 @@
 3. **Start Streaming**: Tap the stream button to begin broadcasting
 4. **Monitor**: Watch real-time statistics and connection status
 
-## Provider Configuration
+## Planned Features
 
-### FrameWorks Service
-1. Select "FrameWorks" as your provider
-2. Log in with your FrameWorks credentials
-3. The app will automatically configure streaming settings
-
-### Static SRT Target
-1. Tap "Add Provider" → "SRT Server"
-2. Configure SRT settings:
-   - **Name**: Display name for the provider
-   - **Server URL**: SRT server address
-   - **Port**: SRT port (default: 9999)
-   - **Latency**: Buffer latency in milliseconds
-   - **Encryption**: Optional passphrase for encrypted streams
-
-### WHIP/WebRTC Target
-1. Tap "Add Provider" → "WHIP Server"
-2. Enter WHIP endpoint:
-   - **Name**: Display name for the provider
-   - **Server URL**: WHIP endpoint URL
-   - **Bearer Token**: Optional authentication token
-
-### Custom Service
-1. Tap "Add Provider" → "Custom Service"
-2. Configure service details:
-   - **Base URL**: API base URL
-   - **Authentication**: Choose auth method (JWT, OAuth, API Key, etc.)
-   - **Endpoints**: Customize API endpoints if needed
+These are planned; timelines tracked in the roadmap:
+- Multi‑protocol ingest: SRT and WHIP/WebRTC
+- Camera pipeline with manual controls (focus, exposure, WB)
+- Provider system: FrameWorks, static targets, custom endpoints
+- Stream configuration presets (resolution, fps, bitrate)
+- Basic stats overlay (bitrate, fps, dropped frames)
 
 ## Camera Settings
 
@@ -138,24 +79,11 @@ Optimized settings for different scenarios:
 - **Reliability**: Modern web standard with automatic adaptation
 - **Configuration**: WHIP endpoint URL
 
-## Technical Architecture
+## Notes for Contributors
 
-### Core Components
-- **CameraController**: Camera management and manual controls
-- **StreamingEngine**: Multi-protocol streaming implementation
-- **ProviderManager**: Service and target management
-- **AuthRepository**: Authentication handling
-
-### Streaming Engines
-- **SrtStreamingEngine**: Official SRT library with MediaCodec integration
-- **WebRtcStreamingEngine**: Native WebRTC implementation
-
-### Libraries Used
-- **CameraX**: Modern camera API
-- **Camera2**: Low-level camera controls
-- **Official SRT Library**: Native SRT streaming with optimal performance
-- **WebRTC**: Real-time communication
-- **OkHttp/Retrofit**: Network communication
+- Keep placeholders minimal and clearly labeled
+- Avoid shipping UI that implies functionality that isn’t implemented
+- Update this README when a feature becomes functional
 
 ## Requirements
 

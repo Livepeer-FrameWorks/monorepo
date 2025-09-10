@@ -1,6 +1,6 @@
 # FrameWorks CLI
 
-Unified operator tool for managing the FrameWorks platform: contexts/connectivity, edge stack, and (soon) central services.
+Unified operator tool for managing the FrameWorks platform: contexts/connectivity, edge stack, and central services (planned).
 
 ## What It Does (current)
 
@@ -9,7 +9,7 @@ Unified operator tool for managing the FrameWorks platform: contexts/connectivit
 - **Edge Preflight**: Verify DNS (optional), Docker/compose, Linux sysctls, `/dev/shm`, `ulimit`, and ports 80/443.
 - **Edge Tune**: Dry‑run or apply recommended sysctl/limits (root needed for system paths).
 
-Coming soon (tracked in SCOPE.md): workspace mode and optional interface helpers.
+Planned (tracked in SCOPE.md): workspace mode and optional interface helpers.
 
 ## Installation
 

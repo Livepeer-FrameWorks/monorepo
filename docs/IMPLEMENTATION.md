@@ -2,7 +2,7 @@
 
 This document provides comprehensive technical details about FrameWorks architecture, implementation, and integration patterns.
 
-## 🏛️ Architecture Overview
+## Architecture Overview
 
 FrameWorks is a **distributed microservices platform** for **multi-tenant video streaming SaaS**, built on **event-driven architecture** with **multi-plane separation** of concerns.
 
@@ -41,14 +41,14 @@ FrameWorks is a **distributed microservices platform** for **multi-tenant video 
   - Payment processing (including crypto)
   - Invoice generation
 
-**Planned Services** 🚧:
+**Planned Services**:
 - **Privateer** (`api_mesh`): WireGuard mesh orchestration agent
   - Token-based secure mesh joining
   - Bootstrap peer architecture for initial connections
   - Integration with Quartermaster node registry
   - Zero-downtime configuration updates and peer discovery
 
-**Deferred Services** ⏸️:
+**Deferred Services**:
 - **Seawarden** (`api_certmgr`): Certificate management
   - **Deferred because**: Let's Encrypt + Certbot already handles SSL automation effectively, exploring handling this with Caddy or Terraform+Ansible
   - **Current solution**: Custom Nginx build with automatic certificate renewal
@@ -145,10 +145,9 @@ FrameWorks is a **distributed microservices platform** for **multi-tenant video 
   - Keys require activation and deposit management
 
 **Characteristics**:
-- **Direct media protocols** for low-latency streaming
-- **Autonomous routing decisions** via Foghorn
-- Self-discovering topology
-- **Independent operation** from Control/Data planes
+- Direct media protocols for low-latency streaming
+- Routing decisions handled by Foghorn
+- Independent operation from Control/Data planes
 
 ### 4. Support Services & Interface
 **Purpose**: User interfaces and supporting functionality
@@ -186,7 +185,7 @@ FrameWorks is a **distributed microservices platform** for **multi-tenant video 
   - Alert management
   - Multi-datasource support
 
-**Planned Services** 🚧:
+**Planned Services**:
 - **Parlor** (`api_rooms`): Interactive room service
   - Room hierarchy with persistent communities
   - Multi-modal interaction (chat, voice, video, games)

@@ -1,17 +1,17 @@
 # Forms Service
 
-Barebones API to deal with insecure form submissions. Should look into integrating third party forms providers.
+Minimal contact API used for demos. Not part of the dev docker‑compose stack.
 
-## Status
-- Minimal utility; consider third‑party integration later. Useful for demos and contact forms.
+Status
+- Minimal utility; evaluate third‑party providers vs. in‑house.
 
 ## Run (dev)
-- From repo root: `docker-compose up -d`
-- Or run just the service: `cd api_forms && npm install && npm run dev`
+- Run the service directly: `cd api_forms && npm install && npm run dev`
+- Configure the marketing site to point `VITE_CONTACT_API_URL` to this service.
 
 Configuration: copy `env.example` to `.env` and use the inline comments as reference. Do not commit secrets.
 
-## Build vs Buy Decision
+## Build vs Buy Considerations
 
 This service can be either built in-house or use third-party providers:
 
@@ -20,7 +20,7 @@ This service can be either built in-house or use third-party providers:
     - Formspree
     - Netlify Forms
     - Other form backends
-  - Custom implementation (viable choice)
+  - Custom implementation (viable, small scope)
 
 - **Why Building is OK**
   - Low implementation effort

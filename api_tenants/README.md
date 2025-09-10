@@ -24,3 +24,7 @@ Configuration: copy `env.example` to `.env` and use the inline comments as refer
 Health: `GET /health`.
 
 Cross‑refs: see docs/IMPLEMENTATION.md for how Commodore and Foghorn consume this API. 
+
+## Health & port
+- Health: `GET /health`
+- HTTP: 18002

@@ -25,3 +25,7 @@ Configuration: copy `env.example` to `.env` and use the inline comments as refer
 Health: `GET /health`.
 
 Cross‑refs: docs/IMPLEMENTATION.md for event format; docs/DATABASE.md for ClickHouse sinks. 
+
+## Health & port
+- Health: `GET /health`
+- HTTP: 18007

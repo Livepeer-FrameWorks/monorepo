@@ -13,7 +13,7 @@ The Bridge is the GraphQL API Gateway that provides a unified interface for all 
 ## Architecture
 - Framework: gqlgen (Go GraphQL server)
 - Caching: optional Redis for query results
-- Auth: JWT validation via Commodore
+- Auth: JWT or service token; minimal public allowlist (status, player endpoint resolve); WebSocket authenticates on init
 - Subscriptions: WebSocket via Signalman
 - Service calls: HTTP to internal services
 
@@ -24,7 +24,7 @@ The Bridge is the GraphQL API Gateway that provides a unified interface for all 
 ## Health & endpoints
 - Health: `GET /health`
 - HTTP: 18000 (see root README “Ports”)
-- GraphQL: `POST /graphql`, WS: `/graphql/ws`, Playground optional at `/graphql`
+- GraphQL: `POST /graphql`, WS: `/graphql/ws` (Playground optional in non‑release builds)
 
 Configuration: copy `env.example` to `.env` and use the inline comments as reference. Do not commit secrets.
 

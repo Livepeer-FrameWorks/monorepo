@@ -6,7 +6,7 @@ Commodore is the control API. It owns users, streams, API tokens and exposes ten
 - User authentication and authorization
 - Stream management and metadata
 - Tenant/stream API surface for the web app
-- Service endpoints used by Helmsman (e.g. `GET /resolve-internal-name/:internal_name`)
+- Resolution endpoints used by Helmsman (internal name, playback ID)
 
 ## Architecture
 - Routing: uses Quartermaster for cluster/tenant context
@@ -22,3 +22,7 @@ Configuration: copy `env.example` to `.env` and use the inline comments as refer
 Health: `GET /health`.
 
 Cross‑refs: see root README “Ports” and docs/IMPLEMENTATION.md for event and boundary details. 
+
+## Health & port
+- Health: `GET /health`
+- HTTP: 18001

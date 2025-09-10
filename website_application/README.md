@@ -6,13 +6,12 @@ The FrameWorks web application dashboard — a SvelteKit frontend for managing s
 
 ### Prerequisites
 - Node.js 18+
-- npm or yarn
+- npm
 - Docker and Docker Compose (for backend services)
 
 ### Backend Services
 From the monorepo root:
 ```bash
-cd monorepo
 docker-compose up -d
 ```
 This starts (ports per root README):
@@ -32,10 +31,17 @@ npm install
 cp env.example .env
 npm run dev
 ```
-App: http://localhost:18030
+App URLs:
+- Local dev server (npm run dev): http://localhost:3000
+- Docker (webapp service in compose): http://localhost:18030
+
+## GraphQL Usage & Tenant Context
+- HTTP: the app adds `Authorization: Bearer <JWT>` when logged in.
+- WebSocket: JWT is passed in the connection init payload for subscriptions.
+- Tenant scope: when a user is logged in, the app includes `X-Tenant-ID` on requests to simplify scoping in control‑plane handlers. Public marketing/player calls do not set this header.
 
 ## Configuration
-Copy `env.example` to `.env` and adjust as needed. Use the comments in `env.example` as the source of truth. Do not commit secrets.
+Copy `env.example` to `.env` and adjust as needed. Do not commit secrets.
 
 ## Architecture
 - **SvelteKit** frontend with server-side rendering

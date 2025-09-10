@@ -1,13 +1,13 @@
 # Lookout (Incident Management Service)
 
-> **Status**: ⏸️ **Deferred (post‑MVP)** — We plan to revisit this once requirements justify it. Today Prometheus + Grafana cover monitoring and alerting needs.
->
-> **Current Solution**: 
-> - Prometheus for metrics collection and alert rules
-> - Grafana for dashboards and alert notifications
-> - VictoriaMetrics for high-performance metrics storage
->
-> This service is deferred as the Prometheus/Grafana stack provides comprehensive monitoring and alerting capabilities that meet our current needs.
+Status: Deferred (post‑MVP). Today Prometheus + Grafana cover monitoring and alerting needs.
+
+Current solution:
+- Prometheus for metrics collection and alert rules
+- Grafana for dashboards and alert notifications
+- VictoriaMetrics for high-performance metrics storage
+
+Rationale: The Prometheus/Grafana stack meets current requirements; Lookout can be revisited when needs outgrow the existing setup.
 
 ## Overview
 

@@ -14,6 +14,9 @@ Event ingress over gRPC. Validates, batches, and publishes to Kafka with tenant 
 ## Port
 - gRPC: 18006
 
+## Health
+- gRPC: `decklog.DecklogService/CheckHealth` (see docker-compose healthcheck example)
+
 Configuration: copy `env.example` to `.env` and use the inline comments as reference. Do not commit secrets.
 
 ## Related

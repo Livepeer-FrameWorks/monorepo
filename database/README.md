@@ -253,7 +253,7 @@ Notes:
 
 ## Verification
 
-### Test YugabyteDB Connection
+### Test PostgreSQL Connection (dev compose)
 
 ```bash
 # Test connection
@@ -307,6 +307,15 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO frameworks_u
 \q
 ```
 
+### YugabyteDB Connection (when used)
+
+If using YugabyteDB instead of PostgreSQL:
+
+```bash
+# Test connection
+ysqlsh -h localhost -p 5433 -U frameworks_user -d frameworks -c "SELECT version();"
+```
+
 ### ClickHouse Issues
 
 If you get connection errors:
@@ -356,8 +365,8 @@ CLICKHOUSE_PORT=8443
 ### Backup Commands
 
 ```bash
-# YugabyteDB backup
-psql_dump -h localhost -p 5432 -U frameworks_user -d frameworks > frameworks_backup.sql
+# PostgreSQL backup
+pg_dump -h localhost -p 5432 -U frameworks_user -d frameworks > frameworks_backup.sql
 
 # ClickHouse backup
 clickhouse-client --host localhost --port 8123 --user frameworks --password frameworks_dev -q "BACKUP TABLE frameworks.* TO '/backup/clickhouse/'"
@@ -365,7 +374,7 @@ clickhouse-client --host localhost --port 8123 --user frameworks --password fram
 
 ## Docker Integration
 
-The database initialization works seamlessly with Docker Compose. The initialization scripts will be automatically executed when the containers start for the first time.
+The database initialization works with Docker Compose. The initialization scripts run automatically on first container start.
 
 Make sure your `docker-compose.yml` has the correct environment variables and volume mounts as shown in the Configuration section above.
 

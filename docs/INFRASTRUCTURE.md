@@ -100,6 +100,11 @@ graph TB
 
 Decision: Nginx + MaxMind remains an option; evaluate Cloudflare geo headers + Caddy as a unified solution. Production configs are provided via the CLI templates.
 
+## Monitoring & Observability
+
+- Development: Prometheus scrapes service `/metrics`; Grafana ships pre-wired. Datasources: Prometheus, ClickHouse (via grafana-clickhouse), and PostgreSQL (read-only) for ad‑hoc queries.
+- Production: Use VictoriaMetrics as the long‑term time‑series database (single node or cluster). Run vmagent (or Prometheus Agent) to scrape/exporters and `remote_write` to VictoriaMetrics. Grafana should query VictoriaMetrics for time‑series, ClickHouse for analytics, and PostgreSQL sparingly (read-only, avoid heavy joins on primaries; prefer replicas/materialized views).
+
 ## Mesh Networking Strategy
 
 ### The Bootstrap Challenge

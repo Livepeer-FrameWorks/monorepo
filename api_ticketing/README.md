@@ -1,6 +1,6 @@
 # Deckhand (Support Ticketing Service)
 
-> **Status**: 🚧 **Planned** - High priority support service
+Status: Planned — tracked on the roadmap. Not implemented yet.
 
 ## Overview
 
@@ -25,7 +25,7 @@ Incidents ──────┘                         ↓
                                  [Agent Dashboard, Customer Portal]
 ```
 
-NOTE: We might want to deprecate api_forms and roll it into the Deckhand.
+Note: The contact forms workflow may be consolidated here when Deckhand is implemented. Today `api_forms` is a separate minimal service used for demos.
 
 Configuration: this service is planned. When implemented, configuration will be provided via an `env.example` file with inline comments.
 

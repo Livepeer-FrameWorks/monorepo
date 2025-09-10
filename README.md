@@ -63,7 +63,7 @@ docker-compose up
 
 Endpoints (local)
 - GraphQL Gateway: http://localhost:18090/graphql
-- GraphQL WebSocket: ws://localhost:18090/graphql (subscriptions)
+- GraphQL WebSocket: ws://localhost:18090/graphql/ws (subscriptions)
 - App via Nginx: http://localhost:18090
 - Web Console: http://localhost:18030
 - Marketing site: http://localhost:18031
@@ -98,15 +98,15 @@ Endpoints (local)
 | Media | MistServer (control) | 4242 | Control API |
 | Media | MistServer (RTMP) | 1935 | Ingest |
 | Media | MistServer (HTTP) | 8080 | HLS/WebRTC delivery |
-| Media | Livepeer Gateway (CLI) | 18016 | golivepeer control |
-| Media | Livepeer Gateway (RPC/HTTP) | 18017 | golivepeer public API |
+| Media | Livepeer Gateway (CLI) | 18016 | golivepeer control (compute gateway; integration WIP; not in dev compose) |
+| Media | Livepeer Gateway (RPC/HTTP) | 18017 | golivepeer public API (compute gateway; integration WIP; not in dev compose) |
 | Realtime | Signalman | 18009 | WebSocket hub |
 | Support | Nginx | 18090 | Reverse proxy |
 | Support | Prometheus | 9091 | Metrics |
 | Support | Grafana | 3000 | Dashboards |
 | UI | Web Console | 18030 | Application UI |
 | UI | Marketing Site | 18031 | Public site |
-| Support | Forms API | 18032 | Contact forms |
+| Support | Forms API | 18032 | Contact forms (not in dev compose) |
 | Deferred | Seawarden | 18010 | Certificate management (use nginx/caddy instead) |
 | Deferred | Navigator | 18011 | DNS management (manual for now, future MVP in Quartermaster) |
 | Deferred | Lookout (api_incidents) | 18013 | Incident management (use Prometheus/Grafana instead) |
@@ -116,20 +116,13 @@ Endpoints (local)
 
 ## Configuration
 
-### GeoIP Enhancement (Optional)
+### GeoIP
 
-FrameWorks supports geo enrichment of analytics events using MaxMind GeoIP databases:
+Foghorn (api_balancing) can determine geography from either:
+- Proxy-injected geo headers (e.g., Cloudflare’s CF-IPCountry or similar), or
+- A local MMDB file (any vendor providing a compatible City/Country database).
 
-- **Helmsman** (api_sidecar): Enriches connection events using client IP from webhooks
-- **Foghorn** (api_balancing): Provides fallback geo data when Cloudflare/proxy headers are missing
-
-Set `GEOIP_MMDB_PATH` environment variable to the path of your MaxMind GeoLite2 or GeoIP2 MMDB file:
-
-```bash
-export GEOIP_MMDB_PATH=/path/to/GeoLite2-City.mmdb
-```
-
-If not provided, geo enrichment is disabled and NULL values are used for geographic fields. Events with Cloudflare geo headers (CF-IPCountry, CF-IPLatitude, CF-IPLongitude) will still be processed normally.
+To use a local database, set `GEOIP_MMDB_PATH` to the path of your MMDB file. If neither headers nor MMDB are available, Foghorn operates without geo routing data.
 
 ## Docs
 - [Database](docs/DATABASE.md) — Dual-database design: PostgreSQL/YugabyteDB for state/aggregates, ClickHouse for time‑series; schemas, materialized views, TTLs, and service touch‑points.

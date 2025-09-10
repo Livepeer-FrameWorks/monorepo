@@ -1,6 +1,6 @@
 # Privateer (WireGuard Mesh Agent)
 
-> **Status**: 🚧 **Planned** - High priority infrastructure agent
+Status: Planned — tracked on the roadmap. Not implemented yet.
 
 ## Overview
 

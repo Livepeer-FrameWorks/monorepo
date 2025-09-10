@@ -1,6 +1,6 @@
 # Parlor (Interactive Room Service)
 
-> **Status**: 🚧 **Planned** - Microservice not yet implemented
+Status: Planned — tracked on the roadmap. Not implemented yet.
 
 ## Overview
 

@@ -1,4 +1,4 @@
-# 🌊 Foghorn - Load Balancer
+# Foghorn (Load Balancer)
 
 Go implementation of MistServer's load balancer, replacing the original C++ MistUtilLoad binary.
 

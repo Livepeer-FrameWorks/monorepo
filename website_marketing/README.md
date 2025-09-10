@@ -7,7 +7,7 @@ The marketing website for FrameWorks - a React-based site showcasing the streami
 ### Prerequisites
 
 - Node.js 18+ 
-- npm or yarn
+- npm
 
 ### Setup
 
@@ -137,3 +137,6 @@ docker run -p 80:80 frameworks-marketing
 ```
 
 Configuration for production is also managed via `.env`. Use `env.example` as the source of truth for available variables and descriptions.
+
+Note
+- The Contact API (`VITE_CONTACT_API_URL`, default `http://localhost:18032`) is not part of the dev docker-compose stack. To use the contact form locally, run the service separately: `cd monorepo/api_forms && npm install && npm run dev`.

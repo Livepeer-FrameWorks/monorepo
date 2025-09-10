@@ -6,7 +6,7 @@ FrameWorks is a distributed microservices platform for multi-tenant video stream
 
 - **Control Plane**: Authentication, stream management, tenant/routing (immediate consistency)
 - **Data Plane**: Analytics, metrics, and event processing (Kafka-driven)
-- **Media Plane**: Media ingest/processing and routing (autonomous)
+- **Media Plane**: Media ingest/processing and routing
 - **Support & Interfaces**: Web apps, marketing, docs
 
 ---
@@ -35,7 +35,7 @@ FrameWorks is a distributed microservices platform for multi-tenant video stream
 | Signalman | 18009 | Central | Real-time updates & WebSocket hub |
 | Web Console | 18030 | Central | Main application interface |
 | Marketing Site | 18031 | Central | Public website |
-| Forms API | 18032 | Central | Contact form handling |
+| Forms API | 18032 | Central | Contact form handling (not in dev compose) |
 | **Planned Services** | | | |
 | Privateer (api_mesh) | 18012 | Central | WireGuard mesh orchestration |
 | Lookout (api_incidents) | 18013 | Central | Incident management |
@@ -50,7 +50,7 @@ FrameWorks is a distributed microservices platform for multi-tenant video stream
 | Component | Role | Plane | Port(s) | Deploy Location |
 |-----------|------|-------|---------|-----------------|
 | MistServer | Media processing (ingest/transcode) | Media | 4242, 8080, 1935 | Edge |
-| Livepeer | Transcoding/AI processing | Media | 18016 (CLI), 18017 (RPC/HTTP) | Edge |
+| Livepeer | Transcoding/AI compute gateway (integration WIP; not in dev compose) | Media | 18016 (CLI), 18017 (RPC/HTTP) | Edge |
 | PostgreSQL/YugabyteDB | State & configuration database | Data | 5432/5433 | Central |
 | ClickHouse | Time-series analytics database | Data | 8123, 9000 | Central |
 | Kafka | Event streaming backbone | Data | 9092, 29092 | Regional |

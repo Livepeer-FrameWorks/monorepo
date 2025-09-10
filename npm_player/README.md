@@ -36,12 +36,16 @@ function App() {
       <Player 
         contentType="live"            // 'live' | 'dvr' | 'clip'
         contentId="internal-or-hash"  // stream internal name, DVR hash, or clip hash
-        options={{ gatewayUrl: 'https://your-bridge/graphql', authToken: '...optional...' }}
+        options={{ gatewayUrl: 'https://your-bridge/graphql' /* authToken optional */ }}
       />
     </div>
   );
 }
 ```
+
+Notes:
+- Endpoint resolution (`resolveViewerEndpoint`) is public in the Gateway; no JWT or tenant header is required when using playback IDs.
+- For private or non‑public operations, pass `authToken` to authorize Gateway queries.
 
 ### Thumbnail Support
 
@@ -207,39 +211,30 @@ Options (PlayerOptions):
 
 ## Player Types
 
-### MistPlayer ⭐ **Recommended for Most Use Cases**
-- **Technology**: Intelligent wrapper that automatically selects optimal protocol + player combo
-- **Best for**: Universal compatibility with automatic optimization
-- **Pros**: Chooses best protocol (WebRTC, HLS, DASH, etc.) per device, handles adaptive bitrate, maximum compatibility, automatic fallbacks
-- **Cons**: Less direct control over specific playback technology
+Recommended: use the `Player` component. It selects the most suitable underlying player/protocol for the current environment based on available endpoints.
 
-### WHEPPlayer ⭐ **Recommended for Low Latency**
-- **Technology**: HTTP signaling + WebRTC (WHEP standard)
-- **Best for**: Universal compatibility with guaranteed low latency
-- **Pros**: Works on all devices, standardized protocol, no WebSocket needed, just HTTP requests, ultra-low latency
-- **Cons**: WebRTC limitations (CPU intensive, battery drain, network sensitivity), no adaptive bitrate
+Advanced: raw players are exposed if you must force a specific path.
 
-### DirectSourcePlayer  
-- **Technology**: HTML5 video (direct MP4/WEBM)
-- **Best for**: Small VOD files/preview clips
-- **Pros**: Simple, widely supported
-- **Cons**: No ABR; not for live
+### Raw Players (advanced)
+- `WHEPPlayer`: WebRTC (WHEP). Use when low latency must be forced.
+- `Html5NativePlayer` / `HlsJsPlayer` / `DashJsPlayer` / `VideoJsPlayer`: Force a specific HTML5/MSE stack.
+- `MistPlayer`: Embedded Mist viewer. Typically a last resort; the `Player` already integrates Mist behavior when appropriate.
 
 ## How It Works
 
-### Player Resolution (Gateway)
-The `Player` component queries the Gateway GraphQL `resolveViewerEndpoint` to obtain ready-to-use endpoints:
+### Player Resolution
+The `Player` component uses backend-provided viewer endpoints and an internal selection algorithm to choose an underlying player/protocol for the current environment. Selection heuristics may evolve without breaking the public API.
 
-- Uses backend-provided URLs and capabilities only; no local URL synthesis
-- Live defaults to WHEP; DVR/Clip use Mist HTML; MP4/WEBM direct sources go to DirectSourcePlayer
+### Profiles (planned)
+We plan to add selector presets (e.g., `low-latency-live`, `standard-live`, `vod`) to bias latency vs. quality decisions. Until then, prefer the default `Player` without forcing a raw player unless you have a specific reason.
 
 ### Raw Components (Direct URIs)
-The raw `MistPlayer`, `DirectSourcePlayer`, and `WHEPPlayer` components accept URIs directly, giving you full control over which servers to use. This is useful when:
+The raw player components accept URIs directly, giving you full control over which servers to use. This is useful when:
 
 - You want to implement your own load balancing logic
 - You're connecting to a specific known server
 - You're building a custom player interface
-- You need to bypass the Stronk Tech load balancer
+- You need to bypass the FrameWorks load balancer (Foghorn)
 
 ## FrameWorks Gateway
 

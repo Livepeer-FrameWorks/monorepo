@@ -28,3 +28,7 @@ Configuration: copy `env.example` to `.env` and use the inline comments as refer
 - `docs/DATABASE.md` (schemas, MVs)
 
 Cross‑refs: docs/DATABASE.md (schemas, MVs); docs/IMPLEMENTATION.md (event headers/types).
+
+## Health & port
+- Health: `GET /health`
+- HTTP: 18005 (health/metrics only)
