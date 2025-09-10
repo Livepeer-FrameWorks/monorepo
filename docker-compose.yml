@@ -400,7 +400,7 @@ services:
         max-size: "50m"
         max-file: "3"
     healthcheck:
-      test: ["CMD", "grpcurl", "-plaintext", "localhost:18006", "decklog.DecklogService/CheckHealth"]
+      test: ["CMD", "grpcurl", "-plaintext", "localhost:18006", "grpc.health.v1.Health/Check"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -707,9 +707,10 @@ services:
   webapp:
     container_name: frameworks-webapp
     build:
-      context: ./website_application
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: website_application/Dockerfile
       args:
+        - BUILD_ENV=development
         - VITE_AUTH_URL=http://localhost:18090/auth
         - VITE_GRAPHQL_HTTP_URL=http://localhost:18090/graphql/
         - VITE_GRAPHQL_WS_URL=ws://localhost:18090/graphql/ws
@@ -742,9 +743,10 @@ services:
   website:
     container_name: frameworks-website
     build:
-      context: ./website_marketing
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: website_marketing/Dockerfile
       args:
+        - BUILD_ENV=development
         - VITE_APP_URL=http://localhost:18090/app/
         - VITE_API_URL=http://localhost:18001
         - VITE_GATEWAY_URL=http://localhost:18090/graphql
@@ -755,6 +757,7 @@ services:
         - VITE_DEMO_STREAM_NAME=frameworks-demo
         - VITE_COMPANY_NAME=FrameWorks
         - VITE_DOMAIN=frameworks.dev
+        - VITE_CONTACT_API_URL=http://localhost:18032
     hostname: website
     environment:
       - NODE_ENV=production

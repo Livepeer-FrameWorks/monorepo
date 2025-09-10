@@ -1,14 +1,64 @@
+# Build argument to control player source
+ARG BUILD_ENV=production
+
+# Player builder stage (only used in development)
+FROM node:18-alpine AS player-builder
+# Only build if we're in development mode
+ARG BUILD_ENV
+RUN if [ "$BUILD_ENV" = "development" ]; then \
+      echo "Building local player package..."; \
+    else \
+      echo "Skipping local player build (using NPM package)"; \
+    fi
+
+WORKDIR /player
+# Copy and build player only in dev mode
+COPY npm_player/package*.json ./
+RUN if [ "$BUILD_ENV" = "development" ]; then \
+      npm ci && \
+      echo "Player dependencies installed"; \
+    fi
+COPY npm_player/ ./
+RUN if [ "$BUILD_ENV" = "development" ]; then \
+      npm run build && \
+      echo "Player built successfully"; \
+    fi
+
 # Build stage
 FROM node:18-alpine AS builder
 
 WORKDIR /app
 
 # Copy package files
-COPY package*.json ./
-RUN npm ci
+COPY website_application/package*.json ./
+
+# Install dependencies - use BUILD_ENV to determine behavior
+ARG BUILD_ENV
+RUN if [ "$BUILD_ENV" = "development" ]; then \
+      echo "Development mode: installing all dependencies" && \
+      npm install; \
+    else \
+      echo "Production mode: using npm ci" && \
+      npm ci; \
+    fi
+
+# Copy built player from player-builder stage (only in dev)
+COPY --from=player-builder /player/dist* /tmp/player-dist/
+RUN if [ "$BUILD_ENV" = "development" ] && [ -d "/tmp/player-dist/dist" ]; then \
+      echo "Copying local player build..." && \
+      rm -rf node_modules/@livepeer-frameworks/player/dist && \
+      mkdir -p node_modules/@livepeer-frameworks/player && \
+      cp -r /tmp/player-dist/dist node_modules/@livepeer-frameworks/player/ && \
+      if [ -f "/tmp/player-dist/package.json" ]; then \
+        cp /tmp/player-dist/package.json node_modules/@livepeer-frameworks/player/; \
+      fi && \
+      echo "Local player copied successfully"; \
+    else \
+      echo "Using NPM package for player"; \
+    fi
 
 # Copy source code
-COPY . .
+COPY website_application/ .
 
 # Pass environment variables to build process
 ARG VITE_AUTH_URL
@@ -44,7 +94,7 @@ FROM node:18-alpine AS runner
 WORKDIR /app
 
 # Copy package files
-COPY package*.json ./
+COPY website_application/package*.json ./
 
 # Install only production dependencies
 RUN npm ci --only=production && npm cache clean --force
@@ -57,4 +107,4 @@ EXPOSE 18030
 
 ENV NODE_ENV=production
 
-CMD ["node", "build/index.js"] 
+CMD ["node", "build/index.js"]
