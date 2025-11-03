@@ -20,7 +20,7 @@ Edge sidecar for MistServer. Validates streams via Commodore, collects metrics, 
 - Typically runs alongside MistServer. For local stack: `docker-compose up -d`
 - Or run just Helmsman: `cd api_sidecar && go run ./cmd/helmsman`
 
-Configuration: copy `env.example` to `.env` and use the inline comments as reference. Do not commit secrets.
+Configuration is shared via the repo-level `config/env` files. Run `make env` / `frameworks config env generate` to create `.env`, then adjust `config/env/secrets.env` as needed. See `docs/configuration.md`. Do not commit secrets.
 
 Health: `GET /health`.
 

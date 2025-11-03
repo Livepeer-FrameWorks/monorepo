@@ -1,0 +1,19 @@
+/* Marketing component styles: forms */
+@layer components {
+  .input {
+    width: 100%;
+    background-color: hsl(var(--brand-surface) / 0.9);
+    border: 1px solid hsl(var(--border) / 0.6);
+    border-radius: 0.75rem;
+    padding: 0.75rem 1rem;
+    font-size: 0.875rem;
+    color: hsl(var(--foreground));
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  }
+
+  .input:focus-visible {
+    outline: none;
+    border-color: hsl(var(--primary) / 0.9);
+    box-shadow: 0 0 0 2px hsl(var(--primary) / 0.35);
+  }
+}

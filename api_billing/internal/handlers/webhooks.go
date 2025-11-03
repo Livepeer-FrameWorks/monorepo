@@ -430,8 +430,8 @@ func HandleMollieWebhook(c *gin.Context) {
 
 // getTenantInfo calls Quartermaster to get tenant information using shared client
 func getTenantInfo(tenantID string) (*models.Tenant, error) {
-	quartermasterURL := config.GetEnv("QUARTERMASTER_URL", "http://localhost:18002")
-	serviceToken := config.GetEnv("SERVICE_TOKEN", "")
+	quartermasterURL := config.RequireEnv("QUARTERMASTER_URL")
+	serviceToken := config.RequireEnv("SERVICE_TOKEN")
 
 	client := qmclient.NewClient(qmclient.Config{
 		BaseURL:      quartermasterURL,

@@ -249,6 +249,46 @@ func (c *Client) GetTenant(ctx context.Context, tenantID string) (*quartermaster
 	return &response, nil
 }
 
+// UpdateTenant updates tenant metadata in Quartermaster
+func (c *Client) UpdateTenant(ctx context.Context, tenantID string, req *quartermaster.UpdateTenantRequest) error {
+	if req == nil {
+		return fmt.Errorf("update request is nil")
+	}
+
+	jsonBody, err := json.Marshal(req)
+	if err != nil {
+		return fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	endpoint := fmt.Sprintf("%s/tenants/%s", c.baseURL, url.PathEscape(tenantID))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPut, endpoint, bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	if jwtToken := ctx.Value("jwt_token"); jwtToken != nil {
+		if tokenStr, ok := jwtToken.(string); ok && tokenStr != "" {
+			httpReq.Header.Set("Authorization", "Bearer "+tokenStr)
+		}
+	} else if c.serviceToken != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.serviceToken)
+	}
+
+	resp, err := clients.DoWithRetry(ctx, c.httpClient, httpReq, c.retryConfig)
+	if err != nil {
+		return fmt.Errorf("failed to call Quartermaster: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("Quartermaster error (%d): %s", resp.StatusCode, string(body))
+	}
+
+	return nil
+}
+
 // CreateTenant creates a new tenant
 func (c *Client) CreateTenant(ctx context.Context, req *quartermaster.CreateTenantRequest) (*quartermaster.CreateTenantResponse, error) {
 	jsonBody, err := json.Marshal(req)

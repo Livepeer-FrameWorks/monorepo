@@ -4,6 +4,8 @@ import (
 	"time"
 
 	"frameworks/api_gateway/graph/model"
+	commodore "frameworks/pkg/api/commodore"
+	foghorn "frameworks/pkg/api/foghorn"
 	"frameworks/pkg/api/periscope"
 	"frameworks/pkg/models"
 )
@@ -372,15 +374,63 @@ func GenerateViewerMetricsEvents() []*model.ViewerMetrics {
 func GenerateTrackListEvents() []*periscope.AnalyticsTrackListEvent {
 	return []*periscope.AnalyticsTrackListEvent{
 		{
-			Timestamp:  time.Now(),
-			NodeID:     "node_demo_us_west_01",
-			TrackList:  "Track 1: Intro Music\nTrack 2: Main Content\nTrack 3: Q&A Session",
+			Timestamp: time.Now(),
+			NodeID:    "node_demo_us_west_01",
+			Stream:    "demo_live_stream_001",
+			TrackList: "Track 1: Intro Music\nTrack 2: Main Content\nTrack 3: Q&A Session",
+			Tracks: []periscope.StreamTrack{
+				{
+					TrackName:   "video_main",
+					TrackType:   "video",
+					Codec:       "H264",
+					BitrateKbps: intPtr(2500),
+					Width:       intPtr(1920),
+					Height:      intPtr(1080),
+					FPS:         float64Ptr(30.0),
+				},
+				{
+					TrackName:   "audio_main",
+					TrackType:   "audio",
+					Codec:       "AAC",
+					BitrateKbps: intPtr(128),
+					Channels:    intPtr(2),
+					SampleRate:  intPtr(48000),
+				},
+			},
 			TrackCount: 3,
 		},
 		{
-			Timestamp:  time.Now().Add(60 * time.Second),
-			NodeID:     "node_demo_us_west_01",
-			TrackList:  "Track 1: Intro Music\nTrack 2: Main Content\nTrack 3: Q&A Session\nTrack 4: Closing Remarks",
+			Timestamp: time.Now().Add(60 * time.Second),
+			NodeID:    "node_demo_us_west_01",
+			Stream:    "demo_live_stream_001",
+			TrackList: "Track 1: Intro Music\nTrack 2: Main Content\nTrack 3: Q&A Session\nTrack 4: Closing Remarks",
+			Tracks: []periscope.StreamTrack{
+				{
+					TrackName:   "video_main",
+					TrackType:   "video",
+					Codec:       "H264",
+					BitrateKbps: intPtr(2400),
+					Width:       intPtr(1920),
+					Height:      intPtr(1080),
+					FPS:         float64Ptr(29.8),
+				},
+				{
+					TrackName:   "audio_main",
+					TrackType:   "audio",
+					Codec:       "AAC",
+					BitrateKbps: intPtr(128),
+					Channels:    intPtr(2),
+					SampleRate:  intPtr(48000),
+				},
+				{
+					TrackName:   "audio_spanish",
+					TrackType:   "audio",
+					Codec:       "AAC",
+					BitrateKbps: intPtr(96),
+					Channels:    intPtr(2),
+					SampleRate:  intPtr(44100),
+				},
+			},
 			TrackCount: 4,
 		},
 	}
@@ -415,36 +465,117 @@ func GenerateSystemHealthEvents() []*model.SystemHealthEvent {
 // GenerateStreamHealthMetrics creates demo stream health metrics
 func GenerateStreamHealthMetrics() []*periscope.StreamHealthMetric {
 	now := time.Now()
-	return []*periscope.StreamHealthMetric{
+
+	videoBitrate := 2500
+	videoWidth := 1920
+	videoHeight := 1080
+	videoFPS := 30.0
+	videoResolution := "1920x1080"
+	audioBitrate := 128
+	audioChannels := 2
+	audioSampleRate := 48000
+	tracks := []periscope.StreamTrack{
 		{
-			Timestamp:     now.Add(-5 * time.Minute),
-			InternalName:  "demo_live_stream_001",
-			NodeID:        "node_demo_us_west_01",
-			Bitrate:       2500000,
-			FPS:           30,
-			GOPSize:       60,
-			Width:         1920,
-			Height:        1080,
-			BufferHealth:  0.98,
-			PacketsSent:   15420,
-			PacketsLost:   12,
-			Codec:         "H264",
-			TrackMetadata: "",
+			TrackName:   "video_main",
+			TrackType:   "video",
+			Codec:       "H264",
+			BitrateKbps: intPtr(videoBitrate),
+			Width:       intPtr(videoWidth),
+			Height:      intPtr(videoHeight),
+			FPS:         float64Ptr(videoFPS),
+			Resolution:  stringPtr(videoResolution),
 		},
 		{
-			Timestamp:     now.Add(-2 * time.Minute),
-			InternalName:  "demo_live_stream_001",
-			NodeID:        "node_demo_us_west_01",
-			Bitrate:       2400000,
-			FPS:           29.8,
-			GOPSize:       64,
-			Width:         1920,
-			Height:        1080,
-			BufferHealth:  0.82,
-			PacketsSent:   15890,
-			PacketsLost:   45,
-			Codec:         "H264",
-			TrackMetadata: "",
+			TrackName:   "audio_main",
+			TrackType:   "audio",
+			Codec:       "AAC",
+			BitrateKbps: intPtr(audioBitrate),
+			Channels:    intPtr(audioChannels),
+			SampleRate:  intPtr(audioSampleRate),
+		},
+	}
+
+	tracksDegraded := []periscope.StreamTrack{
+		{
+			TrackName:   "video_main",
+			TrackType:   "video",
+			Codec:       "H264",
+			BitrateKbps: intPtr(2200),
+			Width:       intPtr(videoWidth),
+			Height:      intPtr(videoHeight),
+			FPS:         float64Ptr(29.8),
+			Resolution:  stringPtr(videoResolution),
+		},
+		{
+			TrackName:   "audio_main",
+			TrackType:   "audio",
+			Codec:       "AAC",
+			BitrateKbps: intPtr(audioBitrate),
+			Channels:    intPtr(audioChannels),
+			SampleRate:  intPtr(audioSampleRate),
+		},
+	}
+
+	healthScore1 := 0.94
+	healthScore2 := 0.81
+	packetLoss1 := 0.08
+	packetLoss2 := 0.32
+	frameJitter1 := 18.5
+	frameJitter2 := 42.7
+	qualityTierFull := stringPtr("1080p30")
+	qualityTierRecover := stringPtr("1080p30")
+
+	return []*periscope.StreamHealthMetric{
+		{
+			Timestamp:              now.Add(-5 * time.Minute),
+			InternalName:           "demo_live_stream_001",
+			TenantID:               "demo_tenant_frameworks",
+			NodeID:                 "node_demo_us_west_01",
+			Bitrate:                2500000,
+			FPS:                    30,
+			GOPSize:                60,
+			Width:                  1920,
+			Height:                 1080,
+			BufferHealth:           0.98,
+			BufferState:            "FULL",
+			PacketsSent:            15420,
+			PacketsLost:            12,
+			Codec:                  "H264",
+			Tracks:                 tracks,
+			PrimaryAudioChannels:   intPtr(audioChannels),
+			PrimaryAudioSampleRate: intPtr(audioSampleRate),
+			PrimaryAudioCodec:      stringPtr("AAC"),
+			PrimaryAudioBitrate:    intPtr(audioBitrate),
+			HealthScore:            float32(healthScore1),
+			FrameJitterMs:          float64Ptr(frameJitter1),
+			PacketLossPercentage:   float64Ptr(packetLoss1),
+			QualityTier:            qualityTierFull,
+		},
+		{
+			Timestamp:              now.Add(-2 * time.Minute),
+			InternalName:           "demo_live_stream_001",
+			TenantID:               "demo_tenant_frameworks",
+			NodeID:                 "node_demo_us_west_01",
+			Bitrate:                2400000,
+			FPS:                    29,
+			GOPSize:                64,
+			Width:                  1920,
+			Height:                 1080,
+			BufferHealth:           0.72,
+			BufferState:            "DRY",
+			PacketsSent:            15890,
+			PacketsLost:            45,
+			Codec:                  "H264",
+			Tracks:                 tracksDegraded,
+			PrimaryAudioChannels:   intPtr(audioChannels),
+			PrimaryAudioSampleRate: intPtr(audioSampleRate),
+			PrimaryAudioCodec:      stringPtr("AAC"),
+			PrimaryAudioBitrate:    intPtr(audioBitrate),
+			HealthScore:            float32(healthScore2),
+			FrameJitterMs:          float64Ptr(frameJitter2),
+			PacketLossPercentage:   float64Ptr(packetLoss2),
+			QualityTier:            qualityTierRecover,
+			IssuesDescription:      stringPtr("elevated packet loss on edge node"),
 		},
 	}
 }
@@ -513,28 +644,26 @@ func GenerateRebufferingEvents() []*model.RebufferingEvent {
 	now := time.Now()
 	return []*model.RebufferingEvent{
 		{
-			Timestamp:            now.Add(-8 * time.Minute),
-			Stream:               "demo_live_stream_001",
-			NodeID:               "node_demo_us_west_01",
-			BufferState:          model.BufferStateDry,
-			PreviousState:        model.BufferStateFull,
-			RebufferStart:        true,
-			RebufferEnd:          false,
-			HealthScore:          func() *float64 { h := 0.65; return &h }(),
-			FrameJitterMs:        func() *float64 { f := 58.3; return &f }(),
-			PacketLossPercentage: func() *float64 { p := 2.1; return &p }(),
+			Timestamp:     now.Add(-8 * time.Minute),
+			Stream:        "demo_live_stream_001",
+			NodeID:        "node_demo_us_west_01",
+			BufferState:   model.BufferStateDry,
+			PreviousState: model.BufferStateFull,
+			RebufferStart: true,
+			RebufferEnd:   false,
+			HealthScore:   func() *float64 { h := 0.65; return &h }(),
+			FrameJitterMs: func() *float64 { f := 58.3; return &f }(),
 		},
 		{
-			Timestamp:            now.Add(-6 * time.Minute),
-			Stream:               "demo_live_stream_001",
-			NodeID:               "node_demo_us_west_01",
-			BufferState:          model.BufferStateRecover,
-			PreviousState:        model.BufferStateDry,
-			RebufferStart:        false,
-			RebufferEnd:          true,
-			HealthScore:          func() *float64 { h := 0.78; return &h }(),
-			FrameJitterMs:        func() *float64 { f := 35.2; return &f }(),
-			PacketLossPercentage: func() *float64 { p := 0.8; return &p }(),
+			Timestamp:     now.Add(-6 * time.Minute),
+			Stream:        "demo_live_stream_001",
+			NodeID:        "node_demo_us_west_01",
+			BufferState:   model.BufferStateRecover,
+			PreviousState: model.BufferStateDry,
+			RebufferStart: false,
+			RebufferEnd:   true,
+			HealthScore:   func() *float64 { h := 0.78; return &h }(),
+			FrameJitterMs: func() *float64 { f := 35.2; return &f }(),
 		},
 	}
 }
@@ -772,3 +901,138 @@ func GenerateLoadBalancingMetrics() []*model.LoadBalancingMetric {
 		},
 	}
 }
+
+// GenerateViewerEndpointResponse returns a demo viewer endpoint resolution payload
+func GenerateViewerEndpointResponse(contentType, contentID string) *commodore.ViewerEndpointResponse {
+	if contentType == "" {
+		contentType = "live"
+	}
+	if contentID == "" {
+		contentID = "demo_live_stream_001"
+	}
+
+	primaryOutputs := map[string]foghorn.OutputEndpoint{
+		"WHEP": {
+			Protocol: "WHEP",
+			URL:      "https://edge.demo.frameworks.video/whep/demo_live_stream_001",
+			Capabilities: foghorn.OutputCapability{
+				SupportsSeek:          false,
+				SupportsQualitySwitch: true,
+				HasAudio:              true,
+				HasVideo:              true,
+				Codecs:                []string{"H264", "AAC"},
+			},
+		},
+		"HLS": {
+			Protocol: "HLS",
+			URL:      "https://edge.demo.frameworks.video/hls/demo_live_stream_001.m3u8",
+			Capabilities: foghorn.OutputCapability{
+				SupportsSeek:          true,
+				SupportsQualitySwitch: true,
+				HasAudio:              true,
+				HasVideo:              true,
+				Codecs:                []string{"H264", "AAC"},
+			},
+		},
+	}
+
+	fallbackOutputs := map[string]foghorn.OutputEndpoint{
+		"HLS": {
+			Protocol: "HLS",
+			URL:      "https://edge.eu.demo.frameworks.video/hls/demo_live_stream_001.m3u8",
+			Capabilities: foghorn.OutputCapability{
+				SupportsSeek:          true,
+				SupportsQualitySwitch: true,
+				HasAudio:              true,
+				HasVideo:              true,
+				Codecs:                []string{"H264", "AAC"},
+			},
+		},
+		"HTTP": {
+			Protocol: "HTTP",
+			URL:      "https://edge.eu.demo.frameworks.video/http/demo_live_stream_001",
+			Capabilities: foghorn.OutputCapability{
+				SupportsSeek:          true,
+				SupportsQualitySwitch: false,
+				HasAudio:              true,
+				HasVideo:              true,
+				Codecs:                []string{"MP4"},
+			},
+		},
+	}
+
+	primary := foghorn.ViewerEndpoint{
+		NodeID:      "node_demo_us_west_01",
+		BaseURL:     "https://edge.demo.frameworks.video",
+		Protocol:    "webrtc",
+		URL:         "https://edge.demo.frameworks.video/webrtc/demo_live_stream_001",
+		GeoDistance: 18.4,
+		LoadScore:   0.72,
+		HealthScore: 0.94,
+		Outputs:     primaryOutputs,
+	}
+
+	fallback := foghorn.ViewerEndpoint{
+		NodeID:      "node_demo_eu_west_01",
+		BaseURL:     "https://edge.eu.demo.frameworks.video",
+		Protocol:    "hls",
+		URL:         "https://edge.eu.demo.frameworks.video/hls/demo_live_stream_001.m3u8",
+		GeoDistance: 4567.0,
+		LoadScore:   0.81,
+		HealthScore: 0.9,
+		Outputs:     fallbackOutputs,
+	}
+
+	now := time.Now()
+	metadata := &foghorn.PlaybackMetadata{
+		Status:        "live",
+		IsLive:        true,
+		Viewers:       132,
+		BufferState:   "FULL",
+		HealthScore:   float64Ptr(0.93),
+		TenantID:      "demo_tenant_frameworks",
+		ContentID:     contentID,
+		ContentType:   contentType,
+		ProtocolHints: []string{"WHEP", "HLS", "HTTP"},
+		Tracks: []foghorn.PlaybackTrack{
+			{Type: "video", Codec: "H264", BitrateKbps: 2500, Width: 1920, Height: 1080},
+			{Type: "audio", Codec: "AAC", BitrateKbps: 128, Channels: 2, SampleRate: 48000},
+		},
+		Instances: []foghorn.PlaybackInstance{
+			{
+				NodeID:           "node_demo_us_west_01",
+				Viewers:          78,
+				BufferState:      "FULL",
+				BytesUp:          3_456_789,
+				BytesDown:        5_678_901,
+				TotalConnections: 120,
+				Inputs:           1,
+				LastUpdate:       now.Add(-25 * time.Second),
+			},
+			{
+				NodeID:           "node_demo_eu_west_01",
+				Viewers:          54,
+				BufferState:      "RECOVER",
+				BytesUp:          2_345_678,
+				BytesDown:        4_321_987,
+				TotalConnections: 96,
+				Inputs:           1,
+				LastUpdate:       now.Add(-40 * time.Second),
+			},
+		},
+		CreatedAt:       &now,
+		DurationSeconds: intPtr(0),
+	}
+
+	return &commodore.ViewerEndpointResponse{
+		Primary:   primary,
+		Fallbacks: []foghorn.ViewerEndpoint{fallback},
+		Metadata:  metadata,
+	}
+}
+
+func intPtr(v int) *int             { return &v }
+func int64Ptr(v int64) *int64       { return &v }
+func float64Ptr(v float64) *float64 { return &v }
+func stringPtr(s string) *string    { return &s }
+func boolPtr(v bool) *bool          { return &v }

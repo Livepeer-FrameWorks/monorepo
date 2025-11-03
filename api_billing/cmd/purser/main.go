@@ -25,9 +25,14 @@ func main() {
 
 	logger.Info("Starting Purser (Billing API)")
 
+	dbURL := config.RequireEnv("DATABASE_URL")
+	jwtSecret := config.RequireEnv("JWT_SECRET")
+	serviceToken := config.RequireEnv("SERVICE_TOKEN")
+	quartermasterURL := config.RequireEnv("QUARTERMASTER_URL")
+
 	// Connect to database
 	dbConfig := database.DefaultConfig()
-	dbConfig.URL = config.GetEnv("DATABASE_URL", "")
+	dbConfig.URL = dbURL
 	db := database.MustConnect(dbConfig, logger)
 	defer db.Close()
 
@@ -38,8 +43,8 @@ func main() {
 	// Add health checks
 	healthChecker.AddCheck("database", monitoring.DatabaseHealthCheck(db))
 	healthChecker.AddCheck("config", monitoring.ConfigurationHealthCheck(map[string]string{
-		"DATABASE_URL": config.GetEnv("DATABASE_URL", ""),
-		"JWT_SECRET":   config.GetEnv("JWT_SECRET", ""),
+		"DATABASE_URL": dbURL,
+		"JWT_SECRET":   jwtSecret,
 	}))
 
 	// Create custom billing metrics
@@ -72,7 +77,7 @@ func main() {
 	{
 		// Authentication required endpoints
 		protected := router.Group("")
-		protected.Use(auth.JWTAuthMiddleware([]byte(config.GetEnv("JWT_SECRET", ""))))
+		protected.Use(auth.JWTAuthMiddleware([]byte(jwtSecret)))
 		{
 			// Billing endpoints
 			protected.GET("/billing/plans", handlers.GetPlans)
@@ -87,7 +92,7 @@ func main() {
 
 		// Usage ingestion endpoints (service-to-service)
 		serviceAPI := router.Group("")
-		serviceAPI.Use(auth.ServiceAuthMiddleware(config.GetEnv("SERVICE_TOKEN", "")))
+		serviceAPI.Use(auth.ServiceAuthMiddleware(serviceToken))
 		{
 			serviceAPI.POST("/usage/ingest", handlers.IngestUsageData)
 			serviceAPI.GET("/usage/ledger/:tenant_id", handlers.GetUsageRecords) // Legacy endpoint name
@@ -103,7 +108,7 @@ func main() {
 
 	// Best-effort service registration in Quartermaster
 	go func() {
-		qc := qmclient.NewClient(qmclient.Config{BaseURL: config.GetEnv("QUARTERMASTER_URL", "http://localhost:18002"), ServiceToken: config.GetEnv("SERVICE_TOKEN", ""), Logger: logger})
+		qc := qmclient.NewClient(qmclient.Config{BaseURL: quartermasterURL, ServiceToken: serviceToken, Logger: logger})
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if _, err := qc.BootstrapService(ctx, &qmapi.BootstrapServiceRequest{Type: "purser", Version: version.Version, Protocol: "http", HealthEndpoint: func() *string { s := "/health"; return &s }(), Port: 18003}); err != nil {

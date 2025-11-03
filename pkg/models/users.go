@@ -55,15 +55,17 @@ type RegisterRequest struct {
 	FirstName string `json:"first_name"`
 	LastName  string `json:"last_name"`
 	// Bot protection fields
-	PhoneNumber string       `json:"phone_number"` // Honeypot - must be empty
-	HumanCheck  string       `json:"human_check"`  // Must be "human"
-	Behavior    BehaviorData `json:"behavior"`     // Typed interaction data
+	PhoneNumber    string       `json:"phone_number"` // Honeypot - must be empty
+	HumanCheck     string       `json:"human_check"`  // Must be "human"
+	Behavior       BehaviorData `json:"behavior"`     // Typed interaction data
+	TurnstileToken string       `json:"turnstile_token"`
 }
 
 // LoginRequest represents the login request
 type LoginRequest struct {
-	Email    string `json:"email" binding:"required,email"`
-	Password string `json:"password" binding:"required"`
+	Email          string `json:"email" binding:"required,email"`
+	Password       string `json:"password" binding:"required"`
+	TurnstileToken string `json:"turnstile_token"`
 }
 
 // CreateAPITokenRequest represents the API token creation request

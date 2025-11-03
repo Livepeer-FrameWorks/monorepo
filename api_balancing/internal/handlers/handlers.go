@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -2082,6 +2083,110 @@ func buildOutputsMap(baseURL string, rawOutputs map[string]interface{}, streamNa
 	return outputs
 }
 
+func playbackTracksFromState(tracks []state.StreamTrack) []fapi.PlaybackTrack {
+	if len(tracks) == 0 {
+		return nil
+	}
+	out := make([]fapi.PlaybackTrack, 0, len(tracks))
+	for _, tr := range tracks {
+		pt := fapi.PlaybackTrack{
+			Type:        tr.Type,
+			Codec:       tr.Codec,
+			BitrateKbps: tr.Bitrate,
+			Width:       tr.Width,
+			Height:      tr.Height,
+			Channels:    tr.Channels,
+			SampleRate:  tr.SampleRate,
+		}
+		out = append(out, pt)
+	}
+	return out
+}
+
+func playbackInstancesFromState(instances map[string]state.StreamInstanceState) []fapi.PlaybackInstance {
+	if len(instances) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(instances))
+	for nodeID := range instances {
+		keys = append(keys, nodeID)
+	}
+	sort.Strings(keys)
+	out := make([]fapi.PlaybackInstance, 0, len(keys))
+	for _, nodeID := range keys {
+		inst := instances[nodeID]
+		out = append(out, fapi.PlaybackInstance{
+			NodeID:           nodeID,
+			Viewers:          inst.Viewers,
+			BufferState:      inst.BufferState,
+			BytesUp:          inst.BytesUp,
+			BytesDown:        inst.BytesDown,
+			TotalConnections: inst.TotalConnections,
+			Inputs:           inst.Inputs,
+			LastUpdate:       inst.LastUpdate,
+		})
+	}
+	return out
+}
+
+func protocolHintsFromEndpoints(endpoints []fapi.ViewerEndpoint) []string {
+	set := make(map[string]struct{})
+	for _, ep := range endpoints {
+		if ep.Protocol != "" {
+			set[strings.ToUpper(ep.Protocol)] = struct{}{}
+		}
+		for proto := range ep.Outputs {
+			if proto == "" {
+				continue
+			}
+			set[strings.ToUpper(proto)] = struct{}{}
+		}
+	}
+	if len(set) == 0 {
+		return nil
+	}
+	hints := make([]string, 0, len(set))
+	for proto := range set {
+		hints = append(hints, proto)
+	}
+	sort.Strings(hints)
+	return hints
+}
+
+func buildLivePlaybackMetadata(req fapi.ViewerEndpointRequest, endpoints []fapi.ViewerEndpoint) *fapi.PlaybackMetadata {
+	sm := state.DefaultManager()
+	streamState := sm.GetStreamState(req.ContentID)
+	if streamState == nil {
+		return nil
+	}
+
+	meta := &fapi.PlaybackMetadata{
+		Status:        streamState.Status,
+		IsLive:        strings.EqualFold(streamState.Status, "live"),
+		Viewers:       streamState.Viewers,
+		BufferState:   streamState.BufferState,
+		TenantID:      streamState.TenantID,
+		ContentID:     req.ContentID,
+		ContentType:   req.ContentType,
+		Tracks:        playbackTracksFromState(streamState.Tracks),
+		Instances:     playbackInstancesFromState(sm.GetStreamInstances(req.ContentID)),
+		ProtocolHints: protocolHintsFromEndpoints(endpoints),
+	}
+
+	if meta.Status == "" {
+		meta.Status = req.ContentType
+	}
+	if !meta.IsLive && strings.EqualFold(req.ContentType, "live") {
+		meta.IsLive = true
+	}
+	if streamState.HealthScore > 0 {
+		score := streamState.HealthScore
+		meta.HealthScore = &score
+	}
+
+	return meta
+}
+
 // HandleResolveViewerEndpoint resolves optimal viewing endpoints for different content types
 func HandleResolveViewerEndpoint(c *gin.Context) {
 	var req fapi.ViewerEndpointRequest
@@ -2432,22 +2537,28 @@ func resolveLiveViewerEndpoint(req fapi.ViewerEndpointRequest, lat, lon float64)
 	return fapi.ViewerEndpointResponse{
 		Primary:   endpoints[0],
 		Fallbacks: endpoints[1:],
-		Metadata:  &fapi.PlaybackMetadata{Status: "live", IsLive: true},
+		Metadata:  buildLivePlaybackMetadata(req, endpoints),
 	}, nil
 }
 
 // resolveDVRViewerEndpoint queries database for DVR storage node
 func resolveDVRViewerEndpoint(req fapi.ViewerEndpointRequest) (fapi.ViewerEndpointResponse, error) {
-	var nodeID, status string
-	var duration *int
-	var recordingSize *int64
-	var createdAt time.Time
+	var (
+		tenantID      string
+		internalName  string
+		nodeID        string
+		status        string
+		duration      sql.NullInt64
+		recordingSize sql.NullInt64
+		manifestPath  sql.NullString
+		createdAt     sql.NullTime
+	)
 
 	err := db.QueryRow(`
-		SELECT storage_node_id, status, duration_seconds, size_bytes, created_at
+		SELECT tenant_id, internal_name, storage_node_id, status, duration_seconds, size_bytes, manifest_path, created_at
 		FROM foghorn.dvr_requests 
 		WHERE request_hash = $1 AND status = 'completed'
-	`, req.ContentID).Scan(&nodeID, &status, &duration, &recordingSize, &createdAt)
+	`, req.ContentID).Scan(&tenantID, &internalName, &nodeID, &status, &duration, &recordingSize, &manifestPath, &createdAt)
 
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -2487,27 +2598,61 @@ func resolveDVRViewerEndpoint(req fapi.ViewerEndpointRequest) (fapi.ViewerEndpoi
 		Outputs:  buildOutputsMap(nodeOutputs.BaseURL, nodeOutputs.Outputs, streamName, false),
 	}
 
+	meta := &fapi.PlaybackMetadata{
+		Status:        status,
+		IsLive:        false,
+		TenantID:      tenantID,
+		ContentID:     req.ContentID,
+		ContentType:   req.ContentType,
+		DvrStatus:     status,
+		ProtocolHints: protocolHintsFromEndpoints([]fapi.ViewerEndpoint{endpoint}),
+	}
+
+	if duration.Valid {
+		d := int(duration.Int64)
+		meta.DurationSeconds = &d
+	}
+	if recordingSize.Valid {
+		size := recordingSize.Int64
+		meta.RecordingSizeBytes = &size
+	}
+	if manifestPath.Valid {
+		meta.DvrSourceURI = manifestPath.String
+	}
+	if createdAt.Valid {
+		t := createdAt.Time
+		meta.CreatedAt = &t
+	}
+	if internalName != "" {
+		meta.ClipSource = &internalName
+	}
+
 	return fapi.ViewerEndpointResponse{
-		Primary: endpoint,
-		Metadata: &fapi.PlaybackMetadata{
-			Status: "dvr",
-			IsLive: false,
-		},
+		Primary:  endpoint,
+		Metadata: meta,
 	}, nil
 }
 
 // resolveClipViewerEndpoint queries database for clip storage node
 func resolveClipViewerEndpoint(req fapi.ViewerEndpointRequest) (fapi.ViewerEndpointResponse, error) {
-	var nodeID, status, sourceStream string
-	var duration *int
-	var fileSize *int64
-	var createdAt time.Time
+	var (
+		tenantID     string
+		nodeID       string
+		status       string
+		sourceStream string
+		title        sql.NullString
+		duration     sql.NullInt64
+		fileSize     sql.NullInt64
+		createdAt    sql.NullTime
+		baseURL      sql.NullString
+		storagePath  sql.NullString
+	)
 
 	err := db.QueryRow(`
-		SELECT node_id, status, stream_name, duration, size_bytes, created_at
+		SELECT tenant_id, node_id, status, stream_name, title, duration, size_bytes, created_at, base_url, storage_path
 		FROM foghorn.clips 
 		WHERE clip_hash = $1 AND status = 'ready'
-	`, req.ContentID).Scan(&nodeID, &status, &sourceStream, &duration, &fileSize, &createdAt)
+	`, req.ContentID).Scan(&tenantID, &nodeID, &status, &sourceStream, &title, &duration, &fileSize, &createdAt, &baseURL, &storagePath)
 
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -2547,12 +2692,50 @@ func resolveClipViewerEndpoint(req fapi.ViewerEndpointRequest) (fapi.ViewerEndpo
 		Outputs:  buildOutputsMap(nodeOutputs.BaseURL, nodeOutputs.Outputs, streamName, false),
 	}
 
+	meta := &fapi.PlaybackMetadata{
+		Status:        status,
+		IsLive:        false,
+		TenantID:      tenantID,
+		ContentID:     req.ContentID,
+		ContentType:   req.ContentType,
+		ProtocolHints: protocolHintsFromEndpoints([]fapi.ViewerEndpoint{endpoint}),
+	}
+	if sourceStream != "" {
+		clipSource := sourceStream
+		meta.ClipSource = &clipSource
+	}
+	if title.Valid {
+		meta.Title = &title.String
+	}
+	if duration.Valid {
+		totalMs := duration.Int64
+		secs := int(totalMs / 1000)
+		if totalMs%1000 != 0 {
+			secs++
+		}
+		if secs < 0 {
+			secs = 0
+		}
+		meta.DurationSeconds = &secs
+	}
+	if fileSize.Valid {
+		size := fileSize.Int64
+		meta.RecordingSizeBytes = &size
+	}
+	if createdAt.Valid {
+		t := createdAt.Time
+		meta.CreatedAt = &t
+	}
+	if baseURL.Valid && storagePath.Valid {
+		combined := strings.TrimRight(baseURL.String, "/") + "/" + strings.TrimLeft(storagePath.String, "/")
+		meta.DvrSourceURI = combined
+	} else if storagePath.Valid {
+		meta.DvrSourceURI = storagePath.String
+	}
+
 	return fapi.ViewerEndpointResponse{
-		Primary: endpoint,
-		Metadata: &fapi.PlaybackMetadata{
-			Status: "clip",
-			IsLive: false,
-		},
+		Primary:  endpoint,
+		Metadata: meta,
 	}, nil
 }
 

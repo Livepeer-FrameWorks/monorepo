@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"frameworks/cli/internal/xexec"
 	qmapi "frameworks/pkg/api/quartermaster"
 	qmclient "frameworks/pkg/clients/quartermaster"
+	"frameworks/pkg/configgen"
 	"github.com/spf13/cobra"
 )
 
@@ -176,6 +178,10 @@ func newServicesPlanCmd() *cobra.Command {
 	var dir string
 	var overwrite bool
 	var interactive bool
+	var configBase string
+	var configSecrets string
+	var envOutput string
+	var envContext string
 	cmd := &cobra.Command{Use: "plan", Short: "Generate central-tier compose (.yml + .env)", RunE: func(cmd *cobra.Command, args []string) error {
 		if dir == "" {
 			dir = "."
@@ -201,19 +207,38 @@ func newServicesPlanCmd() *cobra.Command {
 			return err
 		}
 		// Write env and plan
-		epath := dir + string(os.PathSeparator) + ".central.env"
+		if configBase == "" {
+			configBase = "config/env/base.env"
+		}
+		if configSecrets == "" {
+			configSecrets = "config/env/secrets.env"
+		}
+		if envContext == "" {
+			envContext = "central"
+		}
+		if envOutput == "" {
+			envOutput = filepath.Join(dir, ".central.env")
+		}
+		configBase = filepath.Clean(configBase)
+		configSecrets = filepath.Clean(configSecrets)
+		envOutput = filepath.Clean(envOutput)
 		if !overwrite {
-			if _, err := os.Stat(epath); err == nil {
-				return fmt.Errorf("file exists: %s (use --overwrite)", epath)
+			if _, err := os.Stat(envOutput); err == nil {
+				return fmt.Errorf("file exists: %s (use --overwrite)", envOutput)
 			}
 		}
-		if err := os.WriteFile(epath, []byte(services.GenerateEnv(specs)), 0o644); err != nil {
+		if _, err := configgen.Generate(configgen.Options{
+			BaseFile:    configBase,
+			SecretsFile: configSecrets,
+			OutputFile:  envOutput,
+			Context:     envContext,
+		}); err != nil {
 			return err
 		}
 		if err := services.SavePlan(dir, specs, profile); err != nil {
 			return err
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Wrote service fragments to %s and %s\n", dir, epath)
+		fmt.Fprintf(cmd.OutOrStdout(), "Wrote service fragments to %s and %s\n", dir, envOutput)
 		fmt.Fprintln(cmd.OutOrStdout(), "Selection:")
 		fmt.Fprint(cmd.OutOrStdout(), services.SummarizeSelection(specs))
 		return nil
@@ -224,6 +249,10 @@ func newServicesPlanCmd() *cobra.Command {
 	cmd.Flags().StringVar(&dir, "dir", ".", "target directory for generated files")
 	cmd.Flags().BoolVar(&overwrite, "overwrite", false, "overwrite existing files")
 	cmd.Flags().BoolVar(&interactive, "interactive", false, "interactive checkbox-like selection")
+	cmd.Flags().StringVar(&configBase, "config-base", "", "path to base env file (default: config/env/base.env)")
+	cmd.Flags().StringVar(&configSecrets, "config-secrets", "", "path to secrets env file (default: config/env/secrets.env)")
+	cmd.Flags().StringVar(&envOutput, "env-output", "", "path for generated env file (default: <dir>/.central.env)")
+	cmd.Flags().StringVar(&envContext, "env-context", "central", "value for ENV_CONTEXT in the generated env file")
 	return cmd
 }
 

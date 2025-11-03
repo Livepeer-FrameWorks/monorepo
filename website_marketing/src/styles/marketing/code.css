@@ -1,0 +1,94 @@
+/* Marketing component styles: code panels */
+@layer components {
+  .marketing-code-panel {
+    position: relative;
+    border: 1px solid rgba(var(--accent-rgb) / 0.22);
+    border-radius: clamp(1rem, 1.6vw, 1.3rem);
+    background: linear-gradient(150deg, rgba(20, 24, 40, 0.92), rgba(12, 16, 28, 0.85));
+    box-shadow: 0 12px 24px rgba(6, 10, 28, 0.32);
+    overflow: hidden;
+  }
+
+  .marketing-code-panel--plain {
+    border: none;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .marketing-code-panel__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: clamp(0.6rem, 1vw, 0.9rem);
+    padding: clamp(0.9rem, 1.3vw, 1.15rem) clamp(1.2rem, 1.8vw, 1.5rem);
+    border-bottom: 1px solid rgba(var(--accent-rgb) / 0.18);
+    background: linear-gradient(135deg, rgba(24, 28, 44, 0.82), rgba(16, 20, 34, 0.78));
+  }
+
+  .marketing-code-panel__header--plain {
+    padding: 0;
+    border: none;
+    background: transparent;
+  }
+
+  .marketing-code-panel__headline {
+    display: flex;
+    align-items: center;
+    gap: clamp(0.5rem, 0.8vw, 0.7rem);
+  }
+
+  .marketing-code-panel__badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.25rem 0.75rem;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    background: rgba(var(--accent-rgb) / 0.12);
+    border: 1px solid rgba(var(--accent-rgb) / 0.3);
+    color: hsl(var(--accent));
+  }
+
+  .marketing-code-panel__language {
+    font-size: 0.72rem;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: color-mix(in srgb, hsl(var(--muted-foreground)) 64%, rgba(213, 229, 255, 0.28));
+  }
+
+  .marketing-code-panel__actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .marketing-code-panel__body {
+    position: relative;
+    padding: clamp(1.2rem, 1.8vw, 1.6rem);
+    background: radial-gradient(circle at top, rgba(125, 207, 255, 0.08), transparent 55%);
+  }
+
+  .marketing-code-panel__body--plain {
+    padding: clamp(1rem, 1.5vw, 1.2rem) 0 0;
+    background: transparent;
+  }
+
+  .marketing-code-panel__body pre {
+    margin: 0;
+    max-height: 28rem;
+    overflow-x: auto;
+    overflow-y: auto;
+    font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+    font-size: 0.9rem;
+    line-height: 1.65;
+    color: color-mix(in srgb, hsl(var(--foreground)) 92%, rgba(213, 229, 255, 0.18));
+  }
+
+  .marketing-code-panel__body code {
+    display: block;
+    white-space: pre;
+  }
+}

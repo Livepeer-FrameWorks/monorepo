@@ -63,7 +63,7 @@ func NewServiceClients(cfg Config) *ServiceClients {
 
 	return &ServiceClients{
 		Commodore: commodore.NewClient(commodore.Config{
-			BaseURL:              config.GetEnv("COMMODORE_URL", "http://localhost:18001"),
+			BaseURL:              config.RequireEnv("COMMODORE_URL"),
 			ServiceToken:         cfg.ServiceToken,
 			Timeout:              cfg.Timeout,
 			Logger:               cfg.Logger,
@@ -71,7 +71,7 @@ func NewServiceClients(cfg Config) *ServiceClients {
 			CircuitBreakerConfig: circuitBreakerConfig,
 		}),
 		Periscope: periscope.NewClient(periscope.Config{
-			BaseURL:              config.GetEnv("PERISCOPE_QUERY_URL", "http://localhost:18004"),
+			BaseURL:              config.RequireEnv("PERISCOPE_QUERY_URL"),
 			ServiceToken:         cfg.ServiceToken,
 			Timeout:              cfg.Timeout,
 			Logger:               cfg.Logger,
@@ -79,7 +79,7 @@ func NewServiceClients(cfg Config) *ServiceClients {
 			CircuitBreakerConfig: circuitBreakerConfig,
 		}),
 		Purser: purser.NewClient(purser.Config{
-			BaseURL:              config.GetEnv("PURSER_URL", "http://localhost:18003"),
+			BaseURL:              config.RequireEnv("PURSER_URL"),
 			ServiceToken:         cfg.ServiceToken,
 			Timeout:              cfg.Timeout,
 			Logger:               cfg.Logger,
@@ -87,7 +87,7 @@ func NewServiceClients(cfg Config) *ServiceClients {
 			CircuitBreakerConfig: circuitBreakerConfig,
 		}),
 		Quartermaster: quartermaster.NewClient(quartermaster.Config{
-			BaseURL:              config.GetEnv("QUARTERMASTER_URL", "http://localhost:18002"),
+			BaseURL:              config.RequireEnv("QUARTERMASTER_URL"),
 			ServiceToken:         cfg.ServiceToken,
 			Timeout:              cfg.Timeout,
 			Logger:               cfg.Logger,
@@ -96,7 +96,7 @@ func NewServiceClients(cfg Config) *ServiceClients {
 			Cache:                qmCache,
 		}),
 		Signalman: signalman.NewClient(signalman.Config{
-			BaseURL:        config.GetEnv("SIGNALMAN_WS_URL", "ws://localhost:18009"),
+			BaseURL:        config.RequireEnv("SIGNALMAN_WS_URL"),
 			Logger:         cfg.Logger,
 			ReconnectDelay: 5 * time.Second,
 			MaxReconnects:  5,

@@ -32,6 +32,7 @@ type ErrorResponse = common.ErrorResponse
 // StreamEventRequest represents a request to forward stream events
 type StreamEventRequest struct {
 	NodeID       string   `json:"node_id"`
+	TenantID     string   `json:"tenant_id,omitempty"`
 	StreamID     string   `json:"stream_id,omitempty"`
 	StreamKey    string   `json:"stream_key,omitempty"`
 	InternalName string   `json:"internal_name,omitempty"`
@@ -79,10 +80,14 @@ type LoginRequest struct {
 }
 
 type RegisterRequest struct {
-	Email     string `json:"email"`
-	Password  string `json:"password"`
-	FirstName string `json:"first_name"`
-	LastName  string `json:"last_name"`
+	Email          string              `json:"email"`
+	Password       string              `json:"password"`
+	FirstName      string              `json:"first_name"`
+	LastName       string              `json:"last_name"`
+	PhoneNumber    string              `json:"phone_number,omitempty"`
+	HumanCheck     string              `json:"human_check,omitempty"`
+	Behavior       models.BehaviorData `json:"behavior,omitempty"`
+	TurnstileToken string              `json:"turnstile_token,omitempty"`
 }
 
 type AuthResponse struct {

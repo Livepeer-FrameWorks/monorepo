@@ -5,6 +5,13 @@ const rateLimit = require('express-rate-limit');
 const nodemailer = require('nodemailer');
 require('dotenv').config();
 
+const TURNSTILE_SECRET_KEY = process.env.TURNSTILE_FORMS_SECRET_KEY || '';
+const isTurnstileEnabled = Boolean(TURNSTILE_SECRET_KEY);
+
+if (!isTurnstileEnabled) {
+  console.warn('TURNSTILE_FORMS_SECRET_KEY not set. Turnstile verification is disabled.');
+}
+
 const app = express();
 const PORT = process.env.PORT || 18032;
 
@@ -32,6 +39,51 @@ app.use(cors({
   credentials: true
 }));
 app.use(express.json({ limit: '10mb' }));
+
+const validateTurnstile = async (token, remoteip) => {
+  if (!isTurnstileEnabled) {
+    return { success: true, 'error-codes': [] };
+  }
+
+  if (!token) {
+    return { success: false, 'error-codes': ['missing-input-response'] };
+  }
+
+  try {
+    const payload = new URLSearchParams();
+    payload.append('secret', TURNSTILE_SECRET_KEY);
+    payload.append('response', token);
+    if (remoteip) {
+      payload.append('remoteip', remoteip);
+    }
+
+    const response = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
+      body: payload.toString()
+    });
+
+    const result = await response.json();
+    return result;
+  } catch (error) {
+    console.error('Turnstile validation error:', error);
+    return { success: false, 'error-codes': ['internal-error'] };
+  }
+};
+
+const getRemoteIp = (req) => {
+  const cfConnectingIp = req.headers['cf-connecting-ip'];
+  if (cfConnectingIp) return cfConnectingIp;
+
+  const forwardedFor = req.headers['x-forwarded-for'];
+  if (forwardedFor) {
+    return forwardedFor.split(',')[0].trim();
+  }
+
+  return req.ip;
+};
 
 // Rate limiting
 const contactLimiter = rateLimit({
@@ -67,37 +119,35 @@ const validateSubmission = (req) => {
   const { name, email, company, message, phone_number, human_check, behavior } = req.body;
   const errors = [];
 
-  // 1. 🕳️ Honeypot Check
-  if (phone_number && phone_number.trim() !== '') {
-    errors.push('Honeypot field filled (bot detected)');
-  }
+  const legacyBotChecksEnabled = !isTurnstileEnabled;
 
-  // 2. 🔘 Human Check Toggle
-  if (human_check !== 'human') {
-    errors.push('Human verification not selected');
-  }
-
-  // 3. 🖱️ Behavioral Analysis
-  if (behavior) {
-    const behaviorData = typeof behavior === 'string' ? JSON.parse(behavior) : behavior;
-
-    // Check if form was filled too quickly (less than 3 seconds)
-    const timeSpent = behaviorData.submittedAt - behaviorData.formShownAt;
-    if (timeSpent < 3000) {
-      errors.push('Form submitted too quickly');
+  if (legacyBotChecksEnabled) {
+    if (phone_number && phone_number.trim() !== '') {
+      errors.push('Honeypot field filled (bot detected)');
     }
 
-    // Check for human interactions
-    if (!behaviorData.mouse && !behaviorData.typed) {
-      errors.push('No human interaction detected');
+    if (human_check !== 'human') {
+      errors.push('Human verification not selected');
     }
 
-    // Check if form was open for too long (likely abandoned/bot)
-    if (timeSpent > 30 * 60 * 1000) { // 30 minutes
-      errors.push('Form session expired');
+    if (behavior) {
+      const behaviorData = typeof behavior === 'string' ? JSON.parse(behavior) : behavior;
+
+      const timeSpent = behaviorData.submittedAt - behaviorData.formShownAt;
+      if (timeSpent < 3000) {
+        errors.push('Form submitted too quickly');
+      }
+
+      if (!behaviorData.mouse && !behaviorData.typed) {
+        errors.push('No human interaction detected');
+      }
+
+      if (timeSpent > 30 * 60 * 1000) {
+        errors.push('Form session expired');
+      }
+    } else {
+      errors.push('Missing behavioral data');
     }
-  } else {
-    errors.push('Missing behavioral data');
   }
 
   // 4. Basic field validation
@@ -127,14 +177,30 @@ const validateSubmission = (req) => {
 // Contact form endpoint
 app.post('/api/contact', contactLimiter, async (req, res) => {
   try {
+    const remoteIp = getRemoteIp(req);
+
+    if (isTurnstileEnabled) {
+      const verification = await validateTurnstile(req.body.turnstileToken, remoteIp);
+
+      if (!verification.success) {
+        return res.status(400).json({
+          success: false,
+          error: 'Turnstile verification failed',
+          details: verification['error-codes']
+        });
+      }
+    }
+
     // Validate submission
     const validationErrors = validateSubmission(req);
 
     if (validationErrors.length > 0) {
+      const { turnstileToken, ...sanitizedBody } = req.body || {};
+
       console.log('Blocked submission:', {
-        ip: req.ip,
+        ip: remoteIp,
         errors: validationErrors,
-        body: req.body
+        body: sanitizedBody
       });
 
       return res.status(400).json({
@@ -162,7 +228,7 @@ app.post('/api/contact', contactLimiter, async (req, res) => {
         </div>
         <hr>
         <p><small>Submitted at: ${new Date().toISOString()}</small></p>
-        <p><small>IP: ${req.ip}</small></p>
+        <p><small>IP: ${remoteIp}</small></p>
       `
     };
 

@@ -63,7 +63,7 @@ src/
 ### Key Features
 
 - **Live Demo Player**: Integrated MistPlayer showing real streaming
-- **Anti-spam Contact Form**: Behavioral checks and validation
+- **Anti-spam Contact Form**: Behavioral checks, Cloudflare Turnstile, and validation
 - **Responsive Design**: Mobile-first with Tailwind CSS
 - **Tokyo Night Theme**: Custom dark theme with gradient accents
 - **Framer Motion**: Smooth animations and transitions
@@ -78,6 +78,61 @@ The site uses a custom "Tokyo Night" theme built with Tailwind CSS:
 - **Components**: Glass cards with glow effects
 - **Animations**: Smooth transitions and hover effects
 
+## Brand System
+
+Our visual language is anchored in the Tokyo Night palette, with a focus on “solid as a rock” slabs accented by subtle beams and seams.
+
+- **Core palette**: `--background` (`#1a1b26`), `--accent` (`#7aa2f7`), secondary highlights (`#9ece6a`, `#e0af68`, `#bb9af7`).
+- **Surfaces**: `MarketingBand` exposes surface presets—
+  - `slate`: soft gradient panels for general content.
+  - `midnight`: deeper contrast for immersive sections.
+  - `mesh`: grid texture for technical callouts.
+  - `beam`: diagonal beams evoking metal braces and infrastructure strength.
+- **Outline treatments**: `MarketingOutline` restores the legacy “No Surprise Bills” badge aesthetic without nested cards.
+- **Seams**: seam utilities rely on the shared `--accent-rgb` token, keeping dividers consistent across grids and stacks.
+- **Motion**: use the optional `.cta-motion` utility on buttons to add a shared hover glow without bespoke animations.
+
+## Component Library
+
+All primitives live in `src/components/MarketingElements.jsx` with matching styles in `src/index.css`.
+
+### Layout Wrappers
+
+| Component | Purpose | Notes |
+|-----------|---------|-------|
+| `MarketingBand` | Neutral background section with opt-in surfaces & padding presets (`none`, `compact`, `balanced`, `spacious`). | `surface="panel"` recreates the heavy slab; `flush` removes radius/gaps. |
+| `MarketingOutline` | Outline-only slab with corner or centered labels. | Combine with `MarketingOutlineCluster` for multi-card outlines. |
+| `MarketingGridSeam` | Seam-driven grid for equal columns with token-based dividers. | `columns`, `stackAt`, and `gap` control responsiveness. |
+| `MarketingGridSplit` | Two-column layout with optional reversal/stack breakpoints. | Ideal for hero+media or copy/visual splits. |
+| `MarketingOutlineCluster` | Grid of outlined cards with optional header via `HeadlineStack`. | Supports `items` arrays or custom children. |
+| `MarketingStackedSeam` | Vertical list with horizontal seams (roadmaps, FAQs). | Works with raw children or `items` arrays. |
+| `MarketingHero` | Hero container with optional media slot (`media`, `mediaPosition`, `layout`). | `surface` toggles preset backgrounds (`none`, `gradient`, `beams`, `spotlight`); `accents` places per-page beams/spots via percentage coords; `support`/`footnote` inject copy above/below CTAs. `mediaSurface="none"` keeps embeds flush. |
+| `MarketingFeatureWall` | Flush feature wall with brand seams and icon badges. | Defaults to the legacy wall styling; use `variant="grid"` or `flush` for equal-width grids. |
+| `MarketingPartnerSurface` | Partner/endorsement shelf with outline-ready cards. | `variant="flush"` renders legacy seam grid. |
+| `TimelineBand` | Neutral timeline wrapper that hosts `MarketingTimeline` or custom children. | `variant="plain"` drops the band background. |
+| `SectionDivider` | Reusable section divider with angled “shelf” option. | Use between bands when gradients don’t change. |
+
+### Content Modules
+
+| Component | Usage |
+|-----------|-------|
+| `HeadlineStack` | Eyebrow/title/subtitle stack with optional underline + action slot. | `actionsPlacement="inline"` keeps CTAs on the baseline. |
+| `CTACluster` & `CTAFootnote` | Primary/secondary button groups and legal footers. |
+| `MetricStack` & `StatBadge` | Key metrics/credibility stats with tone-aware badges. | `variant="plain"` removes the card treatment. |
+| `IconList` | Feature bullets with shared gradient icon plate. | `variant="plain"` matches the mission pillar list. |
+| `TestimonialTile` | Quote card with avatar, author meta, and optional extras. |
+| `ComparisonTable` | Token-driven comparison table for feature matrices (sets `--comparison-cols`). |
+| `MarketingFeatureCard` | Icon-forward feature tile used inside `MarketingFeatureWall` or standalone. | Supports `flush`, `stripe`, `hover="subtle"`, `metaAlign`. |
+| `MarketingTimeline` | Accordion timeline tuned for roadmap milestones. |
+
+### Utility Patterns
+
+- **CTA motion**: add `.cta-motion` to any button to enable the shared glow hover.
+- **Seam stacks**: combine `MarketingStackedSeam` with `MarketingGridSeam` for hybrid layouts (e.g., deployment options, FAQs).
+- **Surface tokens**: all gradients reference `--accent-rgb` or brand tokens so palette adjustments propagate automatically.
+
+Refer to `WEBSITE_MARKETING_LAYOUT_PLAN.md` for the evolving playbook and migration checklist.
+
 ## Configuration
 
 All configuration is handled through environment variables defined in `config.js`:
@@ -90,6 +145,12 @@ const config = {
   // ... other config options
 }
 ```
+
+Key environment variables:
+
+- `VITE_TURNSTILE_FORMS_SITE_KEY` – Cloudflare Turnstile site key for contact forms. Use the [Cloudflare test key](https://developers.cloudflare.com/turnstile/troubleshooting/testing/) (`1x0000000000000000000000000000000AA`) for local development.
+- `VITE_CONTACT_API_URL` – Points to the contact API service (defaults to `http://localhost:18032`).
+- `VITE_GATEWAY_URL` – GraphQL endpoint used for the status page and live player.
 
 ## Pages
 

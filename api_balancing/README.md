@@ -25,7 +25,7 @@ Routes streaming traffic to the best available media nodes based on:
 - HTTP: 18008 (routing API)
 - gRPC control: 18019
 
-Configuration: copy `env.example` to `.env` and use the inline comments as reference. Do not commit secrets.
+Configuration is sourced from `config/env/base.env` + `config/env/secrets.env`. Generate `.env` with `make env` (or `frameworks config env generate`) before starting the stack. Adjust `config/env/secrets.env` for credentials. See `docs/configuration.md` for the full workflow. Do not commit secrets.
 
 ## Related
 - Root `README.md` (ports, stack overview)

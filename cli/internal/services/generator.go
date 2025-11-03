@@ -52,10 +52,6 @@ func GenerateFragments(dir string, specs []ServiceSpec, overwrite bool) error {
 }
 
 // GenerateEnv returns a minimal .env suggestion (placeholder for future use).
-func GenerateEnv(specs []ServiceSpec) string {
-	return "# Frameworks central stack env\n# (reserved for future configuration overrides)\n"
-}
-
 func SummarizeSelection(specs []ServiceSpec) string {
 	var b bytes.Buffer
 	for _, s := range specs {

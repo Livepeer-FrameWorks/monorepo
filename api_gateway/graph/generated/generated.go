@@ -917,6 +917,8 @@ type NodeMetricResolver interface {
 	NetworkTx(ctx context.Context, obj *periscope.NodeMetric) (int, error)
 	HealthScore(ctx context.Context, obj *periscope.NodeMetric) (float64, error)
 	Status(ctx context.Context, obj *periscope.NodeMetric) (string, error)
+
+	Metadata(ctx context.Context, obj *periscope.NodeMetric) (*string, error)
 }
 type PaymentResolver interface {
 	Method(ctx context.Context, obj *models.Payment) (model.PaymentMethod, error)
@@ -5796,9 +5798,11 @@ type RecordingConfig {
 }
 
 input CreatePaymentInput {
+  invoiceId: ID!
   amount: Money!
   currency: Currency
   method: PaymentMethod!
+  returnUrl: String
 }
 
 input UpdateTenantInput {
@@ -17503,7 +17507,7 @@ func (ec *executionContext) _NodeMetric_metadata(ctx context.Context, field grap
 	}()
 	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
 		ctx = rctx // use context from middleware stack in children
-		return obj.Metadata, nil
+		return ec.resolvers.NodeMetric().Metadata(rctx, obj)
 	})
 	if err != nil {
 		ec.Error(ctx, err)
@@ -17512,17 +17516,17 @@ func (ec *executionContext) _NodeMetric_metadata(ctx context.Context, field grap
 	if resTmp == nil {
 		return graphql.Null
 	}
-	res := resTmp.(string)
+	res := resTmp.(*string)
 	fc.Result = res
-	return ec.marshalOJSON2string(ctx, field.Selections, res)
+	return ec.marshalOJSON2ᚖstring(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_NodeMetric_metadata(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "NodeMetric",
 		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
+		IsMethod:   true,
+		IsResolver: true,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type JSON does not have child fields")
 		},
@@ -37586,13 +37590,20 @@ func (ec *executionContext) unmarshalInputCreatePaymentInput(ctx context.Context
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"amount", "currency", "method"}
+	fieldsInOrder := [...]string{"invoiceId", "amount", "currency", "method", "returnUrl"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
 			continue
 		}
 		switch k {
+		case "invoiceId":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("invoiceId"))
+			data, err := ec.unmarshalNID2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.InvoiceID = data
 		case "amount":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("amount"))
 			data, err := ec.unmarshalNMoney2float64(ctx, v)
@@ -37614,6 +37625,13 @@ func (ec *executionContext) unmarshalInputCreatePaymentInput(ctx context.Context
 				return it, err
 			}
 			it.Method = data
+		case "returnUrl":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("returnUrl"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ReturnURL = data
 		}
 	}
 
@@ -40717,7 +40735,38 @@ func (ec *executionContext) _NodeMetric(ctx context.Context, sel ast.SelectionSe
 		case "tags":
 			out.Values[i] = ec._NodeMetric_tags(ctx, field, obj)
 		case "metadata":
-			out.Values[i] = ec._NodeMetric_metadata(ctx, field, obj)
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._NodeMetric_metadata(ctx, field, obj)
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}

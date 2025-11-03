@@ -1,0 +1,411 @@
+@layer components {
+  .marketing-hero {
+    position: relative;
+    --hero-padding-y: clamp(3.2rem, 4.8vw, 5.2rem);
+    --hero-padding-x: clamp(2.4rem, 4.6vw, 4.2rem);
+    --hero-gradient-angle: 140deg;
+    --hero-before-top: -240px;
+    --hero-before-left: -320px;
+    --hero-before-rotate: -14deg;
+    --hero-before-scale: 1;
+    --hero-before-opacity: 0.5;
+    --hero-after-top: -110px;
+    --hero-after-right: -260px;
+    --hero-after-rotate: -6deg;
+    --hero-after-scale: 1;
+    --hero-after-opacity: 0.5;
+    --hero-surface-primary: color-mix(in srgb, hsl(var(--brand-surface-strong)) 92%, rgba(0, 0, 0, 0.08));
+    --hero-surface-secondary: color-mix(in srgb, hsl(var(--brand-surface)) 82%, rgba(255, 255, 255, 0.04));
+    --hero-beam-stripe: rgba(var(--accent-rgb) / 0.12);
+    --hero-beam-highlight: rgba(var(--accent-rgb) / 0.22);
+    --hero-spotlight: rgba(var(--accent-rgb) / 0.24);
+    padding: var(--hero-padding-y) var(--hero-padding-x);
+    overflow: hidden;
+  }
+
+  .marketing-hero::after {
+    content: none;
+  }
+
+  .marketing-hero__surface {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .marketing-hero__surface::before,
+  .marketing-hero__surface::after {
+    content: '';
+    position: absolute;
+    pointer-events: none;
+    mix-blend-mode: screen;
+    display: none;
+  }
+
+  .marketing-hero[data-surface='none']::after {
+    content: none;
+  }
+
+  .marketing-hero[data-surface='none'] .marketing-hero__surface::before,
+  .marketing-hero[data-surface='none'] .marketing-hero__surface::after {
+    display: none;
+  }
+
+  .marketing-hero[data-surface='gradient']::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(var(--hero-gradient-angle), var(--hero-surface-primary), var(--hero-surface-secondary));
+    border-bottom: 1px solid rgba(var(--accent-rgb) / 0.24);
+    pointer-events: none;
+    z-index: 0;
+    opacity: 1;
+  }
+
+  .marketing-hero[data-surface='gradient'] .marketing-hero__surface::before {
+    display: block;
+    width: clamp(420px, 42vw, 560px);
+    height: clamp(420px, 42vw, 560px);
+    top: var(--hero-before-top, -240px);
+    left: var(--hero-before-left, -320px);
+    background:
+      linear-gradient(130deg, rgba(var(--accent-rgb) / 0.28), rgba(26, 32, 54, 0.32)),
+      radial-gradient(circle at 15% 20%, rgba(var(--accent-rgb) / 0.22), transparent 66%);
+    border-radius: 32px;
+    transform: rotate(var(--hero-before-rotate, -14deg)) scale(var(--hero-before-scale, 1));
+    opacity: var(--hero-before-opacity, 0.52);
+    box-shadow: 0 32px 58px rgba(8, 10, 24, 0.42);
+  }
+
+  .marketing-hero[data-surface='gradient'] .marketing-hero__surface::after {
+    display: block;
+    width: clamp(360px, 36vw, 520px);
+    height: clamp(360px, 36vw, 520px);
+    top: var(--hero-after-top, -110px);
+    right: var(--hero-after-right, -260px);
+    background:
+      linear-gradient(200deg, rgba(var(--accent-rgb) / 0.26), rgba(26, 32, 56, 0.18)),
+      linear-gradient(150deg, rgba(18, 22, 38, 0.32), transparent 70%);
+    border-radius: 28px;
+    transform: rotate(var(--hero-after-rotate, -6deg)) scale(var(--hero-after-scale, 1));
+    opacity: var(--hero-after-opacity, 0.48);
+    box-shadow: 0 18px 46px rgba(8, 10, 24, 0.32);
+  }
+
+  .marketing-hero[data-surface='beams']::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background:
+      linear-gradient(165deg, color-mix(in srgb, var(--hero-surface-primary) 96%, rgba(0, 0, 0, 0.08)), color-mix(in srgb, var(--hero-surface-secondary) 92%, rgba(0, 0, 0, 0.18)));
+    border-bottom: 1px solid rgba(var(--accent-rgb) / 0.22);
+    pointer-events: none;
+    z-index: 0;
+    opacity: 1;
+  }
+
+  .marketing-hero[data-surface='beams'] .marketing-hero__surface::before {
+    display: block;
+    width: clamp(520px, 56vw, 760px);
+    height: clamp(480px, 52vw, 680px);
+    top: var(--hero-before-top, -220px);
+    left: var(--hero-before-left, -320px);
+    background:
+      repeating-linear-gradient(135deg,
+        transparent,
+        transparent 32px,
+        var(--hero-beam-stripe) 32px,
+        var(--hero-beam-stripe) 60px),
+      radial-gradient(circle at 12% 18%, var(--hero-beam-highlight), transparent 70%);
+    border-radius: 36px;
+    transform: rotate(var(--hero-before-rotate, -12deg)) scale(var(--hero-before-scale, 1.04));
+    opacity: var(--hero-before-opacity, 0.62);
+    filter: blur(0.4px);
+  }
+
+  .marketing-hero[data-surface='beams'] .marketing-hero__surface::after {
+    display: block;
+    width: clamp(420px, 48vw, 640px);
+    height: clamp(340px, 38vw, 520px);
+    top: var(--hero-after-top, -90px);
+    right: var(--hero-after-right, -260px);
+    background:
+      linear-gradient(120deg, rgba(45, 60, 100, 0.38), rgba(18, 22, 38, 0.12)),
+      radial-gradient(circle at 68% 28%, rgba(var(--accent-rgb) / 0.14), transparent 72%);
+    border-radius: 34px;
+    transform: rotate(var(--hero-after-rotate, -8deg)) scale(var(--hero-after-scale, 1.08));
+    opacity: var(--hero-after-opacity, 0.55);
+  }
+
+  .marketing-hero[data-surface='spotlight']::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background:
+      radial-gradient(circle at 30% 42%, var(--hero-spotlight), transparent 60%),
+      radial-gradient(circle at 80% 18%, rgba(var(--accent-rgb) / 0.16), transparent 70%),
+      linear-gradient(var(--hero-gradient-angle), var(--hero-surface-primary), var(--hero-surface-secondary));
+    border-bottom: 1px solid rgba(var(--accent-rgb) / 0.22);
+    pointer-events: none;
+    z-index: 0;
+    opacity: 1;
+  }
+
+  .marketing-hero[data-surface='spotlight'] .marketing-hero__surface::before,
+  .marketing-hero[data-surface='spotlight'] .marketing-hero__surface::after {
+    display: none;
+  }
+
+  .marketing-hero__accents {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 1;
+  }
+
+  .marketing-hero__accent {
+    position: absolute;
+    top: calc(var(--accent-y, 50) * 1%);
+    left: calc(var(--accent-x, 50) * 1%);
+    width: var(--accent-width, 40vw);
+    height: var(--accent-height, 30vw);
+    transform: translate(-50%, -50%) rotate(var(--accent-rotate, 0deg));
+    opacity: var(--accent-opacity, 0.45);
+    filter: blur(var(--accent-blur, 0));
+    border-radius: var(--accent-radius, clamp(28px, 6vw, 48px));
+    background: var(--accent-fill, linear-gradient(135deg, rgba(var(--accent-rgb) / 0.28), rgba(18, 22, 38, 0.14)));
+    mix-blend-mode: screen;
+    z-index: var(--accent-layer, 1);
+  }
+
+  .marketing-hero__accent--spot {
+    border-radius: 999px;
+    background: var(--accent-fill, radial-gradient(circle, rgba(var(--accent-rgb) / 0.28) 0%, transparent 70%));
+  }
+
+  .marketing-hero__container {
+    position: relative;
+    z-index: 1;
+    max-width: 68rem;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .marketing-hero__layout {
+    display: flex;
+    flex-direction: column;
+    gap: clamp(1.6rem, 2.2vw, 2.4rem);
+  }
+
+  .marketing-hero__body {
+    display: flex;
+    flex-direction: column;
+    gap: clamp(1.6rem, 2.3vw, 2.4rem);
+  }
+
+  .marketing-hero__content {
+    display: flex;
+    flex-direction: column;
+    gap: clamp(0.85rem, 1.4vw, 1.4rem);
+  }
+
+  .marketing-hero--has-media .marketing-hero__body {
+    gap: clamp(2.2rem, 3vw, 3rem);
+  }
+
+  .marketing-hero__media {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .marketing-hero__media>* {
+    width: 100%;
+    max-width: 520px;
+  }
+
+  .marketing-hero__media--surface-glow {
+    padding: clamp(1.2rem, 2vw, 1.8rem);
+    border-radius: clamp(1.2rem, 1.6vw, 1.8rem);
+    background: linear-gradient(160deg, rgba(24, 28, 46, 0.64), rgba(14, 16, 28, 0.4));
+    border: 1px solid rgba(var(--accent-rgb) / 0.14);
+    box-shadow: 0 24px 48px rgba(6, 12, 32, 0.35);
+  }
+
+  .marketing-hero__media--surface-none {
+    padding: 0;
+    border: none;
+    box-shadow: none;
+    background: transparent;
+  }
+
+  .marketing-hero--has-media .marketing-hero__content {
+    flex: 1 1 52%;
+  }
+
+  .marketing-hero--has-media .marketing-hero__media {
+    flex: 1 1 48%;
+  }
+
+  .marketing-hero__eyebrow {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: clamp(1rem, 1.4vw, 1.5rem);
+  }
+
+  .marketing-hero__title {
+    font-size: clamp(2.8rem, 5vw, 4.6rem);
+    font-weight: 700;
+    line-height: 1.05;
+    letter-spacing: -0.02em;
+  }
+
+  .marketing-hero__description {
+    margin: 0;
+    font-size: clamp(1.05rem, 1.8vw, 1.35rem);
+    max-width: clamp(36rem, 60vw, 48rem);
+    color: color-mix(in srgb, hsl(var(--muted-foreground)) 82%, rgba(255, 255, 255, 0.12));
+    line-height: 1.7;
+  }
+
+  .marketing-hero__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.9rem;
+  }
+
+  .marketing-hero--center .marketing-hero__actions {
+    justify-content: center;
+  }
+
+  .marketing-hero--left .marketing-hero__actions {
+    justify-content: flex-start;
+  }
+
+  .marketing-hero__extra {
+    margin-top: clamp(1.6rem, 2.2vw, 2.6rem);
+    display: flex;
+    flex-direction: column;
+    gap: clamp(0.75rem, 1vw, 1rem);
+  }
+
+  .marketing-hero__support {
+    font-size: clamp(1rem, 1.7vw, 1.15rem);
+    color: color-mix(in srgb, hsl(var(--muted-foreground)) 78%, rgba(255, 255, 255, 0.08));
+  }
+
+  .marketing-hero__footnote {
+    font-size: 0.85rem;
+    color: color-mix(in srgb, hsl(var(--muted-foreground)) 82%, rgba(255, 255, 255, 0.14));
+    max-width: 40ch;
+  }
+
+  .marketing-hero__button {
+    min-width: var(--hero-button-min, clamp(11rem, 24vw, 14rem));
+  }
+
+  .marketing-hero__button.marketing-cta__button--secondary {
+    border-color: rgba(125, 207, 255, 0.32);
+    background-color: rgba(24, 32, 52, 0.6);
+  }
+
+  .deployment-panel {
+    border-radius: clamp(1.5rem, 2.2vw, 2rem);
+    border: 1px solid rgba(125, 207, 255, 0.18);
+    background: linear-gradient(165deg, rgba(32, 35, 52, 0.96), rgba(16, 18, 30, 0.92));
+    box-shadow: 0 32px 64px rgba(8, 10, 24, 0.45);
+    overflow: hidden;
+  }
+
+  .deployment-panel__header {
+    padding: clamp(1.8rem, 2.4vw, 2.2rem) clamp(2.2rem, 3vw, 3rem) clamp(1.2rem, 1.8vw, 1.6rem);
+    border-bottom: 1px solid rgba(125, 207, 255, 0.16);
+  }
+
+  .deployment-panel__title {
+    margin: 0;
+    font-size: clamp(2.1rem, 2vw, 3.6rem);
+    font-weight: 650;
+    letter-spacing: -0.015em;
+  }
+
+  .deployment-panel .marketing-feature-wall {
+    margin: 0;
+    border-top: 1px solid rgba(125, 207, 255, 0.14);
+    border-radius: 0;
+    overflow: hidden;
+  }
+
+  .deployment-panel .marketing-feature {
+    padding: clamp(1.2rem, 1.8vw, 1.6rem) clamp(2.1rem, 3vw, 2.8rem);
+  }
+
+  .marketing-hero--has-media .marketing-hero__extra {
+    max-width: none;
+  }
+
+  .marketing-hero--center .marketing-hero__eyebrow,
+  .marketing-hero--center .marketing-hero__title,
+  .marketing-hero--center .marketing-hero__description,
+  .marketing-hero--center .marketing-hero__extra {
+    text-align: center;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  .marketing-hero--left .marketing-hero__eyebrow {
+    margin-left: 0;
+  }
+
+  .marketing-hero--left .marketing-hero__title,
+  .marketing-hero--left .marketing-hero__description,
+  .marketing-hero--left .marketing-hero__extra {
+    text-align: left;
+    margin-right: 0;
+  }
+
+  @media (max-width: 768px) {
+    .marketing-hero {
+      --hero-padding-y: clamp(2.6rem, 6vw, 3.6rem);
+      --hero-padding-x: clamp(1.4rem, 6.6vw, 2.6rem);
+      padding: var(--hero-padding-y) var(--hero-padding-x);
+    }
+
+    .marketing-hero--has-media .marketing-hero__media {
+      margin-inline: auto;
+    }
+
+    .marketing-hero__actions {
+      justify-content: center;
+    }
+
+    .marketing-hero__button {
+      width: 100%;
+      justify-content: center;
+    }
+  }
+
+  @media (min-width: 900px) {
+    .marketing-hero--has-media .marketing-hero__body {
+      flex-direction: row;
+      align-items: center;
+    }
+
+    .marketing-hero--media-left .marketing-hero__content {
+      order: 2;
+      text-align: left;
+    }
+
+    .marketing-hero--media-left .marketing-hero__actions {
+      justify-content: flex-start;
+    }
+
+    .marketing-hero--media-left .marketing-hero__media {
+      order: 1;
+    }
+  }
+
+}

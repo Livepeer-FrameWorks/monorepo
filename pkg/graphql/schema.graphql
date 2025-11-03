@@ -198,9 +198,11 @@ type RecordingConfig {
 }
 
 input CreatePaymentInput {
+  invoiceId: ID!
   amount: Money!
   currency: Currency
   method: PaymentMethod!
+  returnUrl: String
 }
 
 input UpdateTenantInput {

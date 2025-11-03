@@ -12,7 +12,7 @@ Billing and subscriptions. Orchestrates usage → invoice drafts → payments. K
 - Start the full stack from repo root: `docker-compose up -d`
 - Or run just Purser: `cd api_billing && go run ./cmd/purser`
 
-Configuration: copy `env.example` to `.env` and use the inline comments as reference. Do not commit secrets.
+Configuration is handled via the central env files under `config/env`. Run `make env` (or `frameworks config env generate`) to build `.env`, and update `config/env/secrets.env` with local secrets. Refer to `docs/configuration.md` for the full process. Do not commit secrets.
 
 Health: `GET /health`.
 

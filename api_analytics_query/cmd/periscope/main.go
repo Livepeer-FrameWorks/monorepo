@@ -26,18 +26,27 @@ func main() {
 
 	logger.Info("Starting Periscope-Query (Analytics Query API)")
 
+	dbURL := config.RequireEnv("DATABASE_URL")
+	clickhouseHost := config.RequireEnv("CLICKHOUSE_HOST")
+	clickhouseDB := config.RequireEnv("CLICKHOUSE_DB")
+	clickhouseUser := config.RequireEnv("CLICKHOUSE_USER")
+	clickhousePassword := config.RequireEnv("CLICKHOUSE_PASSWORD")
+	jwtSecret := config.RequireEnv("JWT_SECRET")
+	serviceToken := config.RequireEnv("SERVICE_TOKEN")
+	quartermasterURL := config.RequireEnv("QUARTERMASTER_URL")
+
 	// Database configuration
 	dbConfig := database.DefaultConfig()
-	dbConfig.URL = config.GetEnv("DATABASE_URL", "postgres://frameworks_user:frameworks_dev@localhost:5432/frameworks?sslmode=disable")
+	dbConfig.URL = dbURL
 	yugaDB := database.MustConnect(dbConfig, logger)
 	defer yugaDB.Close()
 
 	// Connect to ClickHouse
 	chConfig := database.DefaultClickHouseConfig()
-	chConfig.Addr = []string{config.GetEnv("CLICKHOUSE_HOST", "localhost:9000")}
-	chConfig.Database = config.GetEnv("CLICKHOUSE_DB", "frameworks")
-	chConfig.Username = config.GetEnv("CLICKHOUSE_USER", "frameworks")
-	chConfig.Password = config.GetEnv("CLICKHOUSE_PASSWORD", "frameworks_dev")
+	chConfig.Addr = []string{clickhouseHost}
+	chConfig.Database = clickhouseDB
+	chConfig.Username = clickhouseUser
+	chConfig.Password = clickhousePassword
 	clickhouse := database.MustConnectClickHouse(chConfig, logger)
 	defer clickhouse.Close()
 
@@ -49,10 +58,10 @@ func main() {
 	healthChecker.AddCheck("postgres", monitoring.DatabaseHealthCheck(yugaDB))
 	healthChecker.AddCheck("clickhouse", monitoring.DatabaseHealthCheck(clickhouse))
 	healthChecker.AddCheck("config", monitoring.ConfigurationHealthCheck(map[string]string{
-		"DATABASE_URL":    config.GetEnv("DATABASE_URL", ""),
-		"CLICKHOUSE_HOST": config.GetEnv("CLICKHOUSE_HOST", ""),
-		"CLICKHOUSE_DB":   config.GetEnv("CLICKHOUSE_DB", ""),
-		"JWT_SECRET":      config.GetEnv("JWT_SECRET", ""),
+		"DATABASE_URL":    dbURL,
+		"CLICKHOUSE_HOST": clickhouseHost,
+		"CLICKHOUSE_DB":   clickhouseDB,
+		"JWT_SECRET":      jwtSecret,
 	}))
 
 	// Create custom analytics query metrics
@@ -81,7 +90,7 @@ func main() {
 	{
 		// All routes require authentication
 		protected := router.Group("")
-		protected.Use(auth.JWTAuthMiddleware([]byte(config.GetEnv("JWT_SECRET", ""))))
+		protected.Use(auth.JWTAuthMiddleware([]byte(jwtSecret)))
 		{
 			// Stream analytics endpoints
 			streams := protected.Group("/analytics/streams")
@@ -141,7 +150,7 @@ func main() {
 
 	// Best-effort service registration in Quartermaster
 	go func() {
-		qc := qmclient.NewClient(qmclient.Config{BaseURL: config.GetEnv("QUARTERMASTER_URL", "http://localhost:18002"), ServiceToken: config.GetEnv("SERVICE_TOKEN", ""), Logger: logger})
+		qc := qmclient.NewClient(qmclient.Config{BaseURL: quartermasterURL, ServiceToken: serviceToken, Logger: logger})
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if _, err := qc.BootstrapService(ctx, &qmapi.BootstrapServiceRequest{Type: "periscope_query", Version: version.Version, Protocol: "http", HealthEndpoint: func() *string { s := "/health"; return &s }(), Port: 18004}); err != nil {

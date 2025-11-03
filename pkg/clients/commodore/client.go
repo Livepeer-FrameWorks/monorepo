@@ -209,6 +209,10 @@ func (c *Client) ForwardStreamEvent(ctx context.Context, endpoint string, eventD
 	}
 
 	req.Header.Set("Content-Type", "application/json")
+	// If tenant context is known, pass it explicitly
+	if eventData != nil && eventData.TenantID != "" {
+		req.Header.Set("X-Tenant-ID", eventData.TenantID)
+	}
 	// Use user's JWT from context if available, otherwise fall back to service token
 	if jwtToken := ctx.Value("jwt_token"); jwtToken != nil {
 		if tokenStr, ok := jwtToken.(string); ok && tokenStr != "" {
@@ -1260,7 +1264,7 @@ func (c *Client) GetRecordings(ctx context.Context, userToken string, streamID *
 // === VIEWER ENDPOINT RESOLUTION ===
 
 // ResolveViewerEndpoint calls Commodore to resolve viewer endpoints (which then calls Foghorn)
-func (c *Client) ResolveViewerEndpoint(ctx context.Context, contentType, contentID string, viewerIP *string) ([]commodore.ViewerEndpoint, error) {
+func (c *Client) ResolveViewerEndpoint(ctx context.Context, contentType, contentID string, viewerIP *string) (*commodore.ViewerEndpointResponse, error) {
 	req := commodore.ViewerEndpointRequest{
 		ContentType: contentType,
 		ContentID:   contentID,
@@ -1306,16 +1310,13 @@ func (c *Client) ResolveViewerEndpoint(ctx context.Context, contentType, content
 		return nil, fmt.Errorf("failed to resolve viewer endpoints: %s", errorResp.Error)
 	}
 
-	var viewerResp commodore.ViewerEndpointResponse
-	if err := json.Unmarshal(body, &viewerResp); err != nil {
-		return nil, fmt.Errorf("failed to parse viewer endpoint response: %w", err)
-	}
+    var viewerResp commodore.ViewerEndpointResponse
+    if err := json.Unmarshal(body, &viewerResp); err != nil {
+        return nil, fmt.Errorf("failed to parse viewer endpoint response: %w", err)
+    }
 
-	// Combine primary and fallbacks into a single slice
-	endpoints := []commodore.ViewerEndpoint{viewerResp.Primary}
-	endpoints = append(endpoints, viewerResp.Fallbacks...)
-
-	return endpoints, nil
+    // Return full response including metadata; callers can flatten endpoints as needed
+    return &viewerResp, nil
 }
 
 // GetStreamMeta fetches Mist JSON meta via Commodore proxy with optional target params

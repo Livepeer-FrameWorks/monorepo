@@ -39,14 +39,19 @@ func main() {
 	logger.Info("Starting Bridge GraphQL Gateway")
 
 	// Initialize service clients
-	serviceToken := config.GetEnv("SERVICE_TOKEN", "")
+	serviceToken := config.RequireEnv("SERVICE_TOKEN")
+	commodoreURL := config.RequireEnv("COMMODORE_URL")
+	quartermasterURL := config.RequireEnv("QUARTERMASTER_URL")
+	purserURL := config.RequireEnv("PURSER_URL")
+	periscopeQueryURL := config.RequireEnv("PERISCOPE_QUERY_URL")
+	signalmanWSURL := config.RequireEnv("SIGNALMAN_WS_URL")
+	jwtSecret := config.RequireEnv("JWT_SECRET")
 	serviceClients := clients.NewServiceClients(clients.Config{
 		ServiceToken: serviceToken,
 		Logger:       logger,
 	})
 
 	// Initialize auth proxy
-	commodoreURL := config.GetEnv("COMMODORE_URL", "http://localhost:18001")
 	authProxy := handlers.NewAuthProxy(commodoreURL, logger)
 
 	// Setup monitoring
@@ -55,13 +60,13 @@ func main() {
 
 	// Add health checks
 	healthChecker.AddCheck("config", monitoring.ConfigurationHealthCheck(map[string]string{
-		"JWT_SECRET":        config.GetEnv("JWT_SECRET", ""),
-		"SERVICE_TOKEN":     config.GetEnv("SERVICE_TOKEN", ""),
-		"COMMODORE_URL":     config.GetEnv("COMMODORE_URL", ""),
-		"PERISCOPE_URL":     config.GetEnv("PERISCOPE_URL", ""),
-		"PURSER_URL":        config.GetEnv("PURSER_URL", ""),
-		"QUARTERMASTER_URL": config.GetEnv("QUARTERMASTER_URL", ""),
-		"SIGNALMAN_URL":     config.GetEnv("SIGNALMAN_URL", ""),
+		"JWT_SECRET":          jwtSecret,
+		"SERVICE_TOKEN":       serviceToken,
+		"COMMODORE_URL":       commodoreURL,
+		"PERISCOPE_QUERY_URL": periscopeQueryURL,
+		"PURSER_URL":          purserURL,
+		"QUARTERMASTER_URL":   quartermasterURL,
+		"SIGNALMAN_WS_URL":    signalmanWSURL,
 	}))
 
 	// Create custom GraphQL metrics
@@ -103,8 +108,6 @@ func main() {
 				if len(parts) == 2 && parts[0] == "Bearer" {
 					token := parts[1]
 
-					// Validate JWT token
-					jwtSecret := config.GetEnv("JWT_SECRET", "default-secret-key-change-in-production")
 					claims, err := pkgauth.ValidateJWT(token, []byte(jwtSecret))
 					if err == nil {
 						// Add user context to WebSocket connection
@@ -160,7 +163,6 @@ func main() {
 
 	// GraphQL endpoint (single route group)
 	graphqlGroup := app.Group("/graphql")
-	jwtSecret := config.GetEnv("JWT_SECRET", "default-secret-key-change-in-production")
 	graphqlGroup.Use(middleware.DemoMode(logger))                   // Demo mode detection (must be before auth)
 	graphqlGroup.Use(middleware.PublicOrJWTAuth([]byte(jwtSecret))) // Allowlist public queries or require auth
 	graphqlGroup.Use(middleware.GraphQLContextMiddleware())         // Bridge user context to GraphQL
@@ -193,7 +195,7 @@ func main() {
 
 	// Best-effort service registration in Quartermaster
 	go func() {
-		qc := qmclient.NewClient(qmclient.Config{BaseURL: config.GetEnv("QUARTERMASTER_URL", "http://localhost:18002"), ServiceToken: config.GetEnv("SERVICE_TOKEN", ""), Logger: logger})
+		qc := qmclient.NewClient(qmclient.Config{BaseURL: quartermasterURL, ServiceToken: serviceToken, Logger: logger})
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if _, err := qc.BootstrapService(ctx, &qmapi.BootstrapServiceRequest{Type: "gateway", Version: version.Version, Protocol: "http", HealthEndpoint: func() *string { s := "/health"; return &s }(), Port: 18000}); err != nil {

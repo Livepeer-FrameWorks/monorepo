@@ -288,13 +288,14 @@ func (h *Hub) GetStats() *signalman.HubStats {
 
 // ServeWS handles WebSocket requests from clients
 func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
+	jwtSecret := config.RequireEnv("JWT_SECRET")
+
 	// Check for JWT token in Authorization header
 	var userID, tenantID string
 	authHeader := r.Header.Get("Authorization")
 	if authHeader != "" {
 		parts := strings.Split(authHeader, " ")
 		if len(parts) == 2 && parts[0] == "Bearer" {
-			jwtSecret := config.GetEnv("JWT_SECRET", "default-secret-key-change-in-production")
 			claims, err := auth.ValidateJWT(parts[1], []byte(jwtSecret))
 			if err != nil {
 				h.logger.WithError(err).Warn("Invalid JWT token for WebSocket connection")

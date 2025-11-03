@@ -20,6 +20,7 @@ import (
 
 	"frameworks/pkg/logging"
 
+	jwt "github.com/golang-jwt/jwt/v5"
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/gin-gonic/gin"
@@ -36,6 +37,7 @@ import (
 	foghorn "frameworks/pkg/clients/foghorn"
 	purserclient "frameworks/pkg/clients/purser"
 	qmclient "frameworks/pkg/clients/quartermaster"
+	"frameworks/pkg/config"
 	"frameworks/pkg/models"
 )
 
@@ -118,20 +120,9 @@ func Init(database *sql.DB, log logging.Logger, r Router, m *HandlerMetrics) {
 	router = r
 	metrics = m
 
-	quartermasterURL = os.Getenv("QUARTERMASTER_URL")
-	if quartermasterURL == "" {
-		quartermasterURL = "http://localhost:18002"
-	}
-
-	purserURL = os.Getenv("PURSER_URL")
-	if purserURL == "" {
-		purserURL = "http://localhost:18003"
-	}
-
-	serviceToken = os.Getenv("SERVICE_TOKEN")
-	if serviceToken == "" {
-		log.Fatal("SERVICE_TOKEN environment variable is required")
-	}
+	quartermasterURL = config.RequireEnv("QUARTERMASTER_URL")
+	purserURL = config.RequireEnv("PURSER_URL")
+	serviceToken = config.RequireEnv("SERVICE_TOKEN")
 
 	// Quartermaster cache
 	qmTTLSecs := getEnvInt("QUARTERMASTER_CACHE_TTL_SECONDS", 60)
@@ -209,6 +200,20 @@ func Register(c *gin.Context) {
 			Success: true,
 			Message: "Registration successful. Please check your email to verify your account.",
 		})
+		return
+	}
+
+	if err := verifyTurnstileToken(req.TurnstileToken, clientIP); err != nil {
+		logger.WithFields(logging.Fields{
+			"ip":    clientIP,
+			"email": req.Email,
+			"error": err.Error(),
+		}).Warn("Turnstile validation failed")
+		if metrics != nil {
+			metrics.AuthOperations.WithLabelValues("register", "error").Inc()
+		}
+
+		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: "Turnstile verification failed"})
 		return
 	}
 
@@ -350,6 +355,18 @@ func Login(c *gin.Context) {
 		return
 	}
 
+	// Validate Turnstile token if configured
+	clientIP := c.ClientIP()
+	if err := verifyTurnstileToken(req.TurnstileToken, clientIP); err != nil {
+		logger.WithFields(logging.Fields{
+			"ip":    clientIP,
+			"email": req.Email,
+			"error": err,
+		}).Warn("Login attempt failed Turnstile verification")
+		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: "Bot verification failed"})
+		return
+	}
+
 	// Find user by email (shared tenancy)
 	var user models.User
 	err := db.QueryRow(`
@@ -410,7 +427,7 @@ func Login(c *gin.Context) {
 	}
 
 	// Generate JWT token
-	jwtSecret := []byte(os.Getenv("JWT_SECRET"))
+	jwtSecret := []byte(config.RequireEnv("JWT_SECRET"))
 	token, err := auth.GenerateJWT(user.ID, user.TenantID, user.Email, user.Role, jwtSecret)
 	if err != nil {
 		logger.WithFields(logging.Fields{
@@ -515,22 +532,22 @@ func GetStreams(c *gin.Context) {
 	if role == "service" {
 		// Service accounts can see all streams for the tenant
 		query = `
-			SELECT stream_key, playback_id, internal_name, title, description,
-			       is_recording_enabled, is_public, status, start_time, end_time, created_at, updated_at
-			FROM commodore.streams 
-			WHERE tenant_id = $1
-			ORDER BY created_at DESC
-		`
+            SELECT stream_key, playback_id, internal_name, title, description,
+                   is_recording_enabled, is_public, status, start_time, end_time, created_at, updated_at
+            FROM commodore.streams 
+            WHERE tenant_id = $1
+            ORDER BY created_at DESC
+        `
 		args = []interface{}{tenantID}
 	} else {
 		// Regular users see only their own streams
 		query = `
-			SELECT stream_key, playback_id, internal_name, title, description,
-			       is_recording_enabled, is_public, status, start_time, end_time, created_at, updated_at
-			FROM commodore.streams 
-			WHERE user_id = $1 AND tenant_id = $2
-			ORDER BY created_at DESC
-		`
+            SELECT stream_key, playback_id, internal_name, title, description,
+                   is_recording_enabled, is_public, status, start_time, end_time, created_at, updated_at
+            FROM commodore.streams 
+            WHERE user_id = $1 AND tenant_id = $2
+            ORDER BY created_at DESC
+        `
 		args = []interface{}{userID, tenantID}
 	}
 
@@ -585,6 +602,9 @@ func GetStreams(c *gin.Context) {
 		// Set public ID to internal_name
 		stream.ID = stream.InternalName
 
+		// Keep GraphQL 'record' field in sync
+		stream.IsRecording = stream.IsRecordingEnabled
+
 		streams = append(streams, stream)
 	}
 
@@ -600,10 +620,10 @@ func GetStream(c *gin.Context) {
 	var stream models.Stream
 	var startTime, endTime *time.Time
 	err := db.QueryRow(`
-		SELECT id, title, description, stream_key, playback_id, internal_name, 
-		       is_recording_enabled, is_public, status, start_time, end_time, created_at
-		FROM commodore.streams WHERE internal_name = $1 AND user_id = $2 AND tenant_id = $3
-	`, streamInternalName, userID, tenantID).Scan(&stream.ID, &stream.Title, &stream.Description,
+        SELECT id, title, description, stream_key, playback_id, internal_name, 
+               is_recording_enabled, is_public, status, start_time, end_time, created_at
+        FROM commodore.streams WHERE internal_name = $1 AND user_id = $2 AND tenant_id = $3
+    `, streamInternalName, userID, tenantID).Scan(&stream.ID, &stream.Title, &stream.Description,
 		&stream.StreamKey, &stream.PlaybackID, &stream.InternalName,
 		&stream.IsRecordingEnabled, &stream.IsPublic, &stream.Status,
 		&startTime, &endTime, &stream.CreatedAt)
@@ -634,6 +654,7 @@ func GetStream(c *gin.Context) {
 
 	// Set public ID to internal_name
 	stream.ID = stream.InternalName
+	stream.IsRecording = stream.IsRecordingEnabled
 
 	c.JSON(http.StatusOK, stream)
 }
@@ -1726,10 +1747,10 @@ func GetUsers(c *gin.Context) {
 // GetAllStreams returns all streams (admin only)
 func GetAllStreams(c *gin.Context) {
 	rows, err := db.Query(`
-		SELECT internal_name, stream_key, playback_id, title, description,
-		       is_recording_enabled, is_public, status, start_time, end_time, created_at
-		FROM commodore.streams ORDER BY created_at DESC
-	`)
+        SELECT internal_name, stream_key, playback_id, title, description,
+               is_recording_enabled, is_public, status, start_time, end_time, created_at
+        FROM commodore.streams ORDER BY created_at DESC
+    `)
 
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Failed to fetch streams"})
@@ -1755,6 +1776,7 @@ func GetAllStreams(c *gin.Context) {
 
 		// Set public ID to internal_name
 		stream.ID = stream.InternalName
+		stream.IsRecording = stream.IsRecordingEnabled
 
 		// Convert nullable timestamps
 		if startTime != nil {
@@ -1981,12 +2003,25 @@ func HandleRecordingStatus(c *gin.Context) {
 		return
 	}
 
-	// Update recording status with tenant awareness
-	tenantID := "00000000-0000-0000-0000-000000000001" // Demo tenant for now
-	_, err := db.Exec(`
-		UPDATE commodore.streams SET is_recording_enabled = $1, updated_at = NOW()
-		WHERE tenant_id = $2 AND internal_name = $3
-	`, eventData.IsRecording, tenantID, eventData.InternalName)
+	if eventData.InternalName == "" {
+		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: "internal_name required"})
+		return
+	}
+
+	// Prefer explicit tenant header if present; otherwise update by unique internal_name
+	tenantID := c.GetHeader("X-Tenant-ID")
+	var err error
+	if tenantID != "" {
+		_, err = db.Exec(`
+            UPDATE commodore.streams SET is_recording_enabled = $1, updated_at = NOW()
+            WHERE tenant_id = $2 AND internal_name = $3
+        `, eventData.IsRecording, tenantID, eventData.InternalName)
+	} else {
+		_, err = db.Exec(`
+            UPDATE commodore.streams SET is_recording_enabled = $1, updated_at = NOW()
+            WHERE internal_name = $2
+        `, eventData.IsRecording, eventData.InternalName)
+	}
 	if err != nil {
 		logger.WithFields(logging.Fields{
 			"tenant_id":     tenantID,
@@ -2278,6 +2313,10 @@ func RevokeAPIToken(c *gin.Context) {
 func VerifyEmail(c *gin.Context) {
 	token := c.Query("token")
 	if token == "" {
+		// Fallback to path param style /verify/:token
+		token = c.Param("token")
+	}
+	if token == "" {
 		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: "Verification token required"})
 		return
 	}
@@ -2336,6 +2375,158 @@ func VerifyEmail(c *gin.Context) {
 		Success: true,
 		Message: "Email verified successfully! You can now log in to your account.",
 	})
+}
+
+// ForgotPassword initiates a password reset by sending a signed reset link to the user's email
+func ForgotPassword(c *gin.Context) {
+	type reqBody struct {
+		Email string `json:"email"`
+	}
+	var req reqBody
+	if err := c.ShouldBindJSON(&req); err != nil || req.Email == "" {
+		c.JSON(http.StatusOK, gin.H{"message": "If that email exists, a reset link has been sent."})
+		return
+	}
+
+	// Find user
+	var userID, email string
+	err := db.QueryRow(`SELECT id, email FROM commodore.users WHERE LOWER(email)=LOWER($1) AND is_active=true`, req.Email).Scan(&userID, &email)
+	if err == sql.ErrNoRows || err != nil {
+		// Do not leak existence
+		c.JSON(http.StatusOK, gin.H{"message": "If that email exists, a reset link has been sent."})
+		return
+	}
+
+	// Create signed reset token (JWT) with short expiry
+	resetToken, err := generatePasswordResetToken(userID, email)
+	if err != nil {
+		logger.WithError(err).Warn("Failed to generate reset token")
+		c.JSON(http.StatusOK, gin.H{"message": "If that email exists, a reset link has been sent."})
+		return
+	}
+
+	// Send email (best effort)
+	if err := sendPasswordResetEmail(email, resetToken, "FrameWorks"); err != nil {
+		logger.WithError(err).Warn("Failed to send reset email")
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "If that email exists, a reset link has been sent."})
+}
+
+// ResetPassword validates the reset token and updates the user's password
+func ResetPassword(c *gin.Context) {
+	type reqBody struct {
+		Token    string `json:"token"`
+		Password string `json:"password"`
+	}
+	var req reqBody
+	if err := c.ShouldBindJSON(&req); err != nil || req.Token == "" || len(req.Password) < 6 {
+		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: "Invalid request"})
+		return
+	}
+
+	userID, email, err := validatePasswordResetToken(req.Token)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: "Invalid or expired token"})
+		return
+	}
+
+	// Ensure user still exists and is active
+	var exists bool
+	if err := db.QueryRow(`SELECT EXISTS(SELECT 1 FROM commodore.users WHERE id=$1 AND email=$2 AND is_active=true)`, userID, email).Scan(&exists); err != nil || !exists {
+		c.JSON(http.StatusBadRequest, commodoreapi.ErrorResponse{Error: "Invalid token"})
+		return
+	}
+
+	// Update password hash
+	hash, err := auth.HashPassword(req.Password)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Failed to update password"})
+		return
+	}
+	if _, err := db.Exec(`UPDATE commodore.users SET password_hash=$1, updated_at=NOW() WHERE id=$2`, hash, userID); err != nil {
+		logger.WithError(err).Error("Failed to update user password")
+		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Failed to update password"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Password has been reset. You can now log in."})
+}
+
+// Logout is a stateless no-op for JWT sessions, provided for API parity
+func Logout(c *gin.Context) {
+	c.Status(http.StatusNoContent)
+}
+
+// generatePasswordResetToken creates a short-lived signed token for password reset
+func generatePasswordResetToken(userID, email string) (string, error) {
+	secret := []byte(config.RequireEnv("JWT_SECRET"))
+	claims := jwt.RegisteredClaims{
+		Subject:   userID,
+		ExpiresAt: jwt.NewNumericDate(time.Now().Add(1 * time.Hour)),
+		IssuedAt:  jwt.NewNumericDate(time.Now()),
+		Audience:  []string{"password_reset"},
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	token.Header["typ"] = "JWT"
+	// Include email in the token via header to avoid custom claims struct
+	token.Header["eml"] = email
+	return token.SignedString(secret)
+}
+
+// validatePasswordResetToken validates the reset token and returns userID and email
+func validatePasswordResetToken(tokenString string) (string, string, error) {
+	secret := []byte(config.RequireEnv("JWT_SECRET"))
+	parsed, err := jwt.ParseWithClaims(tokenString, &jwt.RegisteredClaims{}, func(token *jwt.Token) (interface{}, error) { return secret, nil })
+	if err != nil || !parsed.Valid {
+		return "", "", fmt.Errorf("invalid token")
+	}
+	claims, ok := parsed.Claims.(*jwt.RegisteredClaims)
+	if !ok {
+		return "", "", fmt.Errorf("invalid claims")
+	}
+	if claims.ExpiresAt == nil || time.Now().After(claims.ExpiresAt.Time) {
+		return "", "", fmt.Errorf("expired")
+	}
+	userID := claims.Subject
+	email, _ := parsed.Header["eml"].(string)
+	return userID, email, nil
+}
+
+// sendPasswordResetEmail sends a password reset email
+func sendPasswordResetEmail(email, token, tenantName string) error {
+	smtpHost := os.Getenv("SMTP_HOST")
+	smtpPort := os.Getenv("SMTP_PORT")
+	smtpUser := os.Getenv("SMTP_USER")
+	smtpPass := os.Getenv("SMTP_PASS")
+	fromEmail := os.Getenv("FROM_EMAIL")
+	if smtpHost == "" {
+		return fmt.Errorf("SMTP not configured")
+	}
+	if smtpPort == "" {
+		smtpPort = "587"
+	}
+	if fromEmail == "" {
+		fromEmail = "noreply@frameworks.network"
+	}
+
+	baseURL := os.Getenv("BASE_URL")
+	if baseURL == "" {
+		baseURL = "http://localhost:3000"
+	}
+	resetURL := fmt.Sprintf("%s/reset-password?token=%s", baseURL, url.QueryEscape(token))
+
+	subject := fmt.Sprintf("Reset your %s password", tenantName)
+	body := fmt.Sprintf(`
+<!DOCTYPE html><html><body>
+  <p>We received a request to reset your password.</p>
+  <p><a href="%s">Click here to reset your password</a> (valid for 1 hour).</p>
+  <p>If you did not request this, you can safely ignore this email.</p>
+</body></html>`, resetURL)
+
+	auth := smtp.PlainAuth("", smtpUser, smtpPass, smtpHost)
+	msg := []byte(fmt.Sprintf("To: %s\r\nSubject: %s\r\nMIME-Version: 1.0\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n%s", email, subject, body))
+	return smtp.SendMail(smtpHost+":"+smtpPort, auth, fromEmail, []string{email}, msg)
 }
 
 // getTenantContext extracts tenant ID from request context
@@ -2476,6 +2667,10 @@ func checkRegistrationRateLimit(clientIP string) bool {
 }
 
 func validateBotProtection(req models.RegisterRequest, clientIP string) []string {
+	if os.Getenv("TURNSTILE_AUTH_SECRET_KEY") != "" {
+		return nil
+	}
+
 	var errors []string
 
 	// 1. Honeypot check
@@ -2522,6 +2717,52 @@ func validateBotProtection(req models.RegisterRequest, clientIP string) []string
 	}
 
 	return errors
+}
+
+func verifyTurnstileToken(token, clientIP string) error {
+	secret := os.Getenv("TURNSTILE_AUTH_SECRET_KEY")
+	if secret == "" {
+		return nil
+	}
+
+	if token == "" {
+		return fmt.Errorf("missing turnstile token")
+	}
+
+	data := url.Values{}
+	data.Set("secret", secret)
+	data.Set("response", token)
+	if clientIP != "" {
+		data.Set("remoteip", clientIP)
+	}
+
+	req, err := http.NewRequest(http.MethodPost, "https://challenges.cloudflare.com/turnstile/v0/siteverify", strings.NewReader(data.Encode()))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Success    bool     `json:"success"`
+		ErrorCodes []string `json:"error-codes"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return err
+	}
+
+	if !result.Success {
+		return fmt.Errorf("%v", result.ErrorCodes)
+	}
+
+	return nil
 }
 
 func generateVerificationToken() string {
@@ -3196,7 +3437,7 @@ func ResolveViewerEndpoint(c *gin.Context) {
 		return
 	}
 
-	serviceToken := os.Getenv("SERVICE_TOKEN")
+	serviceToken := config.RequireEnv("SERVICE_TOKEN")
 	if serviceToken == "" {
 		logger.Error("SERVICE_TOKEN environment variable not set")
 		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Service configuration error"})
@@ -3290,7 +3531,7 @@ func StreamMetaByKey(c *gin.Context) {
 	}
 	urls := strings.Split(foghornList, ",")
 
-	serviceToken := os.Getenv("SERVICE_TOKEN")
+	serviceToken := config.RequireEnv("SERVICE_TOKEN")
 
 	// Optional target params and includeRaw flag
 	targetBaseURL := c.Query("target_base_url")

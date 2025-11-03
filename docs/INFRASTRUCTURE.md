@@ -100,6 +100,11 @@ graph TB
 
 Decision: Nginx + MaxMind remains an option; evaluate Cloudflare geo headers + Caddy as a unified solution. Production configs are provided via the CLI templates.
 
+## External vs Internal Balancing
+
+- Cloudflare (external): DNS-level steering for HTTP(S) entrypoints across regions; use pools and health checks to reach the nearest healthy regional gateway.
+- Foghorn (internal): application-level media balancing inside the platform; selects Mist nodes per stream/viewer using health and capacity signals. Keep Cloudflare pools at the entrypoint level; do not pool individual Mist nodes.
+
 ## Monitoring & Observability
 
 - Development: Prometheus scrapes service `/metrics`; Grafana ships pre-wired. Datasources: Prometheus, ClickHouse (via grafana-clickhouse), and PostgreSQL (read-only) for ad‑hoc queries.

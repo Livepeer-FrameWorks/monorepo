@@ -1,0 +1,94 @@
+/* Page-specific styles for documentation */
+@layer components {
+  .docs-highlight-link {
+    display: block;
+    text-decoration: none;
+    color: inherit;
+    height: 100%;
+    border-radius: inherit;
+  }
+  .docs-highlight-link .marketing-feature-card {
+    height: 100%;
+    border-radius: 0;
+  }
+  .docs-highlight-meta {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    font-size: 0.78rem;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: color-mix(in srgb, hsl(var(--muted-foreground)) 64%, rgba(213, 229, 255, 0.32));
+  }
+  .docs-highlight-meta svg {
+    width: 0.9rem;
+    height: 0.9rem;
+  }
+  .docs-highlight-card .marketing-feature-card {
+    padding: clamp(1.6rem, 2vw, 1.85rem);
+    min-height: 100%;
+  }
+  .docs-overview-list {
+    display: flex;
+    flex-direction: column;
+    gap: clamp(0.65rem, 1vw, 0.9rem);
+    margin: clamp(0.8rem, 1.2vw, 1rem) 0 0;
+    padding-top: clamp(0.9rem, 1.3vw, 1.1rem);
+    border-top: 1px solid rgba(var(--accent-rgb) / 0.16);
+  }
+  .docs-overview-list__item {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    padding-left: 1.6rem;
+  }
+  .docs-overview-list__item::before {
+    content: '';
+    position: absolute;
+    top: 0.4rem;
+    left: 0;
+    width: 0.45rem;
+    height: 0.45rem;
+    border-radius: 999px;
+    background: hsl(var(--feature-accent));
+    box-shadow: 0 0 18px hsl(var(--feature-accent) / 0.45);
+  }
+  .docs-overview-list__title {
+    font-weight: 600;
+    font-size: 0.98rem;
+    color: hsl(var(--foreground));
+  }
+  .docs-overview-list__description {
+    font-size: 0.9rem;
+    color: color-mix(in srgb, hsl(var(--muted-foreground)) 78%, rgba(213, 229, 255, 0.24));
+    line-height: 1.6;
+  }
+  .docs-overview-card {
+    position: relative;
+  }
+  .docs-overview-card--disabled {
+    cursor: not-allowed;
+  }
+  .docs-overview-card--disabled .marketing-feature-card__actions {
+    display: none;
+  }
+  .docs-overview-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    color: color-mix(in srgb, hsl(var(--muted-foreground)) 68%, rgba(213, 229, 255, 0.24));
+  }
+  .docs-overview-status svg {
+    width: 0.95rem;
+    height: 0.95rem;
+  }
+  .docs-overview-card .marketing-feature--tone-purple::before,
+  .docs-overview-card .marketing-feature--tone-accent::before,
+  .docs-overview-card .marketing-feature--tone-orange::before {
+    display: none;
+  }
+}

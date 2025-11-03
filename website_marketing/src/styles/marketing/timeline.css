@@ -1,0 +1,260 @@
+/* Marketing component styles: timeline */
+@layer components {
+  .timeline-band {
+    gap: clamp(1.8rem, 2.6vw, 2.4rem);
+  }
+
+  .timeline-band--plain {
+    padding: 0;
+    background: transparent;
+    border: none;
+    gap: clamp(1.2rem, 2vw, 1.8rem);
+  }
+
+  .marketing-timeline-block {
+    position: relative;
+    border-radius: clamp(0.9rem, 1.15vw, 1.25rem);
+    border: 1px solid rgba(125, 207, 255, 0.18);
+    background:
+      linear-gradient(135deg, rgba(28, 32, 48, 0.92), rgba(14, 18, 30, 0.96)),
+      linear-gradient(180deg, rgba(14, 18, 30, 0.92), rgba(12, 14, 26, 0.94));
+    overflow: hidden;
+    box-shadow: 0 26px 52px rgba(8, 10, 28, 0.42);
+    backdrop-filter: blur(18px);
+  }
+
+  .marketing-timeline-block__header {
+    display: flex;
+    flex-direction: column;
+    gap: clamp(0.65rem, 1vw, 0.95rem);
+    padding: clamp(1.8rem, 2.2vw, 2.4rem) clamp(1.9rem, 2.4vw, 2.6rem);
+    border-bottom: 1px solid rgba(125, 207, 255, 0.14);
+    background: linear-gradient(140deg, rgba(35, 40, 60, 0.82), rgba(28, 32, 50, 0.85));
+  }
+
+  .marketing-timeline-block__header .marketing-pill {
+    align-self: flex-start;
+  }
+
+  .marketing-timeline-block__title {
+    margin: 0;
+    font-size: clamp(1.65rem, 1.8vw, 1.95rem);
+    line-height: 1.15;
+    color: hsl(var(--foreground));
+    position: relative;
+    padding-bottom: 0.5rem;
+  }
+
+  .marketing-timeline-block__title::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    bottom: 0;
+    width: clamp(6rem, 24vw, 12rem);
+    height: 3px;
+    border-radius: 999px;
+    background: linear-gradient(90deg, hsl(var(--primary)), hsl(var(--brand-cyan)), hsl(var(--brand-green)));
+    box-shadow: 0 0 18px rgba(125, 207, 255, 0.28);
+  }
+
+  .marketing-timeline-block__subtitle {
+    margin: 0;
+    color: hsl(var(--muted-foreground));
+    max-width: clamp(32rem, 54vw, 44rem);
+    line-height: 1.6;
+  }
+
+  .marketing-timeline {
+    position: relative;
+    display: grid;
+    border-radius: inherit;
+    background: transparent;
+  }
+
+  .marketing-timeline__trigger {
+    position: relative;
+    display: flex;
+    flex-direction: row;
+    gap: 0.25rem;
+  }
+
+  .marketing-timeline__row {
+    display: flex;
+    align-items: flex-start;
+    gap: 18px;
+    width: 100%;
+  }
+
+  .marketing-timeline__item {
+    overflow: hidden;
+  }
+
+  .marketing-timeline__header {
+    display: flex;
+    align-items: flex-start;
+    gap: 18px;
+    width: 100%;
+  }
+
+  .marketing-timeline__icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    border-radius: 10px;
+    background: linear-gradient(145deg, rgba(122, 162, 247, 0.5), rgba(125, 207, 255, 0.35));
+    border: 1px solid rgba(122, 162, 247, 0.35);
+    color: rgba(13, 24, 44, 0.92);
+    flex-shrink: 0;
+  }
+
+  .marketing-timeline__icon svg {
+    width: 1.12rem;
+    height: 1.12rem;
+  }
+
+  .marketing-accordion__trigger:hover .marketing-timeline__icon,
+  .marketing-accordion__trigger:focus-visible .marketing-timeline__icon,
+  .marketing-accordion__trigger[data-state='open'] .marketing-timeline__icon {
+    transform: none;
+    border-color: rgba(122, 162, 247, 0.45);
+    box-shadow: none;
+  }
+
+  .marketing-accordion__trigger:hover .marketing-timeline__badge,
+  .marketing-accordion__trigger:focus-visible .marketing-timeline__badge {
+    border-color: rgba(125, 207, 255, 0.48);
+    color: rgba(213, 229, 255, 0.92);
+  }
+
+  .marketing-accordion__content[data-state='open'] .marketing-timeline__body {
+    animation: marketing-accordion-body-fade-in 0.34s cubic-bezier(0.32, 0.84, 0, 1) forwards;
+  }
+
+  .marketing-accordion__content[data-state='closed'] .marketing-timeline__body {
+    animation: marketing-accordion-body-fade-out 0.34s cubic-bezier(0.5, 0.05, 0.75, 0.35) forwards;
+  }
+
+  .marketing-timeline__content {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+
+  .marketing-timeline__meta {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .marketing-timeline__title-row {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+
+  .marketing-timeline__title {
+    font-size: 1rem;
+    font-weight: 600;
+    line-height: 1.2;
+    color: rgba(222, 232, 255, 0.95);
+  }
+
+  .marketing-timeline__year {
+    font-size: 0.78rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: rgba(186, 202, 235, 0.78);
+    position: relative;
+  }
+
+  .marketing-timeline__year::after {
+    content: ' -';
+    margin-left: 0.15rem;
+    color: inherit;
+  }
+
+  .marketing-timeline__badges {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-top: 0.25rem;
+  }
+
+  .marketing-timeline__badge {
+    border: 1px solid #2c3250 !important;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-size: 0.75rem;
+    line-height: 1rem;
+    color: #d5e5ffe6;
+    padding-block: 0.125rem;
+    padding-inline: 0.625rem;
+    border-radius: 999px;
+    font-weight: 500;
+    background: rgba(125, 207, 255, 0.08);
+  }
+
+  .marketing-timeline__subtitle {
+    font-size: 0.88rem;
+    color: color-mix(in srgb, hsl(var(--muted-foreground)) 76%, rgba(125, 207, 255, 0.68));
+  }
+
+  .marketing-timeline__panel {
+    padding: 0;
+    background: transparent;
+  }
+
+  .marketing-timeline__body {
+    display: flex;
+    flex-direction: column;
+    gap: clamp(0.9rem, 1.3vw, 1.2rem);
+    padding: clamp(1.4rem, 1.8vw, 1.9rem) clamp(1.9rem, 2.3vw, 2.35rem) clamp(1.55rem, 2vw, 2rem);
+    background: linear-gradient(150deg, rgba(22, 24, 36, 0.9), rgba(14, 16, 26, 0.94));
+    border-top: 1px solid rgba(125, 207, 255, 0.14);
+  }
+
+  .marketing-timeline__summary {
+    margin: 0;
+    color: hsl(var(--muted-foreground));
+    line-height: 1.6;
+  }
+
+  .marketing-timeline__list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 0.8rem;
+  }
+
+  .marketing-timeline__list-item {
+    display: flex;
+    gap: 0.75rem;
+    align-items: flex-start;
+    font-size: 0.95rem;
+    color: color-mix(in srgb, hsl(var(--muted-foreground)) 82%, rgba(255, 255, 255, 0.24));
+  }
+
+  .marketing-timeline__bullet {
+    width: 0.48rem;
+    height: 0.48rem;
+    border-radius: 999px;
+    background: linear-gradient(135deg, hsl(var(--primary)), hsl(var(--brand-cyan)));
+    box-shadow: 0 0 10px rgba(125, 207, 255, 0.32);
+    flex-shrink: 0;
+    margin-top: 0.35rem;
+  }
+
+  .marketing-timeline__description {
+    margin: 0;
+    color: hsl(var(--muted-foreground));
+  }
+}

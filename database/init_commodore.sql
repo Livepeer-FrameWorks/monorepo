@@ -119,6 +119,15 @@ CREATE TABLE IF NOT EXISTS commodore.streams (
         "format": "ts",
         "segment_duration": 6
     }',
+    -- Typed recording fields
+    is_recording_enabled BOOLEAN DEFAULT FALSE,
+    recording_retention_days INTEGER DEFAULT 30,
+    recording_segment_duration INTEGER DEFAULT 6,
+    recording_format TEXT DEFAULT 'ts',
+    
+    -- Optional constraints for sane values
+    CONSTRAINT chk_recording_segment_duration_positive CHECK (recording_segment_duration > 0),
+    CONSTRAINT chk_recording_retention_nonnegative CHECK (recording_retention_days >= 0),
     is_public BOOLEAN DEFAULT TRUE,
     max_viewers INTEGER,
     password VARCHAR(255), -- For private streams
@@ -203,4 +212,3 @@ BEGIN
     RETURN QUERY SELECT new_stream_id, new_stream_key, new_playback_id, new_internal_name;
 END;
 $$ LANGUAGE plpgsql;
-

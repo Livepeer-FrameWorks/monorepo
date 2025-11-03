@@ -25,9 +25,14 @@ func main() {
 
 	logger.Info("Starting Commodore (Control API)")
 
+	dbURL := config.RequireEnv("DATABASE_URL")
+	jwtSecret := config.RequireEnv("JWT_SECRET")
+	serviceToken := config.RequireEnv("SERVICE_TOKEN")
+	quartermasterURL := config.RequireEnv("QUARTERMASTER_URL")
+
 	// Connect to database
 	dbConfig := database.DefaultConfig()
-	dbConfig.URL = config.GetEnv("DATABASE_URL", "")
+	dbConfig.URL = dbURL
 	db := database.MustConnect(dbConfig, logger)
 	defer db.Close()
 
@@ -44,8 +49,8 @@ func main() {
 	// Add health checks
 	healthChecker.AddCheck("database", monitoring.DatabaseHealthCheck(db))
 	healthChecker.AddCheck("config", monitoring.ConfigurationHealthCheck(map[string]string{
-		"DATABASE_URL": config.GetEnv("DATABASE_URL", ""),
-		"JWT_SECRET":   config.GetEnv("JWT_SECRET", ""),
+		"DATABASE_URL": dbURL,
+		"JWT_SECRET":   jwtSecret,
 	}))
 
 	// Create custom auth and stream metrics
@@ -68,10 +73,10 @@ func main() {
 		app.POST("/register", handlers.Register)
 		app.POST("/login", handlers.Login)
 		app.GET("/verify", handlers.VerifyEmail)
-
+		app.GET("/verify/:token", handlers.VerifyEmail) // also accept token in path
 		// Protected routes
 		protected := app.Group("")
-		protected.Use(auth.JWTAuthMiddleware([]byte(config.GetEnv("JWT_SECRET", ""))))
+		protected.Use(auth.JWTAuthMiddleware([]byte(jwtSecret)))
 		{
 			// User profile
 			protected.GET("/me", handlers.GetMe)
@@ -117,7 +122,7 @@ func main() {
 
 		// Webhook endpoints for external services (Helmsman, etc.)
 		webhooks := app.Group("")
-		webhooks.Use(auth.ServiceAuthMiddleware(config.GetEnv("SERVICE_TOKEN", "")))
+		webhooks.Use(auth.ServiceAuthMiddleware(serviceToken))
 		{
 			webhooks.POST("/stream-start", handlers.HandleStreamStart)
 			webhooks.POST("/stream-status", handlers.HandleStreamStatus)
@@ -128,6 +133,11 @@ func main() {
 			webhooks.GET("/resolve-internal-name/:internal_name", handlers.ResolveInternalName)
 			webhooks.POST("/viewer/resolve-endpoint", handlers.ResolveViewerEndpoint)
 		}
+
+		// Public auth utility endpoints
+		app.POST("/forgot-password", handlers.ForgotPassword)
+		app.POST("/reset-password", handlers.ResetPassword)
+		app.POST("/logout", handlers.Logout)
 
 		// Stream node discovery (cluster-aware)
 		app.GET("/stream-node/:stream_key", handlers.GetStreamNode)
@@ -147,7 +157,7 @@ func main() {
 
 		// Admin routes
 		admin := app.Group("/admin")
-		admin.Use(auth.JWTAuthMiddleware([]byte(config.GetEnv("JWT_SECRET", ""))))
+		admin.Use(auth.JWTAuthMiddleware([]byte(jwtSecret)))
 		{
 			admin.GET("/users", handlers.GetUsers)
 			admin.GET("/streams", handlers.GetAllStreams)
@@ -163,7 +173,7 @@ func main() {
 
 	// Best-effort service registration in Quartermaster
 	go func() {
-		qc := qmclient.NewClient(qmclient.Config{BaseURL: config.GetEnv("QUARTERMASTER_URL", "http://localhost:18002"), ServiceToken: config.GetEnv("SERVICE_TOKEN", ""), Logger: logger})
+		qc := qmclient.NewClient(qmclient.Config{BaseURL: quartermasterURL, ServiceToken: serviceToken, Logger: logger})
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if _, err := qc.BootstrapService(ctx, &qmapi.BootstrapServiceRequest{Type: "commodore", Version: version.Version, Protocol: "http", HealthEndpoint: func() *string { s := "/health"; return &s }(), Port: 18001}); err != nil {

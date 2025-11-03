@@ -15,26 +15,38 @@ volumes:
   prometheus_data:
   grafana_data:
 
+x-default-env: &default-env
+  env_file:
+    - ${ENV_FILE:-.env}
+
 services:
   # Bridge - GraphQL API Gateway
   bridge:
+    <<: *default-env
     container_name: frameworks-bridge
     build:
       context: .
       dockerfile: api_gateway/Dockerfile
     environment:
-      - BRIDGE_PORT=18000
-      - LOG_LEVEL=info
-      - GIN_MODE=debug
-      - GRAPHQL_PLAYGROUND_ENABLED=true
-      - GRAPHQL_COMPLEXITY_LIMIT=200
-      - COMMODORE_URL=http://commodore:18001
-      - QUARTERMASTER_URL=http://quartermaster:18002
-      - PERISCOPE_QUERY_URL=http://periscope-query:18004
-      - PURSER_URL=http://purser:18003
-      - SIGNALMAN_WS_URL=ws://signalman:18009
-      - JWT_SECRET=your-jwt-secret-change-in-production
-      - SERVICE_TOKEN=your-service-token-change-in-production
+      BRIDGE_PORT: ${BRIDGE_PORT}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      GIN_MODE: ${GIN_MODE:-debug}
+      GRAPHQL_PLAYGROUND_ENABLED: "true"
+      GRAPHQL_COMPLEXITY_LIMIT: 200
+      COMMODORE_URL: ${COMMODORE_URL}
+      QUARTERMASTER_URL: ${QUARTERMASTER_URL}
+      PERISCOPE_QUERY_URL: ${PERISCOPE_QUERY_URL}
+      PURSER_URL: ${PURSER_URL}
+      SIGNALMAN_WS_URL: ${SIGNALMAN_WS_URL}
+      JWT_SECRET: ${JWT_SECRET}
+      SERVICE_TOKEN: ${SERVICE_TOKEN}
+      DECKLOG_URL: ${DECKLOG_URL}
+      DECKLOG_ALLOW_INSECURE: "true"
+      DECKLOG_USE_TLS: "false"
+      FOGHORN_HTTP_BASE: ${FOGHORN_HTTP_BASE}
+      FOGHORN_CONTROL_ADDR: ${FOGHORN_CONTROL_ADDR}
+      EDGE_PUBLIC_HOSTNAME: ${EDGE_PUBLIC_HOSTNAME:-localhost}
+      MISTSERVER_URL: ${MISTSERVER_URL}
     ports:
       - "18000:18000"
     depends_on:
@@ -65,12 +77,13 @@ services:
 
   # PostgreSQL
   postgres:
+    <<: *default-env
     image: postgres:15
     container_name: frameworks-postgres
     environment:
-      POSTGRES_USER: frameworks_user
-      POSTGRES_PASSWORD: frameworks_dev
-      POSTGRES_DB: frameworks
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./database/init_quartermaster.sql:/docker-entrypoint-initdb.d/10_init_quartermaster.sql:ro
@@ -144,6 +157,7 @@ services:
 
   # Foghorn Load Balancer (Regional/Central)
   foghorn:
+    <<: *default-env
     # MistServer Load Balancer (comment out to use FrameWorks Foghorn)
     # image: ddvtech/mistserver_loadbalancer:latest
     # command: ["/usr/bin/MistUtilLoad", "-g", "5", "-P", "koekjes", "-p", "8042", "-s", "http://mistserver:4242"]
@@ -154,36 +168,36 @@ services:
       context: .
       dockerfile: api_balancing/Dockerfile
     environment:
-      - DATABASE_URL=postgres://frameworks_user:frameworks_dev@postgres:5432/frameworks?sslmode=disable
-      - PORT=18008
-      - FOGHORN_CONTROL_ADDR=:18019
-      - LOG_LEVEL=info
-      - GIN_MODE=release
-      - COMMODORE_URL=http://commodore:18001
-      - COMMODORE_CACHE_TTL=60s
-      - COMMODORE_CACHE_SWR=30s
-      - COMMODORE_CACHE_NEG_TTL=10s
-      - COMMODORE_CACHE_MAX=10000
-      - GEOIP_MMDB_PATH=
-      - GEOIP_CACHE_TTL=300s
-      - GEOIP_CACHE_SWR=120s
-      - GEOIP_CACHE_NEG_TTL=60s
-      - GEOIP_CACHE_MAX=50000
-      - DECKLOG_URL=http://decklog:18006
-      - DECKLOG_ALLOW_INSECURE=true  # For local development only
+      DATABASE_URL: ${DATABASE_URL}
+      PORT: ${FOGHORN_PORT}
+      FOGHORN_CONTROL_ADDR: ${FOGHORN_CONTROL_BIND_ADDR}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      GIN_MODE: release
+      COMMODORE_URL: ${COMMODORE_URL}
+      COMMODORE_CACHE_TTL: 60s
+      COMMODORE_CACHE_SWR: 30s
+      COMMODORE_CACHE_NEG_TTL: 10s
+      COMMODORE_CACHE_MAX: 10000
+      GEOIP_MMDB_PATH: 
+      GEOIP_CACHE_TTL: 300s
+      GEOIP_CACHE_SWR: 120s
+      GEOIP_CACHE_NEG_TTL: 60s
+      GEOIP_CACHE_MAX: 50000
+      DECKLOG_URL: ${DECKLOG_URL}
+      DECKLOG_ALLOW_INSECURE: "true"  # For local development only
       # gRPC Security Configuration
-      - GRPC_USE_TLS=false  # Set to true for production TLS
-      - GRPC_TLS_CERT_PATH=/path/to/cert.pem  # Path to TLS certificate
-      - GRPC_TLS_KEY_PATH=/path/to/key.pem    # Path to TLS private key
-      - DECKLOG_USE_TLS=false  # Set to true for secure Decklog connections
-      - QUARTERMASTER_URL=http://quartermaster:18002
-      - CPU_WEIGHT=500
-      - RAM_WEIGHT=500
-      - BANDWIDTH_WEIGHT=1000
-      - GEO_WEIGHT=1000
-      - STREAM_BONUS=50
-      - MISTSERVER_URL=http://mistserver:4242
-      - SERVICE_TOKEN=your-service-token-change-in-production
+      GRPC_USE_TLS: "false"  # Set to true for production TLS
+      GRPC_TLS_CERT_PATH: /path/to/cert.pem  # Path to TLS certificate
+      GRPC_TLS_KEY_PATH: /path/to/key.pem    # Path to TLS private key
+      DECKLOG_USE_TLS: "false"  # Set to true for secure Decklog connections
+      QUARTERMASTER_URL: ${QUARTERMASTER_URL}
+      CPU_WEIGHT: 500
+      RAM_WEIGHT: 500
+      BANDWIDTH_WEIGHT: 1000
+      GEO_WEIGHT: 1000
+      STREAM_BONUS: 50
+      MISTSERVER_URL: ${MISTSERVER_URL}
+      SERVICE_TOKEN: ${SERVICE_TOKEN}
     ports:
       - "18008:18008"
       - "18019:18019"
@@ -328,6 +342,7 @@ services:
 
   # Quartermaster - Tenant Management Service
   quartermaster:
+    <<: *default-env
     container_name: frameworks-quartermaster
     build:
       context: .
@@ -335,11 +350,11 @@ services:
     ports:
       - "18002:18002"
     environment:
-      - DATABASE_URL=postgres://frameworks_user:frameworks_dev@postgres:5432/frameworks?sslmode=disable
-      - PORT=18002
-      - LOG_LEVEL=info
-      - JWT_SECRET=your-jwt-secret-change-in-production
-      - SERVICE_TOKEN=your-service-token-change-in-production
+      DATABASE_URL: ${DATABASE_URL}
+      PORT: ${QUARTERMASTER_PORT}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      JWT_SECRET: ${JWT_SECRET}
+      SERVICE_TOKEN: ${SERVICE_TOKEN}
     depends_on:
       postgres:
         condition: service_healthy
@@ -363,23 +378,24 @@ services:
 
   # Event Ingest (Decklog)
   decklog:
+    <<: *default-env
     container_name: frameworks-decklog
     build:
       context: .
       dockerfile: api_firehose/Dockerfile
     hostname: decklog
     environment:
-      - KAFKA_BROKERS=kafka:9092
-      - KAFKA_CLUSTER_ID=frameworks
-      - REGION=development
-      - HOSTNAME=decklog-dev
-      - PORT=18006
-      - LOG_LEVEL=info
-      - GIN_MODE=release
-      - GRPC_PORT=18006
-      - ALLOW_INSECURE=true  # For local development only
-      - QUARTERMASTER_URL=http://quartermaster:18002
-      - SERVICE_TOKEN=your-service-token-change-in-production
+      KAFKA_BROKERS: ${KAFKA_BROKERS}
+      KAFKA_CLUSTER_ID: ${KAFKA_CLUSTER_ID}
+      REGION: ${REGION:-development}
+      HOSTNAME: decklog-dev
+      PORT: ${DECKLOG_PORT}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      GIN_MODE: release
+      GRPC_PORT: ${DECKLOG_PORT}
+      ALLOW_INSECURE: "true"
+      QUARTERMASTER_URL: ${QUARTERMASTER_URL}
+      SERVICE_TOKEN: ${SERVICE_TOKEN}
     ports:
       - "18006:18006"
       - "18026:18026"
@@ -408,6 +424,7 @@ services:
 
   # Signalman - WebSocket Hub Service  
   signalman:
+    <<: *default-env
     container_name: frameworks-signalman
     build:
       context: .
@@ -421,19 +438,19 @@ services:
       quartermaster:
         condition: service_started
     environment:
-      - PORT=18009
-      - DATABASE_URL=postgres://frameworks_user:frameworks_dev@postgres:5432/frameworks?sslmode=disable
-      - KAFKA_BROKERS=kafka:9092
-      - KAFKA_TOPICS=analytics_events
-      - KAFKA_GROUP_ID=signalman-group
-      - KAFKA_CLUSTER_ID=frameworks
-      - KAFKA_CLIENT_ID=signalman
-      - LOG_LEVEL=info
-      - REGION=development
-      - HOSTNAME=signalman-dev
-      - QUARTERMASTER_URL=http://quartermaster:18002
-      - JWT_SECRET=your-jwt-secret-change-in-production
-      - SERVICE_TOKEN=your-service-token-change-in-production
+      PORT: ${SIGNALMAN_PORT}
+      DATABASE_URL: ${DATABASE_URL}
+      KAFKA_BROKERS: ${KAFKA_BROKERS}
+      KAFKA_TOPICS: analytics_events
+      KAFKA_GROUP_ID: signalman-group
+      KAFKA_CLUSTER_ID: ${KAFKA_CLUSTER_ID}
+      KAFKA_CLIENT_ID: signalman
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      REGION: ${REGION:-development}
+      HOSTNAME: signalman-dev
+      QUARTERMASTER_URL: ${QUARTERMASTER_URL}
+      JWT_SECRET: ${JWT_SECRET}
+      SERVICE_TOKEN: ${SERVICE_TOKEN}
     ports:
       - "18009:18009"
     networks:
@@ -455,18 +472,21 @@ services:
 
   # Backend API
   commodore:
+    <<: *default-env
     container_name: frameworks-commodore
     build:
       context: .
       dockerfile: api_control/Dockerfile
     environment:
-      - DATABASE_URL=postgres://frameworks_user:frameworks_dev@postgres:5432/frameworks?sslmode=disable
-      - JWT_SECRET=your-jwt-secret-change-in-production
-      - FOGHORN_URL=http://foghorn:18008
-      - PORT=18001
-      - QUARTERMASTER_URL=http://quartermaster:18002
-      - PURSER_URL=http://purser:18003
-      - SERVICE_TOKEN=your-service-token-change-in-production
+      DATABASE_URL: ${DATABASE_URL}
+      JWT_SECRET: ${JWT_SECRET}
+      FOGHORN_URL: ${FOGHORN_HTTP_BASE}
+      PORT: ${COMMODORE_PORT}
+      QUARTERMASTER_URL: ${QUARTERMASTER_URL}
+      PURSER_URL: ${PURSER_URL}
+      BASE_URL: ${BASE_URL:-http://localhost:18090/app}
+      SERVICE_TOKEN: ${SERVICE_TOKEN}
+      TURNSTILE_AUTH_SECRET_KEY: ${TURNSTILE_AUTH_SECRET_KEY:-}
     ports:
       - "18001:18001"
     depends_on:
@@ -493,28 +513,28 @@ services:
 
   # Edge Sidecar API
   helmsman:
+    <<: *default-env
     container_name: frameworks-helmsman
     build:
       context: .
       dockerfile: api_sidecar/Dockerfile
     environment:
-      - HELMSMAN_WEBHOOK_URL=http://helmsman:18007
-      - FOGHORN_URL=http://foghorn:18008
-      - FOGHORN_CONTROL_ADDR=foghorn:18019
-      - FOGHORN_HTTP_BASE=http://foghorn:18008
-      - EDGE_PUBLIC_HOSTNAME=localhost
-      - MISTSERVER_URL=http://mistserver:4242
-      - MIST_PASSWORD=koekjes
-      - MIST_API_USERNAME=test
-      - MIST_API_PASSWORD=test
-      - CLUSTER_ID=default-cluster
-      - NODE_NAME=edge-node-1
-      - PORT=18007
-      - LOG_LEVEL=info
-      - SERVICE_TOKEN=your-service-token-change-in-production
-      - QUARTERMASTER_URL=http://quartermaster:18002
-      # gRPC Security Configuration
-      - GRPC_USE_TLS=false  # Set to true for production TLS
+      HELMSMAN_WEBHOOK_URL: ${HELMSMAN_WEBHOOK_URL}
+      FOGHORN_URL: ${FOGHORN_HTTP_BASE}
+      FOGHORN_CONTROL_ADDR: ${FOGHORN_CONTROL_ADDR}
+      FOGHORN_HTTP_BASE: ${FOGHORN_HTTP_BASE}
+      EDGE_PUBLIC_HOSTNAME: ${EDGE_PUBLIC_HOSTNAME:-localhost}
+      MISTSERVER_URL: ${MISTSERVER_URL}
+      MIST_PASSWORD: ${MIST_PASSWORD}
+      MIST_API_USERNAME: ${MIST_API_USERNAME}
+      MIST_API_PASSWORD: ${MIST_API_PASSWORD}
+      CLUSTER_ID: default-cluster
+      NODE_NAME: edge-node-1
+      PORT: ${HELMSMAN_PORT}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      SERVICE_TOKEN: ${SERVICE_TOKEN}
+      QUARTERMASTER_URL: ${QUARTERMASTER_URL}
+      GRPC_USE_TLS: "false"  # Set to true for production TLS
     volumes:
       - ./infrastructure/edge/machine-id:/etc/machine-id:ro
     depends_on:
@@ -547,6 +567,7 @@ services:
   
   # Periscope-Ingest: High-throughput event processing from Kafka
   periscope-ingest:
+    <<: *default-env
     container_name: frameworks-periscope-ingest
     build:
       context: .
@@ -554,22 +575,22 @@ services:
     ports:
       - "18005:18005"
     environment:
-      - DATABASE_URL=postgres://frameworks_user:frameworks_dev@postgres:5432/frameworks?sslmode=disable
-      - KAFKA_BROKERS=kafka:9092
-      - KAFKA_GROUP_ID=periscope-ingest
-      - KAFKA_CLUSTER_ID=frameworks
-      - KAFKA_TOPICS=analytics_events
-      - KAFKA_CLIENT_ID=periscope-ingest
-      - LOG_LEVEL=info
-      - ENABLE_HEALTH_ENDPOINT=true
-      - HEALTH_PORT=18005
-      - CLICKHOUSE_HOST=clickhouse:9000
-      - CLICKHOUSE_PORT=8123
-      - CLICKHOUSE_DB=frameworks
-      - CLICKHOUSE_USER=frameworks
-      - CLICKHOUSE_PASSWORD=frameworks_dev
-      - QUARTERMASTER_URL=http://quartermaster:18002
-      - SERVICE_TOKEN=your-service-token-change-in-production
+      DATABASE_URL: ${DATABASE_URL}
+      KAFKA_BROKERS: ${KAFKA_BROKERS}
+      KAFKA_GROUP_ID: periscope-ingest
+      KAFKA_CLUSTER_ID: ${KAFKA_CLUSTER_ID}
+      KAFKA_TOPICS: analytics_events
+      KAFKA_CLIENT_ID: periscope-ingest
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      ENABLE_HEALTH_ENDPOINT: "true"
+      HEALTH_PORT: ${PERISCOPE_INGEST_PORT}
+      CLICKHOUSE_HOST: ${CLICKHOUSE_HOST}
+      CLICKHOUSE_PORT: ${CLICKHOUSE_PORT}
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+      QUARTERMASTER_URL: ${QUARTERMASTER_URL}
+      SERVICE_TOKEN: ${SERVICE_TOKEN}
     depends_on:
       postgres:
         condition: service_healthy
@@ -599,6 +620,7 @@ services:
 
   # Periscope-Query (Analytics API - Query Side)
   periscope-query:
+    <<: *default-env
     container_name: frameworks-periscope-query
     build:
       context: .
@@ -606,21 +628,21 @@ services:
     ports:
       - "18004:18004"
     environment:
-      - DATABASE_URL=postgres://frameworks_user:frameworks_dev@postgres:5432/frameworks?sslmode=disable
-      - PORT=18004
-      - LOG_LEVEL=info
-      - GIN_MODE=release
-      - JWT_SECRET=your-jwt-secret-change-in-production
-      - SERVICE_TOKEN=your-service-token-change-in-production
-      - PURSER_URL=http://purser:18003
-      - BILLING_HOURLY_INTERVAL=60
-      - BILLING_DAILY_INTERVAL=24
-      - CLICKHOUSE_HOST=clickhouse:9000
-      - CLICKHOUSE_PORT=8123
-      - CLICKHOUSE_DB=frameworks
-      - CLICKHOUSE_USER=frameworks
-      - CLICKHOUSE_PASSWORD=frameworks_dev
-      - QUARTERMASTER_URL=http://quartermaster:18002
+      DATABASE_URL: ${DATABASE_URL}
+      PORT: ${PERISCOPE_QUERY_PORT}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      GIN_MODE: release
+      JWT_SECRET: ${JWT_SECRET}
+      SERVICE_TOKEN: ${SERVICE_TOKEN}
+      PURSER_URL: ${PURSER_URL}
+      BILLING_HOURLY_INTERVAL: 60
+      BILLING_DAILY_INTERVAL: 24
+      CLICKHOUSE_HOST: ${CLICKHOUSE_HOST}
+      CLICKHOUSE_PORT: ${CLICKHOUSE_PORT}
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+      QUARTERMASTER_URL: ${QUARTERMASTER_URL}
     depends_on:
       postgres:
         condition: service_healthy
@@ -650,6 +672,7 @@ services:
 
   # Purser (Billing API)
   purser:
+    <<: *default-env
     container_name: frameworks-purser
     build:
       context: .
@@ -657,15 +680,15 @@ services:
     ports:
       - "18003:18003"
     environment:
-      - DATABASE_URL=postgres://frameworks_user:frameworks_dev@postgres:5432/frameworks?sslmode=disable
-      - PORT=18003
-      - LOG_LEVEL=info
-      - STRIPE_SECRET_KEY=sk_test_dummy
-      - STRIPE_WEBHOOK_SECRET=whsec_dummy
-      - GIN_MODE=release
-      - JWT_SECRET=your-jwt-secret-change-in-production
-      - SERVICE_TOKEN=your-service-token-change-in-production
-      - QUARTERMASTER_URL=http://quartermaster:18002
+      DATABASE_URL: ${DATABASE_URL}
+      PORT: ${PURSER_PORT}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET}
+      GIN_MODE: release
+      JWT_SECRET: ${JWT_SECRET}
+      SERVICE_TOKEN: ${SERVICE_TOKEN}
+      QUARTERMASTER_URL: ${QUARTERMASTER_URL}
       # Optional: Crypto payment providers (uncomment when needed)
       # - MOLLIE_API_KEY=${MOLLIE_API_KEY}
       # - ETHERSCAN_API_KEY=${ETHERSCAN_API_KEY}
@@ -722,12 +745,13 @@ services:
         - VITE_WEBRTC_PATH=/webrtc
         - VITE_EMBED_PATH=/view
         - VITE_MARKETING_SITE_URL=http://localhost:18031
+        - VITE_TURNSTILE_AUTH_SITE_KEY=${TURNSTILE_AUTH_SITE_KEY:-1x0000000000000000000000000000000AA}
         - BASE_PATH=/app
     depends_on:
       commodore:
         condition: service_started
     ports:
-      - "18030:3000"
+      - "18030:18030"
     networks:
       - frameworks
     mem_limit: 512m
@@ -756,14 +780,14 @@ services:
         - VITE_CONTACT_EMAIL=hello@frameworks.dev
         - VITE_DEMO_STREAM_NAME=frameworks-demo
         - VITE_COMPANY_NAME=FrameWorks
+        - VITE_TURNSTILE_FORMS_SITE_KEY=${TURNSTILE_FORMS_SITE_KEY:-1x0000000000000000000000000000000AA}
         - VITE_DOMAIN=frameworks.dev
         - VITE_CONTACT_API_URL=http://localhost:18032
     hostname: website
     environment:
       - NODE_ENV=production
-      - PORT=9009
     ports:
-      - "18031:9009"
+      - "18031:18031"
     depends_on:
       commodore:
         condition: service_started
@@ -781,7 +805,7 @@ services:
         max-size: "50m"
         max-file: "3"
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9009/health"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:18031/health"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -911,6 +935,7 @@ services:
 
   # Grafana for visualization
   grafana:
+    <<: *default-env
     image: grafana/grafana:latest
     container_name: frameworks-grafana
     hostname: grafana
@@ -921,10 +946,10 @@ services:
       - ./infrastructure/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./infrastructure/grafana/dashboards:/var/lib/grafana/dashboards:ro
     environment:
-      - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=frameworks_dev
-      - GF_USERS_ALLOW_SIGN_UP=false
-      - GF_INSTALL_PLUGINS=grafana-clickhouse-datasource
+      GF_SECURITY_ADMIN_USER: ${GF_SECURITY_ADMIN_USER}
+      GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_INSTALL_PLUGINS: grafana-clickhouse-datasource
     depends_on:
       prometheus:
         condition: service_healthy

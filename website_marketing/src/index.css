@@ -1,9 +1,139 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+@import "./styles/markdown.css";
+
+/* Marketing component systems */
+@import "./styles/marketing/hero.css";
+@import "./styles/marketing/cta.css";
+@import "./styles/marketing/forms.css";
+@import "./styles/marketing/badges.css";
+@import "./styles/marketing/navigation.css";
+@import "./styles/marketing/layout.css";
+@import "./styles/marketing/icons.css";
+@import "./styles/marketing/code.css";
+@import "./styles/marketing/grid-seam.css";
+@import "./styles/marketing/utilities.css";
+@import "./styles/marketing/buttons.css";
+@import "./styles/marketing/content.css";
+@import "./styles/marketing/comparison.css";
+@import "./styles/marketing/partners.css";
+@import "./styles/marketing/timeline.css";
+
+/* Page-specific styles */
+@import "./styles/pages/about.css";
+@import "./styles/pages/contact.css";
+@import "./styles/pages/documentation.css";
+@import "./styles/pages/landing.css";
+@import "./styles/pages/pricing.css";
 
 @layer base {
+  :root {
+    --background: 235 19% 13%;
+    /* #1a1b26 */
+    --foreground: 229 73% 86%;
+    /* #c0caf5 */
+    --card: 229 24% 19%;
+    /* #24283b */
+    --card-foreground: 229 73% 86%;
+    --popover: 229 24% 19%;
+    --popover-foreground: 229 73% 86%;
+    --primary: 225 86% 70%;
+    /* #7aa2f7 */
+    --primary-foreground: 235 19% 13%;
+    --secondary: 229 23% 33%;
+    /* #414868 */
+    --secondary-foreground: 229 35% 75%;
+    /* #a9b1d6 */
+    --muted: 229 24% 24%;
+    /* between gutter + terminal */
+    --muted-foreground: 229 35% 75%;
+    /* #a9b1d6 */
+    --accent: 225 86% 70%;
+    /* #7aa2f7 */
+    --accent-foreground: 235 19% 13%;
+    --accent-rgb: 122 162 247;
+    --destructive: 349 89% 72%;
+    /* #f7768e */
+    --destructive-foreground: 235 19% 13%;
+    --border: 229 24% 31%;
+    /* #3b4261 */
+    --input: 229 24% 31%;
+    --ring: 225 86% 70%;
+    --radius: 0.75rem;
+
+    /* Brand palette helpers */
+    --brand-surface: 229 24% 19%;
+    /* #24283b */
+    --brand-surface-strong: 240 15% 10%;
+    /* #16161e */
+    --brand-terminal: 229 23% 33%;
+    /* #414868 */
+    --brand-comment: 229 23% 44%;
+    /* #565f89 */
+    --brand-green: 89 51% 61%;
+    /* #9ece6a */
+    --brand-yellow: 36 66% 64%;
+    /* #e0af68 */
+    --brand-purple: 264 85% 74%;
+    /* #bb9af7 */
+    --brand-cyan: 225 86% 70%;
+    /* #7aa2f7 */
+    --brand-orange: 22 100% 70%;
+    /* #ff9e64 */
+    --brand-red: 349 89% 72%;
+    /* #f7768e */
+    --brand-accent-strong: 264 85% 74%;
+    /* #bb9af7 */
+    --brand-accent-soft: 265 78% 85%;
+    /* #d8c8fb */
+  }
+
+  .dark {
+    color-scheme: dark;
+    --background: 235 19% 13%;
+    --foreground: 229 73% 86%;
+    --card: 229 24% 19%;
+    --card-foreground: 229 73% 86%;
+    --popover: 229 24% 19%;
+    --popover-foreground: 229 73% 86%;
+    --primary: 225 86% 70%;
+    --primary-foreground: 235 19% 13%;
+    --secondary: 229 23% 33%;
+    --secondary-foreground: 229 35% 75%;
+    --muted: 229 24% 24%;
+    --muted-foreground: 229 35% 75%;
+    --accent: 225 86% 70%;
+    --accent-foreground: 235 19% 13%;
+    --accent-rgb: 122 162 247;
+    --destructive: 349 89% 72%;
+    --destructive-foreground: 235 19% 13%;
+    --border: 229 24% 31%;
+    --input: 229 24% 31%;
+    --ring: 225 86% 70%;
+  }
+
+  .bg-brand-surface {
+    background-color: hsl(var(--brand-surface));
+  }
+
+  .bg-brand-surface-muted {
+    background-color: color-mix(in srgb, hsl(var(--brand-surface-strong)) 82%, rgba(18, 20, 34, 0.25));
+  }
+
+  .bg-brand-surface-soft {
+    background-color: color-mix(in srgb, hsl(var(--brand-surface)) 88%, rgba(18, 20, 34, 0.12));
+  }
+
+  .bg-brand-surface-strong {
+    background-color: hsl(var(--brand-surface-strong));
+  }
+
+  * {
+    border-color: hsl(var(--border));
+  }
+
   body {
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
     font-family: 'Inter', sans-serif;
     min-height: 100vh;
     overflow-x: hidden;
@@ -14,140 +144,29 @@
   }
 }
 
-@layer components {
-  .glass-card {
-    @apply bg-tokyo-night-bg-light/50 backdrop-blur-sm border border-tokyo-night-fg-gutter rounded-lg;
-  }
-
-  .input {
-    @apply w-full bg-tokyo-night-bg-dark border border-tokyo-night-fg-gutter rounded-md px-3 py-2 text-sm text-tokyo-night-fg focus:outline-none focus:ring-2 focus:ring-tokyo-night-blue/50;
-  }
-
-  .glow-card {
-    @apply glass-card transition-all duration-300 hover:shadow-lg hover:shadow-tokyo-night-blue/20;
-  }
-
-  .gradient-text {
-    @apply bg-gradient-to-r from-tokyo-night-blue via-tokyo-night-cyan to-tokyo-night-green bg-clip-text text-transparent;
-    display: inline-block;
-  }
-
-  .logo-gradient {
-    @apply bg-gradient-to-r from-tokyo-night-blue via-tokyo-night-cyan to-tokyo-night-green;
-    padding: 2px;
-  }
-
-  .logo-gradient img {
-    border-radius: inherit;
-  }
-
-  .gradient-bg {
-    @apply bg-gradient-to-r from-tokyo-night-blue via-tokyo-night-cyan to-tokyo-night-green;
-    background-size: 300% 300%;
-    animation: gradient 6s ease infinite;
-  }
-
-  .code-block {
-    @apply bg-tokyo-night-bg-dark border border-tokyo-night-fg-gutter rounded-lg p-4 font-mono text-sm overflow-x-auto;
-  }
-
-  .btn-primary {
-    @apply bg-tokyo-night-blue hover:bg-tokyo-night-blue/80 text-tokyo-night-bg px-6 py-3 rounded-lg font-medium transition-all duration-300;
-    position: relative;
-    overflow: hidden;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    font-size: 0.875rem;
-  }
-
-  .btn-secondary {
-    @apply border border-tokyo-night-blue text-tokyo-night-blue hover:bg-tokyo-night-blue hover:text-tokyo-night-bg px-6 py-3 rounded-lg font-medium transition-all duration-300;
-    position: relative;
-    overflow: hidden;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    font-size: 0.875rem;
-  }
-
-  /* Lighthouse scan effect for marketing buttons */
-  .btn-primary::before,
-  .btn-secondary::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: -100%;
-    width: 100%;
-    height: 100%;
-    transition: left 0.6s ease;
-    pointer-events: none;
-    z-index: 1;
-  }
-
-  /* Dark variant lighthouse scan for primary buttons */
-  .btn-primary::before {
-    background: linear-gradient(90deg,
-        transparent 0%,
-        rgba(0, 0, 0, 0.1) 20%,
-        rgba(0, 0, 0, 0.3) 50%,
-        rgba(0, 0, 0, 0.1) 80%,
-        transparent 100%);
-  }
-
-  /* Light variant lighthouse scan for secondary buttons */
-  .btn-secondary::before {
-    background: linear-gradient(90deg,
-        transparent 0%,
-        rgba(255, 255, 255, 0.1) 20%,
-        rgba(255, 255, 255, 0.4) 50%,
-        rgba(255, 255, 255, 0.1) 80%,
-        transparent 100%);
-  }
-
-  .btn-primary:hover::before,
-  .btn-secondary:hover::before {
-    left: 100%;
-  }
-
-  .btn-primary:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 4px 15px rgba(122, 162, 247, 0.3);
-  }
-
-  .btn-secondary:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 4px 15px rgba(122, 162, 247, 0.2);
-  }
-
-  .section-padding {
-    @apply py-12 px-4;
-  }
+.transparent-word {
+  position: relative;
+  display: inline-block;
+  color: hsl(var(--accent));
+  transition: color 0.2s ease;
 }
 
-@layer utilities {
-  .text-shadow {
-    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
-  }
+.transparent-word::after {
+  content: attr(data-text);
+  position: absolute;
+  inset: 0;
+  color: transparent;
+  -webkit-text-stroke: 1px rgba(var(--accent-rgb) / 0.6);
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
 
-  .transparent-word {
-    transition: width, height, opacity 0.3s ease;
-    user-select: none;
-    -webkit-user-select: none;
-    -moz-user-select: none;
-    -ms-user-select: none;
-  }
-  
-  .transparent-word:hover {
-    background: #7aa2f7 !important;
-    -webkit-background-clip: unset !important;
-    background-clip: unset !important;
-    color: #7aa2f7 !important;
-    mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 50'><text x='100' y='25' font-family='Inter,sans-serif' font-size='40' font-weight='bold' text-anchor='middle' dominant-baseline='central' fill='none' stroke='white' stroke-width='2'>Transparent</text></svg>");
-    -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 50'><text x='100' y='25' font-family='Inter,sans-serif' font-size='40' font-weight='bold' text-anchor='middle' dominant-baseline='central' fill='none' stroke='white' stroke-width='2'>Transparent</text></svg>");
-    mask-repeat: no-repeat;
-    -webkit-mask-repeat: no-repeat;
-    mask-position: center;
-    -webkit-mask-position: center;
-    mask-size: 100% 100%;
-    -webkit-mask-size: 100% 100%;
-  }
+.transparent-word:hover,
+.transparent-word:focus-visible {
+  color: transparent;
+}
+
+.transparent-word:hover::after,
+.transparent-word:focus-visible::after {
+  opacity: 1;
 }

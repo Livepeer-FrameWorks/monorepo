@@ -46,6 +46,7 @@ func NewRootCmd() *cobra.Command {
 	rootCmd.AddCommand(newLoginCmd())
 	rootCmd.AddCommand(newAdminCmd())
 	rootCmd.AddCommand(newVersionCmd())
+	rootCmd.AddCommand(newConfigCmd())
 
 	return rootCmd
 }

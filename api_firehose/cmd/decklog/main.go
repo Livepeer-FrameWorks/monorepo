@@ -36,8 +36,10 @@ func main() {
 	metricsCollector := monitoring.NewMetricsCollector("decklog", version.Version, version.GitCommit)
 
 	// Setup Kafka producer
-	brokers := strings.Split(config.GetEnv("KAFKA_BROKERS", "localhost:9092"), ",")
-	clusterID := config.GetEnv("KAFKA_CLUSTER_ID", "frameworks")
+	brokers := strings.Split(config.RequireEnv("KAFKA_BROKERS"), ",")
+	clusterID := config.RequireEnv("KAFKA_CLUSTER_ID")
+	serviceToken := config.RequireEnv("SERVICE_TOKEN")
+	quartermasterURL := config.RequireEnv("QUARTERMASTER_URL")
 
 	producer, err := kafka.NewKafkaProducer(brokers, clusterID, logger)
 	if err != nil {
@@ -52,8 +54,8 @@ func main() {
 	// Add health checks
 	healthChecker.AddCheck("kafka_producer", monitoring.KafkaProducerHealthCheck(producer.GetClient()))
 	healthChecker.AddCheck("config", monitoring.ConfigurationHealthCheck(map[string]string{
-		"KAFKA_BROKERS":    config.GetEnv("KAFKA_BROKERS", ""),
-		"KAFKA_CLUSTER_ID": config.GetEnv("KAFKA_CLUSTER_ID", ""),
+		"KAFKA_BROKERS":    strings.Join(brokers, ","),
+		"KAFKA_CLUSTER_ID": clusterID,
 	}))
 
 	// Create custom event streaming metrics
@@ -94,7 +96,7 @@ func main() {
 
 	// Best-effort service registration in Quartermaster
 	go func() {
-		qc := qmclient.NewClient(qmclient.Config{BaseURL: config.GetEnv("QUARTERMASTER_URL", "http://localhost:18002"), ServiceToken: config.GetEnv("SERVICE_TOKEN", ""), Logger: logger})
+		qc := qmclient.NewClient(qmclient.Config{BaseURL: quartermasterURL, ServiceToken: serviceToken, Logger: logger})
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		pi, _ := strconv.Atoi(port)

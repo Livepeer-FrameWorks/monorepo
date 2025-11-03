@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -693,6 +694,7 @@ func GetStreamEvents(c *gin.Context) {
 			Status:       status,
 			NodeID:       nodeID,
 			EventData:    eventData,
+			EventPayload: decodeEventPayload(eventData),
 			InternalName: internalNameSel,
 		})
 	}
@@ -755,6 +757,7 @@ func GetTrackListEvents(c *gin.Context) {
 			TrackList:  trackList,
 			TrackCount: trackCount,
 			Stream:     internalNameSel,
+			Tracks:     decodeTrackList(trackList),
 		})
 	}
 
@@ -1641,7 +1644,11 @@ func GetStreamHealthMetrics(c *gin.Context) {
 			bandwidth_out,
 			codec,
 			profile,
-			track_metadata
+			track_metadata,
+			audio_channels,
+			audio_sample_rate,
+			audio_codec,
+			audio_bitrate
 		FROM stream_health_metrics
 		WHERE tenant_id = ?
 		AND timestamp BETWEEN ? AND ?`
@@ -1696,6 +1703,10 @@ func GetStreamHealthMetrics(c *gin.Context) {
 			Codec                string    `json:"codec"`
 			Profile              string    `json:"profile"`
 			TrackMetadata        string    `json:"track_metadata"`
+			AudioChannels        sql.NullInt64
+			AudioSampleRate      sql.NullInt64
+			AudioCodec           sql.NullString
+			AudioBitrate         sql.NullInt64
 		}
 
 		if err := rows.Scan(
@@ -1719,6 +1730,10 @@ func GetStreamHealthMetrics(c *gin.Context) {
 			&m.Codec,
 			&m.Profile,
 			&m.TrackMetadata,
+			&m.AudioChannels,
+			&m.AudioSampleRate,
+			&m.AudioCodec,
+			&m.AudioBitrate,
 		); err != nil {
 			logger.WithError(err).Error("Failed to scan stream health metrics")
 			continue
@@ -1781,35 +1796,46 @@ func GetStreamHealthMetrics(c *gin.Context) {
 			bufferState = "DRY"
 		}
 
+		tracks := decodeTrackList(m.TrackMetadata)
+		audioChannels := optionalIntPointer(m.AudioChannels)
+		audioSampleRate := optionalIntPointer(m.AudioSampleRate)
+		audioCodec := optionalStringPointer(m.AudioCodec)
+		audioBitrate := optionalIntPointer(m.AudioBitrate)
+
 		metrics = append(metrics, periscope.StreamHealthMetric{
-			Timestamp:            m.Timestamp,
-			TenantID:             m.TenantID,
-			InternalName:         m.InternalName,
-			NodeID:               m.NodeID,
-			Bitrate:              m.Bitrate,
-			FPS:                  m.FPS,
-			GOPSize:              m.GOPSize,
-			Width:                m.Width,
-			Height:               m.Height,
-			BufferSize:           m.BufferSize,
-			BufferUsed:           m.BufferUsed,
-			BufferHealth:         m.BufferHealth,
-			PacketsSent:          m.PacketsSent,
-			PacketsLost:          m.PacketsLost,
-			PacketsRetransmitted: m.PacketsRetransmitted,
-			BandwidthIn:          m.BandwidthIn,
-			BandwidthOut:         m.BandwidthOut,
-			Codec:                m.Codec,
-			Profile:              m.Profile,
-			TrackMetadata:        m.TrackMetadata,
-			HealthScore:          health,
-			FrameJitterMs:        jitter,
-			KeyframeStabilityMs:  keyframeMs,
-			IssuesDescription:    issues,
-			HasIssues:            m.BufferHealth < 0.5 || (lossPerc != nil && *lossPerc > 2.0),
-			PacketLossPercentage: lossPerc,
-			QualityTier:          quality,
-			BufferState:          bufferState,
+			Timestamp:              m.Timestamp,
+			TenantID:               m.TenantID,
+			InternalName:           m.InternalName,
+			NodeID:                 m.NodeID,
+			Bitrate:                m.Bitrate,
+			FPS:                    m.FPS,
+			GOPSize:                m.GOPSize,
+			Width:                  m.Width,
+			Height:                 m.Height,
+			BufferSize:             m.BufferSize,
+			BufferUsed:             m.BufferUsed,
+			BufferHealth:           m.BufferHealth,
+			PacketsSent:            m.PacketsSent,
+			PacketsLost:            m.PacketsLost,
+			PacketsRetransmitted:   m.PacketsRetransmitted,
+			BandwidthIn:            m.BandwidthIn,
+			BandwidthOut:           m.BandwidthOut,
+			Codec:                  m.Codec,
+			Profile:                m.Profile,
+			TrackMetadata:          m.TrackMetadata,
+			Tracks:                 tracks,
+			PrimaryAudioChannels:   audioChannels,
+			PrimaryAudioSampleRate: audioSampleRate,
+			PrimaryAudioCodec:      audioCodec,
+			PrimaryAudioBitrate:    audioBitrate,
+			HealthScore:            health,
+			FrameJitterMs:          jitter,
+			KeyframeStabilityMs:    keyframeMs,
+			IssuesDescription:      issues,
+			HasIssues:              m.BufferHealth < 0.5 || (lossPerc != nil && *lossPerc > 2.0),
+			PacketLossPercentage:   lossPerc,
+			QualityTier:            quality,
+			BufferState:            bufferState,
 		})
 	}
 
@@ -1863,11 +1889,12 @@ func GetStreamBufferEvents(c *gin.Context) {
 			continue
 		}
 		events = append(events, periscope.BufferEvent{
-			Timestamp: ts,
-			EventID:   eventID,
-			Status:    status,
-			NodeID:    nodeID,
-			EventData: eventData,
+			Timestamp:    ts,
+			EventID:      eventID,
+			Status:       status,
+			NodeID:       nodeID,
+			EventData:    eventData,
+			EventPayload: decodeEventPayload(eventData),
 		})
 	}
 	response := periscope.BufferEventsResponse(events)
@@ -1920,11 +1947,12 @@ func GetStreamEndEvents(c *gin.Context) {
 			continue
 		}
 		events = append(events, periscope.EndEvent{
-			Timestamp: ts,
-			EventID:   eventID,
-			Status:    status,
-			NodeID:    nodeID,
-			EventData: eventData,
+			Timestamp:    ts,
+			EventID:      eventID,
+			Status:       status,
+			NodeID:       nodeID,
+			EventData:    eventData,
+			EventPayload: decodeEventPayload(eventData),
 		})
 	}
 	response := periscope.EndEventsResponse(events)
@@ -2016,4 +2044,48 @@ func GetClipEvents(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"events": events,
 	})
+}
+
+func decodeTrackList(raw string) []periscope.StreamTrack {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var tracks []periscope.StreamTrack
+	if err := json.Unmarshal([]byte(raw), &tracks); err != nil {
+		return nil
+	}
+	return tracks
+}
+
+func optionalIntPointer(val sql.NullInt64) *int {
+	if !val.Valid {
+		return nil
+	}
+	v := int(val.Int64)
+	if v == 0 {
+		return nil
+	}
+	return &v
+}
+
+func optionalStringPointer(val sql.NullString) *string {
+	if !val.Valid {
+		return nil
+	}
+	s := strings.TrimSpace(val.String)
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
+func decodeEventPayload(raw string) map[string]interface{} {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var payload map[string]interface{}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return nil
+	}
+	return payload
 }

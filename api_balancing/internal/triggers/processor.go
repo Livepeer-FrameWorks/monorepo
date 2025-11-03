@@ -176,6 +176,7 @@ func (p *Processor) handlePushRewrite(trigger *pb.MistTrigger) (string, bool, er
 	// Forward stream start event to Commodore for database updates (stream status and key usage)
 	if err := p.commodoreClient.ForwardStreamEvent(context.Background(), "stream-start", &commodoreapi.StreamEventRequest{
 		NodeID:       trigger.GetNodeId(),
+		TenantID:     streamValidation.TenantID,
 		StreamKey:    pushRewrite.GetStreamName(),
 		InternalName: streamValidation.InternalName,
 		Hostname:     pushRewrite.GetHostname(),
@@ -492,6 +493,7 @@ func (p *Processor) handleStreamBuffer(trigger *pb.MistTrigger) (string, bool, e
 	go func() {
 		if err := p.commodoreClient.ForwardStreamEvent(context.Background(), "stream-status", &commodoreapi.StreamEventRequest{
 			NodeID:       trigger.GetNodeId(),
+			TenantID:     p.getTenantForInternalName(streamBuffer.GetStreamName()),
 			InternalName: streamBuffer.GetStreamName(),
 			EventType:    "stream_buffer",
 			Timestamp:    time.Now().Unix(),
@@ -560,6 +562,7 @@ func (p *Processor) handleStreamEnd(trigger *pb.MistTrigger) (string, bool, erro
 		if err := p.commodoreClient.ForwardStreamEvent(context.Background(), "stream-end", &commodoreapi.StreamEventRequest{
 			NodeID:       nodeID,
 			StreamKey:    "",
+			TenantID:     p.getTenantForInternalName(internalName),
 			InternalName: internalName,
 			EventType:    "stream_end",
 			Timestamp:    time.Now().Unix(),
@@ -763,6 +766,7 @@ func (p *Processor) handleRecordingEnd(trigger *pb.MistTrigger) (string, bool, e
 	go func() {
 		if err := p.commodoreClient.ForwardStreamEvent(context.Background(), "recording-status", &commodoreapi.StreamEventRequest{
 			NodeID:       nodeID,
+			TenantID:     p.getTenantForInternalName(internalName),
 			InternalName: internalName,
 			EventType:    "recording_end",
 			Timestamp:    time.Now().Unix(),

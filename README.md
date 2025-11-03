@@ -58,7 +58,17 @@ For local development and testing:
 ```bash
 git clone https://github.com/Livepeer-FrameWorks/monorepo.git
 cd monorepo
+cp config/env/secrets.env.example config/env/secrets.env  # edit values as needed
+make env  # writes .env from config/env
 docker-compose up
+```
+
+The Compose stack loads `${ENV_FILE:-.env}` automatically. Override `ENV_FILE` (and pass `--env-file` to docker compose) when you want to use a different generated env file (for example `.env.staging`).
+
+Prefer the CLI? You can generate env files with:
+
+```bash
+frameworks config env generate --context dev --output .env
 ```
 
 Endpoints (local)
@@ -121,6 +131,8 @@ Endpoints (local)
 Foghorn (api_balancing) can determine geography from either:
 - Proxy-injected geo headers (e.g., Cloudflare’s CF-IPCountry or similar), or
 - A local MMDB file (any vendor providing a compatible City/Country database).
+
+It is recommended to point it to a local MMDB file, which ensures all events are enriched with Geo data. Only events originating from the Load Balancer can be enriched via geo headers.
 
 To use a local database, set `GEOIP_MMDB_PATH` to the path of your MMDB file. If neither headers nor MMDB are available, Foghorn operates without geo routing data.
 

@@ -24,9 +24,14 @@ func main() {
 
 	logger.Info("Starting Quartermaster (Tenant Management API)")
 
+	dbURL := config.RequireEnv("DATABASE_URL")
+	serviceToken := config.RequireEnv("SERVICE_TOKEN")
+	jwtSecret := config.RequireEnv("JWT_SECRET")
+	quartermasterURL := config.RequireEnv("QUARTERMASTER_URL")
+
 	// Connect to database
 	dbConfig := database.DefaultConfig()
-	dbConfig.URL = config.GetEnv("DATABASE_URL", "")
+	dbConfig.URL = dbURL
 	db := database.MustConnect(dbConfig, logger)
 	defer db.Close()
 
@@ -37,8 +42,8 @@ func main() {
 	// Add health checks
 	healthChecker.AddCheck("database", monitoring.DatabaseHealthCheck(db))
 	healthChecker.AddCheck("config", monitoring.ConfigurationHealthCheck(map[string]string{
-		"DATABASE_URL":  config.GetEnv("DATABASE_URL", ""),
-		"SERVICE_TOKEN": config.GetEnv("SERVICE_TOKEN", ""),
+		"DATABASE_URL":  dbURL,
+		"SERVICE_TOKEN": serviceToken,
 	}))
 
 	// Create custom tenant management metrics
@@ -64,7 +69,7 @@ func main() {
 
 		// Protected routes (accept JWT user tokens and service token fallback)
 		protected := router.Group("")
-		protected.Use(auth.JWTAuthMiddleware([]byte(config.GetEnv("JWT_SECRET", "default-secret-key-change-in-production"))))
+		protected.Use(auth.JWTAuthMiddleware([]byte(jwtSecret)))
 		{
 			// Tenant management
 			protected.POST("/tenants", handlers.CreateTenant)
@@ -120,7 +125,7 @@ func main() {
 
 	// Best-effort self-registration in Quartermaster (idempotent)
 	go func() {
-		qc := qmclient.NewClient(qmclient.Config{BaseURL: config.GetEnv("QUARTERMASTER_URL", "http://localhost:18002"), ServiceToken: config.GetEnv("SERVICE_TOKEN", ""), Logger: logger})
+		qc := qmclient.NewClient(qmclient.Config{BaseURL: quartermasterURL, ServiceToken: serviceToken, Logger: logger})
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_, _ = qc.BootstrapService(ctx, &qmapi.BootstrapServiceRequest{Type: "quartermaster", Version: version.Version, Protocol: "http", HealthEndpoint: func() *string { s := "/health"; return &s }(), Port: 18002})

@@ -8,6 +8,7 @@ Unified operator tool for managing the FrameWorks platform: contexts/connectivit
 - **Edge Templates**: Generate `.edge.env`, `docker-compose.edge.yml`, and `Caddyfile` using the active context.
 - **Edge Preflight**: Verify DNS (optional), Docker/compose, Linux sysctls, `/dev/shm`, `ulimit`, and ports 80/443.
 - **Edge Tune**: Dry‑run or apply recommended sysctl/limits (root needed for system paths).
+- **Env Generation**: `frameworks config env generate` merges `config/env` layers into ready-to-use `.env` files (dev/prod/targets).
 
 Planned (tracked in SCOPE.md): workspace mode and optional interface helpers.
 
@@ -73,14 +74,17 @@ frameworks
 │   ├── logs        # Tail logs
 │   └── cert        # Show TLS expiry; --reload to reload Caddy
 │
-├── services        # Central‑tier ops
-│   ├── plan        # Generate per‑service compose fragments (+ plan.yaml)
+├── services        # Central-tier ops
+│   ├── plan        # Generate per-service compose fragments (+ plan.yaml)
 │   ├── up          # Start services (merges svc-*.yml; supports --only, --ssh)
 │   ├── down        # Stop services (supports --only, --ssh)
 │   ├── status      # Container status (supports --only, --ssh)
 │   ├── logs        # Logs (supports --only, --follow, --tail, --ssh)
 │   ├── health      # Aggregated service health (Quartermaster)
 │   └── discover    # Service discovery (Quartermaster)
+│
+├── config          # Configuration helpers
+│   └── env         # Merge config/env layers into an env file (CLI reuse of configgen)
 │
 ├── login           # Store JWT/service token in context
 ├── admin           # Provider/admin operations

@@ -1,0 +1,221 @@
+/* Page-specific styles for about */
+@layer components {
+  .mission-copy {
+    padding-inline: 0;
+    padding-block-start: 0;
+    padding-block-end: clamp(1.4rem, 2vw, 1.8rem);
+  }
+
+  .mission-copy .headline-stack__title {
+    font-size: clamp(2.2rem, 2vw, 3.1rem);
+  }
+
+  .mission-pillars {
+    position: relative;
+    padding-top: clamp(1.6rem, 2.4vw, 2.1rem);
+  }
+
+  .mission-pillars .headline-stack {
+    padding-inline: 0;
+    padding-block-start: 0;
+    padding-block-end: 0;
+    border-bottom: none;
+  }
+
+  .mission-pillars .headline-stack__title {
+    font-size: 0.72rem;
+    letter-spacing: 0.3em;
+    text-transform: uppercase;
+    font-weight: 650;
+    color: color-mix(in srgb, hsl(var(--muted-foreground)) 58%, rgba(var(--accent-rgb) / 0.5));
+    display: inline-block;
+    padding-left: clamp(0.95rem, 1.4vw, 1.2rem);
+  }
+
+  .mission-pillars__list {
+    padding-inline: clamp(0.95rem, 1.4vw, 1.2rem);
+    padding-block: clamp(0.95rem, 1.4vw, 1.2rem);
+  }
+
+  .mission-pillars__list .marketing-stacked-seam__item {
+    padding-block: clamp(0.5rem, 0.85vw, 0.7rem);
+    border-bottom: 1px solid rgba(var(--accent-rgb) / 0.12);
+  }
+
+  .mission-pillars__list .marketing-stacked-seam__item:last-child {
+    border-bottom: none;
+  }
+
+  .mission-pillars__list .marketing-stacked-seam__item:first-child {
+    border-top: none;
+  }
+
+  .mission-pillars__entry {
+    display: flex;
+    gap: clamp(0.75rem, 1.1vw, 1rem);
+    align-items: flex-start;
+  }
+
+  .mission-pillars__dot {
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 999px;
+    background: linear-gradient(135deg, hsl(var(--primary)), hsl(var(--brand-cyan)));
+    box-shadow: 0 0 10px rgba(var(--accent-rgb) / 0.32);
+    margin-top: 0.4rem;
+    flex-shrink: 0;
+  }
+
+  .mission-pillars__entry[data-tone='green'] .mission-pillars__dot {
+    background: linear-gradient(135deg, hsl(var(--brand-green)), color-mix(in srgb, hsl(var(--brand-green)) 70%, white 30%));
+  }
+
+  .mission-pillars__entry[data-tone='yellow'] .mission-pillars__dot {
+    background: linear-gradient(135deg, hsl(var(--brand-yellow)), color-mix(in srgb, hsl(var(--brand-yellow)) 70%, white 30%));
+  }
+
+  .mission-pillars__entry[data-tone='purple'] .mission-pillars__dot {
+    background: linear-gradient(135deg, hsl(var(--brand-purple)), color-mix(in srgb, hsl(var(--brand-purple)) 70%, white 30%));
+  }
+
+  .mission-pillars__body {
+    display: flex;
+    flex-direction: column;
+    gap: clamp(0.3rem, 0.6vw, 0.5rem);
+  }
+
+  .mission-pillars__body h4 {
+    margin: 0;
+    font-size: 0.88rem;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    font-weight: 600;
+    color: color-mix(in srgb, hsl(var(--foreground)) 85%, hsl(var(--accent)) 15%);
+  }
+
+  .mission-pillars__body p {
+    margin: 0;
+    font-size: 0.95rem;
+    line-height: 1.55;
+    color: color-mix(in srgb, hsl(var(--muted-foreground)) 86%, rgba(255, 255, 255, 0.12));
+  }
+
+  .marketing-tech-grid {
+    --grid-cell-padding: clamp(1.9rem, 2.6vw, 2.35rem);
+  }
+
+  .marketing-tech-column {
+    display: flex;
+    flex-direction: column;
+    gap: clamp(1rem, 1.6vw, 1.35rem);
+    height: 100%;
+  }
+
+  .marketing-tech-column__header {
+    display: flex;
+    flex-direction: column;
+    gap: clamp(0.45rem, 1vw, 0.75rem);
+  }
+
+  .marketing-tech-column__title {
+    font-size: 0.82rem;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: color-mix(in srgb, hsl(var(--muted-foreground)) 68%, rgba(255, 255, 255, 0.12));
+  }
+
+  .marketing-tech-column__description {
+    font-size: 0.95rem;
+    line-height: 1.6;
+    color: color-mix(in srgb, hsl(var(--muted-foreground)) 86%, rgba(255, 255, 255, 0.14));
+  }
+
+  .marketing-tech-column__list {
+    display: flex;
+    flex-direction: column;
+    padding: 0;
+    margin: 0;
+    list-style: none;
+  }
+
+  .marketing-tech-column__item {
+    display: flex;
+    align-items: center;
+    gap: clamp(0.9rem, 1.4vw, 1.15rem);
+    padding-block: clamp(0.45rem, 1vw, 0.75rem);
+  }
+
+  .marketing-tech-column__item:first-child {
+    border-top: none;
+  }
+
+  .marketing-tech-column__icon {
+    width: clamp(2.7rem, 3vw, 3rem);
+    height: clamp(2.7rem, 3vw, 3rem);
+    border-radius: clamp(0.85rem, 1.2vw, 1.1rem);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 14px 30px rgba(10, 14, 34, 0.32);
+    aspect-ratio: 1/1;
+  }
+
+  .marketing-tech-column__icon-image {
+    width: 64%;
+    height: 64%;
+    object-fit: contain;
+    filter: drop-shadow(0 6px 12px rgba(10, 14, 26, 0.35));
+  }
+
+  .marketing-tech-column__dot {
+    display: block;
+    width: 0.55rem;
+    height: 0.55rem;
+    border-radius: 999px;
+    background: linear-gradient(135deg, hsl(var(--primary)), hsl(var(--accent)));
+    box-shadow: 0 0 10px rgba(var(--accent-rgb) / 0.55);
+  }
+
+  .marketing-tech-column__text {
+    font-size: 0.98rem;
+    line-height: 1.5;
+    color: color-mix(in srgb, hsl(var(--muted-foreground)) 88%, rgba(255, 255, 255, 0.1));
+  }
+
+  /* About hero overrides */
+  .about-hero .marketing-hero__description {
+    position: relative;
+    display: inline-block;
+    padding-bottom: 0.55rem;
+    max-width: clamp(34rem, 58vw, 44rem);
+    color: color-mix(in srgb, hsl(var(--foreground)) 82%, rgba(255, 255, 255, 0.1));
+  }
+
+  .about-hero .marketing-hero__description::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    bottom: 0;
+    width: clamp(6rem, 26vw, 11rem);
+    height: 3px;
+    border-radius: 999px;
+    background: linear-gradient(90deg, hsl(var(--primary)), hsl(var(--accent)), hsl(var(--brand-green)));
+    box-shadow: 0 0 18px hsl(var(--accent) / 0.35);
+    transform: translateX(-50%);
+  }
+
+  .about-hero .marketing-hero__support {
+    text-align: center;
+    max-width: clamp(32rem, 60vw, 46rem);
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  .about-hero .marketing-hero__surface::before {
+    opacity: 0.4;
+    background:
+      linear-gradient(125deg, rgba(60, 90, 168, 0.32), rgba(18, 22, 38, 0.12)),
+      radial-gradient(ellipse at 14% -8%, rgba(var(--accent-rgb) / 0.22), transparent 58%),
+      radial-gradient(ellipse at 86% 118%, rgba(125, 207, 255, 0.18), transparent 70%);
+  }
+}

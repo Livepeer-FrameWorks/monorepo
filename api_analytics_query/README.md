@@ -16,7 +16,7 @@ Read‑optimized analytics API. Serves tenant‑scoped queries by reading time�
 - Health: `GET /health`
 - HTTP: 18004
 
-Configuration: copy `env.example` to `.env` and use the inline comments as reference. Do not commit secrets.
+Configuration is managed centrally via `config/env`. Generate `.env` with `make env` or `frameworks config env generate`, and keep secrets in `config/env/secrets.env`. See `docs/configuration.md`. Do not commit secrets.
 
 ## Related
 - Root `README.md` (ports, stack overview)

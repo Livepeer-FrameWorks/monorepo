@@ -90,9 +90,11 @@ type CreateDeveloperTokenInput struct {
 }
 
 type CreatePaymentInput struct {
-	Amount   float64       `json:"amount"`
-	Currency *string       `json:"currency,omitempty"`
-	Method   PaymentMethod `json:"method"`
+	InvoiceID string        `json:"invoiceId"`
+	Amount    float64       `json:"amount"`
+	Currency  *string       `json:"currency,omitempty"`
+	Method    PaymentMethod `json:"method"`
+	ReturnURL *string       `json:"returnUrl,omitempty"`
 }
 
 type CreateStreamInput struct {

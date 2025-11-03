@@ -63,6 +63,7 @@ docker-compose.override.yml
 
 # Temporary & Logs
 **/tmp/
+**/EXAMPLE*/
 **/temp/
 **/logs/
 *.log
@@ -76,6 +77,11 @@ bin
 *.crt
 *.cert
 secrets.*
+config/env/secrets.env
+scripts/env/.gocache/
+scripts/env/env
+**/.gocache/
+
 
 # Backups & Archives
 *.bak

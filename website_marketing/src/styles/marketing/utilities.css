@@ -1,0 +1,37 @@
+/* Marketing component styles: utilities */
+@layer components {
+  /* CTA actions responsive override */
+  @media (min-width: 640px) {
+    .marketing-cta__actions {
+      flex-direction: row;
+      justify-content: center;
+    }
+
+    .marketing-cta--left .marketing-cta__actions {
+      justify-content: flex-start;
+    }
+  }
+
+  /* CTA cluster */
+  .marketing-cta-cluster {
+    display: flex;
+    align-items: center;
+    gap: clamp(0.8rem, 2vw, 1.4rem);
+  }
+
+  .marketing-cta-cluster--wrap {
+    flex-wrap: wrap;
+  }
+
+  .marketing-cta-cluster--wrap>* {
+    flex-shrink: 0;
+  }
+
+  .marketing-cta-cluster--align-center {
+    justify-content: center;
+  }
+
+  .marketing-cta-cluster--align-end {
+    justify-content: flex-end;
+  }
+}

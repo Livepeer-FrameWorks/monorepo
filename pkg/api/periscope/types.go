@@ -7,6 +7,24 @@ import (
 	"frameworks/pkg/models"
 )
 
+// StreamTrack represents a single audio/video track entry provided by MistServer
+type StreamTrack struct {
+	TrackName   string   `json:"track_name"`
+	TrackType   string   `json:"track_type"`
+	Codec       string   `json:"codec"`
+	BitrateKbps *int     `json:"bitrate_kbps,omitempty"`
+	BitrateBps  *int64   `json:"bitrate_bps,omitempty"`
+	Buffer      *int     `json:"buffer,omitempty"`
+	Jitter      *int     `json:"jitter,omitempty"`
+	Width       *int     `json:"width,omitempty"`
+	Height      *int     `json:"height,omitempty"`
+	FPS         *float64 `json:"fps,omitempty"`
+	Resolution  *string  `json:"resolution,omitempty"`
+	HasBFrames  *bool    `json:"has_bframes,omitempty"`
+	Channels    *int     `json:"channels,omitempty"`
+	SampleRate  *int     `json:"sample_rate,omitempty"`
+}
+
 // StreamAnalyticsResponse represents the response from GetStreamAnalytics
 type StreamAnalyticsResponse = []models.StreamAnalytics
 
@@ -27,13 +45,14 @@ type StreamEventsResponse = []StreamEvent
 
 // StreamEvent represents a single stream event
 type StreamEvent struct {
-	Timestamp    time.Time `json:"timestamp"`
-	EventID      string    `json:"event_id"`
-	EventType    string    `json:"event_type"`
-	Status       string    `json:"status"`
-	NodeID       string    `json:"node_id"`
-	EventData    string    `json:"event_data"`
-	InternalName string    `json:"internal_name"`
+	Timestamp    time.Time              `json:"timestamp"`
+	EventID      string                 `json:"event_id"`
+	EventType    string                 `json:"event_type"`
+	Status       string                 `json:"status"`
+	NodeID       string                 `json:"node_id"`
+	EventData    string                 `json:"event_data"`
+	EventPayload map[string]interface{} `json:"event_payload,omitempty"`
+	InternalName string                 `json:"internal_name"`
 }
 
 // TrackListEventsResponse represents the response from GetTrackListEvents
@@ -41,11 +60,12 @@ type TrackListEventsResponse = []AnalyticsTrackListEvent
 
 // AnalyticsTrackListEvent represents a track list event for analytics
 type AnalyticsTrackListEvent struct {
-	Timestamp  time.Time `json:"timestamp"`
-	NodeID     string    `json:"node_id"`
-	TrackList  string    `json:"track_list"`
-	TrackCount int       `json:"track_count"`
-	Stream     string    `json:"stream"`
+	Timestamp  time.Time     `json:"timestamp"`
+	NodeID     string        `json:"node_id"`
+	TrackList  string        `json:"track_list"`
+	Tracks     []StreamTrack `json:"tracks,omitempty"`
+	TrackCount int           `json:"track_count"`
+	Stream     string        `json:"stream"`
 }
 
 // ViewerStatsResponse represents the response from GetViewerStats
@@ -180,25 +200,25 @@ type NodeMetricsResponse struct {
 
 // NodeMetric represents a node metric entry
 type NodeMetric struct {
-	Timestamp          time.Time `json:"timestamp"`
-	NodeID             string    `json:"node_id"`
-	CPUUsage           float32   `json:"cpu_usage"`
-	MemoryUsage        float32   `json:"memory_usage"`
-	DiskUsage          float32   `json:"disk_usage"`
-	RAMMax             uint64    `json:"ram_max"`
-	RAMCurrent         uint64    `json:"ram_current"`
-	BandwidthIn        int64     `json:"bandwidth_in"`
-	BandwidthOut       int64     `json:"bandwidth_out"`
-	UpSpeed            uint64    `json:"up_speed"`
-	DownSpeed          uint64    `json:"down_speed"`
-	ConnectionsCurrent int       `json:"connections_current"`
-	StreamCount        int       `json:"stream_count"`
-	HealthScore        float32   `json:"health_score"`
-	IsHealthy          bool      `json:"is_healthy"`
-	Latitude           float64   `json:"latitude"`
-	Longitude          float64   `json:"longitude"`
-	Tags               []string  `json:"tags"`
-	Metadata           string    `json:"metadata"`
+	Timestamp          time.Time              `json:"timestamp"`
+	NodeID             string                 `json:"node_id"`
+	CPUUsage           float32                `json:"cpu_usage"`
+	MemoryUsage        float32                `json:"memory_usage"`
+	DiskUsage          float32                `json:"disk_usage"`
+	RAMMax             uint64                 `json:"ram_max"`
+	RAMCurrent         uint64                 `json:"ram_current"`
+	BandwidthIn        int64                  `json:"bandwidth_in"`
+	BandwidthOut       int64                  `json:"bandwidth_out"`
+	UpSpeed            uint64                 `json:"up_speed"`
+	DownSpeed          uint64                 `json:"down_speed"`
+	ConnectionsCurrent int                    `json:"connections_current"`
+	StreamCount        int                    `json:"stream_count"`
+	HealthScore        float32                `json:"health_score"`
+	IsHealthy          bool                   `json:"is_healthy"`
+	Latitude           float64                `json:"latitude"`
+	Longitude          float64                `json:"longitude"`
+	Tags               []string               `json:"tags"`
+	Metadata           map[string]interface{} `json:"metadata"`
 }
 
 // NodeMetrics1hResponse represents the response from GetNodeMetrics1h
@@ -223,26 +243,31 @@ type StreamHealthMetricsResponse = []StreamHealthMetric
 
 // StreamHealthMetric represents a stream health metric entry
 type StreamHealthMetric struct {
-	Timestamp            time.Time `json:"timestamp"`
-	TenantID             string    `json:"tenant_id"`
-	InternalName         string    `json:"internal_name"`
-	NodeID               string    `json:"node_id"`
-	Bitrate              int       `json:"bitrate"`
-	FPS                  float32   `json:"fps"`
-	GOPSize              int       `json:"gop_size"`
-	Width                int       `json:"width"`
-	Height               int       `json:"height"`
-	BufferSize           int       `json:"buffer_size"`
-	BufferUsed           int       `json:"buffer_used"`
-	BufferHealth         float32   `json:"buffer_health"`
-	PacketsSent          int64     `json:"packets_sent"`
-	PacketsLost          int64     `json:"packets_lost"`
-	PacketsRetransmitted int64     `json:"packets_retransmitted"`
-	BandwidthIn          int64     `json:"bandwidth_in"`
-	BandwidthOut         int64     `json:"bandwidth_out"`
-	Codec                string    `json:"codec"`
-	Profile              string    `json:"profile"`
-	TrackMetadata        string    `json:"track_metadata"`
+	Timestamp              time.Time     `json:"timestamp"`
+	TenantID               string        `json:"tenant_id"`
+	InternalName           string        `json:"internal_name"`
+	NodeID                 string        `json:"node_id"`
+	Bitrate                int           `json:"bitrate"`
+	FPS                    float32       `json:"fps"`
+	GOPSize                int           `json:"gop_size"`
+	Width                  int           `json:"width"`
+	Height                 int           `json:"height"`
+	BufferSize             int           `json:"buffer_size"`
+	BufferUsed             int           `json:"buffer_used"`
+	BufferHealth           float32       `json:"buffer_health"`
+	PacketsSent            int64         `json:"packets_sent"`
+	PacketsLost            int64         `json:"packets_lost"`
+	PacketsRetransmitted   int64         `json:"packets_retransmitted"`
+	BandwidthIn            int64         `json:"bandwidth_in"`
+	BandwidthOut           int64         `json:"bandwidth_out"`
+	Codec                  string        `json:"codec"`
+	Profile                string        `json:"profile"`
+	TrackMetadata          string        `json:"track_metadata"`
+	Tracks                 []StreamTrack `json:"tracks,omitempty"`
+	PrimaryAudioChannels   *int          `json:"primary_audio_channels,omitempty"`
+	PrimaryAudioSampleRate *int          `json:"primary_audio_sample_rate,omitempty"`
+	PrimaryAudioCodec      *string       `json:"primary_audio_codec,omitempty"`
+	PrimaryAudioBitrate    *int          `json:"primary_audio_bitrate,omitempty"`
 
 	// Derived metrics computed in Periscope/MVs
 	HealthScore          float32  `json:"health_score"`
@@ -260,11 +285,12 @@ type BufferEventsResponse = []BufferEvent
 
 // BufferEvent represents a buffer event
 type BufferEvent struct {
-	Timestamp time.Time `json:"timestamp"`
-	EventID   string    `json:"event_id"`
-	Status    string    `json:"status"`
-	NodeID    string    `json:"node_id"`
-	EventData string    `json:"event_data"`
+	Timestamp    time.Time              `json:"timestamp"`
+	EventID      string                 `json:"event_id"`
+	Status       string                 `json:"status"`
+	NodeID       string                 `json:"node_id"`
+	EventData    string                 `json:"event_data"`
+	EventPayload map[string]interface{} `json:"event_payload,omitempty"`
 }
 
 // EndEventsResponse represents the response from GetStreamEndEvents
@@ -272,11 +298,12 @@ type EndEventsResponse = []EndEvent
 
 // EndEvent represents a stream end event
 type EndEvent struct {
-	Timestamp time.Time `json:"timestamp"`
-	EventID   string    `json:"event_id"`
-	Status    string    `json:"status"`
-	NodeID    string    `json:"node_id"`
-	EventData string    `json:"event_data"`
+	Timestamp    time.Time              `json:"timestamp"`
+	EventID      string                 `json:"event_id"`
+	Status       string                 `json:"status"`
+	NodeID       string                 `json:"node_id"`
+	EventData    string                 `json:"event_data"`
+	EventPayload map[string]interface{} `json:"event_payload,omitempty"`
 }
 
 // PlatformEventsResponse represents the response from GetPlatformEvents

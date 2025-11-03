@@ -17,7 +17,7 @@ Event ingress over gRPC. Validates, batches, and publishes to Kafka with tenant 
 ## Health
 - gRPC: `decklog.DecklogService/CheckHealth` (see docker-compose healthcheck example)
 
-Configuration: copy `env.example` to `.env` and use the inline comments as reference. Do not commit secrets.
+Configuration lives in `config/env/base.env` and `config/env/secrets.env`. Generate `.env` with `make env` or `frameworks config env generate`, and keep secrets in the git-ignored `config/env/secrets.env`. See `docs/configuration.md` for details. Do not commit secrets.
 
 ## Related
 - Root `README.md` (ports, stack overview)

@@ -10,6 +10,10 @@ Status
 - Configure the marketing site to point `VITE_CONTACT_API_URL` to this service.
 
 Configuration: copy `env.example` to `.env` and use the inline comments as reference. Do not commit secrets.
+Keep the following in mind:
+
+- `TURNSTILE_FORMS_SECRET_KEY` enables Cloudflare Turnstile verification for contact forms. Use Cloudflare's [test secret](https://developers.cloudflare.com/turnstile/troubleshooting/testing/) (`1x0000000000000000000000000000000AA`) for local development.
+- `ALLOWED_ORIGINS` should contain the marketing site domains allowed to submit the form.
 
 ## Build vs Buy Considerations
 

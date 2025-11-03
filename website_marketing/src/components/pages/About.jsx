@@ -1,0 +1,522 @@
+import { motion } from 'framer-motion'
+import config from '../../config'
+import {
+  ChartBarIcon,
+  SparklesIcon,
+  FilmIcon,
+  GlobeAltIcon,
+  VideoCameraIcon,
+  LockOpenIcon,
+  CpuChipIcon,
+  ServerStackIcon,
+} from '@heroicons/react/24/outline'
+import { Section, SectionContainer } from '@/components/ui/section'
+import {
+  MarketingHero,
+  MarketingBand,
+  MarketingGridSplit,
+  HeadlineStack,
+  CTACluster,
+  MarketingFeatureWall,
+  MarketingPartnerSurface,
+  TimelineBand,
+  MarketingFinalCTA,
+  MarketingScrollProgress,
+  MarketingGridSeam,
+  MarketingIconBadge,
+  MarketingCTAButton,
+  MarketingStackedSeam,
+  SectionDivider
+} from '@/components/marketing'
+
+const About = () => {
+  const team = [
+    {
+      name: 'MistServer Team',
+      role: 'Video Infrastructure Pioneers',
+      description:
+        'The team behind MistServer - the battle-tested media server powering streaming infrastructure worldwide. Decades of experience building rock-solid video technology at scale.',
+      avatar: '/mist.svg',
+      href: 'https://www.mistserver.com/',
+    },
+    {
+      name: 'Livepeer Network',
+      role: 'Decentralized Video Infrastructure',
+      description:
+        "The world's largest decentralized video network, processing millions of minutes of video daily. Their treasury backing enables FrameWorks to offer a free tier and feature-rich supporter tier.",
+      avatar: '/livepeer-light.svg',
+      href: 'https://livepeer.org/',
+    },
+  ]
+
+  const timeline = [
+    {
+      year: 'Sep 2025',
+      title: 'IBC Demo Milestone',
+      subtitle: 'Amsterdam launch window (Sep 12–15)',
+      icon: FilmIcon,
+      badges: ['IBC 2025', 'Live Demos'],
+      summary: 'FrameWorks ships the first public demo environment and onboarding flow in time for IBC Amsterdam.',
+      points: [
+        'IBC showcase highlights hybrid ingest + hosted GPU pipelines with real operator telemetry.',
+        'Sales engineering loop formalized to convert demo interest into structured pilots.',
+        'Partner roadmap aligned with MistServer + Livepeer field feedback captured during the conference.',
+      ],
+    },
+    {
+      year: '2025',
+      title: 'Public Beta Expansion',
+      subtitle: 'Hybrid operator cohorts live',
+      icon: SparklesIcon,
+      badges: ['Beta Access', 'Hybrid Workflows'],
+      summary:
+        'Core platform is live with guarded capacity for hybrid operators, validating ingest, orchestration, and AI loops.',
+      points: [
+        'Operators onboard with guided runbooks pairing hosted control planes with self-managed nodes.',
+        'Auto-discovery, compositing, and AI moderation launch under beta flags while telemetry hardening continues.',
+        'Weekly release trains focus on operator feedback, console UX polish, and documentation depth.',
+      ],
+    },
+    {
+      year: '2026+',
+      title: 'Scale and Expand',
+      subtitle: 'Staffing + product velocity',
+      icon: ChartBarIcon,
+      badges: ['Hiring', 'Global Footprint'],
+      summary: 'Grow the core team, expand infrastructure regions, and deepen enterprise integrations.',
+      points: [
+        'Expand SRE and solutions engineering headcount to support multi-region customer rollouts.',
+        'Broaden GPU orchestration and AI automation coverage for broadcast + defense workloads.',
+        'Stand up regional control plane replicas with audit-grade tenancy boundaries.',
+      ],
+    },
+    {
+      year: 'Future',
+      title: 'Federalized CDN Network',
+      subtitle: 'Long-term vision',
+      icon: GlobeAltIcon,
+      badges: ['Federated', 'Tokenized Incentives'],
+      summary: 'Deliver a federated CDN and compute marketplace so operators can exchange capacity without lock-in.',
+      points: [
+        'Blend community-operated edge clusters with Livepeer incentives for pay-as-you-go streaming.',
+        'Expose FrameWorks policy engine so operators trade bandwidth, GPU, and AI workloads securely.',
+        'Maintain public-domain licensing so any team can extend, self-host, and interoperate without friction.',
+      ],
+    },
+  ]
+
+  const missionHighlights = [
+    {
+      title: 'Hybrid control on your terms',
+      description:
+        'Run your own edge network, extend it with hosted GPU features when you need them, and shift workloads whenever budgets or compliance demand it.',
+      icon: ServerStackIcon,
+      tone: 'accent',
+    },
+    {
+      title: 'Unique Features',
+      description: 'Auto-discovery, multi-stream compositing, and AI workflows built for hybrid deployments.',
+      icon: SparklesIcon,
+      tone: 'purple',
+    },
+    {
+      title: 'B2B Focus',
+      description: 'Custom integrations, compliance, and enterprise-grade support for mission critical video.',
+      icon: ChartBarIcon,
+      tone: 'yellow',
+    },
+    {
+      title: 'Public Domain Licensed',
+      description: 'No attribution requirements or copyleft restrictions. Deploy commercially without lock-in.',
+      icon: LockOpenIcon,
+      tone: 'orange',
+    },
+  ]
+
+  const missionStoryCopy = [
+    "We're building the streaming infrastructure that doesn't lock you in. Need custom features? Build them yourself or let us help. Switch providers? Your infrastructure comes with you. Cloud bills spiraling? Run it yourself with our open source stack.",
+    'Built by the MistServer team and subsidized by the Livepeer treasury, we\'re on a mission to democratize video infrastructure by leveraging decentralized protocols and open source technology.',
+    'Run it yourself, use our hosted services, or mix and match. Uncloud your infrastructure.',
+  ]
+
+  const differentiators = [
+    {
+      title: 'Livepeer Network Integration',
+      badge: 'Treasury Backed',
+      icon: VideoCameraIcon,
+      tone: 'accent',
+      description:
+        "Subsidized by the Livepeer treasury and powered by the world's largest decentralized video network for transcoding and AI processing.",
+    },
+    {
+      title: 'Auto-Discovery App',
+      badge: 'Industry First',
+      icon: SparklesIcon,
+      tone: 'cyan',
+      description:
+        'A drop-in app that automatically discovers IP cameras, VISCA PTZ controls, NDI sources, USB webcams, and HDMI inputs. Zero configuration required.',
+    },
+    {
+      title: 'Multi-stream Compositing',
+      badge: 'Advanced Feature',
+      icon: FilmIcon,
+      tone: 'purple',
+      description:
+        'Combine multiple input streams into one composite output with picture-in-picture, overlays, and OBS-style mixing capabilities.',
+    },
+    {
+      title: 'Public Domain Licensed',
+      badge: 'Open Source',
+      icon: LockOpenIcon,
+      tone: 'yellow',
+      description:
+        'No attribution required, no copyleft restrictions - you truly own what you deploy, including for commercial use.',
+    },
+    {
+      title: 'Real-time Analytics and Monitoring',
+      badge: 'Live Updates',
+      icon: ChartBarIcon,
+      tone: 'green',
+      description:
+        'Live viewer counts, bandwidth monitoring, instant alerts, and performance metrics across your entire streaming network.',
+    },
+    {
+      title: 'Live AI Processing',
+      badge: 'AI Powered',
+      icon: CpuChipIcon,
+      tone: 'orange',
+      description:
+        'Real-time speech-to-text, object detection, content classification, and automated clipping with AI segmentation while you stream.',
+    },
+  ]
+
+  const differentiatorCards = differentiators.map((item) => ({
+    icon: item.icon,
+    tone: item.tone,
+    iconTone: item.tone,
+    title: item.title,
+    badge: item.badge,
+    description: item.description,
+    hover: 'subtle',
+    stripe: true,
+  }))
+
+  const techColumns = [
+    {
+      title: 'Broad Support',
+      items: [
+        { icon: '/mist.svg', label: 'MistServer - battle-tested media server' },
+        { icon: '/livepeer-light.svg', label: 'Livepeer Network - decentralized transcoding and AI' },
+        { icon: '/webrtc.svg', label: 'WebRTC, RTMP, SRT, HLS, DASH - every streaming protocol you need' },
+      ],
+    },
+    {
+      title: 'Backend Infrastructure',
+      items: [
+        { icon: '/go-lightblue.svg', label: 'Go - high-performance custom microservices' },
+        { icon: '/kafka.svg', label: 'Apache Kafka - event streaming' },
+        { icon: '/postgres.svg', label: 'YugabyteDB - state and configuration' },
+        { icon: '/clickhouse.svg', label: 'ClickHouse - time-series analytics' },
+      ],
+    },
+    {
+      title: 'Deployment and Operations',
+      items: [
+        { icon: '/docker-mark-blue.svg', label: 'Docker - containerized deployment' },
+        { icon: '/websocket.svg', label: 'WebSockets - real-time updates' },
+        { icon: '/nginx.svg', label: 'Nginx - load balancing and SSL' },
+        { icon: '/prometheus.svg', label: 'Prometheus - monitoring and metrics' },
+        { icon: '/svelte.svg', label: 'SvelteKit - modern web interface' },
+      ],
+    },
+  ]
+
+  const aboutHeroAccents = [
+    {
+      kind: 'beam',
+      x: 14,
+      y: 34,
+      width: 'clamp(24rem, 46vw, 40rem)',
+      height: 'clamp(18rem, 34vw, 28rem)',
+      rotate: -22,
+      fill: 'linear-gradient(145deg, rgba(92, 126, 216, 0.35), rgba(24, 30, 52, 0.26))',
+      opacity: 0.58,
+      radius: '52px',
+    },
+    {
+      kind: 'beam',
+      x: 76,
+      y: 24,
+      width: 'clamp(18rem, 36vw, 30rem)',
+      height: 'clamp(16rem, 28vw, 24rem)',
+      rotate: 18,
+      fill: 'linear-gradient(160deg, rgba(53, 186, 255, 0.28), rgba(18, 22, 38, 0.18))',
+      opacity: 0.46,
+      radius: '44px',
+    },
+    {
+      kind: 'spot',
+      x: 58,
+      y: 84,
+      width: 'clamp(22rem, 48vw, 36rem)',
+      height: 'clamp(22rem, 48vw, 36rem)',
+      fill: 'radial-gradient(circle, rgba(125, 207, 255, 0.22) 0%, transparent 70%)',
+      opacity: 0.32,
+      blur: '95px',
+    },
+    {
+      kind: 'beam',
+      x: 8,
+      y: 78,
+      width: 'clamp(18rem, 32vw, 26rem)',
+      height: 'clamp(18rem, 32vw, 26rem)',
+      rotate: -6,
+      fill: 'linear-gradient(140deg, rgba(147, 197, 114, 0.22), rgba(20, 26, 44, 0.18))',
+      opacity: 0.34,
+      radius: '42px',
+    },
+  ]
+
+  return (
+    <div className="pt-16">
+      <MarketingHero
+        seed="/about"
+        className="about-hero"
+        title="About FrameWorks"
+        description="The only streaming platform that combines full self-hosting capabilities with hosted processing, backed by unique features you won’t find anywhere else."
+        align="center"
+        surface="gradient"
+        surfaceTone="accent"
+        surfaceIntensity="raised"
+        support="Open stack • Live video processing • Flexible deployments"
+        accents={aboutHeroAccents}
+      />
+
+      <SectionDivider />
+
+      <Section className="bg-brand-surface">
+        <SectionContainer>
+          <MarketingBand surface="none">
+            <MarketingGridSplit align="start" stackAt="lg" gap="lg">
+              <motion.div
+                initial={{ opacity: 0, x: -26 }}
+                whileInView={{ opacity: 1, x: 0 }}
+                viewport={{ once: true }}
+                transition={{ duration: 0.55 }}
+              >
+                <HeadlineStack
+                  eyebrow="Mission"
+                  title="Why we built FrameWorks"
+                  align="left"
+                  underlineAlign="start"
+                  className="mission-copy"
+                >
+                  <div className="flex flex-col gap-4">
+                    {missionStoryCopy.map((paragraph) => (
+                      <p key={paragraph} className="text-[1.05rem] leading-[1.68] text-muted-foreground">
+                        {paragraph}
+                      </p>
+                    ))}
+                  </div>
+                </HeadlineStack>
+                <CTACluster align="start" wrap className="mission-cta">
+                  <MarketingCTAButton intent="primary" label="Start Free" href={config.appUrl} external />
+                  <MarketingCTAButton intent="secondary" label="Talk to Sales" to="/contact" />
+                </CTACluster>
+              </motion.div>
+
+              <motion.div
+                initial={{ opacity: 0, x: 26 }}
+                whileInView={{ opacity: 1, x: 0 }}
+                viewport={{ once: true }}
+                transition={{ duration: 0.55, delay: 0.1 }}
+              >
+                <MarketingBand surface="panel" className="mission-pillars">
+                  <HeadlineStack
+                    title="Mission pillars"
+                    align="left"
+                    underline={false}
+                  />
+                  <MarketingStackedSeam gap="sm" className="mission-pillars__list">
+                    {missionHighlights.map((highlight) => (
+                      <div key={highlight.title} className="mission-pillars__entry" data-tone={highlight.tone}>
+                        <span className="mission-pillars__dot" aria-hidden="true" />
+                        <div className="mission-pillars__body">
+                          <h4>{highlight.title}</h4>
+                          <p>{highlight.description}</p>
+                          {highlight.betaNote ? <span className="mission-pillars__note">{highlight.betaNote}</span> : null}
+                        </div>
+                      </div>
+                    ))}
+                  </MarketingStackedSeam>
+                </MarketingBand>
+              </motion.div>
+            </MarketingGridSplit>
+          </MarketingBand>
+        </SectionContainer>
+      </Section>
+
+      <SectionDivider />
+
+      <Section className="bg-brand-surface-muted">
+        <SectionContainer>
+          <motion.div
+            initial={{ opacity: 0, y: 30 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true }}
+            transition={{ duration: 0.6 }}
+          >
+            <MarketingBand surface="panel">
+              <HeadlineStack
+                eyebrow="Differentiators"
+                title="What makes FrameWorks different?"
+                subtitle="Platform-level differentiators that bind ingest, orchestration, and AI into one system."
+                align="left"
+                underlineAlign="start"
+                actionsPlacement="inline"
+              />
+              <MarketingFeatureWall
+                items={differentiatorCards}
+                columns={3}
+                stackAt="md"
+              />
+            </MarketingBand>
+          </motion.div>
+        </SectionContainer>
+      </Section>
+
+      <Section className="bg-brand-surface-muted">
+        <SectionContainer>
+          <motion.div
+            initial={{ opacity: 0, y: 30 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true }}
+            transition={{ duration: 0.6 }}
+          >
+            <MarketingBand surface="panel">
+              <HeadlineStack
+                eyebrow="Technology"
+                title="Built on proven infrastructure"
+                align="left"
+                underlineAlign="start"
+                actionsPlacement="inline"
+              >
+                <p className="marketing-tech__intro">
+                  Production-ready components that scale with you—from ingest through analytics. Every layer is battle-tested by
+                  MistServer operators and Livepeer&apos;s decentralized network.
+                </p>
+              </HeadlineStack>
+              <MarketingGridSeam columns={3} stackAt="lg" className="marketing-tech-grid">
+                {techColumns.map((column) => (
+                  <div key={column.title} className="marketing-tech-column">
+                    <div className="marketing-tech-column__header">
+                      <span className="marketing-tech-column__title">{column.title}</span>
+                      {column.description ? (
+                        <p className="marketing-tech-column__description">{column.description}</p>
+                      ) : null}
+                    </div>
+                    <ul className="marketing-tech-column__list">
+                      {column.items?.map((item) => (
+                        <li key={item.label} className="marketing-tech-column__item">
+                          <MarketingIconBadge variant="neutral" className="marketing-tech-column__icon">
+                            {item.icon ? (
+                              <img src={item.icon} alt="" aria-hidden="true" className="marketing-tech-column__icon-image" />
+                            ) : (
+                              <span className="marketing-tech-column__dot" aria-hidden="true" />
+                            )}
+                          </MarketingIconBadge>
+                          <span className="marketing-tech-column__text">{item.label}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ))}
+              </MarketingGridSeam>
+            </MarketingBand>
+          </motion.div>
+        </SectionContainer>
+      </Section>
+
+      <SectionDivider />
+
+      <Section className="bg-brand-surface">
+        <SectionContainer>
+          <motion.div
+            initial={{ opacity: 0, y: 30 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true }}
+            transition={{ duration: 0.6 }}
+          >
+            <TimelineBand
+              surface="panel"
+              eyebrow="Timeline"
+              title="Our journey"
+              subtitle="From concept to an industry-leading streaming platform and where we go next."
+              items={timeline}
+            />
+          </motion.div>
+        </SectionContainer>
+      </Section>
+
+      <SectionDivider />
+
+      <Section className="bg-brand-surface-strong">
+        <SectionContainer>
+          <motion.div
+            initial={{ opacity: 0, y: 30 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true }}
+            transition={{ duration: 0.6 }}
+          >
+            <MarketingPartnerSurface
+              partners={team}
+              headline="Powered by MistServer and Livepeer"
+              eyebrow="Partners"
+              subtitle="Industry-leading video infrastructure expertise backed by the Livepeer treasury"
+              variant="flush"
+            />
+          </motion.div>
+        </SectionContainer>
+      </Section>
+
+      <SectionDivider />
+
+      <Section className="px-0">
+        <motion.div
+          initial={{ opacity: 0, y: 32 }}
+          whileInView={{ opacity: 1, y: 0 }}
+          viewport={{ once: true }}
+          transition={{ duration: 0.6 }}
+        >
+          <MarketingFinalCTA
+            eyebrow="Next steps"
+            title="Ready to transform your streaming?"
+            description="Join the teams using FrameWorks for mission-critical video infrastructure. Start on your own hardware or partner with us for managed deployments."
+            variant="band"
+            primaryAction={{
+              label: 'Start Free',
+              href: config.appUrl,
+              external: true,
+            }}
+            secondaryAction={[
+              {
+                label: 'Talk to our team',
+                to: '/contact',
+              },
+              {
+                label: 'View Open Source',
+                href: config.githubUrl,
+                icon: 'auto',
+                external: true,
+              },
+            ]}
+          />
+        </motion.div>
+      </Section>
+
+      <MarketingScrollProgress />
+    </div>
+  )
+}
+
+export default About

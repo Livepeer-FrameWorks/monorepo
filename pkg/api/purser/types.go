@@ -112,6 +112,13 @@ type GetInvoiceResponse struct {
 	Tier    models.BillingTier `json:"tier"`
 }
 
+// GetInvoicesRequest contains optional filters when fetching invoices
+type GetInvoicesRequest struct {
+	Status *string `json:"status,omitempty"`
+	Limit  *int    `json:"limit,omitempty"`
+	Offset *int    `json:"offset,omitempty"`
+}
+
 type InvoiceLineItem struct {
 	Description string  `json:"description"`
 	Amount      float64 `json:"amount"`

@@ -19,7 +19,7 @@ All endpoints require `Authorization: Bearer <SERVICE_TOKEN>`.
 - Start the full stack from repo root: `docker-compose up -d`
 - Or run just Quartermaster: `cd api_tenants && go run ./cmd/quartermaster`
 
-Configuration: copy `env.example` to `.env` and use the inline comments as reference. Do not commit secrets.
+Configuration is shared via `config/env/base.env` and `config/env/secrets.env`. Use `make env` or `frameworks config env generate` to create `.env`, and customise `config/env/secrets.env` for secrets. See `docs/configuration.md`. Do not commit secrets.
 
 Health: `GET /health`.
 

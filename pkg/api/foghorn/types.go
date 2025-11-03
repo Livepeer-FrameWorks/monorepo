@@ -154,16 +154,25 @@ type ViewerEndpointResponse struct {
 
 // PlaybackMetadata is a richer, player-oriented metadata payload
 type PlaybackMetadata struct {
-	Status        string             `json:"status"`
-	IsLive        bool               `json:"is_live"`
-	Viewers       int                `json:"viewers"`
-	BufferState   string             `json:"buffer_state,omitempty"`
-	HealthScore   *float64           `json:"health_score,omitempty"`
-	Tracks        []PlaybackTrack    `json:"tracks,omitempty"`
-	ProtocolHints []string           `json:"protocol_hints,omitempty"`
-	Instances     []PlaybackInstance `json:"instances,omitempty"`
-	DvrStatus     string             `json:"dvr_status,omitempty"`
-	DvrSourceURI  string             `json:"dvr_source_uri,omitempty"`
+	Status             string             `json:"status"`
+	IsLive             bool               `json:"is_live"`
+	Viewers            int                `json:"viewers"`
+	BufferState        string             `json:"buffer_state,omitempty"`
+	HealthScore        *float64           `json:"health_score,omitempty"`
+	Tracks             []PlaybackTrack    `json:"tracks,omitempty"`
+	ProtocolHints      []string           `json:"protocol_hints,omitempty"`
+	Instances          []PlaybackInstance `json:"instances,omitempty"`
+	DvrStatus          string             `json:"dvr_status,omitempty"`
+	DvrSourceURI       string             `json:"dvr_source_uri,omitempty"`
+	TenantID           string             `json:"tenant_id,omitempty"`
+	ContentID          string             `json:"content_id,omitempty"`
+	ContentType        string             `json:"content_type,omitempty"`
+	Title              *string            `json:"title,omitempty"`
+	Description        *string            `json:"description,omitempty"`
+	DurationSeconds    *int               `json:"duration_seconds,omitempty"`
+	RecordingSizeBytes *int64             `json:"recording_size_bytes,omitempty"`
+	ClipSource         *string            `json:"clip_source,omitempty"`
+	CreatedAt          *time.Time         `json:"created_at,omitempty"`
 }
 
 type PlaybackTrack struct {

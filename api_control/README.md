@@ -17,7 +17,11 @@ Commodore is the control API. It owns users, streams, API tokens and exposes ten
 - Start the full stack from repo root: `docker-compose up -d`
 - Or run just Commodore: `cd api_control && go run ./cmd/commodore`
 
-Configuration: copy `env.example` to `.env` and use the inline comments as reference. Do not commit secrets.
+Configuration comes from the shared `config/env` layers. Run `make env` (or `frameworks config env generate`) to materialize `.env` before starting the stack. Update `config/env/secrets.env` for local secrets; see `docs/configuration.md` for details. Do not commit secrets.
+
+Key secret:
+
+- `TURNSTILE_AUTH_SECRET_KEY` – Cloudflare Turnstile secret used to validate registration and login requests. Optional for local development (use the Cloudflare test secret).
 
 Health: `GET /health`.
 

@@ -26,7 +26,8 @@ func main() {
 
 	// Connect to database
 	dbConfig := database.DefaultConfig()
-	dbConfig.URL = config.GetEnv("DATABASE_URL", "")
+	dbURL := config.RequireEnv("DATABASE_URL")
+	dbConfig.URL = dbURL
 	db := database.MustConnect(dbConfig, logger)
 	defer db.Close()
 
@@ -51,7 +52,7 @@ func main() {
 	// Add health checks
 	healthChecker.AddCheck("database", monitoring.DatabaseHealthCheck(db))
 	healthChecker.AddCheck("config", monitoring.ConfigurationHealthCheck(map[string]string{
-		"DATABASE_URL": config.GetEnv("DATABASE_URL", ""),
+		"DATABASE_URL": dbURL,
 	}))
 
 	// Create custom load balancing metrics
@@ -113,7 +114,7 @@ func main() {
 		DVRRepo:  control.NewDVRRepository(),
 		NodeRepo: control.NewNodeRepository(),
 	})
-	controlAddr := config.GetEnv("FOGHORN_CONTROL_ADDR", ":18019")
+	controlAddr := config.RequireEnv("FOGHORN_CONTROL_BIND_ADDR")
 	if _, err := control.StartGRPCServer(controlAddr, logger); err != nil {
 		logger.WithError(err).Fatal("Failed to start control gRPC server")
 	}

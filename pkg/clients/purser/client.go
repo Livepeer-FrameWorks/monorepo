@@ -114,6 +114,43 @@ func (c *Client) GetTenantTierInfo(ctx context.Context, tenantID string) (*purse
 	return tierInfo, nil
 }
 
+// GetBillingTiers retrieves the list of available billing tiers
+func (c *Client) GetBillingTiers(ctx context.Context) (*purser.GetBillingTiersResponse, error) {
+	endpoint := fmt.Sprintf("%s/billing/plans", c.baseURL)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	// Prefer end-user JWT, fall back to service token
+	if jwtToken := ctx.Value("jwt_token"); jwtToken != nil {
+		if tokenStr, ok := jwtToken.(string); ok && tokenStr != "" {
+			req.Header.Set("Authorization", "Bearer "+tokenStr)
+		}
+	} else if c.serviceToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.serviceToken)
+	}
+
+	resp, err := clients.DoWithRetry(ctx, c.httpClient, req, c.retryConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call Purser: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("Purser error (%d): %s", resp.StatusCode, string(body))
+	}
+
+	var tiers purser.GetBillingTiersResponse
+	if err := json.NewDecoder(resp.Body).Decode(&tiers); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return &tiers, nil
+}
+
 // CheckUserLimit checks if a tenant can add a new user
 // User limits are now checked via the billing/status endpoint
 func (c *Client) CheckUserLimit(ctx context.Context, req *purser.CheckUserLimitRequest) (*purser.CheckUserLimitResponse, error) {
@@ -242,6 +279,101 @@ func (c *Client) GetTenantUsage(ctx context.Context, req *purser.TenantUsageRequ
 	}
 
 	return &usageResp, nil
+}
+
+// GetInvoices retrieves invoices for the authenticated tenant using optional filters
+func (c *Client) GetInvoices(ctx context.Context, params *purser.GetInvoicesRequest) (*purser.GetInvoicesResponse, error) {
+	endpoint, err := url.Parse(fmt.Sprintf("%s/billing/invoices", c.baseURL))
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse base URL: %w", err)
+	}
+
+	query := endpoint.Query()
+	if params != nil {
+		if params.Status != nil && *params.Status != "" {
+			query.Set("status", *params.Status)
+		}
+		if params.Limit != nil && *params.Limit > 0 {
+			query.Set("limit", fmt.Sprintf("%d", *params.Limit))
+		}
+		if params.Offset != nil && *params.Offset >= 0 {
+			query.Set("offset", fmt.Sprintf("%d", *params.Offset))
+		}
+	}
+	endpoint.RawQuery = query.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	if jwtToken := ctx.Value("jwt_token"); jwtToken != nil {
+		if tokenStr, ok := jwtToken.(string); ok && tokenStr != "" {
+			req.Header.Set("Authorization", "Bearer "+tokenStr)
+		}
+	} else if c.serviceToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.serviceToken)
+	}
+
+	resp, err := clients.DoWithRetry(ctx, c.httpClient, req, c.retryConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call Purser: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("Purser error (%d): %s", resp.StatusCode, string(body))
+	}
+
+	var invoiceResp purser.GetInvoicesResponse
+	if err := json.NewDecoder(resp.Body).Decode(&invoiceResp); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return &invoiceResp, nil
+}
+
+// CreatePayment creates a payment for an invoice
+func (c *Client) CreatePayment(ctx context.Context, reqBody *purser.PaymentRequest) (*purser.PaymentResponse, error) {
+	jsonBody, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal payment request: %w", err)
+	}
+
+	endpoint := fmt.Sprintf("%s/billing/pay", c.baseURL)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	if jwtToken := ctx.Value("jwt_token"); jwtToken != nil {
+		if tokenStr, ok := jwtToken.(string); ok && tokenStr != "" {
+			req.Header.Set("Authorization", "Bearer "+tokenStr)
+		}
+	} else if c.serviceToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.serviceToken)
+	}
+
+	resp, err := clients.DoWithRetry(ctx, c.httpClient, req, c.retryConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call Purser: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("Purser error (%d): %s", resp.StatusCode, string(body))
+	}
+
+	var paymentResp purser.PaymentResponse
+	if err := json.NewDecoder(resp.Body).Decode(&paymentResp); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return &paymentResp, nil
 }
 
 // GetSubscription retrieves subscription information for a tenant

@@ -1,0 +1,88 @@
+/* Marketing component styles: buttons */
+@layer components {
+  .cta-button {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.55rem;
+    padding-inline: 1.4rem;
+    padding-block: 0.65rem;
+    border-radius: 0.85rem;
+    background: linear-gradient(130deg,
+        color-mix(in srgb, hsl(var(--primary)) 82%, hsl(var(--brand-surface)) 18%),
+        color-mix(in srgb, hsl(var(--accent)) 65%, hsl(var(--brand-surface)) 35%));
+    border: 1px solid hsl(var(--primary) / 0.45);
+    color: hsl(var(--accent-foreground));
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    box-shadow: 0 12px 24px rgba(34, 56, 106, 0.32);
+    transition: transform 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease, background 0.25s ease;
+    overflow: hidden;
+  }
+
+  .cta-button::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(circle at 20% 20%, rgba(255, 255, 255, 0.35), transparent 55%);
+    opacity: 0.75;
+    pointer-events: none;
+    mix-blend-mode: screen;
+    transition: opacity 0.25s ease;
+  }
+
+  .cta-button:hover,
+  .cta-button:focus-visible {
+    border-color: hsl(var(--primary) / 0.6);
+    box-shadow: 0 18px 34px rgba(34, 56, 106, 0.38);
+    transform: translateY(-2px);
+    background: linear-gradient(130deg,
+        color-mix(in srgb, hsl(var(--primary)) 88%, hsl(var(--brand-surface)) 12%),
+        color-mix(in srgb, hsl(var(--accent)) 72%, hsl(var(--brand-surface)) 28%));
+  }
+
+  .cta-button:hover::before,
+  .cta-button:focus-visible::before {
+    opacity: 0.95;
+  }
+
+  .cta-button__icon {
+    transition: transform 0.25s ease;
+  }
+
+  .cta-button:hover .cta-button__icon,
+  .cta-button:focus-visible .cta-button__icon {
+    transform: translate(4px, -4px);
+  }
+
+  .cta-motion {
+    position: relative;
+    overflow: hidden;
+    transition: transform 0.26s ease, box-shadow 0.26s ease, border-color 0.26s ease;
+  }
+
+  .cta-motion::after {
+    content: '';
+    position: absolute;
+    inset: -120%;
+    background: radial-gradient(circle at 50% 50%, rgba(var(--accent-rgb) / 0.4), transparent 70%);
+    opacity: 0;
+    transform: scale(0.3);
+    transition: opacity 0.32s ease, transform 0.32s ease;
+    pointer-events: none;
+  }
+
+  .cta-motion:hover,
+  .cta-motion:focus-visible {
+    transform: translateY(-2px);
+    box-shadow: 0 22px 48px rgba(8, 14, 32, 0.4);
+    border-color: rgba(var(--accent-rgb) / 0.42);
+  }
+
+  .cta-motion:hover::after,
+  .cta-motion:focus-visible::after {
+    opacity: 1;
+    transform: scale(1);
+  }
+}

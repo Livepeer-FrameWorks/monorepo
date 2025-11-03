@@ -51,12 +51,14 @@ func main() {
 	signalmanHandlers := handlers.NewSignalmanHandlers(hub, nil, logger, serviceMetrics)
 
 	// Setup Kafka consumer
-	brokers := strings.Split(config.GetEnv("KAFKA_BROKERS", "localhost:9092"), ",")
+	brokers := strings.Split(config.RequireEnv("KAFKA_BROKERS"), ",")
 	groupID := config.GetEnv("KAFKA_GROUP_ID", "signalman-group")
-	clusterID := config.GetEnv("KAFKA_CLUSTER_ID", "frameworks")
+	clusterID := config.RequireEnv("KAFKA_CLUSTER_ID")
 	clientID := config.GetEnv("KAFKA_CLIENT_ID", "signalman")
 	topicsEnv := config.GetEnv("KAFKA_TOPICS", "analytics_events")
 	topics := strings.Split(topicsEnv, ",")
+	serviceToken := config.RequireEnv("SERVICE_TOKEN")
+	quartermasterURL := config.RequireEnv("QUARTERMASTER_URL")
 
 	consumer, err := kafka.NewConsumer(brokers, groupID, clusterID, clientID, logger, signalmanHandlers)
 	if err != nil {
@@ -75,8 +77,8 @@ func main() {
 	// Add health checks
 	healthChecker.AddCheck("kafka", monitoring.KafkaConsumerHealthCheck(consumer.GetClient()))
 	healthChecker.AddCheck("config", monitoring.ConfigurationHealthCheck(map[string]string{
-		"KAFKA_BROKERS": config.GetEnv("KAFKA_BROKERS", ""),
-		"KAFKA_TOPICS":  config.GetEnv("KAFKA_TOPICS", ""),
+		"KAFKA_BROKERS": strings.Join(brokers, ","),
+		"KAFKA_TOPICS":  topicsEnv,
 	}))
 
 	// Start Kafka consumer
@@ -100,7 +102,7 @@ func main() {
 
 	// Admin routes with service auth
 	admin := router.Group("/admin")
-	admin.Use(auth.ServiceAuthMiddleware(config.GetEnv("SERVICE_TOKEN", "")))
+	admin.Use(auth.ServiceAuthMiddleware(serviceToken))
 	router.NoRoute(signalmanHandlers.HandleNotFound)
 
 	// Start server with graceful shutdown
@@ -111,7 +113,7 @@ func main() {
 
 	// Best-effort service registration in Quartermaster
 	go func() {
-		qc := qmclient.NewClient(qmclient.Config{BaseURL: config.GetEnv("QUARTERMASTER_URL", "http://localhost:18002"), ServiceToken: config.GetEnv("SERVICE_TOKEN", ""), Logger: logger})
+		qc := qmclient.NewClient(qmclient.Config{BaseURL: quartermasterURL, ServiceToken: serviceToken, Logger: logger})
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if _, err := qc.BootstrapService(ctx, &qmapi.BootstrapServiceRequest{Type: "signalman", Version: version.Version, Protocol: "http", HealthEndpoint: func() *string { s := "/health"; return &s }(), Port: 18009}); err != nil {

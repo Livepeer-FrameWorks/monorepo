@@ -2,6 +2,7 @@ package resolvers
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
 	"strings"
@@ -15,6 +16,17 @@ import (
 
 	"github.com/sirupsen/logrus"
 )
+
+type streamBufferPayload struct {
+	HealthScore *float64                   `json:"health_score"`
+	Tracks      []streamBufferTrackPayload `json:"tracks"`
+}
+
+type streamBufferTrackPayload struct {
+	TrackType     string   `json:"track_type"`
+	FrameJitterMs *float64 `json:"frame_jitter_ms"`
+	Jitter        *float64 `json:"jitter"`
+}
 
 // DoGetStreamAnalytics returns analytics for a specific stream
 func (r *Resolver) DoGetStreamAnalytics(ctx context.Context, streamId string, timeRange *model.TimeRangeInput) (*models.StreamAnalytics, error) {
@@ -348,18 +360,24 @@ func (r *Resolver) DoGetRebufferingEvents(ctx context.Context, streamId string, 
 		rebufferStart := (prevState == model.BufferStateFull && bufferState == model.BufferStateDry)
 		rebufferEnd := (prevState == model.BufferStateDry && bufferState == model.BufferStateRecover)
 
+		var healthScore *float64
+		var frameJitter *float64
+		if payload := parseStreamBufferPayload(event); payload != nil {
+			healthScore = normalizeHealthScore(payload.HealthScore)
+			frameJitter = extractMaxJitter(payload.Tracks)
+		}
+
 		if rebufferStart || rebufferEnd {
 			result = append(result, &model.RebufferingEvent{
-				Timestamp:            event.Timestamp,
-				Stream:               streamId,
-				NodeID:               event.NodeID,
-				BufferState:          bufferState,
-				PreviousState:        prevState,
-				RebufferStart:        rebufferStart,
-				RebufferEnd:          rebufferEnd,
-				HealthScore:          func() *float64 { f := 0.5; return &f }(),  // Default health score
-				FrameJitterMs:        func() *float64 { f := 10.0; return &f }(), // Default jitter
-				PacketLossPercentage: func() *float64 { f := 1.0; return &f }(),  // Default packet loss
+				Timestamp:     event.Timestamp,
+				Stream:        streamId,
+				NodeID:        event.NodeID,
+				BufferState:   bufferState,
+				PreviousState: prevState,
+				RebufferStart: rebufferStart,
+				RebufferEnd:   rebufferEnd,
+				HealthScore:   healthScore,
+				FrameJitterMs: frameJitter,
 			})
 		}
 
@@ -409,6 +427,86 @@ func (r *Resolver) DoGetViewerGeographics(ctx context.Context, stream *string, t
 		out = append(out, ev)
 	}
 	return out, nil
+}
+
+func parseStreamBufferPayload(event periscope.BufferEvent) *streamBufferPayload {
+	if payload := decodeStreamBufferPayload(event.EventData); payload != nil {
+		return payload
+	}
+	if event.EventPayload != nil {
+		if encoded, err := json.Marshal(event.EventPayload); err == nil {
+			return decodeStreamBufferPayload(string(encoded))
+		}
+	}
+	return nil
+}
+
+func decodeStreamBufferPayload(raw string) *streamBufferPayload {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var payload streamBufferPayload
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return nil
+	}
+	return &payload
+}
+
+func normalizeHealthScore(raw *float64) *float64 {
+	if raw == nil {
+		return nil
+	}
+	normalized := *raw
+	if normalized > 1.0 {
+		normalized = normalized / 100.0
+	}
+	if normalized < 0 {
+		normalized = 0
+	}
+	if normalized > 1 {
+		normalized = 1
+	}
+	return &normalized
+}
+
+func extractMaxJitter(tracks []streamBufferTrackPayload) *float64 {
+	var bestVideo float64
+	var haveVideo bool
+	var bestAny float64
+	var haveAny bool
+	for _, track := range tracks {
+		candidate, ok := jitterFromTrack(track)
+		if !ok {
+			continue
+		}
+		if strings.EqualFold(track.TrackType, "video") {
+			if !haveVideo || candidate > bestVideo {
+				haveVideo = true
+				bestVideo = candidate
+			}
+		}
+		if !haveAny || candidate > bestAny {
+			haveAny = true
+			bestAny = candidate
+		}
+	}
+	if haveVideo {
+		return &bestVideo
+	}
+	if haveAny {
+		return &bestAny
+	}
+	return nil
+}
+
+func jitterFromTrack(track streamBufferTrackPayload) (float64, bool) {
+	if track.FrameJitterMs != nil {
+		return *track.FrameJitterMs, true
+	}
+	if track.Jitter != nil {
+		return *track.Jitter, true
+	}
+	return 0, false
 }
 
 // DoGetGeographicDistribution returns aggregated geographic distribution analytics

@@ -1,18 +1,18 @@
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom'
 import Navigation from './components/Navigation'
-import LandingPage from './components/LandingPage'
-import Documentation from './components/Documentation'
-import Pricing from './components/Pricing'
-import About from './components/About'
-import Contact from './components/Contact'
-import ScrollToTop from './components/ScrollToTop'
+import LandingPage from './components/pages/LandingPage'
+import Documentation from './components/pages/Documentation'
+import Pricing from './components/pages/Pricing'
+import About from './components/pages/About'
+import Contact from './components/pages/Contact'
+import ScrollToTop from './components/shared/ScrollToTop'
 import Footer from './components/Footer'
-import StatusPage from './components/StatusPage'
-import RoadmapPage from './components/RoadmapPage'
-import ChangelogPage from './components/ChangelogPage'
-import PrivacyPage from './components/PrivacyPage'
-import TermsPage from './components/TermsPage'
-import AupPage from './components/AupPage'
+import StatusPage from './components/pages/StatusPage'
+import RoadmapPage from './components/pages/RoadmapPage'
+import ChangelogPage from './components/pages/ChangelogPage'
+import PrivacyPage from './components/pages/PrivacyPage'
+import TermsPage from './components/pages/TermsPage'
+import AupPage from './components/pages/AupPage'
 
 function App() {
   return (
@@ -39,4 +39,4 @@ function App() {
   )
 }
 
-export default App 
+export default App

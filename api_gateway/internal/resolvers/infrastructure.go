@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/demo"
 	"frameworks/api_gateway/internal/middleware"
 	"frameworks/pkg/api/commodore"
+	quartermaster "frameworks/pkg/api/quartermaster"
 	"frameworks/pkg/models"
 )
 
@@ -314,16 +316,59 @@ func (r *Resolver) DoUpdateTenant(ctx context.Context, input model.UpdateTenantI
 
 	r.Logger.WithField("tenant_id", tenantID).Info("Updating tenant")
 
-	// Handle JSON settings validation if provided
-	if input.Settings != nil {
-		var settings models.JSONB
-		if err := json.Unmarshal([]byte(*input.Settings), &settings); err != nil {
-			return nil, fmt.Errorf("invalid settings JSON: %w", err)
+	updateReq := &quartermaster.UpdateTenantRequest{}
+	updates := 0
+
+	if input.Name != nil {
+		trimmed := strings.TrimSpace(*input.Name)
+		if trimmed != "" {
+			updateReq.Name = &trimmed
+			updates++
 		}
 	}
 
-	// TODO: Add UpdateTenant method to Quartermaster client
-	// For now, return current tenant
+	if input.Settings != nil {
+		var raw map[string]interface{}
+		if err := json.Unmarshal([]byte(*input.Settings), &raw); err != nil {
+			return nil, fmt.Errorf("invalid settings JSON: %w", err)
+		}
+
+		if val, ok := raw["primaryClusterId"].(string); ok && strings.TrimSpace(val) != "" {
+			clusterID := strings.TrimSpace(val)
+			updateReq.PrimaryClusterID = &clusterID
+			updates++
+		}
+
+		if val, ok := raw["deploymentModel"].(string); ok && strings.TrimSpace(val) != "" {
+			model := strings.TrimSpace(val)
+			updateReq.DeploymentModel = &model
+			updates++
+		}
+
+		if tiers, ok := raw["allowedDeploymentTiers"].([]interface{}); ok {
+			allowed := make([]string, 0, len(tiers))
+			for _, item := range tiers {
+				if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
+					allowed = append(allowed, strings.TrimSpace(s))
+				}
+			}
+			if len(allowed) > 0 {
+				updateReq.AllowedDeploymentTiers = allowed
+				updates++
+			}
+		}
+	}
+
+	if updates == 0 {
+		r.Logger.WithField("tenant_id", tenantID).Debug("No tenant updates requested")
+		return r.DoGetTenant(ctx)
+	}
+
+	if err := r.Clients.Quartermaster.UpdateTenant(ctx, tenantID, updateReq); err != nil {
+		r.Logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to update tenant")
+		return nil, fmt.Errorf("failed to update tenant: %w", err)
+	}
+
 	return r.DoGetTenant(ctx)
 }
 

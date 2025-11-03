@@ -1,6 +1,6 @@
 .PHONY: build build-images build-bin-commodore build-bin-quartermaster build-bin-purser build-bin-decklog build-bin-foghorn build-bin-helmsman build-bin-periscope-ingest build-bin-periscope-query build-bin-signalman build-bin-bridge \
 	build-image-commodore build-image-quartermaster build-image-purser build-image-decklog build-image-foghorn build-image-helmsman build-image-periscope-ingest build-image-periscope-query build-image-signalman build-image-bridge \
-	proto graphql clean version install-tools verify test coverage
+	proto graphql clean version install-tools verify test coverage env
 
 # Version information
 # Prefer annotated git tags like v1.2.3; fallback to describe or dev
@@ -233,6 +233,10 @@ coverage: proto graphql
 			else \
 				echo "   tests failed, skipping"; \
 			fi; \
-			rm -f "$$tmpfile" ); \
+		rm -f "$$tmpfile" ); \
 	done;
 	@echo "Combined coverage saved to coverage/coverage.out"
+
+env:
+	@echo "Generating .env from config/env/*.env..."
+	@cd scripts/env && GOCACHE=$$(pwd)/.gocache go run .

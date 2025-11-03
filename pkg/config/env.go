@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/joho/godotenv"
 	"github.com/sirupsen/logrus"
@@ -10,9 +11,27 @@ import (
 
 // LoadEnv loads environment variables from .env file
 func LoadEnv(logger *logrus.Logger) {
-	if err := godotenv.Load(); err != nil {
+	files := []string{".env", ".env.dev"}
+	loaded := make([]string, 0, len(files))
+	for _, file := range files {
+		if _, err := os.Stat(file); err != nil {
+			continue
+		}
+		if err := godotenv.Overload(file); err != nil {
+			if logger != nil {
+				logger.WithError(err).Warnf("Failed to load %s", file)
+			}
+			continue
+		}
+		loaded = append(loaded, file)
+	}
+	if len(loaded) == 0 {
 		if logger != nil {
-			logger.Debug("No .env file found, using environment variables")
+			logger.Debug("No local env files loaded; relying on process environment")
+		}
+	} else {
+		if logger != nil {
+			logger.Debugf("Loaded env files: %s", strings.Join(loaded, ", "))
 		}
 	}
 }
@@ -57,4 +76,13 @@ func GetLogLevel() logrus.Level {
 	default:
 		return logrus.InfoLevel
 	}
+}
+
+// RequireEnv fetches a variable and exits the process if it is empty.
+func RequireEnv(key string) string {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		logrus.Fatalf("environment variable %s is required but not set", key)
+	}
+	return value
 }

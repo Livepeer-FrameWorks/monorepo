@@ -4,13 +4,13 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"os"
 	"time"
 
 	"frameworks/pkg/api/periscope"
 	"frameworks/pkg/api/purser"
 	pclient "frameworks/pkg/clients/purser"
 	qmclient "frameworks/pkg/clients/quartermaster"
+	"frameworks/pkg/config"
 	"frameworks/pkg/database"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/models"
@@ -29,17 +29,9 @@ type BillingSummarizer struct {
 
 // NewBillingSummarizer creates a new billing summarizer instance
 func NewBillingSummarizer(yugaDB database.PostgresConn, clickhouse database.ClickHouseConn, logger logging.Logger) *BillingSummarizer {
-	purserURL := os.Getenv("PURSER_URL")
-	if purserURL == "" {
-		purserURL = "http://localhost:18003"
-	}
-
-	quartermasterURL := os.Getenv("QUARTERMASTER_URL")
-	if quartermasterURL == "" {
-		quartermasterURL = "http://localhost:18002"
-	}
-
-	serviceToken := os.Getenv("SERVICE_TOKEN")
+	purserURL := config.RequireEnv("PURSER_URL")
+	quartermasterURL := config.RequireEnv("QUARTERMASTER_URL")
+	serviceToken := config.RequireEnv("SERVICE_TOKEN")
 
 	purserClient := pclient.NewClient(pclient.Config{
 		BaseURL:      purserURL,

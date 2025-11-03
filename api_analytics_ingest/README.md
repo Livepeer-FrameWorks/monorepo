@@ -21,7 +21,7 @@ events into PostgreSQL (`stream_analytics`) for stream state tracking.
 - Start the full stack from repo root: `docker-compose up -d`
 - Or run just Periscope‑Ingest: `cd api_analytics_ingest && go run ./cmd/periscope`
 
-Configuration: copy `env.example` to `.env` and use the inline comments as reference. Do not commit secrets.
+Configuration is provided via the repo-level env layers (`config/env/base.env` + `config/env/secrets.env`). Run `make env` or `frameworks config env generate` to build `.env`, then adjust `config/env/secrets.env` as needed. See `docs/configuration.md`. Do not commit secrets.
 
 ## Related
 - Root `README.md` (ports, stack overview)

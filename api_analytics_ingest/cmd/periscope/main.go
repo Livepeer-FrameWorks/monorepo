@@ -29,18 +29,28 @@ func main() {
 
 	logger.Info("Starting Periscope-Ingest (Analytics Event Processing)")
 
+	dbURL := config.RequireEnv("DATABASE_URL")
+	clickhouseHost := config.RequireEnv("CLICKHOUSE_HOST")
+	clickhouseDB := config.RequireEnv("CLICKHOUSE_DB")
+	clickhouseUser := config.RequireEnv("CLICKHOUSE_USER")
+	clickhousePassword := config.RequireEnv("CLICKHOUSE_PASSWORD")
+	brokersEnv := config.RequireEnv("KAFKA_BROKERS")
+	clusterID := config.RequireEnv("KAFKA_CLUSTER_ID")
+	serviceToken := config.RequireEnv("SERVICE_TOKEN")
+	quartermasterURL := config.RequireEnv("QUARTERMASTER_URL")
+
 	// Database configuration
 	dbConfig := database.DefaultConfig()
-	dbConfig.URL = config.GetEnv("DATABASE_URL", "postgres://frameworks_user:frameworks_dev@localhost:5432/frameworks?sslmode=disable")
+	dbConfig.URL = dbURL
 	yugaDB := database.MustConnect(dbConfig, logger)
 	defer yugaDB.Close()
 
 	// Connect to ClickHouse
 	chConfig := database.DefaultClickHouseConfig()
-	chConfig.Addr = []string{config.GetEnv("CLICKHOUSE_HOST", "localhost:9000")}
-	chConfig.Database = config.GetEnv("CLICKHOUSE_DB", "frameworks")
-	chConfig.Username = config.GetEnv("CLICKHOUSE_USER", "frameworks")
-	chConfig.Password = config.GetEnv("CLICKHOUSE_PASSWORD", "frameworks_dev")
+	chConfig.Addr = []string{clickhouseHost}
+	chConfig.Database = clickhouseDB
+	chConfig.Username = clickhouseUser
+	chConfig.Password = clickhousePassword
 	clickhouse := database.MustConnectClickHouseNative(chConfig, logger)
 	defer clickhouse.Close()
 
@@ -65,9 +75,8 @@ func main() {
 	// We'll add health checks after we have the consumer client
 
 	// Setup Kafka consumer
-	brokers := strings.Split(config.GetEnv("KAFKA_BROKERS", "localhost:9092"), ",")
+	brokers := strings.Split(brokersEnv, ",")
 	groupID := config.GetEnv("KAFKA_GROUP_ID", "periscope-ingest")
-	clusterID := config.GetEnv("KAFKA_CLUSTER_ID", "frameworks")
 	clientID := config.GetEnv("KAFKA_CLIENT_ID", "periscope-ingest")
 	topics := strings.Split(config.GetEnv("KAFKA_TOPICS", "analytics_events"), ",")
 
@@ -86,10 +95,10 @@ func main() {
 	healthChecker.AddCheck("clickhouse", monitoring.ClickHouseNativeHealthCheck(clickhouse))
 	healthChecker.AddCheck("kafka", monitoring.KafkaConsumerHealthCheck(consumer.GetClient()))
 	healthChecker.AddCheck("config", monitoring.ConfigurationHealthCheck(map[string]string{
-		"DATABASE_URL":    config.GetEnv("DATABASE_URL", ""),
-		"CLICKHOUSE_HOST": config.GetEnv("CLICKHOUSE_HOST", ""),
-		"KAFKA_BROKERS":   config.GetEnv("KAFKA_BROKERS", ""),
-		"KAFKA_GROUP_ID":  config.GetEnv("KAFKA_GROUP_ID", ""),
+		"DATABASE_URL":    dbURL,
+		"CLICKHOUSE_HOST": clickhouseHost,
+		"KAFKA_BROKERS":   brokersEnv,
+		"KAFKA_GROUP_ID":  groupID,
 	}))
 
 	// Start consuming
@@ -109,7 +118,7 @@ func main() {
 
 	// Best-effort service registration in Quartermaster
 	go func() {
-		qc := qmclient.NewClient(qmclient.Config{BaseURL: config.GetEnv("QUARTERMASTER_URL", "http://localhost:18002"), ServiceToken: config.GetEnv("SERVICE_TOKEN", ""), Logger: logger})
+		qc := qmclient.NewClient(qmclient.Config{BaseURL: quartermasterURL, ServiceToken: serviceToken, Logger: logger})
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if _, err := qc.BootstrapService(ctx, &qmapi.BootstrapServiceRequest{Type: "periscope_ingest", Version: version.Version, Protocol: "http", HealthEndpoint: func() *string { s := "/health"; return &s }(), Port: 18005}); err != nil {
