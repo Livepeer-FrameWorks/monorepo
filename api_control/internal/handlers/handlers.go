@@ -2498,7 +2498,7 @@ func sendPasswordResetEmail(email, token, tenantName string) error {
 	smtpHost := os.Getenv("SMTP_HOST")
 	smtpPort := os.Getenv("SMTP_PORT")
 	smtpUser := os.Getenv("SMTP_USER")
-	smtpPass := os.Getenv("SMTP_PASS")
+	smtpPass := os.Getenv("SMTP_PASSWORD")
 	fromEmail := os.Getenv("FROM_EMAIL")
 	if smtpHost == "" {
 		return fmt.Errorf("SMTP not configured")
@@ -2776,7 +2776,7 @@ func sendVerificationEmail(email, token, tenantName string) error {
 	smtpHost := os.Getenv("SMTP_HOST")
 	smtpPort := os.Getenv("SMTP_PORT")
 	smtpUser := os.Getenv("SMTP_USER")
-	smtpPass := os.Getenv("SMTP_PASS")
+	smtpPass := os.Getenv("SMTP_PASSWORD")
 	fromEmail := os.Getenv("FROM_EMAIL")
 
 	if smtpHost == "" {

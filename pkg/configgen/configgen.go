@@ -57,6 +57,10 @@ func Generate(opts Options) (map[string]string, error) {
 		return nil, fmt.Errorf("derive values: %w", err)
 	}
 
+	if err := computeViteVariables(env); err != nil {
+		return nil, fmt.Errorf("derive VITE variables: %w", err)
+	}
+
 	if err := validate(env); err != nil {
 		return nil, err
 	}
@@ -220,6 +224,46 @@ func computeDerived(env map[string]string) error {
 	}
 	env["FOGHORN_CONTROL_BIND_ADDR"] = fmt.Sprintf(":%s", foghornControlPort)
 	env["FOGHORN_CONTROL_ADDR"] = fmt.Sprintf("%s:%s", foghornHost, foghornControlPort)
+
+	return nil
+}
+
+// computeViteVariables derives browser-accessible URLs from deployment configuration.
+// These VITE_* variables are baked into the frontend build at compile time.
+func computeViteVariables(env map[string]string) error {
+	// Public-facing protocol and domain (for nginx-proxied endpoints)
+	publicProto := valueOrDefault(env, "PUBLIC_PROTOCOL", "http")
+	publicDomain := valueOrDefault(env, "PUBLIC_DOMAIN", "localhost:18090")
+
+	// WebSocket protocol follows HTTP protocol (ws for http, wss for https)
+	wsProto := "ws"
+	if publicProto == "https" {
+		wsProto = "wss"
+	}
+
+	// Frontend URLs (webapp routes via nginx)
+	env["VITE_AUTH_URL"] = fmt.Sprintf("%s://%s/auth", publicProto, publicDomain)
+	env["VITE_GRAPHQL_HTTP_URL"] = fmt.Sprintf("%s://%s/graphql/", publicProto, publicDomain)
+	env["VITE_GRAPHQL_WS_URL"] = fmt.Sprintf("%s://%s/graphql/ws", wsProto, publicDomain)
+	env["VITE_APP_URL"] = fmt.Sprintf("%s://%s/app", publicProto, publicDomain)
+
+	// Streaming infrastructure domains
+	streamingRtmp := valueOrDefault(env, "STREAMING_DOMAIN", "localhost:1935")
+	streamingHttp := valueOrDefault(env, "STREAMING_HTTP_DOMAIN", "localhost:8080")
+	streamingCdn := valueOrDefault(env, "STREAMING_CDN_DOMAIN", streamingHttp)
+
+	env["VITE_RTMP_DOMAIN"] = streamingRtmp
+	env["VITE_HTTP_DOMAIN"] = streamingHttp
+	env["VITE_CDN_DOMAIN"] = streamingCdn
+
+	// Streaming paths (defaults, but allow override from base.env or secrets.env)
+	env["VITE_RTMP_PATH"] = valueOrDefault(env, "VITE_RTMP_PATH", "/live")
+	env["VITE_HLS_PATH"] = valueOrDefault(env, "VITE_HLS_PATH", "/hls")
+	env["VITE_WEBRTC_PATH"] = valueOrDefault(env, "VITE_WEBRTC_PATH", "/webrtc")
+	env["VITE_EMBED_PATH"] = valueOrDefault(env, "VITE_EMBED_PATH", "/embed")
+
+	// Optional service URLs with sensible defaults
+	env["VITE_MARKETING_SITE_URL"] = valueOrDefault(env, "VITE_MARKETING_SITE_URL", "http://localhost:9004")
 
 	return nil
 }
