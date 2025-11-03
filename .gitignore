@@ -78,6 +78,7 @@ bin
 *.cert
 secrets.*
 config/env/secrets.env
+!config/env/secrets.env.example
 scripts/env/.gocache/
 scripts/env/env
 **/.gocache/
