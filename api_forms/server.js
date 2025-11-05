@@ -15,8 +15,8 @@ if (!isTurnstileEnabled) {
 const app = express();
 const PORT = process.env.PORT || 18032;
 
-// Respect proxy headers (e.g., when behind nginx or Cloudflare)
-app.set('trust proxy', true);
+// Respect proxy headers: trust direct upstream proxy in production, loopback ranges otherwise
+app.set('trust proxy', process.env.NODE_ENV === 'production' ? 1 : 'loopback, linklocal, uniquelocal');
 
 // Security middleware
 app.use(helmet());
