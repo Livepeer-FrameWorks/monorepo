@@ -15,6 +15,9 @@ if (!isTurnstileEnabled) {
 const app = express();
 const PORT = process.env.PORT || 18032;
 
+// Respect proxy headers (e.g., when behind nginx or Cloudflare)
+app.set('trust proxy', true);
+
 // Security middleware
 app.use(helmet());
 app.use(cors({
