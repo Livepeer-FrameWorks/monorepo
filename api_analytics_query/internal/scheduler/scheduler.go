@@ -1,8 +1,6 @@
 package scheduler
 
 import (
-	"os"
-	"strconv"
 	"time"
 
 	"frameworks/pkg/logging"
@@ -115,46 +113,14 @@ func (s *Scheduler) runDailyTasks() {
 	}
 }
 
-// getHourlyInterval returns the hourly summarization interval from environment
+// getHourlyInterval returns the fixed hourly summarization interval.
 func (s *Scheduler) getHourlyInterval() time.Duration {
-	intervalStr := os.Getenv("BILLING_HOURLY_INTERVAL")
-	if intervalStr == "" {
-		return time.Hour // Default: every hour
-	}
-
-	if intervalStr == "disabled" {
-		s.logger.Info("Hourly billing summarization disabled")
-		return 0
-	}
-
-	intervalMinutes, err := strconv.Atoi(intervalStr)
-	if err != nil {
-		s.logger.WithError(err).Warn("Invalid BILLING_HOURLY_INTERVAL, using default of 60 minutes")
-		return time.Hour
-	}
-
-	return time.Duration(intervalMinutes) * time.Minute
+	return time.Hour
 }
 
-// getDailyInterval returns the daily summarization interval from environment
+// getDailyInterval returns the fixed daily summarization interval.
 func (s *Scheduler) getDailyInterval() time.Duration {
-	intervalStr := os.Getenv("BILLING_DAILY_INTERVAL")
-	if intervalStr == "" {
-		return 24 * time.Hour // Default: every 24 hours
-	}
-
-	if intervalStr == "disabled" {
-		s.logger.Info("Daily billing summarization disabled")
-		return 0
-	}
-
-	intervalHours, err := strconv.Atoi(intervalStr)
-	if err != nil {
-		s.logger.WithError(err).Warn("Invalid BILLING_DAILY_INTERVAL, using default of 24 hours")
-		return 24 * time.Hour
-	}
-
-	return time.Duration(intervalHours) * time.Hour
+	return 24 * time.Hour
 }
 
 // TriggerHourlySummary manually triggers hourly usage summarization

@@ -31,6 +31,7 @@ import (
 	"frameworks/pkg/geoip"
 	"frameworks/pkg/logging"
 	pb "frameworks/pkg/proto"
+	"frameworks/pkg/version"
 
 	"github.com/google/uuid"
 
@@ -137,7 +138,7 @@ func Init(database *sql.DB, log logging.Logger, loadBalancer *balancer.LoadBalan
 		defer cancel()
 		_, _ = quartermasterClient.BootstrapService(ctx, &qmapi.BootstrapServiceRequest{
 			Type:           "foghorn",
-			Version:        os.Getenv("VERSION"),
+			Version:        version.Version,
 			Protocol:       "http",
 			HealthEndpoint: func() *string { s := "/health"; return &s }(),
 			Port:           18008,

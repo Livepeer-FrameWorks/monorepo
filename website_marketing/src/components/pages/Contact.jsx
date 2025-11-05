@@ -416,7 +416,7 @@ const Contact = () => {
 
                 {isTurnstileEnabled && !success ? (
                   <div className="contact-turnstile">
-                    <span className="contact-turnstile__label">Cloudflare Turnstile *</span>
+                    <span className="contact-turnstile__label">Security Check *</span>
                     <div className="contact-turnstile__widget">
                       <Turnstile
                         siteKey={config.turnstileSiteKey}
@@ -443,7 +443,7 @@ const Contact = () => {
 
                 {!isTurnstileEnabled && (
                   <div className="contact-verification">
-                    <span className="contact-turnstile__label">Verification *</span>
+                    <span className="contact-turnstile__label">Security Check *</span>
                     <div className="contact-verification__options">
                       <label
                         className={cn(

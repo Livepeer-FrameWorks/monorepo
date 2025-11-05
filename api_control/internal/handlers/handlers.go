@@ -808,12 +808,9 @@ func CreateClip(c *gin.Context) {
 		return
 	}
 
-	foghornList := os.Getenv("FOGHORN_URLS")
+	foghornList := os.Getenv("FOGHORN_URL")
 	if foghornList == "" {
-		foghornList = os.Getenv("FOGHORN_URL")
-	}
-	if foghornList == "" {
-		c.JSON(http.StatusServiceUnavailable, commodoreapi.ErrorResponse{Error: "FOGHORN_URLS or FOGHORN_URL not configured"})
+		c.JSON(http.StatusServiceUnavailable, commodoreapi.ErrorResponse{Error: "FOGHORN_URL not configured"})
 		return
 	}
 	urls := strings.Split(foghornList, ",")
@@ -898,12 +895,9 @@ func GetClips(c *gin.Context) {
 	}
 
 	// Get list of Foghorn URLs
-	foghornList := os.Getenv("FOGHORN_URLS")
+	foghornList := os.Getenv("FOGHORN_URL")
 	if foghornList == "" {
-		foghornList = os.Getenv("FOGHORN_URL")
-	}
-	if foghornList == "" {
-		c.JSON(http.StatusServiceUnavailable, commodoreapi.ErrorResponse{Error: "FOGHORN_URLS not configured"})
+		c.JSON(http.StatusServiceUnavailable, commodoreapi.ErrorResponse{Error: "FOGHORN_URL not configured"})
 		return
 	}
 	urls := strings.Split(foghornList, ",")
@@ -1034,12 +1028,9 @@ func GetClip(c *gin.Context) {
 	}
 
 	// First, we need to find the clip_hash for this ID by querying all Foghorns
-	foghornList := os.Getenv("FOGHORN_URLS")
+	foghornList := os.Getenv("FOGHORN_URL")
 	if foghornList == "" {
-		foghornList = os.Getenv("FOGHORN_URL")
-	}
-	if foghornList == "" {
-		c.JSON(http.StatusServiceUnavailable, commodoreapi.ErrorResponse{Error: "FOGHORN_URLS not configured"})
+		c.JSON(http.StatusServiceUnavailable, commodoreapi.ErrorResponse{Error: "FOGHORN_URL not configured"})
 		return
 	}
 	urls := strings.Split(foghornList, ",")
@@ -1103,12 +1094,9 @@ func GetClipURLs(c *gin.Context) {
 	}
 
 	// Find the clip and get its hash
-	foghornList := os.Getenv("FOGHORN_URLS")
+	foghornList := os.Getenv("FOGHORN_URL")
 	if foghornList == "" {
-		foghornList = os.Getenv("FOGHORN_URL")
-	}
-	if foghornList == "" {
-		c.JSON(http.StatusServiceUnavailable, commodoreapi.ErrorResponse{Error: "FOGHORN_URLS not configured"})
+		c.JSON(http.StatusServiceUnavailable, commodoreapi.ErrorResponse{Error: "FOGHORN_URL not configured"})
 		return
 	}
 	urls := strings.Split(foghornList, ",")
@@ -1195,12 +1183,9 @@ func DeleteClip(c *gin.Context) {
 	}
 
 	// Find the clip and get its hash
-	foghornList := os.Getenv("FOGHORN_URLS")
+	foghornList := os.Getenv("FOGHORN_URL")
 	if foghornList == "" {
-		foghornList = os.Getenv("FOGHORN_URL")
-	}
-	if foghornList == "" {
-		c.JSON(http.StatusServiceUnavailable, commodoreapi.ErrorResponse{Error: "FOGHORN_URLS not configured"})
+		c.JSON(http.StatusServiceUnavailable, commodoreapi.ErrorResponse{Error: "FOGHORN_URL not configured"})
 		return
 	}
 	urls := strings.Split(foghornList, ",")
@@ -1257,12 +1242,9 @@ func StartDVR(c *gin.Context) {
 		return
 	}
 
-	foghornList := os.Getenv("FOGHORN_URLS")
+	foghornList := os.Getenv("FOGHORN_URL")
 	if foghornList == "" {
-		foghornList = os.Getenv("FOGHORN_URL")
-	}
-	if foghornList == "" {
-		c.JSON(http.StatusServiceUnavailable, commodoreapi.ErrorResponse{Error: "FOGHORN_URLS not configured"})
+		c.JSON(http.StatusServiceUnavailable, commodoreapi.ErrorResponse{Error: "FOGHORN_URL not configured"})
 		return
 	}
 	urls := strings.Split(foghornList, ",")
@@ -1304,12 +1286,9 @@ func StopDVR(c *gin.Context) {
 		return
 	}
 
-	foghornList := os.Getenv("FOGHORN_URLS")
+	foghornList := os.Getenv("FOGHORN_URL")
 	if foghornList == "" {
-		foghornList = os.Getenv("FOGHORN_URL")
-	}
-	if foghornList == "" {
-		c.JSON(http.StatusServiceUnavailable, commodoreapi.ErrorResponse{Error: "FOGHORN_URLS not configured"})
+		c.JSON(http.StatusServiceUnavailable, commodoreapi.ErrorResponse{Error: "FOGHORN_URL not configured"})
 		return
 	}
 	urls := strings.Split(foghornList, ",")
@@ -1350,12 +1329,9 @@ func GetDVRStatus(c *gin.Context) {
 		return
 	}
 
-	foghornList := os.Getenv("FOGHORN_URLS")
+	foghornList := os.Getenv("FOGHORN_URL")
 	if foghornList == "" {
-		foghornList = os.Getenv("FOGHORN_URL")
-	}
-	if foghornList == "" {
-		c.JSON(http.StatusServiceUnavailable, commodoreapi.ErrorResponse{Error: "FOGHORN_URLS not configured"})
+		c.JSON(http.StatusServiceUnavailable, commodoreapi.ErrorResponse{Error: "FOGHORN_URL not configured"})
 		return
 	}
 	urls := strings.Split(foghornList, ",")
@@ -1398,12 +1374,9 @@ func ListDVRRequests(c *gin.Context) {
 		limit = 20
 	}
 
-	foghornList := os.Getenv("FOGHORN_URLS")
+	foghornList := os.Getenv("FOGHORN_URL")
 	if foghornList == "" {
-		foghornList = os.Getenv("FOGHORN_URL")
-	}
-	if foghornList == "" {
-		c.JSON(http.StatusServiceUnavailable, commodoreapi.ErrorResponse{Error: "FOGHORN_URLS not configured"})
+		c.JSON(http.StatusServiceUnavailable, commodoreapi.ErrorResponse{Error: "FOGHORN_URL not configured"})
 		return
 	}
 	urls := strings.Split(foghornList, ",")
@@ -1647,10 +1620,7 @@ func DeleteStream(c *gin.Context) {
 	}
 
 	// Delete related clips via Foghorn API (no cross-service DB access)
-	foghornList := os.Getenv("FOGHORN_URLS")
-	if foghornList == "" {
-		foghornList = os.Getenv("FOGHORN_URL")
-	}
+	foghornList := os.Getenv("FOGHORN_URL")
 	if foghornList != "" {
 		urls := strings.Split(foghornList, ",")
 		for _, rawURL := range urls {
@@ -2510,9 +2480,9 @@ func sendPasswordResetEmail(email, token, tenantName string) error {
 		fromEmail = "noreply@frameworks.network"
 	}
 
-	baseURL := os.Getenv("BASE_URL")
+	baseURL := os.Getenv("WEBAPP_PUBLIC_URL")
 	if baseURL == "" {
-		baseURL = "http://localhost:3000"
+		baseURL = "http://localhost:18090/app"
 	}
 	resetURL := fmt.Sprintf("%s/reset-password?token=%s", baseURL, url.QueryEscape(token))
 
@@ -2792,9 +2762,9 @@ func sendVerificationEmail(email, token, tenantName string) error {
 	}
 
 	// Create verification URL
-	baseURL := os.Getenv("BASE_URL")
+	baseURL := os.Getenv("WEBAPP_PUBLIC_URL")
 	if baseURL == "" {
-		baseURL = "http://localhost:9003"
+		baseURL = "http://localhost:18090/app"
 	}
 	verifyURL := fmt.Sprintf("%s/verify-email?token=%s", baseURL, token)
 
@@ -3430,9 +3400,9 @@ func ResolveViewerEndpoint(c *gin.Context) {
 	}
 
 	// Get Foghorn URLs from environment (following existing pattern)
-	foghornList := os.Getenv("FOGHORN_URLS")
+	foghornList := os.Getenv("FOGHORN_URL")
 	if foghornList == "" {
-		logger.Error("FOGHORN_URLS environment variable not set")
+		logger.Error("FOGHORN_URL environment variable not set")
 		c.JSON(http.StatusInternalServerError, commodoreapi.ErrorResponse{Error: "Service configuration error"})
 		return
 	}
@@ -3521,12 +3491,9 @@ func StreamMetaByKey(c *gin.Context) {
 	}
 
 	// Determine Foghorn URL (cluster aware): reuse existing env fan-out pattern
-	foghornList := os.Getenv("FOGHORN_URLS")
+	foghornList := os.Getenv("FOGHORN_URL")
 	if foghornList == "" {
-		foghornList = os.Getenv("FOGHORN_URL")
-	}
-	if foghornList == "" {
-		c.JSON(http.StatusServiceUnavailable, commodoreapi.ErrorResponse{Error: "FOGHORN_URLS not configured"})
+		c.JSON(http.StatusServiceUnavailable, commodoreapi.ErrorResponse{Error: "FOGHORN_URL not configured"})
 		return
 	}
 	urls := strings.Split(foghornList, ",")

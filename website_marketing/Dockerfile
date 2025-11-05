@@ -2,11 +2,10 @@
 
 ARG BUILD_ENV=production
 
-FROM node:22-alpine AS builder
+FROM node:24-alpine AS builder
 
 ARG BUILD_ENV
 ARG VITE_APP_URL
-ARG VITE_API_URL
 ARG VITE_GITHUB_URL
 ARG VITE_LIVEPEER_URL
 ARG VITE_LIVEPEER_EXPLORER_URL
@@ -21,7 +20,6 @@ ARG VITE_CONTACT_API_URL
 ARG VITE_TURNSTILE_FORMS_SITE_KEY
 
 ENV VITE_APP_URL=${VITE_APP_URL}
-ENV VITE_API_URL=${VITE_API_URL}
 ENV VITE_GITHUB_URL=${VITE_GITHUB_URL}
 ENV VITE_LIVEPEER_URL=${VITE_LIVEPEER_URL}
 ENV VITE_LIVEPEER_EXPLORER_URL=${VITE_LIVEPEER_EXPLORER_URL}
@@ -59,7 +57,7 @@ COPY website_marketing/ website_marketing/
 # build the marketing site
 RUN pnpm --filter frameworks-website... run build
 
-FROM node:22-alpine AS runner
+FROM node:24-alpine AS runner
 
 RUN apk add --no-cache ca-certificates tzdata \
   && npm install -g serve \

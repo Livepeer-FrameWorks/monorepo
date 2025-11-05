@@ -74,7 +74,7 @@ func (es *EmailService) SendInvoiceCreatedEmail(tenantEmail, tenantName, invoice
 		Amount:     amount,
 		Currency:   currency,
 		DueDate:    dueDate,
-		LoginURL:   os.Getenv("BASE_URL") + "/login",
+		LoginURL:   os.Getenv("WEBAPP_PUBLIC_URL") + "/login",
 	}
 
 	body, err := es.renderTemplate("invoice_created", data)
@@ -102,7 +102,7 @@ func (es *EmailService) SendPaymentSuccessEmail(tenantEmail, tenantName, invoice
 		Currency:      currency,
 		PaidAt:        &now,
 		PaymentMethod: paymentMethod,
-		LoginURL:      os.Getenv("BASE_URL") + "/login",
+		LoginURL:      os.Getenv("WEBAPP_PUBLIC_URL") + "/login",
 	}
 
 	body, err := es.renderTemplate("payment_success", data)
@@ -128,7 +128,7 @@ func (es *EmailService) SendPaymentFailedEmail(tenantEmail, tenantName, invoiceI
 		Amount:        amount,
 		Currency:      currency,
 		PaymentMethod: paymentMethod,
-		LoginURL:      os.Getenv("BASE_URL") + "/login",
+		LoginURL:      os.Getenv("WEBAPP_PUBLIC_URL") + "/login",
 	}
 
 	body, err := es.renderTemplate("payment_failed", data)
@@ -154,7 +154,7 @@ func (es *EmailService) SendOverdueReminderEmail(tenantEmail, tenantName, invoic
 		Amount:      amount,
 		Currency:    currency,
 		DaysPastDue: daysPastDue,
-		LoginURL:    os.Getenv("BASE_URL") + "/login",
+		LoginURL:    os.Getenv("WEBAPP_PUBLIC_URL") + "/login",
 	}
 
 	body, err := es.renderTemplate("overdue_reminder", data)

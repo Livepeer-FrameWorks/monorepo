@@ -658,18 +658,11 @@ func (pm *PrometheusMonitor) processUpdates() {
 // forwardNodeMetrics forwards node metrics to API and analytics services - TYPED VERSION
 func (pm *PrometheusMonitor) forwardNodeMetrics(nodeID string) {
 	// Capabilities from environment (fallback defaults: all true in dev)
-	rolesCSV := os.Getenv("HELMSMAN_ROLES") // e.g. "ingest,edge,storage,processing"
-	var roles []string
-	for _, r := range strings.Split(rolesCSV, ",") {
-		r = strings.TrimSpace(r)
-		if r != "" {
-			roles = append(roles, r)
-		}
-	}
 	capIngest := os.Getenv("HELMSMAN_CAP_INGEST")
 	capEdge := os.Getenv("HELMSMAN_CAP_EDGE")
 	capStorage := os.Getenv("HELMSMAN_CAP_STORAGE")
 	capProcessing := os.Getenv("HELMSMAN_CAP_PROCESSING")
+	roles := rolesFromCapabilityFlags(capIngest, capEdge, capStorage, capProcessing)
 
 	// Convert API response to MistTrigger using converter
 	mistTrigger := convertNodeAPIToMistTrigger(nodeID, pm.getLastJSONData(), monitorLogger)
@@ -1652,6 +1645,31 @@ func enrichNodeLifecycleTrigger(mistTrigger *pb.MistTrigger, capIngest, capEdge,
 			nodeUpdate.TenantId = &t
 		}
 	}
+}
+
+func rolesFromCapabilityFlags(capIngest, capEdge, capStorage, capProcessing string) []string {
+	var roles []string
+	if interpretCapabilityFlag(capIngest, true) {
+		roles = append(roles, "ingest")
+	}
+	if interpretCapabilityFlag(capEdge, true) {
+		roles = append(roles, "edge")
+	}
+	if interpretCapabilityFlag(capStorage, true) {
+		roles = append(roles, "storage")
+	}
+	if interpretCapabilityFlag(capProcessing, true) {
+		roles = append(roles, "processing")
+	}
+	return roles
+}
+
+func interpretCapabilityFlag(value string, def bool) bool {
+	v := strings.ToLower(strings.TrimSpace(value))
+	if v == "" {
+		return def
+	}
+	return v == "1" || v == "true" || v == "yes"
 }
 
 // convertStreamAPIToMistTrigger converts stream API response data to a MistTrigger protobuf

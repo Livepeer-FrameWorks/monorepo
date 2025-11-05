@@ -21,7 +21,7 @@ import (
 func notifyFoghornShutdown() error {
 	nodeID := control.GetCurrentNodeID()
 	if nodeID == "" {
-		nodeID = os.Getenv("NODE_NAME")
+		nodeID = os.Getenv("NODE_ID")
 		if nodeID == "" {
 			nodeID = "unknown-node"
 		}
@@ -78,8 +78,8 @@ func main() {
 	}
 
 	healthChecker.AddCheck("config", monitoring.ConfigurationHealthCheck(map[string]string{
-		"NODE_NAME": os.Getenv("NODE_NAME"),
-		"PORT":      os.Getenv("PORT"),
+		"NODE_ID": os.Getenv("NODE_ID"),
+		"PORT":    os.Getenv("PORT"),
 	}))
 
 	// Create infrastructure sidecar metrics using handlers.HandlerMetrics directly

@@ -219,11 +219,11 @@ func runClient(addr string, logger logging.Logger) error {
 	}
 
 	// Send Register
-	nodeID := os.Getenv("NODE_NAME")
+	nodeID := os.Getenv("NODE_ID")
 	if nodeID == "" {
 		nodeID = hostnameFallback()
 	}
-	roles := splitCSV(os.Getenv("HELMSMAN_ROLES"))
+	roles := deriveRolesFromCapabilities()
 	reg := &pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_Register{Register: &pb.Register{
 		NodeId:          nodeID,
 		Roles:           roles,
@@ -423,17 +423,6 @@ func downloadToFile(url, dst string) error {
 	return err
 }
 
-func splitCSV(s string) []string {
-	var out []string
-	for _, p := range strings.Split(s, ",") {
-		p = strings.TrimSpace(p)
-		if p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
-}
-
 func envBoolDefault(name string, def bool) bool {
 	v := strings.ToLower(os.Getenv(name))
 	if v == "" {
@@ -460,6 +449,23 @@ func hostnameFallback() string {
 		h = "unknown-helmsman"
 	}
 	return h
+}
+
+func deriveRolesFromCapabilities() []string {
+	var roles []string
+	if envBoolDefault("HELMSMAN_CAP_INGEST", true) {
+		roles = append(roles, "ingest")
+	}
+	if envBoolDefault("HELMSMAN_CAP_EDGE", true) {
+		roles = append(roles, "edge")
+	}
+	if envBoolDefault("HELMSMAN_CAP_STORAGE", true) {
+		roles = append(roles, "storage")
+	}
+	if envBoolDefault("HELMSMAN_CAP_PROCESSING", true) {
+		roles = append(roles, "processing")
+	}
+	return roles
 }
 
 // collectNodeFingerprint builds a stable fingerprint from local network/machine info.

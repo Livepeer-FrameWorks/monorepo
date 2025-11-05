@@ -723,7 +723,7 @@ func createStripePayment(invoice models.Invoice) (string, string, error) {
 		return "", "", fmt.Errorf("invalid stripe response: missing client secret")
 	}
 
-	paymentURL := fmt.Sprintf("%s/payment/stripe?client_secret=%s", os.Getenv("BASE_URL"), result.ClientSecret)
+	paymentURL := fmt.Sprintf("%s/payment/stripe?client_secret=%s", os.Getenv("WEBAPP_PUBLIC_URL"), result.ClientSecret)
 
 	logger.WithFields(logging.Fields{
 		"method":         "stripe",
@@ -751,13 +751,20 @@ func createMolliePayment(invoice models.Invoice) (string, string, error) {
 			Value:    fmt.Sprintf("%.2f", invoice.Amount),
 		},
 		Description: fmt.Sprintf("Invoice %s", invoice.ID),
-		RedirectURL: fmt.Sprintf("%s/payment/success", os.Getenv("BASE_URL")),
-		WebhookURL:  fmt.Sprintf("%s/webhooks/mollie", os.Getenv("BASE_URL")),
+		RedirectURL: fmt.Sprintf("%s/payment/success", os.Getenv("WEBAPP_PUBLIC_URL")),
+		// TODO(ARCHITECTURE): External payment webhooks must go through Gateway/Bridge, not direct to Purser.
+		// Mollie/Stripe need publicly accessible URLs. This requires nginx → bridge → purser routing
+		// with proper external endpoint exposure. Cannot expose Purser directly to internet.
+		// For now, using WEBAPP_PUBLIC_URL as placeholder - THIS WILL NOT WORK in production
+		// until we expose /webhooks/* through Gateway and route to Purser with proper authentication.
+		WebhookURL:  fmt.Sprintf("%s/webhooks/mollie", os.Getenv("WEBAPP_PUBLIC_URL")),
 		Metadata: map[string]string{
 			"invoice_id": invoice.ID,
 			"tenant_id":  invoice.TenantID,
 		},
 	}
+
+	logger.Warn("Mollie webhook URL uses temporary placeholder - external webhooks need Gateway routing")
 
 	var result purserapi.MolliePaymentResponse
 	resp, err := client.R().

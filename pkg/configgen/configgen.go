@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -30,6 +31,47 @@ func (o *Options) defaults() error {
 		o.Context = "dev"
 	}
 	return nil
+}
+
+// convertToWS converts http/https URLs to ws/wss
+func convertToWS(httpURL string) (string, error) {
+	parsed, err := url.Parse(httpURL)
+	if err != nil {
+		return "", fmt.Errorf("parse URL: %w", err)
+	}
+	switch parsed.Scheme {
+	case "http":
+		parsed.Scheme = "ws"
+	case "https":
+		parsed.Scheme = "wss"
+	default:
+		return "", fmt.Errorf("unsupported scheme %q for WebSocket conversion", parsed.Scheme)
+	}
+	return parsed.String(), nil
+}
+
+// extractHostFromURL returns the host:port from a URL
+func extractHostFromURL(rawURL string) (string, error) {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return "", fmt.Errorf("parse URL: %w", err)
+	}
+	if parsed.Host == "" {
+		return "", fmt.Errorf("no host in URL %q", rawURL)
+	}
+	return parsed.Host, nil
+}
+
+// extractPathFromURL returns the path from a URL (defaults to "/" if empty)
+func extractPathFromURL(rawURL string) (string, error) {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return "", fmt.Errorf("parse URL: %w", err)
+	}
+	if parsed.Path == "" {
+		return "/", nil
+	}
+	return parsed.Path, nil
 }
 
 // Generate merges base + secrets env files, derives additional values, validates required variables,
@@ -161,7 +203,7 @@ func computeDerived(env map[string]string) error {
 	}
 	env["KAFKA_BROKERS"] = fmt.Sprintf("%s:%s", kafkaHost, kafkaPort)
 
-	chHost, err := require(env, "CLICKHOUSE_SERVICE_HOST")
+	chHost, err := require(env, "CLICKHOUSE_HOST")
 	if err != nil {
 		return err
 	}
@@ -197,7 +239,7 @@ func computeDerived(env map[string]string) error {
 	if err := setHTTPURL(env, "HELMSMAN_WEBHOOK_URL", "HELMSMAN_HOST", "HELMSMAN_PORT"); err != nil {
 		return err
 	}
-	if err := setHTTPURL(env, "FOGHORN_HTTP_BASE", "FOGHORN_HOST", "FOGHORN_PORT"); err != nil {
+	if err := setHTTPURL(env, "FOGHORN_URL", "FOGHORN_HOST", "FOGHORN_PORT"); err != nil {
 		return err
 	}
 	if err := setHTTPURL(env, "MISTSERVER_URL", "MISTSERVER_HOST", "MISTSERVER_PORT"); err != nil {
@@ -225,45 +267,109 @@ func computeDerived(env map[string]string) error {
 	env["FOGHORN_CONTROL_BIND_ADDR"] = fmt.Sprintf(":%s", foghornControlPort)
 	env["FOGHORN_CONTROL_ADDR"] = fmt.Sprintf("%s:%s", foghornHost, foghornControlPort)
 
+	// WEBAPP_PUBLIC_URL is already defined in base.env, no derivation needed
+
 	return nil
 }
 
 // computeViteVariables derives browser-accessible URLs from deployment configuration.
 // These VITE_* variables are baked into the frontend build at compile time.
 func computeViteVariables(env map[string]string) error {
-	// Public-facing protocol and domain (for nginx-proxied endpoints)
-	publicProto := valueOrDefault(env, "PUBLIC_PROTOCOL", "http")
-	publicDomain := valueOrDefault(env, "PUBLIC_DOMAIN", "localhost:18090")
-
-	// WebSocket protocol follows HTTP protocol (ws for http, wss for https)
-	wsProto := "ws"
-	if publicProto == "https" {
-		wsProto = "wss"
+	// 1. GATEWAY ENDPOINTS - Read from base.env
+	gatewayPublicURL, err := require(env, "GATEWAY_PUBLIC_URL")
+	if err != nil {
+		return err
 	}
 
-	// Frontend URLs (webapp routes via nginx)
-	env["VITE_AUTH_URL"] = fmt.Sprintf("%s://%s/auth", publicProto, publicDomain)
-	env["VITE_GRAPHQL_HTTP_URL"] = fmt.Sprintf("%s://%s/graphql/", publicProto, publicDomain)
-	env["VITE_GRAPHQL_WS_URL"] = fmt.Sprintf("%s://%s/graphql/ws", wsProto, publicDomain)
-	env["VITE_APP_URL"] = fmt.Sprintf("%s://%s/app", publicProto, publicDomain)
+	env["VITE_GRAPHQL_HTTP_URL"] = gatewayPublicURL + "/"
+	env["VITE_GATEWAY_URL"] = gatewayPublicURL + "/"
 
-	// Streaming infrastructure domains
-	streamingRtmp := valueOrDefault(env, "STREAMING_DOMAIN", "localhost:1935")
-	streamingHttp := valueOrDefault(env, "STREAMING_HTTP_DOMAIN", "localhost:8080")
-	streamingCdn := valueOrDefault(env, "STREAMING_CDN_DOMAIN", streamingHttp)
+	wsURL, err := convertToWS(gatewayPublicURL)
+	if err != nil {
+		return fmt.Errorf("convert gateway URL to WebSocket: %w", err)
+	}
+	env["VITE_GRAPHQL_WS_URL"] = wsURL + "/ws"
 
-	env["VITE_RTMP_DOMAIN"] = streamingRtmp
-	env["VITE_HTTP_DOMAIN"] = streamingHttp
-	env["VITE_CDN_DOMAIN"] = streamingCdn
+	authPublicURL, err := require(env, "AUTH_PUBLIC_URL")
+	if err != nil {
+		return err
+	}
+	env["VITE_AUTH_URL"] = authPublicURL
 
-	// Streaming paths (defaults, but allow override from base.env or secrets.env)
-	env["VITE_RTMP_PATH"] = valueOrDefault(env, "VITE_RTMP_PATH", "/live")
-	env["VITE_HLS_PATH"] = valueOrDefault(env, "VITE_HLS_PATH", "/hls")
-	env["VITE_WEBRTC_PATH"] = valueOrDefault(env, "VITE_WEBRTC_PATH", "/webrtc")
-	env["VITE_EMBED_PATH"] = valueOrDefault(env, "VITE_EMBED_PATH", "/embed")
+	// 2. APPLICATION URLS - Read from base.env
+	webappPublicURL, err := require(env, "WEBAPP_PUBLIC_URL")
+	if err != nil {
+		return err
+	}
+	env["VITE_APP_URL"] = webappPublicURL
 
-	// Optional service URLs with sensible defaults
-	env["VITE_MARKETING_SITE_URL"] = valueOrDefault(env, "VITE_MARKETING_SITE_URL", "http://localhost:9004")
+	marketingPublicURL := valueOrDefault(env, "MARKETING_PUBLIC_URL", "http://localhost:18031")
+	env["VITE_MARKETING_SITE_URL"] = marketingPublicURL
+
+	// Contact API URL - Read from base.env
+	formsPublicURL, err := require(env, "FORMS_PUBLIC_URL")
+	if err != nil {
+		return err
+	}
+	env["VITE_CONTACT_API_URL"] = formsPublicURL + "/api/contact"
+
+	// 3. STREAMING - INGEST (Parse STREAMING_INGEST_URL for RTMP)
+	streamingIngestURL := valueOrDefault(env, "STREAMING_INGEST_URL", "rtmp://localhost:1935/live")
+
+	rtmpHost, err := extractHostFromURL(streamingIngestURL)
+	if err != nil {
+		return fmt.Errorf("extract host from streaming ingest URL: %w", err)
+	}
+	env["VITE_RTMP_DOMAIN"] = rtmpHost
+
+	rtmpPath, err := extractPathFromURL(streamingIngestURL)
+	if err != nil {
+		return fmt.Errorf("extract path from streaming ingest URL: %w", err)
+	}
+	env["VITE_RTMP_PATH"] = rtmpPath
+
+	// 4. STREAMING - EDGE/DELIVERY (Parse STREAMING_EDGE_URL for HTTP)
+	streamingEdgeURL := valueOrDefault(env, "STREAMING_EDGE_URL", "http://localhost:18090/view")
+
+	edgeHost, err := extractHostFromURL(streamingEdgeURL)
+	if err != nil {
+		return fmt.Errorf("extract host from streaming edge URL: %w", err)
+	}
+	env["VITE_HTTP_DOMAIN"] = edgeHost
+	env["VITE_CDN_DOMAIN"] = edgeHost
+
+	// Streaming paths from base.env
+	env["VITE_HLS_PATH"] = valueOrDefault(env, "STREAMING_HLS_PATH", "/hls")
+	env["VITE_WEBRTC_PATH"] = valueOrDefault(env, "STREAMING_WEBRTC_PATH", "/webrtc")
+	env["VITE_EMBED_PATH"] = valueOrDefault(env, "STREAMING_EMBED_PATH", "/")
+
+	// 5. BRANDING - Passthrough from base.env
+	env["VITE_COMPANY_NAME"] = valueOrDefault(env, "BRAND_NAME", "FrameWorks")
+	env["VITE_DOMAIN"] = valueOrDefault(env, "BRAND_DOMAIN", "frameworks.network")
+	env["VITE_CONTACT_EMAIL"] = valueOrDefault(env, "BRAND_CONTACT_EMAIL", "info@frameworks.network")
+
+	// 6. EXTERNAL LINKS - Passthrough from base.env
+	env["VITE_GITHUB_URL"] = valueOrDefault(env, "GITHUB_URL", "https://github.com/livepeer-frameworks/monorepo")
+	env["VITE_LIVEPEER_URL"] = valueOrDefault(env, "LIVEPEER_URL", "https://livepeer.org")
+	env["VITE_LIVEPEER_EXPLORER_URL"] = valueOrDefault(env, "LIVEPEER_EXPLORER_URL", "https://explorer.livepeer.org")
+	env["VITE_FORUM_URL"] = valueOrDefault(env, "FORUM_URL", "https://forum.frameworks.network")
+	env["VITE_DISCORD_URL"] = valueOrDefault(env, "DISCORD_URL", "https://discord.gg/9J6haUjdAq")
+	env["VITE_DEMO_STREAM_NAME"] = valueOrDefault(env, "DEMO_STREAM_NAME", "live+frameworks-demo")
+
+	// 7. TURNSTILE - Passthrough from secrets.env
+	if authKey := env["TURNSTILE_AUTH_SITE_KEY"]; authKey != "" {
+		env["VITE_TURNSTILE_AUTH_SITE_KEY"] = authKey
+	}
+	if formsKey := env["TURNSTILE_FORMS_SITE_KEY"]; formsKey != "" {
+		env["VITE_TURNSTILE_FORMS_SITE_KEY"] = formsKey
+	}
+
+	// 8. BUILD CONFIG - Extract BASE_PATH from WEBAPP_PUBLIC_URL
+	webappPath, err := extractPathFromURL(webappPublicURL)
+	if err != nil {
+		return fmt.Errorf("extract path from webapp URL: %w", err)
+	}
+	env["BASE_PATH"] = webappPath
 
 	return nil
 }

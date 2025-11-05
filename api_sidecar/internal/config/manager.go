@@ -174,7 +174,7 @@ func (m *Manager) ensureStreams(seed *pb.ConfigSeed) error {
 	if seed == nil || len(seed.GetTemplates()) == 0 {
 		return nil
 	}
-	base := os.Getenv("FOGHORN_HTTP_BASE")
+	base := os.Getenv("FOGHORN_URL")
 	if base == "" {
 		base = "http://foghorn:18008"
 	}

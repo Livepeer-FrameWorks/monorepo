@@ -29,10 +29,10 @@ services:
       dockerfile: api_gateway/Dockerfile
     environment:
       BRIDGE_PORT: ${BRIDGE_PORT}
-      LOG_LEVEL: ${LOG_LEVEL:-info}
-      GIN_MODE: ${GIN_MODE:-debug}
-      GRAPHQL_PLAYGROUND_ENABLED: "true"
-      GRAPHQL_COMPLEXITY_LIMIT: 200
+      LOG_LEVEL: ${LOG_LEVEL}
+      GIN_MODE: ${GIN_MODE}
+      GRAPHQL_PLAYGROUND_ENABLED: ${GRAPHQL_PLAYGROUND_ENABLED}
+      GRAPHQL_COMPLEXITY_LIMIT: ${GRAPHQL_COMPLEXITY_LIMIT}
       COMMODORE_URL: ${COMMODORE_URL}
       QUARTERMASTER_URL: ${QUARTERMASTER_URL}
       PERISCOPE_QUERY_URL: ${PERISCOPE_QUERY_URL}
@@ -41,11 +41,11 @@ services:
       JWT_SECRET: ${JWT_SECRET}
       SERVICE_TOKEN: ${SERVICE_TOKEN}
       DECKLOG_URL: ${DECKLOG_URL}
-      DECKLOG_ALLOW_INSECURE: "true"
-      DECKLOG_USE_TLS: "false"
-      FOGHORN_HTTP_BASE: ${FOGHORN_HTTP_BASE}
+      DECKLOG_ALLOW_INSECURE: ${DECKLOG_ALLOW_INSECURE}
+      DECKLOG_USE_TLS: ${DECKLOG_USE_TLS}
+      FOGHORN_URL: ${FOGHORN_URL}
       FOGHORN_CONTROL_ADDR: ${FOGHORN_CONTROL_ADDR}
-      EDGE_PUBLIC_HOSTNAME: ${EDGE_PUBLIC_HOSTNAME:-localhost}
+      EDGE_PUBLIC_HOSTNAME: ${EDGE_PUBLIC_HOSTNAME}
       MISTSERVER_URL: ${MISTSERVER_URL}
     ports:
       - "18000:18000"
@@ -171,31 +171,31 @@ services:
       DATABASE_URL: ${DATABASE_URL}
       PORT: ${FOGHORN_PORT}
       FOGHORN_CONTROL_ADDR: ${FOGHORN_CONTROL_BIND_ADDR}
-      LOG_LEVEL: ${LOG_LEVEL:-info}
-      GIN_MODE: release
+      LOG_LEVEL: ${LOG_LEVEL}
+      GIN_MODE: ${GIN_MODE}
       COMMODORE_URL: ${COMMODORE_URL}
-      COMMODORE_CACHE_TTL: 60s
-      COMMODORE_CACHE_SWR: 30s
-      COMMODORE_CACHE_NEG_TTL: 10s
-      COMMODORE_CACHE_MAX: 10000
-      GEOIP_MMDB_PATH: 
-      GEOIP_CACHE_TTL: 300s
-      GEOIP_CACHE_SWR: 120s
-      GEOIP_CACHE_NEG_TTL: 60s
-      GEOIP_CACHE_MAX: 50000
+      COMMODORE_CACHE_TTL: ${COMMODORE_CACHE_TTL}
+      COMMODORE_CACHE_SWR: ${COMMODORE_CACHE_SWR}
+      COMMODORE_CACHE_NEG_TTL: ${COMMODORE_CACHE_NEG_TTL}
+      COMMODORE_CACHE_MAX: ${COMMODORE_CACHE_MAX}
+      GEOIP_MMDB_PATH: ${GEOIP_MMDB_PATH}
+      GEOIP_CACHE_TTL: ${GEOIP_CACHE_TTL}
+      GEOIP_CACHE_SWR: ${GEOIP_CACHE_SWR}
+      GEOIP_CACHE_NEG_TTL: ${GEOIP_CACHE_NEG_TTL}
+      GEOIP_CACHE_MAX: ${GEOIP_CACHE_MAX}
       DECKLOG_URL: ${DECKLOG_URL}
-      DECKLOG_ALLOW_INSECURE: "true"  # For local development only
+      DECKLOG_ALLOW_INSECURE: ${DECKLOG_ALLOW_INSECURE}  # For local development only
       # gRPC Security Configuration
-      GRPC_USE_TLS: "false"  # Set to true for production TLS
-      GRPC_TLS_CERT_PATH: /path/to/cert.pem  # Path to TLS certificate
-      GRPC_TLS_KEY_PATH: /path/to/key.pem    # Path to TLS private key
-      DECKLOG_USE_TLS: "false"  # Set to true for secure Decklog connections
+      GRPC_USE_TLS: ${FOGHORN_GRPC_USE_TLS}  # Set to true for production TLS
+      GRPC_TLS_CERT_PATH: ${FOGHORN_GRPC_TLS_CERT_PATH}  # Path to TLS certificate
+      GRPC_TLS_KEY_PATH: ${FOGHORN_GRPC_TLS_KEY_PATH}    # Path to TLS private key
+      DECKLOG_USE_TLS: ${DECKLOG_USE_TLS}  # Set to true for secure Decklog connections
       QUARTERMASTER_URL: ${QUARTERMASTER_URL}
-      CPU_WEIGHT: 500
-      RAM_WEIGHT: 500
-      BANDWIDTH_WEIGHT: 1000
-      GEO_WEIGHT: 1000
-      STREAM_BONUS: 50
+      CPU_WEIGHT: ${CPU_WEIGHT}
+      RAM_WEIGHT: ${RAM_WEIGHT}
+      BANDWIDTH_WEIGHT: ${BANDWIDTH_WEIGHT}
+      GEO_WEIGHT: ${GEO_WEIGHT}
+      STREAM_BONUS: ${STREAM_BONUS}
       MISTSERVER_URL: ${MISTSERVER_URL}
       SERVICE_TOKEN: ${SERVICE_TOKEN}
     ports:
@@ -352,7 +352,7 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL}
       PORT: ${QUARTERMASTER_PORT}
-      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOG_LEVEL: ${LOG_LEVEL}
       JWT_SECRET: ${JWT_SECRET}
       SERVICE_TOKEN: ${SERVICE_TOKEN}
     depends_on:
@@ -387,13 +387,14 @@ services:
     environment:
       KAFKA_BROKERS: ${KAFKA_BROKERS}
       KAFKA_CLUSTER_ID: ${KAFKA_CLUSTER_ID}
-      REGION: ${REGION:-development}
-      HOSTNAME: decklog-dev
+      REGION: ${REGION}
       PORT: ${DECKLOG_PORT}
-      LOG_LEVEL: ${LOG_LEVEL:-info}
-      GIN_MODE: release
-      GRPC_PORT: ${DECKLOG_PORT}
-      ALLOW_INSECURE: "true"
+      LOG_LEVEL: ${LOG_LEVEL}
+      GIN_MODE: ${GIN_MODE}
+      DECKLOG_ALLOW_INSECURE: ${DECKLOG_ALLOW_INSECURE}
+      DECKLOG_TLS_CERT_FILE: ${DECKLOG_TLS_CERT_FILE}
+      DECKLOG_TLS_KEY_FILE: ${DECKLOG_TLS_KEY_FILE}
+      DECKLOG_METRICS_PORT: ${DECKLOG_METRICS_PORT}
       QUARTERMASTER_URL: ${QUARTERMASTER_URL}
       SERVICE_TOKEN: ${SERVICE_TOKEN}
     ports:
@@ -441,13 +442,12 @@ services:
       PORT: ${SIGNALMAN_PORT}
       DATABASE_URL: ${DATABASE_URL}
       KAFKA_BROKERS: ${KAFKA_BROKERS}
-      KAFKA_TOPICS: analytics_events
-      KAFKA_GROUP_ID: signalman-group
+      KAFKA_TOPICS: ${KAFKA_TOPICS}
+      KAFKA_GROUP_ID: ${SIGNALMAN_KAFKA_GROUP_ID}
       KAFKA_CLUSTER_ID: ${KAFKA_CLUSTER_ID}
-      KAFKA_CLIENT_ID: signalman
-      LOG_LEVEL: ${LOG_LEVEL:-info}
-      REGION: ${REGION:-development}
-      HOSTNAME: signalman-dev
+      KAFKA_CLIENT_ID: ${SIGNALMAN_KAFKA_CLIENT_ID}
+      LOG_LEVEL: ${LOG_LEVEL}
+      REGION: ${REGION}
       QUARTERMASTER_URL: ${QUARTERMASTER_URL}
       JWT_SECRET: ${JWT_SECRET}
       SERVICE_TOKEN: ${SERVICE_TOKEN}
@@ -480,13 +480,13 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL}
       JWT_SECRET: ${JWT_SECRET}
-      FOGHORN_URL: ${FOGHORN_HTTP_BASE}
+      FOGHORN_URL: ${FOGHORN_URL}
       PORT: ${COMMODORE_PORT}
       QUARTERMASTER_URL: ${QUARTERMASTER_URL}
       PURSER_URL: ${PURSER_URL}
-      BASE_URL: ${BASE_URL:-http://localhost:18090/app}
+      WEBAPP_PUBLIC_URL: ${WEBAPP_PUBLIC_URL}
       SERVICE_TOKEN: ${SERVICE_TOKEN}
-      TURNSTILE_AUTH_SECRET_KEY: ${TURNSTILE_AUTH_SECRET_KEY:-}
+      TURNSTILE_AUTH_SECRET_KEY: ${TURNSTILE_AUTH_SECRET_KEY}
     ports:
       - "18001:18001"
     depends_on:
@@ -520,21 +520,22 @@ services:
       dockerfile: api_sidecar/Dockerfile
     environment:
       HELMSMAN_WEBHOOK_URL: ${HELMSMAN_WEBHOOK_URL}
-      FOGHORN_URL: ${FOGHORN_HTTP_BASE}
+      FOGHORN_URL: ${FOGHORN_URL}
       FOGHORN_CONTROL_ADDR: ${FOGHORN_CONTROL_ADDR}
-      FOGHORN_HTTP_BASE: ${FOGHORN_HTTP_BASE}
-      EDGE_PUBLIC_HOSTNAME: ${EDGE_PUBLIC_HOSTNAME:-localhost}
+      EDGE_PUBLIC_HOSTNAME: ${EDGE_PUBLIC_HOSTNAME}
       MISTSERVER_URL: ${MISTSERVER_URL}
       MIST_PASSWORD: ${MIST_PASSWORD}
       MIST_API_USERNAME: ${MIST_API_USERNAME}
       MIST_API_PASSWORD: ${MIST_API_PASSWORD}
-      CLUSTER_ID: default-cluster
-      NODE_NAME: edge-node-1
+      CLUSTER_ID: ${HELMSMAN_CLUSTER_ID}
+      NODE_ID: ${HELMSMAN_NODE_ID}
       PORT: ${HELMSMAN_PORT}
-      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOG_LEVEL: ${LOG_LEVEL}
       SERVICE_TOKEN: ${SERVICE_TOKEN}
       QUARTERMASTER_URL: ${QUARTERMASTER_URL}
-      GRPC_USE_TLS: "false"  # Set to true for production TLS
+      GRPC_USE_TLS: ${HELMSMAN_GRPC_USE_TLS}  # Set to true for production TLS
+      GRPC_TLS_CERT_PATH: ${HELMSMAN_GRPC_TLS_CERT_PATH}
+      GRPC_TLS_KEY_PATH: ${HELMSMAN_GRPC_TLS_KEY_PATH}
     volumes:
       - ./infrastructure/edge/machine-id:/etc/machine-id:ro
     depends_on:
@@ -577,12 +578,12 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL}
       KAFKA_BROKERS: ${KAFKA_BROKERS}
-      KAFKA_GROUP_ID: periscope-ingest
+      KAFKA_GROUP_ID: ${PERISCOPE_INGEST_KAFKA_GROUP_ID}
       KAFKA_CLUSTER_ID: ${KAFKA_CLUSTER_ID}
-      KAFKA_TOPICS: analytics_events
-      KAFKA_CLIENT_ID: periscope-ingest
-      LOG_LEVEL: ${LOG_LEVEL:-info}
-      ENABLE_HEALTH_ENDPOINT: "true"
+      KAFKA_TOPICS: ${KAFKA_TOPICS}
+      KAFKA_CLIENT_ID: ${PERISCOPE_INGEST_KAFKA_CLIENT_ID}
+      LOG_LEVEL: ${LOG_LEVEL}
+      ENABLE_HEALTH_ENDPOINT: ${PERISCOPE_INGEST_ENABLE_HEALTH_ENDPOINT}
       HEALTH_PORT: ${PERISCOPE_INGEST_PORT}
       CLICKHOUSE_HOST: ${CLICKHOUSE_HOST}
       CLICKHOUSE_PORT: ${CLICKHOUSE_PORT}
@@ -630,13 +631,11 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL}
       PORT: ${PERISCOPE_QUERY_PORT}
-      LOG_LEVEL: ${LOG_LEVEL:-info}
-      GIN_MODE: release
+      LOG_LEVEL: ${LOG_LEVEL}
+      GIN_MODE: ${GIN_MODE}
       JWT_SECRET: ${JWT_SECRET}
       SERVICE_TOKEN: ${SERVICE_TOKEN}
       PURSER_URL: ${PURSER_URL}
-      BILLING_HOURLY_INTERVAL: 60
-      BILLING_DAILY_INTERVAL: 24
       CLICKHOUSE_HOST: ${CLICKHOUSE_HOST}
       CLICKHOUSE_PORT: ${CLICKHOUSE_PORT}
       CLICKHOUSE_DB: ${CLICKHOUSE_DB}
@@ -682,10 +681,10 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL}
       PORT: ${PURSER_PORT}
-      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOG_LEVEL: ${LOG_LEVEL}
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY}
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET}
-      GIN_MODE: release
+      GIN_MODE: ${GIN_MODE}
       JWT_SECRET: ${JWT_SECRET}
       SERVICE_TOKEN: ${SERVICE_TOKEN}
       QUARTERMASTER_URL: ${QUARTERMASTER_URL}
@@ -702,7 +701,7 @@ services:
       # - SMTP_PASSWORD=${SMTP_PASSWORD}
       # - FROM_EMAIL=${FROM_EMAIL}
       # - FROM_NAME=${FROM_NAME}
-      # - BASE_URL=${BASE_URL}
+      # - WEBAPP_PUBLIC_URL=${WEBAPP_PUBLIC_URL}
     depends_on:
       postgres:
         condition: service_healthy
@@ -726,6 +725,44 @@ services:
       retries: 3
       start_period: 10s
 
+  # Contact Forms API
+  forms-api:
+    <<: *default-env
+    container_name: frameworks-forms-api
+    build:
+      context: .
+      dockerfile: api_forms/Dockerfile
+    ports:
+      - "18032:18032"
+    environment:
+      PORT: ${API_FORMS_PORT}
+      NODE_ENV: ${NODE_ENV}
+      FORMS_ALLOWED_ORIGINS: ${FORMS_ALLOWED_ORIGINS}
+      TURNSTILE_FORMS_SECRET_KEY: ${TURNSTILE_FORMS_SECRET_KEY}
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASSWORD: ${SMTP_PASSWORD}
+      FROM_EMAIL: ${FROM_EMAIL}
+      TO_EMAIL: ${TO_EMAIL}
+    restart: unless-stopped
+    networks:
+      - frameworks
+    mem_limit: 256m
+    mem_reservation: 128m
+    cpus: 0.5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:18032/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
   # Web Console
   webapp:
     container_name: frameworks-webapp
@@ -733,20 +770,20 @@ services:
       context: .
       dockerfile: website_application/Dockerfile
       args:
-        - BUILD_ENV=development
-        - VITE_AUTH_URL=http://localhost:18090/auth
-        - VITE_GRAPHQL_HTTP_URL=http://localhost:18090/graphql/
-        - VITE_GRAPHQL_WS_URL=ws://localhost:18090/graphql/ws
-        - VITE_RTMP_DOMAIN=localhost:1935
-        - VITE_HTTP_DOMAIN=localhost:8080
-        - VITE_CDN_DOMAIN=localhost:18090
-        - VITE_RTMP_PATH=/live
-        - VITE_HLS_PATH=/view
-        - VITE_WEBRTC_PATH=/webrtc
-        - VITE_EMBED_PATH=/view
-        - VITE_MARKETING_SITE_URL=http://localhost:18031
-        - VITE_TURNSTILE_AUTH_SITE_KEY=${TURNSTILE_AUTH_SITE_KEY:-1x0000000000000000000000000000000AA}
-        - BASE_PATH=/app
+        - BUILD_ENV=${BUILD_ENV}
+        - VITE_AUTH_URL=${VITE_AUTH_URL}
+        - VITE_GRAPHQL_HTTP_URL=${VITE_GRAPHQL_HTTP_URL}
+        - VITE_GRAPHQL_WS_URL=${VITE_GRAPHQL_WS_URL}
+        - VITE_RTMP_DOMAIN=${VITE_RTMP_DOMAIN}
+        - VITE_HTTP_DOMAIN=${VITE_HTTP_DOMAIN}
+        - VITE_CDN_DOMAIN=${VITE_CDN_DOMAIN}
+        - VITE_RTMP_PATH=${VITE_RTMP_PATH}
+        - VITE_HLS_PATH=${VITE_HLS_PATH}
+        - VITE_WEBRTC_PATH=${VITE_WEBRTC_PATH}
+        - VITE_EMBED_PATH=${VITE_EMBED_PATH}
+        - VITE_MARKETING_SITE_URL=${VITE_MARKETING_SITE_URL}
+        - VITE_TURNSTILE_AUTH_SITE_KEY=${VITE_TURNSTILE_AUTH_SITE_KEY}
+        - BASE_PATH=${BASE_PATH}
     depends_on:
       commodore:
         condition: service_started
@@ -770,19 +807,18 @@ services:
       context: .
       dockerfile: website_marketing/Dockerfile
       args:
-        - BUILD_ENV=development
-        - VITE_APP_URL=http://localhost:18090/app/
-        - VITE_API_URL=http://localhost:18001
-        - VITE_GATEWAY_URL=http://localhost:18090/graphql
-        - VITE_GITHUB_URL=https://github.com/livepeer-frameworks/monorepo
-        - VITE_LIVEPEER_URL=https://livepeer.org
-        - VITE_LIVEPEER_EXPLORER_URL=https://explorer.livepeer.org
-        - VITE_CONTACT_EMAIL=hello@frameworks.dev
-        - VITE_DEMO_STREAM_NAME=frameworks-demo
-        - VITE_COMPANY_NAME=FrameWorks
-        - VITE_TURNSTILE_FORMS_SITE_KEY=${TURNSTILE_FORMS_SITE_KEY:-1x0000000000000000000000000000000AA}
-        - VITE_DOMAIN=frameworks.dev
-        - VITE_CONTACT_API_URL=http://localhost:18032
+        - BUILD_ENV=${BUILD_ENV}
+        - VITE_APP_URL=${VITE_APP_URL}
+        - VITE_GATEWAY_URL=${VITE_GATEWAY_URL}
+        - VITE_GITHUB_URL=${VITE_GITHUB_URL}
+        - VITE_LIVEPEER_URL=${VITE_LIVEPEER_URL}
+        - VITE_LIVEPEER_EXPLORER_URL=${VITE_LIVEPEER_EXPLORER_URL}
+        - VITE_CONTACT_EMAIL=${VITE_CONTACT_EMAIL}
+        - VITE_DEMO_STREAM_NAME=${VITE_DEMO_STREAM_NAME}
+        - VITE_COMPANY_NAME=${VITE_COMPANY_NAME}
+        - VITE_TURNSTILE_FORMS_SITE_KEY=${VITE_TURNSTILE_FORMS_SITE_KEY}
+        - VITE_DOMAIN=${VITE_DOMAIN}
+        - VITE_CONTACT_API_URL=${VITE_CONTACT_API_URL}
     hostname: website
     environment:
       - NODE_ENV=production

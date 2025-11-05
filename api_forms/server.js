@@ -28,7 +28,7 @@ app.use(cors({
     }
 
     // Allow configured origins
-    const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || ['https://frameworks.network'];
+    const allowedOrigins = process.env.FORMS_ALLOWED_ORIGINS?.split(',') || ['https://frameworks.network'];
     if (allowedOrigins.includes(origin)) {
       return callback(null, true);
     }

@@ -61,7 +61,7 @@ func Init(log logging.Logger, m *HandlerMetrics) {
 		foghornURI = "http://localhost:18008"
 	}
 
-	nodeName = os.Getenv("NODE_NAME")
+	nodeName = os.Getenv("NODE_ID")
 	if nodeName == "" {
 		nodeName = "local-mistserver"
 	}

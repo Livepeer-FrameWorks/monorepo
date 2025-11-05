@@ -69,9 +69,9 @@ func main() {
 	metrics.KafkaMessages, metrics.KafkaDuration, metrics.KafkaLag = metricsCollector.CreateKafkaMetrics()
 
 	// Get TLS configuration
-	certFile := config.GetEnv("TLS_CERT_FILE", "/etc/letsencrypt/live/decklog/fullchain.pem")
-	keyFile := config.GetEnv("TLS_KEY_FILE", "/etc/letsencrypt/live/decklog/privkey.pem")
-	allowInsecure := config.GetEnvBool("ALLOW_INSECURE", false)
+	certFile := config.GetEnv("DECKLOG_TLS_CERT_FILE", "/etc/letsencrypt/live/decklog/fullchain.pem")
+	keyFile := config.GetEnv("DECKLOG_TLS_KEY_FILE", "/etc/letsencrypt/live/decklog/privkey.pem")
+	allowInsecure := config.GetEnvBool("DECKLOG_ALLOW_INSECURE", false)
 
 	// Create gRPC server
 	grpcServer, err := grpc.NewGRPCServer(producer, logger, metrics, certFile, keyFile, allowInsecure)
@@ -80,7 +80,7 @@ func main() {
 	}
 
 	// gRPC listener
-	port := config.GetEnv("GRPC_PORT", "18006")
+	port := config.GetEnv("PORT", "18006")
 	lis, err := net.Listen("tcp", ":"+port)
 	if err != nil {
 		logger.WithError(err).Fatal("Failed to listen")
@@ -89,7 +89,7 @@ func main() {
 	// Setup router with unified monitoring
 	router := server.SetupServiceRouter(logger, "decklog", healthChecker, metricsCollector)
 
-	metricsPort := config.GetEnv("METRICS_PORT", "18026")
+	metricsPort := config.GetEnv("DECKLOG_METRICS_PORT", "18026")
 	httpSrv := &http.Server{Addr: ":" + metricsPort, Handler: router}
 
 	logger.WithFields(logging.Fields{"grpc_port": port, "http_port": metricsPort}).Info("Starting Decklog servers")
