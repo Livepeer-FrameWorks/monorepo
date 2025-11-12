@@ -1,5 +1,6 @@
 import React, { useRef, useEffect, useState } from "react";
 import DvdLogo from "./DvdLogo";
+import logomarkAsset from "../../public/logomark.svg";
 
 interface AnimatedBubbleProps {
   index: number;
@@ -202,8 +203,8 @@ const CenterLogo: React.FC<CenterLogoProps> = ({ containerRef, scale = 0.2, onHi
 
       {/* Logo - only the SVG is clickable */}
       <img
-        src="/mist.svg"
-        alt="Mist Logo"
+        src={logomarkAsset}
+        alt="FrameWorks Logo"
         onClick={handleLogoClick}
         style={{
           width: `${logoSize}px`,

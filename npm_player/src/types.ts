@@ -72,6 +72,8 @@ export interface ThumbnailOverlayProps {
   showUnmuteMessage?: boolean;
   /** Additional styles for the overlay */
   style?: React.CSSProperties;
+  /** Optional className for styling */
+  className?: string;
 }
 
 // LoadingScreen internal component types

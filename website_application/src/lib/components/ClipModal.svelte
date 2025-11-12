@@ -1,80 +1,76 @@
-<script>
-  import { onMount, onDestroy } from 'svelte';
-  import Player from './Player.svelte';
-  import { getIconComponent } from '$lib/iconUtils.js';
+<script lang="ts">
+  import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "$lib/components/ui/dialog";
+  import { Button } from "$lib/components/ui/button";
+  import Player from "./Player.svelte";
+  import { getIconComponent } from "$lib/iconUtils";
 
-  export let clip = null;
-  export let onClose = () => {};
-
-  let modalElement;
-  let playerContainer;
-
-  // Close modal on Escape key
-  function handleKeydown(event) {
-    if (event.key === 'Escape') {
-      onClose();
-    }
+  interface Clip {
+    id?: string;
+    title?: string;
+    description?: string;
+    playbackId?: string;
+    thumbnailUrl?: string;
+    duration?: number;
+    startTime?: number;
+    endTime?: number;
+    status?: string;
+    createdAt?: string;
+    streamName?: string;
   }
 
-  // Close modal when clicking outside
-  function handleBackdropClick(event) {
-    if (event.target === modalElement) {
-      onClose();
-    }
+  interface Props {
+    clip?: Clip | null;
+    onClose?: () => void;
   }
 
-  onMount(() => {
-    // Add event listeners
-    document.addEventListener('keydown', handleKeydown);
-    document.body.style.overflow = 'hidden'; // Prevent background scrolling
-  });
+  let { clip = null, onClose = () => {} }: Props = $props();
 
-  onDestroy(() => {
-    // Clean up event listeners
-    document.removeEventListener('keydown', handleKeydown);
-    document.body.style.overflow = 'auto'; // Restore scrolling
-  });
+  const CloseIcon = getIconComponent("X");
 
-  function formatDuration(seconds) {
-    const minutes = Math.floor(seconds / 60);
-    const remainingSeconds = seconds % 60;
-    return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`;
+  function formatDuration(totalSeconds: number | undefined) {
+    if (!totalSeconds || totalSeconds < 0) return "0:00";
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = Math.floor(totalSeconds % 60);
+    return `${minutes}:${seconds.toString().padStart(2, "0")}`;
   }
+
+  function close() {
+    onClose?.();
+  }
+
+  const streamStatusColor = {
+    Available: "bg-tokyo-night-green/20 text-tokyo-night-green",
+    Processing: "bg-tokyo-night-yellow/20 text-tokyo-night-yellow",
+    Failed: "bg-tokyo-night-red/20 text-tokyo-night-red",
+  } as const;
 </script>
 
 {#if clip}
-  <!-- Modal backdrop -->
-  <div 
-    bind:this={modalElement}
-    class="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4"
-    on:click={handleBackdropClick}
+  <Dialog
+    open={Boolean(clip)}
+    onOpenChange={(value) => {
+      if (!value) close();
+    }}
   >
-    <!-- Modal content -->
-    <div class="bg-tokyo-night-bg-light rounded-lg shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-hidden">
-      <!-- Modal header -->
-      <div class="flex items-center justify-between p-6 border-b border-tokyo-night-fg-gutter">
-        <div class="flex-1 min-w-0">
-          <h2 class="text-xl font-semibold text-tokyo-night-fg truncate">
-            {clip.title}
-          </h2>
+    <DialogContent class="max-w-5xl overflow-hidden p-0">
+      <DialogHeader class="flex flex-row items-start justify-between gap-4 border-b border-border p-6">
+        <div class="min-w-0 space-y-2 text-left">
+          <DialogTitle class="truncate text-xl font-semibold text-foreground">
+            {clip.title || "Clip Preview"}
+          </DialogTitle>
           {#if clip.description}
-            <p class="text-sm text-tokyo-night-comment mt-1 line-clamp-2">
+            <DialogDescription class="line-clamp-2 text-sm text-foreground/70">
               {clip.description}
-            </p>
+            </DialogDescription>
           {/if}
         </div>
-        <button
-          on:click={onClose}
-          class="ml-4 text-tokyo-night-comment hover:text-tokyo-night-fg p-2 rounded-lg hover:bg-tokyo-night-bg-highlight transition-colors"
-          title="Close (Esc)"
-        >
-          <svelte:component this={getIconComponent('X')} class="w-5 h-5" />
-        </button>
-      </div>
+        <Button variant="ghost" size="icon" onclick={close} aria-label="Close clip modal">
+          <CloseIcon class="h-5 w-5" />
+        </Button>
+      </DialogHeader>
 
-      <!-- Player area -->
-      <div class="relative bg-black aspect-video">
-        <Player 
+      <section class="bg-black">
+        <Player
           contentId={clip.playbackId || clip.id}
           contentType="clip"
           thumbnailUrl={clip.thumbnailUrl}
@@ -82,56 +78,53 @@
             autoplay: true,
             muted: false,
             controls: true,
-            preferredProtocol: 'auto',
+            preferredProtocol: "auto",
             analytics: {
               enabled: true,
-              sessionTracking: false
-            }
+              sessionTracking: false,
+            },
           }}
         />
-      </div>
+      </section>
 
-      <!-- Clip info -->
-      <div class="p-6 border-t border-tokyo-night-fg-gutter">
-        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+      <section class="grid gap-4 border-t border-border p-6 text-sm text-foreground">
+        <div class="grid grid-cols-2 gap-4 md:grid-cols-4">
           <div>
-            <p class="text-tokyo-night-comment">Duration</p>
-            <p class="font-medium text-tokyo-night-fg">
-              {formatDuration(clip.duration || (clip.endTime - clip.startTime))}
+            <p class="text-muted-foreground">Duration</p>
+            <p class="font-medium">{formatDuration(clip.duration ?? (clip.endTime && clip.startTime ? clip.endTime - clip.startTime : undefined))}</p>
+          </div>
+          <div>
+            <p class="text-muted-foreground">Start Time</p>
+            <p class="font-medium">{formatDuration(clip.startTime)}</p>
+          </div>
+          <div>
+            <p class="text-muted-foreground">Status</p>
+            <p class={`font-medium inline-flex items-center rounded-full px-2 py-1 text-xs ${streamStatusColor[clip.status || "Available"] || "bg-primary/10 text-primary"}`}>
+              {clip.status || "Available"}
             </p>
           </div>
           <div>
-            <p class="text-tokyo-night-comment">Start Time</p>
-            <p class="font-medium text-tokyo-night-fg">
-              {formatDuration(clip.startTime || 0)}
-            </p>
-          </div>
-          <div>
-            <p class="text-tokyo-night-comment">Status</p>
-            <p class="font-medium text-tokyo-night-fg">
-              <span class="px-2 py-1 text-xs rounded-full bg-tokyo-night-green bg-opacity-20 text-tokyo-night-green">
-                {clip.status || 'Available'}
-              </span>
-            </p>
-          </div>
-          <div>
-            <p class="text-tokyo-night-comment">Created</p>
-            <p class="font-medium text-tokyo-night-fg">
-              {clip.createdAt ? new Date(clip.createdAt).toLocaleDateString() : 'N/A'}
-            </p>
+            <p class="text-muted-foreground">Created</p>
+            <p class="font-medium">{clip.createdAt ? new Date(clip.createdAt).toLocaleString() : "N/A"}</p>
           </div>
         </div>
-        
+
         {#if clip.streamName}
-          <div class="mt-4 pt-4 border-t border-tokyo-night-fg-gutter">
-            <p class="text-sm text-tokyo-night-comment">
-              From stream: <span class="text-tokyo-night-fg font-medium">{clip.streamName}</span>
+          <div class="rounded-lg border border-border p-4">
+            <p class="text-sm text-foreground/80">
+              From stream: <span class="font-medium text-foreground">{clip.streamName}</span>
             </p>
           </div>
         {/if}
-      </div>
-    </div>
-  </div>
+      </section>
+
+      <DialogFooter class="border-t border-border bg-muted/10 px-6 py-4">
+        <Button variant="secondary" onclick={close}>
+          Close
+        </Button>
+      </DialogFooter>
+    </DialogContent>
+  </Dialog>
 {/if}
 
 <style>

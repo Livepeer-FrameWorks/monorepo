@@ -1,38 +1,54 @@
 <script>
+  import { preventDefault } from "svelte/legacy";
+
   import { onMount } from "svelte";
   import { goto } from "$app/navigation";
-  import { base } from "$app/paths";
+  import { resolve } from "$app/paths";
   import { auth } from "$lib/stores/auth";
+  import { getIconComponent } from "$lib/iconUtils";
+  import { RadioGroup, RadioGroupItem } from "$lib/components/ui/radio-group";
+  import { Label } from "$lib/components/ui/label";
+  import { Button } from "$lib/components/ui/button";
+  import { Input } from "$lib/components/ui/input";
+  import { Turnstile } from "svelte-turnstile";
 
-  let email = "";
-  let password = "";
-  let confirmPassword = "";
-  let loading = false;
+  const AlertTriangle = getIconComponent("AlertTriangle");
+
+  let email = $state("");
+  let password = $state("");
+  let confirmPassword = $state("");
   /** @type {string | null} */
-  let error = null;
-  let isAuthenticated = false;
-  let authLoading = false;
-  let authInitialized = false;
+  let error = $state(null);
+  let authLoading = $state(false);
 
   // Bot protection fields
-  let phone_number = ""; // Honeypot - must remain empty
-  let human_check = ""; // "human" or "robot" - expect "human"
+  let phone_number = $state(""); // Honeypot - must remain empty (legacy only)
+  const turnstileSiteKey = import.meta.env.VITE_TURNSTILE_AUTH_SITE_KEY || "";
+  const defaultHumanCheck = turnstileSiteKey ? "robot" : "human";
+
+  let human_check = $state(defaultHumanCheck); // "human" or "robot" - expect "human"
   let formShownAt = 0;
   let userInteractions = {
     mouse: false,
     typed: false,
-    focused: false
+    focused: false,
   };
+  let turnstileToken = $state("");
+  let turnstileWidgetId = $state("");
 
-  // Check if we're in development mode
-  const isDev = import.meta.env.DEV;
+  const resetTurnstileWidget = () => {
+    if (typeof window !== "undefined" && turnstileWidgetId) {
+      try {
+        window?.turnstile?.reset?.(turnstileWidgetId);
+      } catch (err) {
+        console.warn("Turnstile reset failed", err);
+      }
+    }
+  };
 
   // Subscribe to auth store
   auth.subscribe((authState) => {
-    isAuthenticated = authState.isAuthenticated;
-    loading = authState.loading;
     authLoading = authState.loading;
-    authInitialized = authState.initialized;
     error = authState.error;
   });
 
@@ -41,20 +57,20 @@
     formShownAt = Date.now();
 
     // Add interaction listeners
-    const form = document.querySelector('form');
+    const form = document.querySelector("form");
     if (form) {
       // Mouse movement detection
-      form.addEventListener('mousemove', () => {
+      form.addEventListener("mousemove", () => {
         userInteractions.mouse = true;
       });
 
       // Typing detection
-      form.addEventListener('input', () => {
+      form.addEventListener("input", () => {
         userInteractions.typed = true;
       });
 
       // Focus detection
-      form.addEventListener('focusin', () => {
+      form.addEventListener("focusin", () => {
         userInteractions.focused = true;
       });
     }
@@ -63,11 +79,7 @@
   });
 
   async function handleRegister() {
-    // If registration is disabled, redirect to contact page
-    if (!isDev) {
-      window.open("https://frameworks.network/contact", "_blank");
-      return;
-    }
+    // Registration enabled in all environments
 
     if (!email || !password || !confirmPassword) {
       error = "Please fill in all fields";
@@ -90,19 +102,31 @@
       submittedAt: Date.now(),
       mouse: userInteractions.mouse,
       typed: userInteractions.typed,
-      focused: userInteractions.focused
+      focused: userInteractions.focused,
     };
+
+    if (turnstileSiteKey && !turnstileToken) {
+      error = "Please complete the verification challenge.";
+      return;
+    }
 
     const result = await auth.register(email, password, {
       phone_number, // Honeypot
       human_check,
-      behavior: JSON.stringify(behaviorData)
+      behavior: JSON.stringify(behaviorData),
+      turnstile_token: turnstileToken || undefined,
     });
-    
+
     if (result.success) {
       // Show verification message instead of redirecting
       error = null;
-      goto(`${base}/verify-email`);
+      goto(resolve("/verify-email"));
+    }
+
+    if (turnstileSiteKey) {
+      turnstileToken = "";
+      human_check = defaultHumanCheck;
+      resetTurnstileWidget();
     }
   }
 
@@ -120,109 +144,71 @@
   <title>Register - FrameWorks</title>
 </svelte:head>
 
-<div class="min-h-screen flex justify-center">
-  <div class="max-w-md w-full space-y-8">
-    <!-- Header -->
-    <div class="text-center">
+<section class="min-h-screen bg-brand-surface-muted py-16 sm:py-24">
+  <!-- Header -->
+  <div class="text-center mb-12">
       <div class="flex justify-center mb-4">
-        <img src="/frameworks-dark-logomark-transparent.svg" alt="FrameWorks" class="h-64 w-64 rounded-lg" />
+        <img
+          src="/frameworks-dark-logomark-transparent.svg"
+          alt="FrameWorks"
+          class="h-80 w-80 rounded-lg"
+        />
       </div>
       <h1 class="text-4xl font-bold gradient-text mb-2">Join FrameWorks</h1>
       <p class="text-tokyo-night-fg-dark">
         Create your account to start streaming
       </p>
 
-      <p class="text-center text-tokyo-night-comment">
+      <p class="text-center text-tokyo-night-comment mt-4">
         Already have an account?
-        <a 
-          href="{base}/login" 
+        <a
+          href={resolve("/login")}
           class="text-tokyo-night-cyan hover:text-tokyo-night-blue transition-colors duration-200 font-medium"
         >
           Sign in
         </a>
       </p>
-    </div>
+  </div>
 
-    <!-- Private Beta Notice -->
-    {#if !isDev}
-      <div
-        class="glow-card p-6 bg-tokyo-night-blue/10 border-tokyo-night-blue/30"
-      >
-        <div class="flex items-center space-x-2 mb-3">
-          <svg
-            class="w-5 h-5 text-tokyo-night-blue"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              stroke-width="2"
-              d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"
-            />
-          </svg>
-          <h3 class="font-semibold text-tokyo-night-blue">
-            Early Access Program
+  <!-- Registration Content -->
+  <div class="max-w-7xl mx-auto">
+    <!-- Beta Disclaimer -->
+    <div
+      class="mb-8 p-4 rounded-lg border bg-tokyo-night-orange/10 border-tokyo-night-orange/30 max-w-4xl mx-auto"
+    >
+      <div class="flex items-start space-x-3">
+        <div class="flex-shrink-0">
+          <AlertTriangle class="w-5 h-5 text-tokyo-night-orange mt-0.5" />
+        </div>
+        <div>
+          <h3 class="text-sm font-medium text-tokyo-night-orange">
+            Beta Platform
           </h3>
-        </div>
-        <div class="space-y-3 text-sm text-tokyo-night-fg-dark">
-          <p>
-            FrameWorks is currently in private beta. Contact us for early access
-            to get started before everyone else.
+          <p class="text-sm text-tokyo-night-fg-dark mt-1">
+            FrameWorks is currently in beta and rapidly evolving. Features may
+            change, and there could be occasional service interruptions as we
+            improve the platform.
           </p>
-          <p>
-            The dashboard will be open for public registrations soon, and we're
-            continuously merging in new features leading up to our full launch
-            at <strong class="text-tokyo-night-cyan"
-              >IBC Amsterdam in September</strong
-            >.
-          </p>
-        </div>
-        <div class="mt-4">
-          <a
-            href="https://frameworks.network/contact"
-            target="_blank"
-            class="inline-flex items-center text-sm font-medium text-tokyo-night-blue hover:text-tokyo-night-cyan transition-colors"
-          >
-            Contact us for early access
-            <svg
-              class="w-4 h-4 ml-1"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"
-              />
-            </svg>
-          </a>
         </div>
       </div>
-    {/if}
+    </div>
 
-    <!-- Registration Form -->
-    <div class="glow-card p-8 {!isDev ? 'opacity-60' : ''}">
-      <form on:submit|preventDefault={handleRegister} class="space-y-6">
+    <!-- Registration Form - Centered -->
+    <div class="marketing-slab auth-form-slab max-w-2xl mx-auto">
+      <form onsubmit={preventDefault(handleRegister)} class="space-y-6">
         <div>
           <label
             for="email"
-            class="block text-sm font-medium mb-2 text-tokyo-night-fg-dark {!isDev
-              ? 'opacity-60'
-              : ''}"
+            class="block text-sm font-medium mb-2 text-tokyo-night-fg-dark"
           >
             Email Address
           </label>
-          <input
+          <Input
             id="email"
             type="email"
             bind:value={email}
             placeholder="Enter your email"
-            class="input {!isDev ? 'cursor-not-allowed opacity-50' : ''}"
-            disabled={!isDev}
+            class="w-full"
             required
           />
         </div>
@@ -230,20 +216,17 @@
         <div>
           <label
             for="password"
-            class="block text-sm font-medium mb-2 text-tokyo-night-fg-dark {!isDev
-              ? 'opacity-60'
-              : ''}"
+            class="block text-sm font-medium mb-2 text-tokyo-night-fg-dark"
           >
             Password
           </label>
-          <input
+          <Input
             id="password"
             type="password"
             bind:value={password}
             placeholder="Enter your password (min 6 characters)"
-            class="input {!isDev ? 'cursor-not-allowed opacity-50' : ''}"
-            disabled={!isDev}
-            on:keypress={handleKeypress}
+            class="w-full"
+            onkeypress={handleKeypress}
             required
           />
         </div>
@@ -251,81 +234,107 @@
         <div>
           <label
             for="confirmPassword"
-            class="block text-sm font-medium mb-2 text-tokyo-night-fg-dark {!isDev
-              ? 'opacity-60'
-              : ''}"
+            class="block text-sm font-medium mb-2 text-tokyo-night-fg-dark"
           >
             Confirm Password
           </label>
-          <input
+          <Input
             id="confirmPassword"
             type="password"
             bind:value={confirmPassword}
             placeholder="Confirm your password"
-            class="input {!isDev ? 'cursor-not-allowed opacity-50' : ''}"
-            disabled={!isDev}
-            on:keypress={handleKeypress}
+            class="w-full"
+            onkeypress={handleKeypress}
             required
           />
         </div>
 
         <!-- Honeypot field - hidden from users but visible to bots -->
-        <div style="position: absolute; left: -9999px; visibility: hidden;">
-          <label for="phone_number">Phone (leave blank)</label>
-          <input
-            id="phone_number"
-            name="phone_number"
-            type="text"
-            bind:value={phone_number}
-            tabindex="-1"
-            autocomplete="off"
-          />
-        </div>
+        {#if !turnstileSiteKey}
+          <div style="position: absolute; left: -9999px; visibility: hidden;">
+            <label for="phone_number">Phone (leave blank)</label>
+            <input
+              id="phone_number"
+              name="phone_number"
+              type="text"
+              bind:value={phone_number}
+              tabindex="-1"
+              autocomplete="off"
+            />
+          </div>
+        {/if}
 
-        <!-- Human verification -->
-        <div class="space-y-3">
-          <fieldset class="space-y-2">
-            <legend class="block text-sm font-medium mb-2 text-tokyo-night-fg-dark {!isDev ? 'opacity-60' : ''}">
+        {#if turnstileSiteKey}
+          <div class="space-y-3">
+            <p class="block text-sm font-medium text-tokyo-night-fg-dark">
+              Verification *
+            </p>
+            <div
+              class="inline-flex rounded-lg border border-border/50 bg-background/70 p-4"
+            >
+              <Turnstile
+                siteKey={turnstileSiteKey}
+                theme="dark"
+                action="register_form"
+                bind:widgetId={turnstileWidgetId}
+                on:callback={({ detail }) => {
+                  const value = detail?.token ?? detail ?? "";
+                  turnstileToken = value;
+                  human_check = "human";
+                  error = null;
+                }}
+                on:error={() => {
+                  turnstileToken = "";
+                  human_check = defaultHumanCheck;
+                }}
+                on:expire={() => {
+                  turnstileToken = "";
+                  human_check = defaultHumanCheck;
+                }}
+              />
+            </div>
+          </div>
+        {/if}
+
+        {#if !turnstileSiteKey}
+          <!-- Human verification -->
+          <div class="space-y-3">
+            <p class="block text-sm font-medium text-tokyo-night-fg-dark">
               Please confirm you are human:
-            </legend>
-            <div class="flex items-center space-x-2">
-              <input
-                id="human-check-human"
-                type="radio"
-                name="human_check"
-                value="human"
-                bind:group={human_check}
-                class="radio {!isDev ? 'cursor-not-allowed opacity-50' : ''}"
-                disabled={!isDev}
-                required
-              />
-              <label for="human-check-human" class="text-sm text-tokyo-night-fg-dark {!isDev ? 'opacity-60' : ''}">
-                I am a human
-              </label>
-            </div>
-            <div class="flex items-center space-x-2">
-              <input
-                id="human-check-robot"
-                type="radio"
-                name="human_check"
-                value="robot"
-                bind:group={human_check}
-                class="radio {!isDev ? 'cursor-not-allowed opacity-50' : ''}"
-                disabled={!isDev}
-              />
-              <label for="human-check-robot" class="text-sm text-tokyo-night-fg-dark {!isDev ? 'opacity-60' : ''}">
-                I am a robot
-              </label>
-            </div>
-          </fieldset>
-        </div>
+            </p>
+            <RadioGroup bind:value={human_check} required class="space-y-2">
+              <div class="flex items-center space-x-2">
+                <RadioGroupItem value="human" id="human-check-human" />
+                <Label
+                  for="human-check-human"
+                  class="text-sm text-tokyo-night-fg-dark"
+                >
+                  I am a human
+                </Label>
+              </div>
+              <div class="flex items-center space-x-2">
+                <RadioGroupItem value="robot" id="human-check-robot" />
+                <Label
+                  for="human-check-robot"
+                  class="text-sm text-tokyo-night-fg-dark"
+                >
+                  I am a robot
+                </Label>
+              </div>
+            </RadioGroup>
+          </div>
+        {/if}
 
-        <button type="submit" class="btn-primary w-full" disabled={authLoading}>
+        <Button
+          type="submit"
+          class="w-full"
+          disabled={authLoading || (turnstileSiteKey && !turnstileToken)}
+        >
           {#if authLoading}
-            <div class="loading-spinner mr-2" />
+            <div class="loading-spinner mr-2"></div>
           {/if}
-          {isDev ? "Create Account" : "Contact us for early access"}
-        </button>
+          Create Account
+        </Button>
       </form>
 
       {#if error}
@@ -337,4 +346,4 @@
       {/if}
     </div>
   </div>
-</div>
+</section>

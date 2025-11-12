@@ -9,18 +9,3 @@ mutation CreatePayment($input: CreatePaymentInput!) {
     createdAt
   }
 }
-
-mutation UpdateBillingTier($tierId: ID!) {
-  updateBillingTier(tierId: $tierId) {
-    currentTier {
-      id
-      name
-      price
-      currency
-      features
-    }
-    nextBillingDate
-    outstandingAmount
-    status
-  }
-}

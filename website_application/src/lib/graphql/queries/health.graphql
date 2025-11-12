@@ -44,20 +44,29 @@ query GetCurrentStreamHealth($stream: String!) {
   }
 }
 
-query GetStreamQualityChanges($stream: String!, $timeRange: TimeRangeInput) {
-  streamQualityChanges(stream: $stream, timeRange: $timeRange) {
+query GetTrackListEvents($stream: String!, $timeRange: TimeRangeInput) {
+  trackListEvents(stream: $stream, timeRange: $timeRange) {
     timestamp
     stream
     nodeId
-    changeType
-    previousQualityTier
-    newQualityTier
-    previousResolution
-    newResolution
-    previousCodec
-    newCodec
-    previousTracks
-    newTracks
+    trackList
+    trackCount
+    tracks {
+      trackName
+      trackType
+      codec
+      bitrateKbps
+      bitrateBps
+      buffer
+      jitter
+      width
+      height
+      fps
+      resolution
+      hasBFrames
+      channels
+      sampleRate
+    }
   }
 }
 

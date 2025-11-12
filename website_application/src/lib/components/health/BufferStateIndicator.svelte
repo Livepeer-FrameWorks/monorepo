@@ -1,44 +1,67 @@
-<script>
+<script lang="ts">
   import { healthService } from '$lib/graphql/services/health.js';
 
-  export let bufferState = 'EMPTY';
-  export let bufferHealth = null;
-  export let size = 'md';
+  type BufferState = "FULL" | "EMPTY" | "DRY" | "RECOVER" | string;
+  type BufferSize = "sm" | "md" | "lg";
 
-  $: colorClass = healthService.getBufferStateColor(bufferState);
-  $: healthPercent = bufferHealth ? Math.round(bufferHealth * 100) : null;
-  
-  $: sizeClasses = {
-    sm: 'w-4 h-4',
-    md: 'w-6 h-6', 
-    lg: 'w-8 h-8'
-  };
+  interface Props {
+    bufferState?: BufferState;
+    bufferHealth?: number | null;
+    size?: BufferSize;
+  }
 
-  $: getStateDescription = (state) => {
+  let { bufferState = "EMPTY", bufferHealth = null, size = "md" }: Props = $props();
+
+  let colorClass = $derived(healthService.getBufferStateColor(bufferState));
+  let healthPercent = $derived(
+    typeof bufferHealth === "number"
+      ? Math.round(bufferHealth * 100)
+      : null,
+  );
+
+  const sizeClasses = {
+    sm: "w-4 h-4",
+    md: "w-6 h-6",
+    lg: "w-8 h-8",
+  } as const;
+
+  let sizeClass = $derived(sizeClasses[size] ?? sizeClasses.md);
+
+  function getStateDescription(state: BufferState): string {
     switch (state) {
-      case 'FULL': return 'Buffer is full and healthy';
-      case 'EMPTY': return 'Buffer has space available';
-      case 'DRY': return 'Buffer is critically low';
-      case 'RECOVER': return 'Buffer is recovering';
-      default: return 'Buffer state unknown';
+      case "FULL":
+        return "Buffer is full and healthy";
+      case "EMPTY":
+        return "Buffer has space available";
+      case "DRY":
+        return "Buffer is critically low";
+      case "RECOVER":
+        return "Buffer is recovering";
+      default:
+        return "Buffer state unknown";
     }
-  };
+  }
 
-  $: getStateIcon = (state) => {
+  function getStateIcon(state: BufferState): string {
     switch (state) {
-      case 'FULL': return '●●●●';
-      case 'EMPTY': return '●●○○';
-      case 'DRY': return '●○○○';
-      case 'RECOVER': return '●●○○';
-      default: return '○○○○';
+      case "FULL":
+        return "●●●●";
+      case "EMPTY":
+        return "●●○○";
+      case "DRY":
+        return "●○○○";
+      case "RECOVER":
+        return "●●○○";
+      default:
+        return "○○○○";
     }
-  };
+  }
 </script>
 
 <div class="flex items-center space-x-2">
   <div class="flex items-center space-x-1">
     <!-- Buffer state icon -->
-    <div class={`${colorClass} font-mono ${sizeClasses[size]} flex items-center justify-center`}>
+    <div class={`${colorClass} font-mono ${sizeClass} flex items-center justify-center`}>
       <span class="text-xs">{getStateIcon(bufferState)}</span>
     </div>
     

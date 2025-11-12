@@ -94,11 +94,11 @@ export class DashJsPlayerImpl extends BasePlayer {
 
   async initialize(container: HTMLElement, source: StreamSource, options: PlayerOptions): Promise<HTMLVideoElement> {
     this.container = container;
+    container.classList.add('fw-player-container');
     
     // Create video element
     const video = document.createElement('video');
-    video.style.width = '100%';
-    video.style.height = '100%';
+    video.classList.add('fw-player-video');
     video.setAttribute('playsinline', '');
     video.setAttribute('crossorigin', 'anonymous');
     
@@ -276,10 +276,8 @@ const DashJsPlayer: React.FC<Props> = ({ src, muted = true, autoPlay = true, con
   }, [src, muted, autoPlay, onError]);
 
   return (
-    <video ref={videoRef} autoPlay={autoPlay} muted={muted} controls={controls} playsInline style={{ width: '100%', height: '100%' }} />
+    <video ref={videoRef} autoPlay={autoPlay} muted={muted} controls={controls} playsInline className="fw-player-video" />
   );
 };
 
 export default DashJsPlayer;
-
-

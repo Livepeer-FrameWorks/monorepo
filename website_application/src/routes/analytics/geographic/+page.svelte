@@ -1,22 +1,21 @@
 <script>
   import { onMount } from "svelte";
-  import { base } from "$app/paths";
+  import { resolve } from "$app/paths";
   import { auth } from "$lib/stores/auth";
   import { infrastructureService } from "$lib/graphql/services/infrastructure.js";
   import { geographicService } from "$lib/graphql/services/geographic.js";
   import { routingService } from "$lib/graphql/services/routing.js";
-  import { getIconComponent } from "$lib/iconUtils.js";
+  import { getIconComponent } from "$lib/iconUtils";
+  import { Button } from "$lib/components/ui/button";
 
   let isAuthenticated = false;
-  let loading = true;
-  let nodes = [];
-  let viewerGeographics = [];
-  let geographicDistribution = null;
-  let loadBalancingMetrics = [];
-  let routingEfficiency = { efficiency: 0, avgScore: 0, totalDecisions: 0 };
-  let routingEvents = [];
-  let connectionPatterns = { uniqueCountries: 0, mostPopularNodes: [], avgDistance: 0 };
-  let error = null;
+  let loading = $state(true);
+  let nodes = $state([]);
+  let geographicDistribution = $state(null);
+  let loadBalancingMetrics = $state([]);
+  let routingEfficiency = $state({ efficiency: 0, avgScore: 0, totalDecisions: 0 });
+  let connectionPatterns = $state({ uniqueCountries: 0, mostPopularNodes: [], avgDistance: 0 });
+  let error = $state(null);
 
   // Time range for analytics (last 24 hours)
   const timeRange = {
@@ -56,13 +55,11 @@
 
   async function loadGeographicData() {
     try {
-      const [viewerGeo, geoDist, loadBalancing] = await Promise.all([
-        geographicService.getViewerGeographics(null, timeRange),
+      const [geoDist, loadBalancing] = await Promise.all([
         geographicService.getGeographicDistribution(null, timeRange),
         geographicService.getLoadBalancingMetrics(timeRange)
       ]);
-      
-      viewerGeographics = viewerGeo;
+
       geographicDistribution = geoDist;
       loadBalancingMetrics = loadBalancing;
     } catch (err) {
@@ -72,20 +69,21 @@
 
   async function loadRoutingData() {
     try {
-      const [efficiency, events, patterns] = await Promise.all([
+      const [efficiency, , patterns] = await Promise.all([
         routingService.getRoutingEfficiency(null, timeRange),
         routingService.getRoutingEvents(null, timeRange),
         routingService.getConnectionPatterns(null, timeRange)
       ]);
       
       routingEfficiency = efficiency;
-      routingEvents = events;
       connectionPatterns = patterns;
     } catch (err) {
       console.error("Failed to load routing analytics:", err);
     }
   }
 
+
+  const SvelteComponent = $derived(getIconComponent('Globe'));
 </script>
 
 <svelte:head>
@@ -97,7 +95,7 @@
   <div class="flex justify-between items-start">
     <div>
       <h1 class="text-3xl font-bold text-tokyo-night-fg mb-2 flex items-center">
-        <svelte:component this={getIconComponent('Globe')} class="w-8 h-8 mr-3 text-tokyo-night-green" />
+        <SvelteComponent class="w-8 h-8 mr-3 text-tokyo-night-green" />
         Geographic Analytics
       </h1>
       <p class="text-tokyo-night-fg-dark">
@@ -108,27 +106,28 @@
 
   {#if loading}
     <div class="flex items-center justify-center min-h-64">
-      <div class="loading-spinner w-8 h-8" />
+      <div class="loading-spinner w-8 h-8"></div>
     </div>
   {:else if error}
+    {@const SvelteComponent_1 = getIconComponent('AlertCircle')}
     <div class="card border-tokyo-night-red/30">
       <div class="text-center py-12">
         <div class="text-6xl mb-4">
-          <svelte:component this={getIconComponent('AlertCircle')} class="w-16 h-16 text-tokyo-night-red mx-auto" />
+          <SvelteComponent_1 class="w-16 h-16 text-tokyo-night-red mx-auto" />
         </div>
         <h3 class="text-xl font-semibold text-tokyo-night-red mb-2">
           Failed to Load Node Data
         </h3>
         <p class="text-tokyo-night-fg-dark mb-6">{error}</p>
-        <button class="btn-primary" on:click={loadAllData}>
+        <Button onclick={loadAllData}>
           Try Again
-        </button>
+        </Button>
       </div>
     </div>
   {:else}
     <!-- Geographic Distribution Overview -->
     {#if geographicDistribution}
-      <div class="glow-card p-6">
+      <div class="stats-panel">
         <h2 class="text-xl font-semibold text-tokyo-night-fg mb-6">
           Geographic Distribution (Last 24 Hours)
         </h2>
@@ -158,7 +157,7 @@
             <div>
               <h3 class="text-lg font-medium text-tokyo-night-fg mb-4">Top Countries</h3>
               <div class="space-y-2">
-                {#each geographicDistribution.topCountries.slice(0, 5) as country}
+                {#each geographicDistribution.topCountries.slice(0, 5) as country (country.countryCode)}
                   <div class="flex justify-between items-center p-3 bg-tokyo-night-bg-highlight rounded border border-tokyo-night-fg-gutter">
                     <span class="font-mono text-sm">{country.countryCode}</span>
                     <div class="text-right">
@@ -174,7 +173,7 @@
             <div>
               <h3 class="text-lg font-medium text-tokyo-night-fg mb-4">Top Cities</h3>
               <div class="space-y-2">
-                {#each geographicDistribution.topCities.slice(0, 5) as city}
+                {#each geographicDistribution.topCities.slice(0, 5) as city (`${city.city}-${city.countryCode}`)}
                   <div class="flex justify-between items-center p-3 bg-tokyo-night-bg-highlight rounded border border-tokyo-night-fg-gutter">
                     <div>
                       <div class="font-medium">{city.city}</div>
@@ -194,7 +193,7 @@
     {/if}
 
     <!-- Routing Efficiency Metrics -->
-    <div class="glow-card p-6">
+    <div class="stats-panel">
       <h2 class="text-xl font-semibold text-tokyo-night-fg mb-6">
         Routing Efficiency & Performance
       </h2>
@@ -228,15 +227,17 @@
 
       <!-- Connection Patterns -->
       {#if connectionPatterns.mostPopularNodes?.length > 0}
+        {@const SvelteComponent_2 = getIconComponent('Server')}
+        {@const SvelteComponent_3 = getIconComponent('MapPin')}
         <div class="grid md:grid-cols-2 gap-6">
           <!-- Most Popular Nodes -->
           <div>
             <h3 class="text-lg font-medium text-tokyo-night-fg mb-4">
-              <svelte:component this={getIconComponent('Server')} class="w-5 h-5 inline mr-2" />
+              <SvelteComponent_2 class="w-5 h-5 inline mr-2" />
               Most Popular Routing Targets
             </h3>
             <div class="space-y-2">
-              {#each connectionPatterns.mostPopularNodes.slice(0, 5) as node}
+              {#each connectionPatterns.mostPopularNodes.slice(0, 5) as node (node.nodeId)}
                 <div class="flex justify-between items-center p-3 bg-tokyo-night-bg-highlight rounded border border-tokyo-night-fg-gutter">
                   <span class="font-mono text-sm">{node.nodeName}</span>
                   <div class="text-right">
@@ -253,7 +254,7 @@
           <!-- Connection Quality by Distance -->
           <div>
             <h3 class="text-lg font-medium text-tokyo-night-fg mb-4">
-              <svelte:component this={getIconComponent('MapPin')} class="w-5 h-5 inline mr-2" />
+              <SvelteComponent_3 class="w-5 h-5 inline mr-2" />
               Connection Quality Distribution
             </h3>
             <div class="space-y-3">
@@ -292,7 +293,7 @@
 
     <!-- Load Balancing Geographic Metrics -->
     {#if loadBalancingMetrics.length > 0}
-      <div class="glow-card p-6">
+      <div class="stats-panel">
         <h2 class="text-xl font-semibold text-tokyo-night-fg mb-6">
           Load Balancing Geographic Data
         </h2>
@@ -310,7 +311,7 @@
               </tr>
             </thead>
             <tbody>
-              {#each loadBalancingMetrics.slice(0, 10) as metric}
+              {#each loadBalancingMetrics.slice(0, 10) as metric (metric.id ?? `${metric.region}-${metric.timestamp}`)}
                 <tr class="border-b border-tokyo-night-fg-gutter/30">
                   <td class="py-2 font-mono text-xs">{metric.stream}</td>
                   <td class="py-2">
@@ -357,14 +358,14 @@
     {/if}
 
     <!-- Regional Node Distribution -->
-    <div class="glow-card p-6">
+    <div class="stats-panel">
       <h2 class="text-xl font-semibold text-tokyo-night-fg mb-6">
         Node Distribution by Region
       </h2>
       
       {#if nodes.length > 0}
         <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {#each nodes as node}
+          {#each nodes as node (node.id ?? node.nodeId)}
             <div class="bg-tokyo-night-bg-highlight p-4 rounded-lg border border-tokyo-night-fg-gutter">
               <div class="flex items-center justify-between mb-3">
                 <h3 class="font-semibold text-tokyo-night-fg">{node.name}</h3>
@@ -409,9 +410,10 @@
           {/each}
         </div>
       {:else}
+        {@const SvelteComponent_4 = getIconComponent('Monitor')}
         <div class="text-center py-12">
           <div class="text-6xl mb-4">
-            <svelte:component this={getIconComponent('Monitor')} class="w-16 h-16 text-tokyo-night-fg mx-auto" />
+            <SvelteComponent_4 class="w-16 h-16 text-tokyo-night-fg mx-auto" />
           </div>
           <h3 class="text-xl font-semibold text-tokyo-night-fg mb-2">
             No Infrastructure Nodes
@@ -419,9 +421,9 @@
           <p class="text-tokyo-night-fg-dark mb-6">
             Configure infrastructure nodes to see regional distribution
           </p>
-          <a href="{base}/infrastructure" class="btn-primary">
+          <Button href={resolve("/infrastructure")}>
             Configure Infrastructure
-          </a>
+          </Button>
         </div>
       {/if}
     </div>

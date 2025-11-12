@@ -1,28 +1,32 @@
-<script>
+<script lang="ts">
   import { healthService } from '$lib/graphql/services/health.js';
 
-  export let healthScore = 0;
-  export let size = 'md';
-  export let showLabel = true;
+  interface Props {
+    healthScore?: number;
+    size?: string;
+    showLabel?: boolean;
+  }
 
-  $: formattedScore = Math.round(healthScore * 100);
-  $: colorClass = healthService.getHealthScoreColor(healthScore);
+  let { healthScore = 0, size = 'md', showLabel = true }: Props = $props();
+
+  let formattedScore = $derived(Math.round(healthScore * 100));
+  let colorClass = $derived(healthService.getHealthScoreColor(healthScore));
   
-  $: sizeClasses = {
+  let sizeClasses = $derived({
     sm: 'w-8 h-8 text-xs',
     md: 'w-12 h-12 text-sm',
     lg: 'w-16 h-16 text-base'
-  };
+  });
 
-  $: labelSizes = {
+  let labelSizes = $derived({
     sm: 'text-xs',
     md: 'text-sm',
     lg: 'text-base'
-  };
+  });
 
   // Calculate stroke-dasharray for circular progress
-  $: circumference = 2 * Math.PI * 18; // radius = 18
-  $: strokeDasharray = `${formattedScore * circumference / 100} ${circumference}`;
+  let circumference = $derived(2 * Math.PI * 18); // radius = 18
+  let strokeDasharray = $derived(`${formattedScore * circumference / 100} ${circumference}`);
 </script>
 
 <div class="flex items-center space-x-2">

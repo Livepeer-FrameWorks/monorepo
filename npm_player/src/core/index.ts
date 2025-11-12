@@ -29,5 +29,5 @@ export * from './PlayerRegistry';
 
 // Re-export for convenience
 export { PlayerManager } from './PlayerManager';
-export { globalPlayerManager, createPlayerManager } from './PlayerRegistry';
+export { globalPlayerManager, createPlayerManager, ensurePlayersRegistered } from './PlayerRegistry';
 export type { IPlayer, PlayerOptions } from './PlayerInterface';

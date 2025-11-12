@@ -1,6 +1,7 @@
 overwrite: true
 schema: "../pkg/graphql/schema.graphql"
 documents: "src/lib/graphql/**/*.graphql"
+concurrency: 1
 generates:
   src/lib/graphql/generated/types.ts:
     plugins:

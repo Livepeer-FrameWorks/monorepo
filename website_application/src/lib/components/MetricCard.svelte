@@ -1,55 +1,82 @@
-<script>
-  import { formatNumber, formatBytes, formatDuration, formatPercentage } from '$lib/utils/formatters.js';
+<script lang="ts">
+  import { formatNumber, formatBytes, formatDuration } from "$lib/utils/formatters.js";
   
-  export let title = '';
-  export let value = null;
-  export let previousValue = null;
-  export let unit = '';
-  export let format = 'number'; // 'number', 'bytes', 'duration', 'percentage'
-  export let icon = null;
-  export let trend = null; // 'up', 'down', 'stable'
-  export let loading = false;
-  export let error = null;
-  export let size = 'normal'; // 'small', 'normal', 'large'
+  interface Props {
+    title?: string;
+    value?: number | string | null;
+    previousValue?: number | null;
+    unit?: string;
+    format?: "number" | "bytes" | "duration" | "percentage";
+    icon?: string | null;
+    trend?: "up" | "down" | "stable" | null;
+    loading?: boolean;
+    error?: string | null;
+    size?: "small" | "normal" | "large";
+    children?: import("svelte").Snippet | null;
+  }
+
+  let {
+    title = '',
+    value = null,
+    previousValue = null,
+    unit = '',
+    format = "number",
+    icon = null,
+    trend = null,
+    loading = false,
+    error = null,
+    size = 'normal',
+    children
+  }: Props = $props();
   
-  // Calculate change percentage if previousValue is provided
-  $: changePercent = previousValue && value !== null && previousValue !== 0 
-    ? ((value - previousValue) / previousValue) * 100 
-    : null;
   
-  $: formattedValue = formatValue(value, format, unit);
-  $: changeDirection = changePercent ? (changePercent > 0 ? 'up' : 'down') : null;
   
   /**
    * @param {number | null} val
    * @param {string} fmt
    * @param {string} unit
    */
-  function formatValue(val, fmt, unit) {
-    if (val === null || val === undefined) return 'N/A';
+  function formatValue(
+    val: number | string | null,
+    fmt: Props["format"],
+    unit: string,
+  ) {
+    if (val === null || val === undefined) return "N/A";
     
     switch (fmt) {
-      case 'bytes':
-        return formatBytes(val);
-      case 'duration':
-        return formatDuration(val);
-      case 'percentage':
-        return val.toFixed(1) + '%';
-      case 'number':
+      case "bytes":
+        return typeof val === "number" ? formatBytes(val) : String(val);
+      case "duration":
+        return typeof val === "number" ? formatDuration(val) : String(val);
+      case "percentage":
+        return typeof val === "number"
+          ? `${val.toFixed(1)}%`
+          : String(val);
+      case "number":
       default:
-        return formatNumber(val) + (unit ? ` ${unit}` : '');
+        if (typeof val === "number") {
+          return `${formatNumber(val)}${unit ? ` ${unit}` : ""}`;
+        }
+        const numericValue = Number(val);
+        return Number.isFinite(numericValue)
+          ? `${formatNumber(numericValue)}${unit ? ` ${unit}` : ""}`
+          : `${String(val)}${unit ? ` ${unit}` : ""}`;
     }
   }
   
   /**
    * @param {string | null} direction
    */
-  function getTrendIcon(direction) {
+  function getTrendIcon(direction: "up" | "down" | "stable" | null) {
     switch (direction) {
-      case 'up': return '↗';
-      case 'down': return '↘';
-      case 'stable': return '→';
-      default: return '';
+      case "up":
+        return "↗";
+      case "down":
+        return "↘";
+      case "stable":
+        return "→";
+      default:
+        return "";
     }
   }
   
@@ -57,19 +84,35 @@
    * @param {string | null} direction
    * @param {boolean} positive
    */
-  function getTrendColor(direction, positive = true) {
-    if (!direction) return 'text-slate-400';
+  function getTrendColor(direction: "up" | "down" | "stable" | null, positive = true) {
+    if (!direction) return "text-slate-400";
     
     if (positive) {
-      return direction === 'up' ? 'text-green-400' : 
-             direction === 'down' ? 'text-red-400' : 
-             'text-slate-400';
+      return direction === "up"
+        ? "text-green-400"
+        : direction === "down"
+          ? "text-red-400"
+          : "text-slate-400";
     } else {
-      return direction === 'up' ? 'text-red-400' : 
-             direction === 'down' ? 'text-green-400' : 
-             'text-slate-400';
+      return direction === "up"
+        ? "text-red-400"
+        : direction === "down"
+          ? "text-green-400"
+          : "text-slate-400";
     }
   }
+  // Calculate change percentage if previousValue is provided
+  let changePercent = $derived(
+    typeof previousValue === "number" &&
+      typeof value === "number" &&
+      previousValue !== 0
+      ? ((value - previousValue) / previousValue) * 100
+      : null,
+  );
+  let formattedValue = $derived(formatValue(value, format, unit));
+  let changeDirection = $derived(
+    changePercent ? (changePercent > 0 ? "up" : "down") : null,
+  );
 </script>
 
 <div class="bg-slate-800 border border-slate-700 rounded-lg p-{size === 'small' ? '4' : size === 'large' ? '8' : '6'} hover:border-slate-600 transition-colors">
@@ -99,6 +142,7 @@
       </h3>
       {#if icon}
         <div class="text-slate-500 {size === 'small' ? 'text-sm' : 'text-lg'}">
+          <!-- eslint-disable-next-line svelte/no-at-html-tags -->
           {@html icon}
         </div>
       {/if}
@@ -124,9 +168,9 @@
     </div>
 
     <!-- Additional info -->
-    {#if $$slots.default}
+    {#if children}
       <div class="mt-3 pt-3 border-t border-slate-700">
-        <slot />
+        {@render children?.()}
       </div>
     {/if}
   {/if}

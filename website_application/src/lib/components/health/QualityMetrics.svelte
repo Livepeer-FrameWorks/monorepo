@@ -1,19 +1,51 @@
-<script>
-  export let metrics = null;
-  export let compact = false;
+<script lang="ts">
+  interface StreamQualityMetrics {
+    width?: number;
+    height?: number;
+    codec?: string;
+    bitrate?: number;
+    fps?: number;
+    qualityTier?: string;
+    frameJitterMs?: number;
+    packetLossPercentage?: number;
+    audioCodec?: string;
+    audioSampleRate?: number;
+    audioBitrate?: number;
+    audioChannels?: number;
+  }
 
-  $: formattedMetrics = metrics ? {
-    resolution: metrics.width && metrics.height ? `${metrics.width}x${metrics.height}` : 'Unknown',
-    codec: metrics.codec || 'Unknown',
-    bitrate: metrics.bitrate ? `${(metrics.bitrate / 1000).toFixed(0)}k` : 'Unknown',
-    fps: metrics.fps ? `${metrics.fps.toFixed(1)} fps` : 'Unknown',
-    qualityTier: metrics.qualityTier || 'Unknown',
-    frameJitter: metrics.frameJitterMs ? `${metrics.frameJitterMs.toFixed(1)}ms` : 'N/A',
-    packetLoss: metrics.packetLossPercentage ? `${metrics.packetLossPercentage.toFixed(2)}%` : 'N/A'
-  } : null;
+  interface Props {
+    metrics?: StreamQualityMetrics | null;
+    compact?: boolean;
+  }
+
+  let { metrics = null, compact = false }: Props = $props();
+
+  let formattedMetrics = $derived(
+    metrics
+      ? {
+          resolution:
+            metrics.width && metrics.height
+              ? `${metrics.width}x${metrics.height}`
+              : "Unknown",
+          codec: metrics.codec || "Unknown",
+          bitrate: metrics.bitrate
+            ? `${(metrics.bitrate / 1000).toFixed(0)}k`
+            : "Unknown",
+          fps: metrics.fps ? `${metrics.fps.toFixed(1)} fps` : "Unknown",
+          qualityTier: metrics.qualityTier || "Unknown",
+          frameJitter: typeof metrics.frameJitterMs === "number"
+            ? `${metrics.frameJitterMs.toFixed(1)}ms`
+            : "N/A",
+          packetLoss: typeof metrics.packetLossPercentage === "number"
+            ? `${metrics.packetLossPercentage.toFixed(2)}%`
+            : "N/A",
+        }
+      : null,
+  );
 </script>
 
-{#if formattedMetrics}
+{#if formattedMetrics && metrics}
   <div class="bg-tokyo-night-surface rounded-lg p-4">
     <h3 class="text-lg font-semibold text-tokyo-night-cyan mb-4">Quality Metrics</h3>
     

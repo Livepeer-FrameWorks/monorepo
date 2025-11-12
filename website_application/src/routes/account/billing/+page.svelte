@@ -4,15 +4,15 @@
   import { billingService } from "$lib/graphql/services/billing.js";
   import { toast } from "$lib/stores/toast.js";
   import SkeletonLoader from "$lib/components/SkeletonLoader.svelte";
-  import LoadingCard from "$lib/components/LoadingCard.svelte";
+  import { Button } from "$lib/components/ui/button";
 
   let isAuthenticated = false;
-  let loading = true;
-  let billingStatus = null;
-  let availableTiers = [];
-  let usageRecords = [];
-  let invoices = [];
-  let error = null;
+  let loading = $state(true);
+  let billingStatus = $state(null);
+  let availableTiers = $state([]);
+  let usageRecords = $state([]);
+  let invoices = $state([]);
+  let error = $state(null);
 
   // Subscribe to auth store
   auth.subscribe((authState) => {
@@ -46,17 +46,6 @@
       console.error('Failed to load billing data:', err);
       error = 'Failed to load billing information. Please try again later.';
       toast.error('Failed to load billing information. Please refresh the page.');
-    }
-  }
-
-  async function upgradeToTier(tierId) {
-    try {
-      await billingService.updateBillingTier(tierId);
-      await loadBillingData(); // Refresh data
-      toast.success('Billing tier updated successfully!');
-    } catch (err) {
-      console.error('Failed to update billing tier:', err);
-      toast.error('Failed to update billing tier. Please try again.');
     }
   }
 
@@ -116,7 +105,7 @@
       <div class="bg-tokyo-night-surface rounded-lg p-6 mb-8">
         <SkeletonLoader type="text-lg" className="w-48 mb-4" />
         <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {#each Array(3) as _}
+          {#each Array(3) as _, index (index)}
             <div>
               <SkeletonLoader type="text-sm" className="w-24 mb-1" />
               <SkeletonLoader type="text" className="w-20" />
@@ -129,7 +118,7 @@
       <div class="bg-tokyo-night-surface rounded-lg p-6 mb-8">
         <SkeletonLoader type="text-lg" className="w-32 mb-4" />
         <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {#each Array(3) as _}
+          {#each Array(3) as _, index (index)}
             <div class="bg-tokyo-night-bg rounded-lg p-4 border border-tokyo-night-selection">
               <SkeletonLoader type="text" className="w-16 mb-2" />
               <SkeletonLoader type="text-lg" className="w-12 mb-3" />
@@ -170,7 +159,7 @@
                 Outstanding Balance: {formatCurrency(billingStatus.outstandingAmount)}
               </p>
               <button
-                on:click={() => createPayment(billingStatus.outstandingAmount)}
+                onclick={() => createPayment(billingStatus.outstandingAmount)}
                 class="mt-2 bg-yellow-600 text-white px-4 py-2 rounded hover:bg-yellow-700 transition-colors"
               >
                 Pay Now
@@ -185,7 +174,7 @@
         <div class="bg-tokyo-night-surface rounded-lg p-6 mb-8">
           <h2 class="text-xl font-semibold mb-4 text-tokyo-night-cyan">Available Plans</h2>
           <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {#each availableTiers as tier}
+            {#each availableTiers as tier (tier.id ?? tier.name)}
               <div class="bg-tokyo-night-bg rounded-lg p-4 border border-tokyo-night-selection">
                 <h3 class="text-lg font-semibold mb-2">{tier.name}</h3>
                 <div class="text-2xl font-bold text-tokyo-night-blue mb-2">
@@ -199,7 +188,7 @@
                 
                 {#if tier.features && tier.features.length > 0}
                   <ul class="space-y-1 mb-4">
-                    {#each tier.features as feature}
+                    {#each tier.features as feature, index (index)}
                       <li class="text-sm flex items-center">
                         <span class="text-green-500 mr-2">✓</span>
                         {feature}
@@ -208,13 +197,14 @@
                   </ul>
                 {/if}
                 
-                <button
-                  on:click={() => upgradeToTier(tier.id)}
-                  class="w-full bg-tokyo-night-blue text-white py-2 px-4 rounded hover:bg-blue-600 transition-colors"
-                  disabled={billingStatus?.currentTier?.id === tier.id}
+                <Button
+                  variant="outline"
+                  class="w-full"
+                  disabled
+                  title="Tier changes will be available once billing launches"
                 >
-                  {billingStatus?.currentTier?.id === tier.id ? 'Current Plan' : 'Select Plan'}
-                </button>
+                  {billingStatus?.currentTier?.id === tier.id ? 'Current Plan' : 'Coming Soon'}
+                </Button>
               </div>
             {/each}
           </div>
@@ -237,7 +227,7 @@
                 </tr>
               </thead>
               <tbody>
-                {#each invoices.slice(0, 5) as invoice}
+                {#each invoices.slice(0, 5) as invoice (invoice.id)}
                   <tr class="border-b border-tokyo-night-selection">
                     <td class="py-2 font-mono text-sm">{invoice.id}</td>
                     <td class="py-2">{formatCurrency(invoice.amount, invoice.currency)}</td>
@@ -261,7 +251,7 @@
         <div class="bg-tokyo-night-surface rounded-lg p-6">
           <h2 class="text-xl font-semibold mb-4 text-tokyo-night-cyan">Current Usage</h2>
           <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {#each usageRecords.slice(0, 4) as record}
+            {#each usageRecords.slice(0, 4) as record, index (record.id ?? `${record.resourceType}-${index}`)}
               <div class="bg-tokyo-night-bg rounded-lg p-4">
                 <div class="text-sm text-tokyo-night-comment">{record.resourceType}</div>
                 <div class="text-lg font-semibold">{record.quantity} {record.unit}</div>

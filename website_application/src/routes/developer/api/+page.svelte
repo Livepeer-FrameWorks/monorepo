@@ -1,31 +1,53 @@
 <script>
   import { onMount } from "svelte";
-  import { base } from "$app/paths";
+  import { resolve } from "$app/paths";
   import { auth } from "$lib/stores/auth";
   import { developerService } from "$lib/graphql/services/developer.js";
   import { toast } from "$lib/stores/toast.js";
   import SkeletonLoader from "$lib/components/SkeletonLoader.svelte";
   import GraphQLExplorer from "$lib/components/GraphQLExplorer.svelte";
-  import { Code2, Key, LogIn, Globe, Zap, Target, Copy, Plus, Rocket, BookOpen } from 'lucide-svelte';
+  import {
+    Code2,
+    Key,
+    LogIn,
+    Globe,
+    Zap,
+    Target,
+    Copy,
+    Plus,
+    Rocket,
+    BookOpen,
+  } from "lucide-svelte";
+  import { Button } from "$lib/components/ui/button";
+  import { Input } from "$lib/components/ui/input";
+  import {
+    Select,
+    SelectTrigger,
+    SelectContent,
+    SelectItem,
+  } from "$lib/components/ui/select";
 
-  let isAuthenticated = false;
-  /** @type {any} */
-  let user = null;
-  let loading = true;
-  let authToken = null;
+  let isAuthenticated = $state(false);
+  let loading = $state(true);
+  let authToken = $state(null);
 
   // API Token Management
-  let apiTokens = [];
-  let showCreateTokenModal = false;
-  let creatingToken = false;
-  let newTokenName = "";
-  let newTokenExpiry = 0; // 0 = never expires
-  let newlyCreatedToken = null;
+  let apiTokens = $state([]);
+  let showCreateTokenModal = $state(false);
+  let creatingToken = $state(false);
+  let newTokenName = $state("");
+  let newTokenExpiry = $state("0"); // "0" = never expires
+  const tokenExpiryLabels = {
+    "0": "Never expires",
+    "30": "30 days",
+    "90": "90 days",
+    "365": "1 year",
+  };
+  let newlyCreatedToken = $state(null);
 
   // Subscribe to auth store
   auth.subscribe((authState) => {
     isAuthenticated = authState.isAuthenticated;
-    user = authState.user?.user || null;
     authToken = authState.token || null;
   });
 
@@ -60,19 +82,19 @@
       const result = await developerService.createAPIToken({
         name: newTokenName.trim(),
         permissions: "read,write",
-        expiresIn: newTokenExpiry || null,
+        expiresIn: Number(newTokenExpiry) || null,
       });
 
       if (result) {
         newlyCreatedToken = {
           token_name: result.name,
-          token_value: result.token
+          token_value: result.token,
         };
         await loadAPITokens();
 
         // Reset form but keep modal open to show the token
         newTokenName = "";
-        newTokenExpiry = 0;
+        newTokenExpiry = "0";
       }
     } catch (error) {
       console.error("Failed to create API token:", error);
@@ -85,7 +107,7 @@
   async function revokeAPIToken(tokenId, tokenName) {
     if (
       !confirm(
-        `Are you sure you want to revoke the token "${tokenName}"? This action cannot be undone.`
+        `Are you sure you want to revoke the token "${tokenName}"? This action cannot be undone.`,
       )
     ) {
       return;
@@ -132,32 +154,35 @@
   <!-- Page Header -->
   <div class="flex justify-between items-start">
     <div>
-      <h1 class="text-3xl font-bold text-tokyo-night-fg mb-2 flex items-center gap-3">
+      <h1
+        class="text-3xl font-bold text-tokyo-night-fg mb-2 flex items-center gap-3"
+      >
         <Code2 class="w-8 h-8" />
         GraphQL API
       </h1>
       <p class="text-tokyo-night-fg-dark">
-        Interactive GraphQL explorer with schema introspection, query templates, and code generation
+        Interactive GraphQL explorer with schema introspection, query templates,
+        and code generation
       </p>
     </div>
 
     <div class="flex space-x-3">
       {#if isAuthenticated}
-        <button
-          class="btn-primary flex items-center gap-2"
-          on:click={() => {
+        <Button
+          class="gap-2"
+          onclick={() => {
             showCreateTokenModal = true;
             newlyCreatedToken = null;
           }}
         >
           <Key class="w-4 h-4" />
           Create New Token
-        </button>
+        </Button>
       {:else}
-        <a href="{base}/login" class="btn-primary flex items-center gap-2">
+        <Button href={resolve("/login")} class="gap-2">
           <LogIn class="w-4 h-4" />
           Login to Access
-        </a>
+        </Button>
       {/if}
     </div>
   </div>
@@ -167,8 +192,10 @@
     <div class="bg-tokyo-night-surface rounded-lg p-6 mb-8">
       <SkeletonLoader type="text-lg" className="w-32 mb-4" />
       <div class="space-y-3">
-        {#each Array(3) as _}
-          <div class="flex items-center justify-between p-4 bg-tokyo-night-bg rounded-lg border border-tokyo-night-selection">
+        {#each Array(3) as _, index (index)}
+          <div
+            class="flex items-center justify-between p-4 bg-tokyo-night-bg rounded-lg border border-tokyo-night-selection"
+          >
             <div class="flex-1">
               <SkeletonLoader type="text" className="w-40 mb-2" />
               <SkeletonLoader type="text-sm" className="w-32" />
@@ -191,38 +218,47 @@
         Authentication Required
       </h3>
       <p class="text-tokyo-night-fg-dark mb-6">
-        Please sign in to access the GraphQL API explorer and manage your API keys.
+        Please sign in to access the GraphQL API explorer and manage your API
+        keys.
       </p>
-      <a href="{base}/login" class="btn-primary"> Sign In </a>
+      <Button href={resolve("/login")}>Sign In</Button>
     </div>
   {:else}
     <!-- GraphQL API Overview -->
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-      <div class="glow-card p-6">
+      <div class="info-card">
         <div class="flex items-start justify-between">
           <div class="flex-1 min-w-0">
-            <p class="text-sm text-tokyo-night-comment mb-2">GraphQL Endpoint</p>
-            <p class="text-sm font-mono text-tokyo-night-fg break-all leading-relaxed">
-              {import.meta.env.VITE_GRAPHQL_HTTP_URL || 'http://localhost:18000/graphql/'}
+            <p class="text-sm text-tokyo-night-comment mb-2">
+              GraphQL Endpoint
+            </p>
+            <p
+              class="text-sm font-mono text-tokyo-night-fg break-all leading-relaxed"
+            >
+              {import.meta.env.VITE_GRAPHQL_HTTP_URL ||
+                "http://localhost:18000/graphql/"}
             </p>
           </div>
           <Globe class="w-6 h-6 ml-3 flex-shrink-0 text-tokyo-night-blue" />
         </div>
       </div>
 
-      <div class="glow-card p-6">
+      <div class="info-card">
         <div class="flex items-start justify-between">
           <div class="flex-1 min-w-0">
             <p class="text-sm text-tokyo-night-comment mb-2">WebSocket</p>
-            <p class="text-sm font-mono text-tokyo-night-fg break-all leading-relaxed">
-              {import.meta.env.VITE_GRAPHQL_WS_URL || 'ws://localhost:18000/graphql/'}
+            <p
+              class="text-sm font-mono text-tokyo-night-fg break-all leading-relaxed"
+            >
+              {import.meta.env.VITE_GRAPHQL_WS_URL ||
+                "ws://localhost:18000/graphql/"}
             </p>
           </div>
           <Zap class="w-6 h-6 ml-3 flex-shrink-0 text-tokyo-night-yellow" />
         </div>
       </div>
 
-      <div class="glow-card p-6">
+      <div class="info-card">
         <div class="flex items-start justify-between">
           <div class="flex-1 min-w-0">
             <p class="text-sm text-tokyo-night-comment mb-2">Authentication</p>
@@ -232,7 +268,7 @@
         </div>
       </div>
 
-      <div class="glow-card p-6">
+      <div class="info-card">
         <div class="flex items-start justify-between">
           <div class="flex-1 min-w-0">
             <p class="text-sm text-tokyo-night-comment mb-2">Active Tokens</p>
@@ -248,7 +284,9 @@
     <!-- API Token Management -->
     <div class="card">
       <div class="card-header">
-        <h2 class="text-xl font-semibold text-tokyo-night-fg mb-2 flex items-center gap-2">
+        <h2
+          class="text-xl font-semibold text-tokyo-night-fg mb-2 flex items-center gap-2"
+        >
           <Key class="w-5 h-5" />
           Your API Tokens
         </h2>
@@ -266,22 +304,23 @@
             No API Tokens
           </h3>
           <p class="text-tokyo-night-comment mb-4">
-            Create your first API token to start using the FrameWorks GraphQL API
+            Create your first API token to start using the FrameWorks GraphQL
+            API
           </p>
-          <button
-            class="btn-primary flex items-center gap-2"
-            on:click={() => {
+          <Button
+            class="gap-2"
+            onclick={() => {
               showCreateTokenModal = true;
               newlyCreatedToken = null;
             }}
           >
             <Plus class="w-4 h-4" />
             Create Your First Token
-          </button>
+          </Button>
         </div>
       {:else}
         <div class="space-y-4">
-          {#each apiTokens as token}
+          {#each apiTokens as token (token.id ?? token.token_id)}
             <div
               class="bg-tokyo-night-bg-highlight p-4 rounded-lg border border-tokyo-night-fg-gutter"
             >
@@ -293,7 +332,7 @@
                     </h3>
                     <span
                       class="text-xs px-2 py-1 rounded {getTokenStatusColor(
-                        token.status
+                        token.status,
                       )} bg-tokyo-night-bg"
                     >
                       {token.status.toUpperCase()}
@@ -328,13 +367,14 @@
                 </div>
                 <div class="flex space-x-2">
                   {#if token.status === "active"}
-                    <button
-                      class="btn-danger text-sm px-3 py-1"
-                      on:click={() =>
-                        revokeAPIToken(token.id, token.name)}
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      class="px-3"
+                      onclick={() => revokeAPIToken(token.id, token.name)}
                     >
                       Revoke
-                    </button>
+                    </Button>
                   {/if}
                 </div>
               </div>
@@ -347,22 +387,27 @@
     <!-- GraphQL Explorer -->
     <div class="card">
       <div class="card-header">
-        <h2 class="text-xl font-semibold text-tokyo-night-fg mb-2 flex items-center gap-2">
+        <h2
+          class="text-xl font-semibold text-tokyo-night-fg mb-2 flex items-center gap-2"
+        >
           <Rocket class="w-5 h-5" />
           GraphQL API Explorer
         </h2>
         <p class="text-tokyo-night-fg-dark">
-          Interactive GraphQL query builder and tester with live schema introspection
+          Interactive GraphQL query builder and tester with live schema
+          introspection
         </p>
       </div>
-      
+
       <GraphQLExplorer {authToken} />
     </div>
 
     <!-- GraphQL Guide -->
     <div class="card">
       <div class="card-header">
-        <h2 class="text-xl font-semibold text-tokyo-night-fg mb-2 flex items-center gap-2">
+        <h2
+          class="text-xl font-semibold text-tokyo-night-fg mb-2 flex items-center gap-2"
+        >
           <BookOpen class="w-5 h-5" />
           GraphQL API Guide
         </h2>
@@ -378,7 +423,8 @@
           </div>
           <h3 class="font-semibold text-tokyo-night-fg mb-2">Schema First</h3>
           <p class="text-sm text-tokyo-night-comment">
-            All operations use a single GraphQL endpoint. Query exactly the data you need with strong typing.
+            All operations use a single GraphQL endpoint. Query exactly the data
+            you need with strong typing.
           </p>
         </div>
 
@@ -388,7 +434,8 @@
           </div>
           <h3 class="font-semibold text-tokyo-night-fg mb-2">Real-time</h3>
           <p class="text-sm text-tokyo-night-comment">
-            Use GraphQL subscriptions over WebSocket for real-time stream events and viewer metrics.
+            Use GraphQL subscriptions over WebSocket for real-time stream events
+            and viewer metrics.
           </p>
         </div>
 
@@ -398,7 +445,8 @@
           </div>
           <h3 class="font-semibold text-tokyo-night-fg mb-2">JWT Auth</h3>
           <p class="text-sm text-tokyo-night-comment">
-            Include your JWT token in the Authorization header. The explorer handles this automatically.
+            Include your JWT token in the Authorization header. The explorer
+            handles this automatically.
           </p>
         </div>
 
@@ -408,7 +456,8 @@
           </div>
           <h3 class="font-semibold text-tokyo-night-fg mb-2">Type Safe</h3>
           <p class="text-sm text-tokyo-night-comment">
-            Generate TypeScript types from the schema for full type safety in your applications.
+            Generate TypeScript types from the schema for full type safety in
+            your applications.
           </p>
         </div>
       </div>
@@ -426,7 +475,9 @@
     >
       {#if newlyCreatedToken}
         <!-- Show newly created token -->
-        <h3 class="text-xl font-semibold text-tokyo-night-green mb-4 flex items-center gap-2">
+        <h3
+          class="text-xl font-semibold text-tokyo-night-green mb-4 flex items-center gap-2"
+        >
           <Key class="w-6 h-6" />
           Token Created Successfully!
         </h3>
@@ -439,7 +490,10 @@
             >
               Token Name
             </label>
-            <p id="token-name-display" class="text-tokyo-night-fg font-semibold">
+            <p
+              id="token-name-display"
+              class="text-tokyo-night-fg font-semibold"
+            >
               {newlyCreatedToken.token_name}
             </p>
           </div>
@@ -452,20 +506,20 @@
               API Token (Copy this now - it won't be shown again!)
             </label>
             <div class="flex space-x-2">
-              <input
+              <Input
                 id="api-token-display"
                 type="text"
                 value={newlyCreatedToken.token_value}
                 readonly
-                class="input flex-1 font-mono text-sm bg-tokyo-night-bg-highlight"
+                class="flex-1 font-mono text-sm bg-tokyo-night-bg-highlight"
               />
-              <button
-                on:click={() => copyToClipboard(newlyCreatedToken.token_value)}
-                class="btn-primary flex items-center gap-2"
+              <Button
+                class="gap-2"
+                onclick={() => copyToClipboard(newlyCreatedToken.token_value)}
               >
                 <Copy class="w-4 h-4" />
                 Copy
-              </button>
+              </Button>
             </div>
           </div>
 
@@ -473,22 +527,21 @@
             class="bg-tokyo-night-bg-highlight p-3 rounded border border-tokyo-night-yellow"
           >
             <p class="text-sm text-tokyo-night-yellow">
-              <strong>Important:</strong> Store this token securely. You won't
-              be able to see it again after closing this dialog.
+              <strong>Important:</strong> Store this token securely. You won't be
+              able to see it again after closing this dialog.
             </p>
           </div>
         </div>
 
         <div class="flex justify-end space-x-3 mt-6">
-          <button
-            class="btn-primary"
-            on:click={() => {
+          <Button
+            onclick={() => {
               showCreateTokenModal = false;
               newlyCreatedToken = null;
             }}
           >
             I've Saved the Token
-          </button>
+          </Button>
         </div>
       {:else}
         <!-- Create token form -->
@@ -504,12 +557,12 @@
             >
               Token Name *
             </label>
-            <input
+            <Input
               id="token-name"
               type="text"
               bind:value={newTokenName}
               placeholder="e.g., My App Token, Production API, etc."
-              class="input w-full"
+              class="w-full"
               disabled={creatingToken}
             />
           </div>
@@ -521,17 +574,21 @@
             >
               Expires In
             </label>
-            <select
-              id="token-expiry"
-              bind:value={newTokenExpiry}
-              class="input w-full"
-              disabled={creatingToken}
-            >
-              <option value={0}>Never expires</option>
-              <option value={30}>30 days</option>
-              <option value={90}>90 days</option>
-              <option value={365}>1 year</option>
-            </select>
+            <Select bind:value={newTokenExpiry}>
+              <SelectTrigger
+                id="token-expiry"
+                class="w-full"
+                disabled={creatingToken}
+              >
+                {tokenExpiryLabels[newTokenExpiry] ?? "Expiration"}
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="0">Never expires</SelectItem>
+                <SelectItem value="30">30 days</SelectItem>
+                <SelectItem value="90">90 days</SelectItem>
+                <SelectItem value="365">1 year</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
 
           <div
@@ -545,24 +602,23 @@
         </div>
 
         <div class="flex justify-end space-x-3 mt-6">
-          <button
-            class="btn-secondary"
-            on:click={() => {
+          <Button
+            variant="outline"
+            onclick={() => {
               showCreateTokenModal = false;
               newTokenName = "";
-              newTokenExpiry = 0;
+              newTokenExpiry = "0";
             }}
             disabled={creatingToken}
           >
             Cancel
-          </button>
-          <button
-            class="btn-primary"
-            on:click={createAPIToken}
+          </Button>
+          <Button
+            onclick={createAPIToken}
             disabled={creatingToken || !newTokenName.trim()}
           >
             {creatingToken ? "Creating..." : "Create Token"}
-          </button>
+          </Button>
         </div>
       {/if}
     </div>

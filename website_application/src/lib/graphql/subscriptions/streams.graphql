@@ -34,4 +34,3 @@ subscription TrackListUpdates($stream: String!) {
     timestamp
   }
 }
-

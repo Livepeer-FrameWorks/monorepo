@@ -1,10 +1,16 @@
 <script>
-  /** @type {'sm' | 'md' | 'lg' | 'xl'} */
-  export let size = 'md';
-  /** @type {string} */
-  export let color = 'text-tokyo-night-blue';
-  /** @type {string} */
-  export let className = '';
+  
+  
+  
+  /**
+   * @typedef {Object} Props
+   * @property {'sm' | 'md' | 'lg' | 'xl'} [size]
+   * @property {string} [color]
+   * @property {string} [className]
+   */
+
+  /** @type {Props} */
+  let { size = 'md', color = 'text-tokyo-night-blue', className = '' } = $props();
 
   const sizeClasses = {
     sm: 'w-4 h-4',

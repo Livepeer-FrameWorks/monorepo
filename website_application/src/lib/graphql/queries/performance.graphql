@@ -50,7 +50,7 @@ query GetPlatformPerformance($timeRange: TimeRangeInput) {
     avgConnectionQuality
     avgBufferHealth
   }
-  
+
   nodeMetrics(timeRange: $timeRange) {
     timestamp
     nodeId
@@ -75,7 +75,7 @@ query GetStreamPerformance($stream: String!, $timeRange: TimeRangeInput) {
     avgConnectionQuality
     avgBufferHealth
   }
-  
+
   # Include routing performance for this stream
   routingEvents(stream: $stream, timeRange: $timeRange) {
     timestamp
@@ -101,7 +101,7 @@ query GetNodeEfficiency($nodeId: String!, $timeRange: TimeRangeInput) {
     healthScore
     status
   }
-  
+
   # Get routing decisions made for this node
   routingEvents(timeRange: $timeRange) {
     timestamp
@@ -124,7 +124,7 @@ query GetRegionalPerformance($timeRange: TimeRangeInput) {
     avgConnectionQuality
     avgBufferHealth
   }
-  
+
   connectionEvents(timeRange: $timeRange) {
     timestamp
     nodeId

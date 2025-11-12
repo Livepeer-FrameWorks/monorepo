@@ -1,78 +1,111 @@
-<script>
-  import { getIconComponent } from '$lib/iconUtils.js';
+<script lang="ts">
+  import { getIconComponent } from '$lib/iconUtils';
+  import { Button } from "$lib/components/ui/button";
+  import type { Snippet } from "svelte";
 
-  /** @type {string} */
-  export let iconName = 'FileText';
-  /** @type {string} */
-  export let title = 'No data found';
-  /** @type {string} */
-  export let description = '';
-  /** @type {string} */
-  export let actionText = '';
-  /** @type {() => void} */
-  export let onAction = () => {};
-  /** @type {'sm' | 'md' | 'lg'} */
-  export let size = 'md';
-  /** @type {string} */
-  export let className = '';
-  /** @type {boolean} */
-  export let showAction = true;
-  
-  $: iconComponent = getIconComponent(iconName);
+  interface Props {
+    iconName?: string;
+    title?: string;
+    description?: string;
+    actionText?: string;
+    onAction?: () => void;
+    size?: "sm" | "md" | "lg";
+    variant?: "default" | "accent" | "subtle";
+    buttonVariant?: "default" | "cta" | "outline" | "ghost" | "secondary" | "destructive";
+    class?: string;
+    showAction?: boolean;
+    children?: Snippet;
+  }
+
+  let {
+    iconName = "FileText",
+    title = "No data found",
+    description = "",
+    actionText = "",
+    onAction = () => {},
+    size = "md",
+    variant = "default",
+    buttonVariant = "cta",
+    class: className = "",
+    showAction = true,
+    children,
+  }: Props = $props();
+
+  const iconComponent = $derived(getIconComponent(iconName));
 
   const sizeClasses = {
     sm: {
-      container: 'py-8',
-      icon: 'w-8 h-8 mb-2 mx-auto text-tokyo-night-fg-dark',
-      title: 'text-lg font-semibold mb-1',
-      description: 'text-sm mb-4',
-      button: 'px-4 py-2 text-sm'
+      container: "py-8",
+      iconWrapper: "w-12 h-12 mb-3",
+      icon: "w-6 h-6",
+      title: "text-lg font-semibold mb-1",
+      description: "text-sm mb-4",
     },
     md: {
-      container: 'py-12',
-      icon: 'w-12 h-12 mb-4 mx-auto text-tokyo-night-fg-dark',
-      title: 'text-xl font-semibold mb-2',
-      description: 'text-sm mb-6',
-      button: 'px-6 py-3'
+      container: "py-12",
+      iconWrapper: "w-16 h-16 mb-5",
+      icon: "w-8 h-8",
+      title: "text-xl font-semibold mb-2",
+      description: "text-sm mb-6",
     },
     lg: {
-      container: 'py-16',
-      icon: 'w-16 h-16 mb-6 mx-auto text-tokyo-night-fg-dark',
-      title: 'text-2xl font-bold mb-3',
-      description: 'mb-8',
-      button: 'px-8 py-4 text-lg'
-    }
+      container: "py-16",
+      iconWrapper: "w-20 h-20 mb-6",
+      icon: "w-10 h-10",
+      title: "text-2xl font-bold mb-3",
+      description: "text-base mb-8",
+    },
   };
 
-  $: classes = sizeClasses[size];
+  const variantClasses = {
+    default: {
+      iconWrapper:
+        "bg-tokyo-night-bg-highlight border border-tokyo-night-fg-gutter",
+      icon: "text-tokyo-night-fg-dark",
+    },
+    accent: {
+      iconWrapper:
+        "bg-gradient-to-br from-tokyo-night-blue/20 to-tokyo-night-cyan/20 border border-tokyo-night-blue/30",
+      icon: "text-tokyo-night-cyan",
+    },
+    subtle: {
+      iconWrapper: "bg-tokyo-night-bg-dark border border-tokyo-night-fg-gutter/50",
+      icon: "text-tokyo-night-comment",
+    },
+  };
+
+  const classes = $derived(sizeClasses[size]);
+  const variantClass = $derived(variantClasses[variant]);
+  const SvelteComponent = $derived(iconComponent);
 </script>
 
 <div class="text-center {classes.container} {className}">
-  <!-- Icon -->
-  <svelte:component this={iconComponent} class="{classes.icon}" />
-  
+  <!-- Icon with styled wrapper -->
+  <div
+    class="mx-auto flex items-center justify-center rounded-2xl {classes.iconWrapper} {variantClass.iconWrapper}"
+  >
+    <SvelteComponent class="{classes.icon} {variantClass.icon}" />
+  </div>
+
   <!-- Title -->
   <h3 class="text-tokyo-night-fg {classes.title}">
     {title}
   </h3>
-  
+
   <!-- Description -->
   {#if description}
-    <p class="text-tokyo-night-fg-dark {classes.description}">
+    <p class="text-tokyo-night-fg-dark {classes.description} max-w-md mx-auto">
       {description}
     </p>
   {/if}
-  
+
   <!-- Action Button -->
   {#if actionText && showAction}
-    <button
-      class="btn-primary {classes.button}"
-      on:click={onAction}
-    >
+    <Button variant={buttonVariant} onclick={onAction}>
       {actionText}
-    </button>
+    </Button>
   {/if}
-  
+
   <!-- Custom slot for additional content -->
-  <slot />
+  {@render children?.()}
 </div>

@@ -1,18 +1,37 @@
 {
   "name": "@livepeer-frameworks/player",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "type": "module",
+  "packageManager": "pnpm@9.12.0",
   "description": "FrameWorks streaming player components with Gateway integration and intelligent protocol selection",
-  "main": "dist/index.cjs.js",
-  "module": "dist/index.esm.js",
-  "types": "dist/index.d.ts",
+  "main": "dist/cjs/index.js",
+  "module": "dist/esm/index.js",
+  "types": "dist/types/index.d.ts",
+  "style": "dist/player.css",
   "files": [
     "dist"
   ],
+  "exports": {
+    ".": {
+      "import": "./dist/esm/index.js",
+      "require": "./dist/cjs/index.js",
+      "types": "./dist/types/index.d.ts"
+    },
+    "./player.css": "./dist/player.css",
+    "./styles.css": "./dist/player.css",
+    "./dist/player.css": "./dist/player.css"
+  },
   "scripts": {
-    "start": "NODE_ENV=development rollup -c --watch",
-    "build": "NODE_ENV=production rollup -c",
-    "type-check": "tsc --noEmit"
+    "start": "pnpm run dev",
+    "build": "pnpm run build:css && NODE_ENV=production rollup -c",
+    "build:watch": "NODE_ENV=development rollup -c --watch",
+    "build:css": "pnpm exec tailwindcss -i ./src/styles/tailwind.css -o ./dist/player.css --minify -c tailwind.config.ts",
+    "build:css:watch": "pnpm exec tailwindcss -i ./src/styles/tailwind.css -o ./dist/player.css --watch -c tailwind.config.ts",
+    "dev": "pnpm exec concurrently \"pnpm run build:watch\" \"pnpm run build:css:watch\" \"pnpm run playground:dev\"",
+    "type-check": "tsc --noEmit",
+    "playground:dev": "npm --prefix playground run dev",
+    "playground:build": "npm --prefix playground run build",
+    "playground:preview": "npm --prefix playground run preview"
   },
   "babel": {
     "presets": [
@@ -22,13 +41,21 @@
     ]
   },
   "dependencies": {
-    "hls.js": "^1.5.15",
+    "@radix-ui/react-select": "^2.0.0",
+    "@radix-ui/react-slider": "^1.1.2",
+    "@radix-ui/react-slot": "^1.1.1",
+    "@web/rollup-plugin-copy": "^0.5.1",
+    "class-variance-authority": "^0.7.0",
+    "clsx": "^2.1.1",
     "dashjs": "^4.7.4",
+    "hls.js": "^1.5.15",
+    "lucide-react": "^0.468.0",
+    "tailwind-merge": "^2.5.2",
     "video.js": "^8.23.0"
   },
   "peerDependencies": {
-    "react": "^17.0.0 || ^18.0.0",
-    "react-dom": "^17.0.0 || ^18.0.0"
+    "react": "^17.0.0 || ^18.0.0 || ^19.0.0",
+    "react-dom": "^17.0.0 || ^18.0.0 || ^19.0.0"
   },
   "devDependencies": {
     "@babel/preset-env": "^7.26.0",
@@ -42,10 +69,15 @@
     "@rollup/plugin-url": "^8.0.2",
     "@types/react": "^19.1.11",
     "@types/react-dom": "^19.1.7",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
+    "autoprefixer": "^10.4.20",
+    "concurrently": "^9.0.1",
+    "postcss": "^8.4.47",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
     "rollup": "^4.48.1",
     "rollup-plugin-peer-deps-external": "^2.2.4",
+    "rollup-plugin-postcss": "^4.0.2",
+    "tailwindcss": "^3.4.13",
     "tslib": "^2.8.1",
     "typescript": "^5.9.2"
   },

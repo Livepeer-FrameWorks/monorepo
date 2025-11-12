@@ -1,9 +1,9 @@
 <script>
   import { toast } from '$lib/stores/toast.js';
   import { fly } from 'svelte/transition';
-  import { getIconComponent } from '$lib/iconUtils.js';
+  import { getIconComponent } from '$lib/iconUtils';
   
-  $: toasts = $toast;
+  let toasts = $derived($toast);
   
   function getToastIcon(type) {
     const iconMap = {
@@ -34,13 +34,15 @@
 <!-- Toast Container -->
 <div class="fixed bottom-4 right-4 z-50 space-y-2 pointer-events-none">
   {#each toasts as toastItem (toastItem.id)}
+    {@const SvelteComponent = getToastIcon(toastItem.type)}
+    {@const SvelteComponent_1 = getIconComponent('X')}
     <div
       class="pointer-events-auto rounded-lg border p-4 shadow-lg max-w-sm {getToastColors(toastItem.type)}"
       transition:fly={{ y: 100, duration: 300 }}
     >
       <div class="flex items-start space-x-3">
         <div class="flex-shrink-0">
-          <svelte:component this={getToastIcon(toastItem.type)} class="w-5 h-5" />
+          <SvelteComponent class="w-5 h-5" />
         </div>
         <div class="flex-1 min-w-0">
           <p class="text-sm font-medium break-words">
@@ -48,11 +50,11 @@
           </p>
         </div>
         <button
-          on:click={() => toast.remove(toastItem.id)}
+          onclick={() => toast.remove(toastItem.id)}
           class="text-current opacity-60 hover:opacity-100 transition-opacity"
           aria-label="Close notification"
         >
-          <svelte:component this={getIconComponent('X')} class="w-4 h-4" />
+          <SvelteComponent_1 class="w-4 h-4" />
         </button>
       </div>
     </div>

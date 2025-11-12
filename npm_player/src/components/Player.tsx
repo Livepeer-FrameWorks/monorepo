@@ -6,11 +6,7 @@ import PlayerControls from "./PlayerControls";
 import { PlayerProps, EndpointInfo, OutputEndpoint, OutputCapabilities, PlayerState, PlayerStateContext } from "../types";
 import useViewerEndpoints from "../hooks/useViewerEndpoints";
 import { globalPlayerManager, StreamInfo, StreamSource, StreamTrack } from "../core";
-// Use existing webapp header logo temporarily; will switch to SVG later
-// Bundled via rollup url plugin
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore
-import defaultIcon from "../../public/icon.png";
+import defaultLogo from "../../public/logomark.svg";
 
 const Player: React.FC<PlayerProps> = ({
   contentId,
@@ -215,14 +211,7 @@ const Player: React.FC<PlayerProps> = ({
         onPlay={handlePlay}
         message={contentId}
         showUnmuteMessage={false}
-        style={{
-          position: "absolute",
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          zIndex: 10
-        }}
+        className="absolute inset-0 z-10"
       />
     );
   }
@@ -234,20 +223,13 @@ const Player: React.FC<PlayerProps> = ({
         onPlay={handlePlay}
         message={null}
         showUnmuteMessage={true}
-        style={{
-          position: "absolute",
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          zIndex: 10
-        }}
+        className="absolute inset-0 z-10"
       />
     );
   }
 
   const branding = options?.branding || { showLogo: true };
-  const resolvedLogo: string = options?.branding?.logoUrl || (defaultIcon as string);
+  const resolvedLogo: string = options?.branding?.logoUrl || defaultLogo;
 
   // Always render player, conditionally render overlay on top
   const useStockControls = options?.stockControls === true;
@@ -301,29 +283,46 @@ const Player: React.FC<PlayerProps> = ({
   }, [useStockControls]);
 
   return (
-    <div style={{ position: "relative", width: "100%", height: "100%" }} data-player-container="true">
-      <div ref={containerRef} style={{ width: '100%', height: '100%' }} />
+    <div className="fw-player-root" data-player-container="true">
+      <div ref={containerRef} className="fw-player-container" />
       {(isBuffering || errorText) && (
-        <div role="status" aria-live="polite" style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.35)' }}>
-          <div style={{ color: '#fff', background: 'rgba(0,0,0,0.55)', padding: '10px 14px', borderRadius: 6, display: 'flex', gap: 12, alignItems: 'center' }}>
-            <span>{errorText ? 'Playback error' : 'Buffering…'}</span>
+        <div
+          role="status"
+          aria-live="polite"
+          className="fw-player-surface absolute inset-0 flex items-center justify-center bg-black/40 backdrop-blur-sm"
+        >
+          <div className="flex items-center gap-3 rounded-lg border border-white/10 bg-black/70 px-4 py-3 text-sm text-white shadow-lg">
+            <span>{errorText ? "Playback error" : "Buffering…"}</span>
             {errorText && (
-              <button aria-label="Retry" onClick={() => {
-                setErrorText(null);
-                setIsBuffering(false);
-                const container = containerRef.current;
-                if (!container || !streamInfo) return;
-                try { globalPlayerManager.destroy(); } catch {}
-                container.innerHTML = '';
-                globalPlayerManager.initializePlayer(container, streamInfo, {
-                  autoplay: options?.autoplay !== false,
-                  muted: options?.muted !== false,
-                  controls: options?.controls !== false,
-                  poster: thumbnailUrl || undefined,
-                  onTimeUpdate: (t) => setCurrentTime(t),
-                  onError: (err) => setErrorText(typeof err === 'string' ? err : String(err))
-                }).catch((e) => console.warn('Retry init failed', e));
-              }} style={{ color: '#000', background: '#fff', border: 0, borderRadius: 4, padding: '6px 10px', cursor: 'pointer' }}>Retry</button>
+              <button
+                type="button"
+                className="rounded-md bg-white/90 px-3 py-1 text-xs font-medium text-black transition hover:bg-white"
+                aria-label="Retry playback"
+                onClick={() => {
+                  setErrorText(null);
+                  setIsBuffering(false);
+                  const container = containerRef.current;
+                  if (!container || !streamInfo) return;
+                  try {
+                    globalPlayerManager.destroy();
+                  } catch {
+                    /* noop */
+                  }
+                  container.innerHTML = "";
+                  globalPlayerManager
+                    .initializePlayer(container, streamInfo, {
+                      autoplay: options?.autoplay !== false,
+                      muted: options?.muted !== false,
+                      controls: options?.controls !== false,
+                      poster: thumbnailUrl || undefined,
+                      onTimeUpdate: (t) => setCurrentTime(t),
+                      onError: (err) => setErrorText(typeof err === "string" ? err : String(err))
+                    })
+                    .catch((e) => console.warn("Retry init failed", e));
+                }}
+              >
+                Retry
+              </button>
             )}
           </div>
         </div>

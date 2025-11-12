@@ -6,52 +6,52 @@ query GetStreamAnalytics($stream: String!, $timeRange: TimeRangeInput) {
     tenantId
     streamId
     internalName
-    
+
     # Session timing
     sessionStartTime
     sessionEndTime
     totalSessionDuration
-    
+
     # Viewer metrics
     currentViewers
     peakViewers
     totalConnections
-    
+
     # Bandwidth metrics
     bandwidthIn
     bandwidthOut
     totalBandwidthGb
     upbytes
     downbytes
-    
+
     # Stream quality
     bitrateKbps
     resolution
-    
+
     # Network performance
     packetsSent
     packetsLost
     packetsRetrans
     firstMs
     lastMs
-    
+
     # Stream details
     trackCount
     inputs
     outputs
-    
+
     # Location
     nodeId
     nodeName
     latitude
     longitude
     location
-    
+
     # Status
     status
     lastUpdated
     createdAt
-    
+
     # Current health state (from STREAM_BUFFER events)
     currentHealthScore
     currentBufferState
@@ -61,7 +61,7 @@ query GetStreamAnalytics($stream: String!, $timeRange: TimeRangeInput) {
     currentResolution
     mistStatus
     qualityTier
-    
+
     # Enriched analytics from ClickHouse (computed)
     avgViewers
     uniqueCountries

@@ -1,15 +1,42 @@
-<script>
-  import { onMount, onDestroy } from 'svelte';
+<script lang="ts">
+  import { onMount, onDestroy } from "svelte";
 
-  export let contentId;
-  export let contentType; // 'live', 'clip', or 'dvr'
-  export let thumbnailUrl = null;
-  export let options = {};
+  let playerModulePromise: Promise<typeof import("@livepeer-frameworks/player")> | null =
+    typeof window !== "undefined" ? import("@livepeer-frameworks/player") : null;
 
-  let playerContainer;
-  let player;
-  let loading = true;
-  let error = '';
+  interface Props {
+    contentId: string;
+    contentType: "live" | "clip" | "dvr";
+    thumbnailUrl?: string | null;
+    options?: PlayerOptions;
+  }
+
+  interface PlayerOptions {
+    gatewayUrl?: string;
+    autoplay?: boolean;
+    muted?: boolean;
+    controls?: boolean;
+    preferredProtocol?: "auto" | "hls" | "dash";
+    analytics?: {
+      enabled?: boolean;
+      sessionTracking?: boolean;
+    };
+    debug?: boolean;
+    verboseLogging?: boolean;
+    authToken?: string;
+  }
+
+  let {
+    contentId,
+    contentType,
+    thumbnailUrl = null,
+    options = {},
+  }: Props = $props();
+
+  let playerContainer = $state<HTMLDivElement | null>(null);
+  let player: { destroy?: () => void } | null = null;
+  let loading = $state(true);
+  let error = $state("");
 
   // Default options
   const defaultOptions = {
@@ -17,21 +44,21 @@
     autoplay: true,
     muted: true,
     controls: true,
-    preferredProtocol: 'auto',
+    preferredProtocol: "auto" as PlayerOptions["preferredProtocol"],
     analytics: {
       enabled: true,
-      sessionTracking: true
+      sessionTracking: true,
     },
     debug: false,
-    verboseLogging: false
+    verboseLogging: false,
   };
 
   // Merge options
   const playerOptions = { ...defaultOptions, ...options };
 
   // Get auth token if available
-  if (typeof window !== 'undefined') {
-    const token = localStorage.getItem('token');
+  if (typeof window !== "undefined") {
+    const token = localStorage.getItem("token");
     if (token) {
       playerOptions.authToken = token;
     }
@@ -39,30 +66,36 @@
 
   onMount(async () => {
     try {
-      // Import the NPM player package
-      const { Player: FrameWorksPlayer } = await import('@livepeer-frameworks/player');
+      if (!playerModulePromise) {
+        playerModulePromise = import("@livepeer-frameworks/player");
+      }
+
+      const { Player: FrameWorksPlayer } = await playerModulePromise;
 
       // Initialize the NPM player - it handles everything internally
       player = new FrameWorksPlayer(playerContainer, {
         contentId,
         contentType,
         thumbnailUrl,
-        options: playerOptions
+        options: playerOptions,
       });
 
       loading = false;
-
     } catch (err) {
-      console.error('Failed to initialize player:', err);
-      error = err.message || 'Failed to load player';
+      console.error("Failed to initialize player:", err);
+      const message =
+        err instanceof Error
+          ? err.message
+          : typeof err === "string"
+            ? err
+            : "Failed to load player";
+      error = message;
       loading = false;
     }
   });
 
   onDestroy(() => {
-    if (player && typeof player.destroy === 'function') {
-      player.destroy();
-    }
+    player?.destroy?.();
   });
 </script>
 

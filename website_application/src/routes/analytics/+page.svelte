@@ -1,7 +1,7 @@
 <script>
   import { onMount, onDestroy } from "svelte";
   import { goto } from "$app/navigation";
-  import { base } from "$app/paths";
+  import { resolve } from "$app/paths";
   import { auth } from "$lib/stores/auth";
   import { streamsService } from "$lib/graphql/services/streams.js";
   import { analyticsService } from "$lib/graphql/services/analytics.js";
@@ -9,19 +9,28 @@
   import LoadingCard from "$lib/components/LoadingCard.svelte";
   import SkeletonLoader from "$lib/components/SkeletonLoader.svelte";
   import EmptyState from "$lib/components/EmptyState.svelte";
-  import { getIconComponent } from "$lib/iconUtils.js";
+  import {
+    Card,
+    CardHeader,
+    CardTitle,
+    CardDescription,
+    CardContent,
+  } from "$lib/components/ui/card";
+  import { Button } from "$lib/components/ui/button";
+  import { Badge } from "$lib/components/ui/badge";
+  import { Panel } from "$lib/components/layout";
 
   let isAuthenticated = false;
   let user = null;
-  let loading = true;
-  
+  let loading = $state(true);
+
   // Data
-  let streams = [];
-  let selectedStream = null;
-  let analyticsData = null;
-  let viewerMetrics = [];
-  let platformOverview = null;
-  
+  let streams = $state([]);
+  let selectedStream = $state(null);
+  let analyticsData = $state(null);
+  let viewerMetrics = $state([]);
+  let platformOverview = $state(null);
+
   // Real-time subscriptions
   let viewerMetricsSubscription = null;
 
@@ -48,25 +57,24 @@
   async function loadData() {
     try {
       loading = true;
-      
+
       // Load streams and platform overview
       const [streamsData, platformData] = await Promise.all([
         streamsService.getStreams().catch(() => []),
-        analyticsService.getPlatformOverview().catch(() => null)
+        analyticsService.getPlatformOverview().catch(() => null),
       ]);
-      
+
       streams = streamsData || [];
       platformOverview = platformData;
-      
+
       if (streams.length > 0) {
         selectedStream = streams[0];
         await loadAnalyticsForStream(selectedStream.id);
         startRealTimeSubscriptions();
       }
-      
     } catch (error) {
-      console.error('Failed to load data:', error);
-      toast.error('Failed to load analytics data. Please refresh the page.');
+      console.error("Failed to load data:", error);
+      toast.error("Failed to load analytics data. Please refresh the page.");
     } finally {
       loading = false;
     }
@@ -74,46 +82,50 @@
 
   async function loadAnalyticsForStream(streamId) {
     if (!streamId) return;
-    
+
     try {
       // Load stream analytics and viewer metrics
       const [streamAnalytics, metrics] = await Promise.all([
         analyticsService.getStreamAnalytics(streamId).catch(() => null),
-        analyticsService.getViewerMetrics(streamId).catch(() => [])
+        analyticsService.getViewerMetrics(streamId).catch(() => []),
       ]);
-      
+
       analyticsData = streamAnalytics;
       viewerMetrics = metrics || [];
-      
     } catch (error) {
-      console.error('Failed to load analytics for stream:', error);
-      toast.warning('Failed to load analytics for selected stream. Some data may be unavailable.');
+      console.error("Failed to load analytics for stream:", error);
+      toast.warning(
+        "Failed to load analytics for selected stream. Some data may be unavailable.",
+      );
     }
   }
 
   function startRealTimeSubscriptions() {
     if (!selectedStream || !user) return;
-    
+
     // Clean up existing subscriptions
     if (viewerMetricsSubscription) {
       viewerMetricsSubscription.unsubscribe();
     }
-    
+
     // Subscribe to real-time viewer metrics
     viewerMetricsSubscription = streamsService.subscribeToViewerMetrics(
       selectedStream.id,
       {
         onViewerMetrics: (metrics) => {
           // Add real-time metrics to the array
-          viewerMetrics = [...viewerMetrics.slice(-99), {
-            timestamp: metrics.timestamp,
-            viewerCount: metrics.currentViewers
-          }];
+          viewerMetrics = [
+            ...viewerMetrics.slice(-99),
+            {
+              timestamp: metrics.timestamp,
+              viewerCount: metrics.currentViewers,
+            },
+          ];
         },
         onError: (error) => {
-          console.error('Viewer metrics subscription failed:', error);
-        }
-      }
+          console.error("Viewer metrics subscription failed:", error);
+        },
+      },
     );
   }
 
@@ -129,12 +141,167 @@
 
   function formatNumber(num) {
     if (num >= 1000000) {
-      return (num / 1000000).toFixed(1) + 'M';
+      return (num / 1000000).toFixed(1) + "M";
     } else if (num >= 1000) {
-      return (num / 1000).toFixed(1) + 'K';
+      return (num / 1000).toFixed(1) + "K";
     }
-    return num?.toString() || '0';
+    return num?.toString() || "0";
   }
+
+  function formatTimeRange(range) {
+    if (!range?.start || !range?.end) {
+      return "N/A";
+    }
+    return `${formatDate(range.start)} - ${formatDate(range.end)}`;
+  }
+
+  function hasValue(value) {
+    return value !== null && value !== undefined;
+  }
+
+  function healthScoreClass(score) {
+    if (!hasValue(score)) return "";
+    if (score >= 0.9) return "text-green-400";
+    if (score >= 0.7) return "text-yellow-400";
+    return "text-red-400";
+  }
+
+  function rebufferClass(count) {
+    if (!hasValue(count)) return "";
+    if (count > 10) return "text-red-400";
+    if (count > 5) return "text-yellow-400";
+    return "text-green-400";
+  }
+
+  function alertClass(count) {
+    if (!hasValue(count)) return "";
+    if (count > 5) return "text-red-400";
+    if (count > 2) return "text-yellow-400";
+    return "text-green-400";
+  }
+
+  function packetLossClass(loss) {
+    if (!hasValue(loss)) return "";
+    if (loss > 2) return "text-red-400";
+    if (loss > 1) return "text-yellow-400";
+    return "text-green-400";
+  }
+
+  function bufferStateClass(state) {
+    switch (state) {
+      case "FULL":
+        return "text-green-400";
+      case "DRY":
+        return "text-red-400";
+      default:
+        return "text-yellow-400";
+    }
+  }
+
+  function jitterClass(ms) {
+    if (!hasValue(ms)) return "";
+    return ms > 30 ? "text-red-400" : "text-green-400";
+  }
+
+  const streamSummaryCards = $derived(
+    analyticsData
+      ? [
+          {
+            key: "totalViews",
+            label: "Total Views",
+            value: formatNumber(analyticsData.totalViews),
+            tone: "text-tokyo-night-blue",
+          },
+          {
+            key: "peakViewers",
+            label: "Peak Viewers",
+            value: formatNumber(analyticsData.peakViewers),
+            tone: "text-tokyo-night-green",
+          },
+          {
+            key: "avgViewers",
+            label: "Avg Viewers",
+            value: Math.round(analyticsData.averageViewers ?? 0),
+            tone: "text-tokyo-night-purple",
+          },
+          {
+            key: "uniqueViewers",
+            label: "Unique Viewers",
+            value: formatNumber(analyticsData.uniqueViewers),
+            tone: "text-tokyo-night-orange",
+          },
+        ]
+      : [],
+  );
+
+  const streamSecondaryCards = $derived(
+    analyticsData
+      ? [
+          {
+            key: "viewTime",
+            label: "Total View Time",
+            value: `${Math.round((analyticsData.totalViewTime ?? 0) / 3600)} hours`,
+          },
+          {
+            key: "timeRange",
+            label: "Time Range",
+            value: formatTimeRange(analyticsData.timeRange),
+          },
+        ]
+      : [],
+  );
+
+  const healthSummaryCards = $derived(
+    analyticsData
+      ? [
+          hasValue(analyticsData.currentHealthScore) && {
+            key: "healthScore",
+            label: "Health Score",
+            value: `${Math.round((analyticsData.currentHealthScore ?? 0) * 100)}%`,
+            tone: healthScoreClass(analyticsData.currentHealthScore ?? 0),
+          },
+          hasValue(analyticsData.rebufferCount) && {
+            key: "rebuffer",
+            label: "Rebuffers",
+            value: `${analyticsData.rebufferCount ?? 0}`,
+            tone: rebufferClass(analyticsData.rebufferCount ?? 0),
+          },
+          hasValue(analyticsData.alertCount) && {
+            key: "alerts",
+            label: "Health Alerts",
+            value: `${analyticsData.alertCount ?? 0}`,
+            tone: alertClass(analyticsData.alertCount ?? 0),
+          },
+          hasValue(analyticsData.packetLossPercentage) && {
+            key: "packetLoss",
+            label: "Packet Loss",
+            value: `${(analyticsData.packetLossPercentage ?? 0).toFixed(1)}%`,
+            tone: packetLossClass(analyticsData.packetLossPercentage ?? 0),
+          },
+        ].filter(Boolean)
+      : [],
+  );
+
+  const hasVideoQuality = $derived(
+    !!(
+      analyticsData?.currentResolution ||
+      analyticsData?.currentCodec ||
+      analyticsData?.currentBitrate ||
+      analyticsData?.currentFps
+    ),
+  );
+  const hasPerformanceMetrics = $derived(
+    hasValue(analyticsData?.frameJitterMs) ||
+      hasValue(analyticsData?.keyframeStabilityMs) ||
+      Boolean(analyticsData?.qualityTier),
+  );
+  const hasBufferInsights = $derived(
+    Boolean(analyticsData?.bufferState) ||
+      Boolean(analyticsData?.currentIssues),
+  );
+  const hasHealthDetails = $derived(
+    hasVideoQuality || hasPerformanceMetrics || hasBufferInsights,
+  );
 </script>
 
 <svelte:head>
@@ -160,7 +327,7 @@
       <div class="bg-tokyo-night-surface rounded-lg p-6 mb-8">
         <SkeletonLoader type="text-lg" className="w-32 mb-4" />
         <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
-          {#each Array(3) as _}
+          {#each Array(3) as _, index (index)}
             <div class="p-3 border border-tokyo-night-selection rounded-lg">
               <SkeletonLoader type="text" className="w-24 mb-1" />
               <SkeletonLoader type="text-sm" className="w-16" />
@@ -174,236 +341,353 @@
     {:else}
       <!-- Platform Overview -->
       {#if platformOverview}
-        <div class="bg-tokyo-night-surface rounded-lg p-6 mb-8">
-          <h2 class="text-xl font-semibold mb-4 text-tokyo-night-cyan">Platform Overview</h2>
-          <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div class="text-center">
-              <div class="text-2xl font-bold text-tokyo-night-blue">{formatNumber(platformOverview.totalStreams)}</div>
-              <div class="text-sm text-tokyo-night-comment">Total Streams</div>
+        <Card class="mb-8">
+          <CardHeader>
+            <CardTitle class="text-tokyo-night-cyan"
+              >Platform Overview</CardTitle
+            >
+            <CardDescription
+              >Streaming activity across your organization</CardDescription
+            >
+          </CardHeader>
+          <CardContent>
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <Card class="text-center border border-tokyo-night-selection">
+                <CardContent class="py-4">
+                  <div class="text-2xl font-bold text-tokyo-night-blue">
+                    {formatNumber(platformOverview.totalStreams)}
+                  </div>
+                  <CardDescription>Total Streams</CardDescription>
+                </CardContent>
+              </Card>
+              <Card class="text-center border border-tokyo-night-selection">
+                <CardContent class="py-4">
+                  <div class="text-2xl font-bold text-tokyo-night-green">
+                    {formatNumber(platformOverview.totalViewers)}
+                  </div>
+                  <CardDescription>Total Viewers</CardDescription>
+                </CardContent>
+              </Card>
+              <Card class="text-center border border-tokyo-night-selection">
+                <CardContent class="py-4">
+                  <div class="text-2xl font-bold text-tokyo-night-purple">
+                    {formatNumber(platformOverview.totalUsers)}
+                  </div>
+                  <CardDescription>Total Users</CardDescription>
+                </CardContent>
+              </Card>
+              <Card class="text-center border border-tokyo-night-selection">
+                <CardContent class="py-4">
+                  <div class="text-2xl font-bold text-tokyo-night-orange">
+                    {(platformOverview.totalBandwidth / 1000000).toFixed(1)}MB
+                  </div>
+                  <CardDescription>Total Bandwidth</CardDescription>
+                </CardContent>
+              </Card>
             </div>
-            <div class="text-center">
-              <div class="text-2xl font-bold text-tokyo-night-green">{formatNumber(platformOverview.totalViewers)}</div>
-              <div class="text-sm text-tokyo-night-comment">Total Viewers</div>
-            </div>
-            <div class="text-center">
-              <div class="text-2xl font-bold text-tokyo-night-purple">{formatNumber(platformOverview.totalUsers)}</div>
-              <div class="text-sm text-tokyo-night-comment">Total Users</div>
-            </div>
-            <div class="text-center">
-              <div class="text-2xl font-bold text-tokyo-night-orange">{(platformOverview.totalBandwidth / 1000000).toFixed(1)}MB</div>
-              <div class="text-sm text-tokyo-night-comment">Total Bandwidth</div>
-            </div>
-          </div>
-        </div>
+          </CardContent>
+        </Card>
       {/if}
 
       <!-- Stream Selector -->
       {#if streams.length > 1}
-        <div class="bg-tokyo-night-surface rounded-lg p-6 mb-8">
-          <h2 class="text-xl font-semibold mb-4 text-tokyo-night-cyan">Select Stream</h2>
-          <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
-            {#each streams as stream}
-              <button
-                on:click={() => selectStream(stream)}
-                class="p-3 border border-tokyo-night-selection rounded-lg text-left hover:bg-tokyo-night-selection transition-colors {selectedStream?.id === stream.id ? 'border-tokyo-night-blue bg-tokyo-night-selection' : ''}"
-              >
-                <div class="font-medium">{stream.name}</div>
-                <div class="text-sm text-tokyo-night-comment">Status: {stream.status}</div>
-              </button>
-            {/each}
-          </div>
-        </div>
+        <Card class="mb-8">
+          <CardHeader>
+            <CardTitle class="text-tokyo-night-cyan">Select Stream</CardTitle>
+            <CardDescription
+              >Choose which stream’s analytics to view</CardDescription
+            >
+          </CardHeader>
+          <CardContent>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+              {#each streams as stream (stream.id ?? stream.name)}
+                <Button
+                  variant={selectedStream?.id === stream.id
+                    ? "default"
+                    : "outline"}
+                  class="justify-start text-left h-auto py-3 px-4 border border-tokyo-night-selection"
+                  onclick={() => selectStream(stream)}
+                >
+                  <div class="flex flex-col items-start">
+                    <span class="font-medium">{stream.name}</span>
+                    <span class="text-xs text-tokyo-night-comment"
+                      >Status: {stream.status}</span
+                    >
+                  </div>
+                </Button>
+              {/each}
+            </div>
+          </CardContent>
+        </Card>
       {/if}
 
       <!-- Stream Analytics -->
       {#if selectedStream}
-        <div class="bg-tokyo-night-surface rounded-lg p-6 mb-8">
-          <h2 class="text-xl font-semibold mb-4 text-tokyo-night-cyan">Stream Analytics: {selectedStream.name}</h2>
-          
-          {#if analyticsData}
-            <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-              <div class="text-center">
-                <div class="text-2xl font-bold text-tokyo-night-blue">{formatNumber(analyticsData.totalViews)}</div>
-                <div class="text-sm text-tokyo-night-comment">Total Views</div>
-              </div>
-              <div class="text-center">
-                <div class="text-2xl font-bold text-tokyo-night-green">{formatNumber(analyticsData.peakViewers)}</div>
-                <div class="text-sm text-tokyo-night-comment">Peak Viewers</div>
-              </div>
-              <div class="text-center">
-                <div class="text-2xl font-bold text-tokyo-night-purple">{Math.round(analyticsData.averageViewers)}</div>
-                <div class="text-sm text-tokyo-night-comment">Avg Viewers</div>
-              </div>
-              <div class="text-center">
-                <div class="text-2xl font-bold text-tokyo-night-orange">{formatNumber(analyticsData.uniqueViewers)}</div>
-                <div class="text-sm text-tokyo-night-comment">Unique Viewers</div>
-              </div>
-            </div>
-            
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-              <div>
-                <div class="text-sm text-tokyo-night-comment">Total View Time</div>
-                <div class="text-lg font-semibold">{Math.round(analyticsData.totalViewTime / 3600)} hours</div>
-              </div>
-              <div>
-                <div class="text-sm text-tokyo-night-comment">Time Range</div>
-                <div class="text-lg font-semibold">
-                  {#if analyticsData.timeRange}
-                    {formatDate(analyticsData.timeRange.start)} - {formatDate(analyticsData.timeRange.end)}
-                  {:else}
-                    N/A
-                  {/if}
+        <Card class="mb-8">
+          <CardHeader>
+            <CardTitle class="text-tokyo-night-cyan">
+              Stream Analytics: {selectedStream.name}
+            </CardTitle>
+            <CardDescription>
+              Detailed engagement metrics for this stream.
+            </CardDescription>
+          </CardHeader>
+          <CardContent class="space-y-6">
+            {#if analyticsData}
+              {#if streamSummaryCards.length > 0}
+                <Panel spacing="default">
+                  <div
+                    class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4"
+                  >
+                    {#each streamSummaryCards as stat (stat.key)}
+                      <Card>
+                        <CardContent class="py-4 text-center space-y-2">
+                          <Badge
+                            variant="outline"
+                            class="mx-auto w-fit uppercase tracking-wide text-[0.65rem]"
+                          >
+                            {stat.label}
+                          </Badge>
+                          <span
+                            class={`text-2xl font-semibold ${stat.tone ?? ""}`}
+                          >
+                            {stat.value}
+                          </span>
+                        </CardContent>
+                      </Card>
+                    {/each}
+                  </div>
+                </Panel>
+              {/if}
+
+              {#if streamSecondaryCards.length > 0}
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {#each streamSecondaryCards as stat (stat.key)}
+                    <Card>
+                      <CardContent class="py-4 space-y-2">
+                        <Badge
+                          variant="outline"
+                          class="w-fit uppercase tracking-wide text-[0.65rem]"
+                        >
+                          {stat.label}
+                        </Badge>
+                        <span class="text-lg font-semibold">{stat.value}</span>
+                      </CardContent>
+                    </Card>
+                  {/each}
                 </div>
-              </div>
-            </div>
+              {/if}
 
-            <!-- Stream Health Metrics -->
-            {#if analyticsData.currentHealthScore !== null || analyticsData.currentCodec || analyticsData.rebufferCount !== null}
-              <div class="border-t border-tokyo-night-selection pt-6">
-                <h3 class="text-lg font-semibold text-tokyo-night-purple mb-4">Stream Health & Quality</h3>
-                
-                <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
-                  {#if analyticsData.currentHealthScore !== null}
-                    <div class="text-center">
-                      <div class="text-2xl font-bold {analyticsData.currentHealthScore >= 0.9 ? 'text-green-400' : analyticsData.currentHealthScore >= 0.7 ? 'text-yellow-400' : 'text-red-400'}">
-                        {Math.round(analyticsData.currentHealthScore * 100)}%
-                      </div>
-                      <div class="text-sm text-tokyo-night-comment">Health Score</div>
+              {#if healthSummaryCards.length > 0 || hasHealthDetails}
+                <Panel spacing="default">
+                  <div class="space-y-4">
+                    <div class="flex items-center gap-2">
+                      <Badge
+                        variant="secondary"
+                        class="uppercase tracking-wide text-[0.65rem]"
+                      >
+                        Stream Health
+                      </Badge>
+                      <span class="text-xs text-muted-foreground">
+                        Quality indicators updated in real-time
+                      </span>
                     </div>
-                  {/if}
-                  
-                  {#if analyticsData.rebufferCount !== null}
-                    <div class="text-center">
-                      <div class="text-2xl font-bold {analyticsData.rebufferCount > 10 ? 'text-red-400' : analyticsData.rebufferCount > 5 ? 'text-yellow-400' : 'text-green-400'}">
-                        {analyticsData.rebufferCount}
-                      </div>
-                      <div class="text-sm text-tokyo-night-comment">Rebuffers</div>
-                    </div>
-                  {/if}
-                  
-                  {#if analyticsData.alertCount !== null}
-                    <div class="text-center">
-                      <div class="text-2xl font-bold {analyticsData.alertCount > 5 ? 'text-red-400' : analyticsData.alertCount > 2 ? 'text-yellow-400' : 'text-green-400'}">
-                        {analyticsData.alertCount}
-                      </div>
-                      <div class="text-sm text-tokyo-night-comment">Health Alerts</div>
-                    </div>
-                  {/if}
-                  
-                  {#if analyticsData.packetLossPercentage !== null}
-                    <div class="text-center">
-                      <div class="text-2xl font-bold {analyticsData.packetLossPercentage > 2 ? 'text-red-400' : analyticsData.packetLossPercentage > 1 ? 'text-yellow-400' : 'text-green-400'}">
-                        {analyticsData.packetLossPercentage.toFixed(1)}%
-                      </div>
-                      <div class="text-sm text-tokyo-night-comment">Packet Loss</div>
-                    </div>
-                  {/if}
-                </div>
 
-                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  {#if analyticsData.currentCodec || analyticsData.currentResolution}
-                    <div>
-                      <div class="text-sm text-tokyo-night-comment">Video Quality</div>
-                      <div class="space-y-1">
-                        {#if analyticsData.currentResolution}
-                          <div class="text-sm font-mono text-tokyo-night-blue">{analyticsData.currentResolution}</div>
-                        {/if}
-                        {#if analyticsData.currentCodec}
-                          <div class="text-sm font-mono text-tokyo-night-purple">{analyticsData.currentCodec}</div>
-                        {/if}
-                        {#if analyticsData.currentBitrate}
-                          <div class="text-sm font-mono text-tokyo-night-green">{Math.round(analyticsData.currentBitrate / 1000)}k</div>
-                        {/if}
-                        {#if analyticsData.currentFps}
-                          <div class="text-sm font-mono text-tokyo-night-orange">{analyticsData.currentFps.toFixed(1)} fps</div>
-                        {/if}
+                    {#if healthSummaryCards.length > 0}
+                      <div
+                        class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4"
+                      >
+                        {#each healthSummaryCards as stat (stat.key)}
+                          <Card>
+                            <CardContent class="py-4 text-center space-y-2">
+                              <Badge
+                                variant="outline"
+                                class="mx-auto w-fit uppercase tracking-wide text-[0.65rem]"
+                              >
+                                {stat.label}
+                              </Badge>
+                              <span
+                                class={`text-2xl font-semibold ${stat.tone ?? ""}`}
+                              >
+                                {stat.value}
+                              </span>
+                            </CardContent>
+                          </Card>
+                        {/each}
                       </div>
-                    </div>
-                  {/if}
+                    {/if}
 
-                  {#if analyticsData.frameJitterMs !== null || analyticsData.keyframeStabilityMs !== null}
-                    <div>
-                      <div class="text-sm text-tokyo-night-comment">Performance</div>
-                      <div class="space-y-1">
-                        {#if analyticsData.frameJitterMs !== null}
-                          <div class="text-sm">
-                            <span class="text-tokyo-night-fg">Jitter:</span>
-                            <span class="font-mono {analyticsData.frameJitterMs > 30 ? 'text-red-400' : 'text-green-400'}">
-                              {analyticsData.frameJitterMs.toFixed(1)}ms
-                            </span>
+                  <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    {#if hasVideoQuality}
+                      <Card>
+                        <CardContent class="space-y-2">
+                          <Badge
+                            variant="outline"
+                            class="w-fit uppercase tracking-wide text-[0.65rem]"
+                          >
+                            Video Quality
+                          </Badge>
+                          <div class="space-y-1 text-sm">
+                            {#if analyticsData.currentResolution}
+                              <p class="font-mono text-primary">
+                                {analyticsData.currentResolution}
+                              </p>
+                            {/if}
+                            {#if analyticsData.currentCodec}
+                              <p class="font-mono text-purple-300">
+                                {analyticsData.currentCodec}
+                              </p>
+                            {/if}
+                            {#if analyticsData.currentBitrate}
+                              <p class="font-mono text-green-300">
+                                {Math.round(
+                                  (analyticsData.currentBitrate ?? 0) / 1000,
+                                )}k
+                              </p>
+                            {/if}
+                            {#if analyticsData.currentFps}
+                              <p class="font-mono text-orange-300">
+                                {analyticsData.currentFps.toFixed(1)} fps
+                              </p>
+                            {/if}
                           </div>
-                        {/if}
-                        {#if analyticsData.keyframeStabilityMs !== null}
-                          <div class="text-sm">
-                            <span class="text-tokyo-night-fg">Keyframe:</span>
-                            <span class="font-mono text-tokyo-night-cyan">{analyticsData.keyframeStabilityMs.toFixed(1)}ms</span>
-                          </div>
-                        {/if}
-                        {#if analyticsData.qualityTier}
-                          <div class="text-sm">
-                            <span class="text-tokyo-night-fg">Tier:</span>
-                            <span class="font-mono text-tokyo-night-purple">{analyticsData.qualityTier}</span>
-                          </div>
-                        {/if}
-                      </div>
-                    </div>
-                  {/if}
+                        </CardContent>
+                      </Card>
+                    {/if}
 
-                  {#if analyticsData.bufferState || analyticsData.currentIssues}
-                    <div>
-                      <div class="text-sm text-tokyo-night-comment">Buffer & Issues</div>
-                      <div class="space-y-1">
-                        {#if analyticsData.bufferState}
-                          <div class="text-sm">
-                            <span class="text-tokyo-night-fg">Buffer:</span>
-                            <span class="font-mono {analyticsData.bufferState === 'FULL' ? 'text-green-400' : analyticsData.bufferState === 'DRY' ? 'text-red-400' : 'text-yellow-400'}">
-                              {analyticsData.bufferState}
-                            </span>
+                    {#if hasPerformanceMetrics}
+                      <Card>
+                        <CardContent class="space-y-2">
+                          <Badge
+                            variant="outline"
+                            class="w-fit uppercase tracking-wide text-[0.65rem]"
+                          >
+                            Performance
+                          </Badge>
+                          <div class="space-y-1 text-sm">
+                            {#if hasValue(analyticsData.frameJitterMs)}
+                              {@const jitter = analyticsData.frameJitterMs ?? 0}
+                              <p>
+                                <span class="text-muted-foreground"
+                                  >Jitter:</span
+                                >
+                                <span
+                                  class={`ml-1 font-mono ${jitterClass(jitter)}`}
+                                >
+                                  {jitter.toFixed(1)}ms
+                                </span>
+                              </p>
+                            {/if}
+                            {#if hasValue(analyticsData.keyframeStabilityMs)}
+                              {@const keyframe =
+                                analyticsData.keyframeStabilityMs ?? 0}
+                              <p>
+                                <span class="text-muted-foreground"
+                                  >Keyframe:</span
+                                >
+                                <span class="ml-1 font-mono text-primary">
+                                  {keyframe.toFixed(1)}ms
+                                </span>
+                              </p>
+                            {/if}
+                            {#if analyticsData.qualityTier}
+                              <p>
+                                <span class="text-muted-foreground">Tier:</span>
+                                <span class="ml-1 font-mono text-purple-300">
+                                  {analyticsData.qualityTier}
+                                </span>
+                              </p>
+                            {/if}
                           </div>
-                        {/if}
-                        {#if analyticsData.currentIssues}
-                          <div class="text-sm text-red-400">{analyticsData.currentIssues}</div>
-                        {/if}
-                      </div>
-                    </div>
-                  {/if}
-                </div>
-              </div>
+                        </CardContent>
+                      </Card>
+                    {/if}
+
+                    {#if hasBufferInsights}
+                      <Card>
+                        <CardContent class="space-y-2">
+                          <Badge
+                            variant="outline"
+                            class="w-fit uppercase tracking-wide text-[0.65rem]"
+                          >
+                            Buffer & Issues
+                          </Badge>
+                          <div class="space-y-1 text-sm">
+                            {#if analyticsData.bufferState}
+                              <p>
+                                <span class="text-muted-foreground"
+                                  >Buffer:</span
+                                >
+                                <span
+                                  class={`ml-1 font-mono ${bufferStateClass(analyticsData.bufferState)}`}
+                                >
+                                  {analyticsData.bufferState}
+                                </span>
+                              </p>
+                            {/if}
+                            {#if analyticsData.currentIssues}
+                              <p class="font-medium text-rose-400">
+                                {analyticsData.currentIssues}
+                              </p>
+                            {/if}
+                          </div>
+                        </CardContent>
+                      </Card>
+                    {/if}
+                  </div>
+                  </div>
+                </Panel>
+              {/if}
+            {:else}
+              <p class="text-muted-foreground">
+                No analytics data available for this stream
+              </p>
             {/if}
-          {:else}
-            <p class="text-tokyo-night-comment">No analytics data available for this stream</p>
-          {/if}
-        </div>
+          </CardContent>
+        </Card>
 
-        <!-- Real-time Viewer Metrics -->
-        <div class="bg-tokyo-night-surface rounded-lg p-6">
-          <h2 class="text-xl font-semibold mb-4 text-tokyo-night-cyan">Real-time Viewer Metrics</h2>
-          
-          {#if viewerMetrics.length > 0}
-            <div class="space-y-2">
-              <div class="text-sm text-tokyo-night-comment">Recent viewer counts:</div>
-              <div class="flex flex-wrap gap-2">
-                {#each viewerMetrics.slice(-10) as metric}
-                  <div class="bg-tokyo-night-bg px-3 py-2 rounded text-sm">
-                    <div class="font-medium">{metric.viewerCount} viewers</div>
-                    <div class="text-xs text-tokyo-night-comment">
+        <Card>
+          <CardHeader>
+            <CardTitle class="text-tokyo-night-cyan">
+              Real-time Viewer Metrics
+            </CardTitle>
+            <CardDescription>
+              Recent viewer counts captured from live updates
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {#if viewerMetrics.length > 0}
+              <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+                {#each viewerMetrics.slice(-10) as metric (metric.timestamp)}
+                  <div
+                    class="rounded-lg border border-border bg-card/40 p-3 text-center"
+                  >
+                    <p class="text-sm font-medium">
+                      {metric.viewerCount} viewers
+                    </p>
+                    <Badge
+                      variant="outline"
+                      class="mt-2 w-fit mx-auto text-[0.65rem]"
+                    >
                       {new Date(metric.timestamp).toLocaleTimeString()}
-                    </div>
+                    </Badge>
                   </div>
                 {/each}
               </div>
-            </div>
-          {:else}
-            <p class="text-tokyo-night-comment">No real-time metrics available</p>
-          {/if}
-        </div>
+            {:else}
+              <p class="text-muted-foreground">
+                No real-time metrics available
+              </p>
+            {/if}
+          </CardContent>
+        </Card>
       {:else if streams.length === 0}
-        <EmptyState 
+        <EmptyState
           icon="BarChart"
           title="No streams found"
           description="Create a stream to start seeing analytics data"
           actionText="Go to Streams"
-          onAction={() => goto(`${base}/streams`)}
+          onAction={() => goto(resolve("/streams"))}
         />
       {/if}
     {/if}

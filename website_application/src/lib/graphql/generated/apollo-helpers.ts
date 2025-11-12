@@ -36,6 +36,14 @@ export enum AlertType {
   Rebuffering = 'REBUFFERING'
 }
 
+export type AvailableCluster = {
+  __typename?: 'AvailableCluster';
+  autoEnroll: Scalars['Boolean']['output'];
+  clusterId: Scalars['String']['output'];
+  clusterName: Scalars['String']['output'];
+  tiers: Array<Scalars['String']['output']>;
+};
+
 export type BillingStatus = {
   __typename?: 'BillingStatus';
   currentTier: BillingTier;
@@ -53,6 +61,25 @@ export type BillingTier = {
   name: Scalars['String']['output'];
   price: Scalars['Float']['output'];
 };
+
+export type BootstrapToken = {
+  __typename?: 'BootstrapToken';
+  createdAt: Scalars['Time']['output'];
+  expiresAt?: Maybe<Scalars['Time']['output']>;
+  id: Scalars['ID']['output'];
+  isActive: Scalars['Boolean']['output'];
+  lastUsedAt?: Maybe<Scalars['Time']['output']>;
+  name: Scalars['String']['output'];
+  token?: Maybe<Scalars['String']['output']>;
+  type: BootstrapTokenType;
+  usageCount: Scalars['Int']['output'];
+  usageLimit?: Maybe<Scalars['Int']['output']>;
+};
+
+export enum BootstrapTokenType {
+  EdgeNode = 'EDGE_NODE',
+  Service = 'SERVICE'
+}
 
 export enum BufferState {
   Dry = 'DRY',
@@ -90,25 +117,18 @@ export type Clip = {
 export type ClipEvent = {
   __typename?: 'ClipEvent';
   contentType?: Maybe<Scalars['String']['output']>;
-  durationSec?: Maybe<Scalars['Int']['output']>;
   filePath?: Maybe<Scalars['String']['output']>;
-  format?: Maybe<Scalars['String']['output']>;
   ingestNodeId?: Maybe<Scalars['String']['output']>;
   internalName: Scalars['String']['output'];
   message?: Maybe<Scalars['String']['output']>;
   percent?: Maybe<Scalars['Int']['output']>;
   requestId: Scalars['String']['output'];
-  routingDistanceKm?: Maybe<Scalars['Float']['output']>;
   s3Url?: Maybe<Scalars['String']['output']>;
   sizeBytes?: Maybe<Scalars['Int']['output']>;
   stage: Scalars['String']['output'];
-  startMs?: Maybe<Scalars['Int']['output']>;
   startUnix?: Maybe<Scalars['Int']['output']>;
-  stopMs?: Maybe<Scalars['Int']['output']>;
   stopUnix?: Maybe<Scalars['Int']['output']>;
-  storageNodeId?: Maybe<Scalars['String']['output']>;
   timestamp: Scalars['Time']['output'];
-  title?: Maybe<Scalars['String']['output']>;
 };
 
 export type ClipViewingUrls = {
@@ -136,6 +156,14 @@ export type ClusterServiceInstancesArgs = {
   status?: InputMaybe<InstanceStatus>;
 };
 
+export type ClusterAccess = {
+  __typename?: 'ClusterAccess';
+  accessLevel: Scalars['String']['output'];
+  clusterId: Scalars['String']['output'];
+  clusterName: Scalars['String']['output'];
+  resourceLimits?: Maybe<Scalars['JSON']['output']>;
+};
+
 export type ConnectionEvent = {
   __typename?: 'ConnectionEvent';
   city?: Maybe<Scalars['String']['output']>;
@@ -153,6 +181,22 @@ export type ConnectionEvent = {
   timestamp: Scalars['Time']['output'];
 };
 
+export type ContentMetadata = {
+  __typename?: 'ContentMetadata';
+  clipSource?: Maybe<Scalars['String']['output']>;
+  contentId: Scalars['String']['output'];
+  contentType: Scalars['String']['output'];
+  createdAt?: Maybe<Scalars['String']['output']>;
+  description?: Maybe<Scalars['String']['output']>;
+  duration?: Maybe<Scalars['Int']['output']>;
+  isLive: Scalars['Boolean']['output'];
+  recordingSize?: Maybe<Scalars['Int']['output']>;
+  status: Scalars['String']['output'];
+  tenantId: Scalars['String']['output'];
+  title?: Maybe<Scalars['String']['output']>;
+  viewCount?: Maybe<Scalars['Int']['output']>;
+};
+
 export type CountryMetric = {
   __typename?: 'CountryMetric';
   cities?: Maybe<Array<CityMetric>>;
@@ -166,6 +210,13 @@ export type CountryTimeSeries = {
   countryCode: Scalars['String']['output'];
   timestamp: Scalars['Time']['output'];
   viewerCount: Scalars['Int']['output'];
+};
+
+export type CreateBootstrapTokenInput = {
+  expiresIn?: InputMaybe<Scalars['Int']['input']>;
+  name: Scalars['String']['input'];
+  type: BootstrapTokenType;
+  usageLimit?: InputMaybe<Scalars['Int']['input']>;
 };
 
 export type CreateClipInput = {
@@ -185,7 +236,9 @@ export type CreateDeveloperTokenInput = {
 export type CreatePaymentInput = {
   amount: Scalars['Money']['input'];
   currency?: InputMaybe<Scalars['Currency']['input']>;
+  invoiceId: Scalars['ID']['input'];
   method: PaymentMethod;
+  returnUrl?: InputMaybe<Scalars['String']['input']>;
 };
 
 export type CreateStreamInput = {
@@ -304,6 +357,7 @@ export type LoadBalancingMetric = {
 
 export type Mutation = {
   __typename?: 'Mutation';
+  createBootstrapToken: BootstrapToken;
   createClip: Clip;
   createDeveloperToken: DeveloperToken;
   createPayment: Payment;
@@ -313,13 +367,18 @@ export type Mutation = {
   deleteStream: Scalars['Boolean']['output'];
   deleteStreamKey: Scalars['Boolean']['output'];
   refreshStreamKey: Stream;
+  revokeBootstrapToken: Scalars['Boolean']['output'];
   revokeDeveloperToken: Scalars['Boolean']['output'];
   setStreamRecordingConfig: RecordingConfig;
   startDVR: DvrRequest;
   stopDVR: Scalars['Boolean']['output'];
-  updateBillingTier: BillingStatus;
   updateStream: Stream;
   updateTenant: Tenant;
+};
+
+
+export type MutationCreateBootstrapTokenArgs = {
+  input: CreateBootstrapTokenInput;
 };
 
 
@@ -370,6 +429,11 @@ export type MutationRefreshStreamKeyArgs = {
 };
 
 
+export type MutationRevokeBootstrapTokenArgs = {
+  id: Scalars['ID']['input'];
+};
+
+
 export type MutationRevokeDeveloperTokenArgs = {
   id: Scalars['ID']['input'];
 };
@@ -392,11 +456,6 @@ export type MutationStartDvrArgs = {
 
 export type MutationStopDvrArgs = {
   dvrHash: Scalars['ID']['input'];
-};
-
-
-export type MutationUpdateBillingTierArgs = {
-  tierId: Scalars['ID']['input'];
 };
 
 
@@ -518,28 +577,23 @@ export type PlatformOverview = {
   totalViewers: Scalars['Int']['output'];
 };
 
-export enum QualityChangeType {
-  BitrateChange = 'BITRATE_CHANGE',
-  CodecChange = 'CODEC_CHANGE',
-  ResolutionChange = 'RESOLUTION_CHANGE',
-  TrackAdded = 'TRACK_ADDED',
-  TrackRemoved = 'TRACK_REMOVED',
-  TrackUpdate = 'TRACK_UPDATE'
-}
-
 export type Query = {
   __typename?: 'Query';
   billingStatus: BillingStatus;
   billingTiers: Array<BillingTier>;
+  bootstrapTokens: Array<BootstrapToken>;
   clip?: Maybe<Clip>;
   clipEvents: Array<ClipEvent>;
   clipViewingUrls: ClipViewingUrls;
   clips: Array<Clip>;
   cluster?: Maybe<Cluster>;
   clusters: Array<Cluster>;
+  clustersAccess: Array<ClusterAccess>;
+  clustersAvailable: Array<AvailableCluster>;
   connectionEvents: Array<ConnectionEvent>;
   currentStreamHealth?: Maybe<StreamHealthMetric>;
   developerTokens: Array<DeveloperToken>;
+  discoverServices: Array<ServiceInstance>;
   dvrRequests: DvrRequestList;
   geographicDistribution: GeographicDistribution;
   invoice?: Maybe<Invoice>;
@@ -553,17 +607,20 @@ export type Query = {
   rebufferingEvents: Array<RebufferingEvent>;
   recordingConfig: RecordingConfig;
   recordings: Array<Recording>;
+  resolveViewerEndpoint: ViewerEndpointResponse;
   routingEvents: Array<RoutingEvent>;
   serviceInstances: Array<ServiceInstance>;
+  serviceInstancesHealth: Array<ServiceInstanceHealth>;
   stream?: Maybe<Stream>;
   streamAnalytics?: Maybe<StreamAnalytics>;
   streamHealthAlerts: Array<StreamHealthAlert>;
   streamHealthMetrics: Array<StreamHealthMetric>;
   streamKeys: Array<StreamKey>;
-  streamQualityChanges: Array<StreamQualityChange>;
+  streamMeta: StreamMetaResponse;
   streams: Array<Stream>;
   tenant?: Maybe<Tenant>;
   tenantClusterAssignments: Array<TenantClusterAssignment>;
+  trackListEvents: Array<TrackListEvent>;
   usageRecords: Array<UsageRecord>;
   validateStreamKey: StreamValidation;
   viewerGeographics: Array<ViewerGeographic>;
@@ -610,6 +667,12 @@ export type QueryConnectionEventsArgs = {
 
 export type QueryCurrentStreamHealthArgs = {
   stream: Scalars['String']['input'];
+};
+
+
+export type QueryDiscoverServicesArgs = {
+  clusterId?: InputMaybe<Scalars['String']['input']>;
+  type: Scalars['String']['input'];
 };
 
 
@@ -684,6 +747,12 @@ export type QueryRecordingsArgs = {
 };
 
 
+export type QueryResolveViewerEndpointArgs = {
+  contentId: Scalars['String']['input'];
+  contentType: Scalars['String']['input'];
+};
+
+
 export type QueryRoutingEventsArgs = {
   pagination?: InputMaybe<PaginationInput>;
   sortOrder?: InputMaybe<SortOrder>;
@@ -696,6 +765,11 @@ export type QueryServiceInstancesArgs = {
   clusterId?: InputMaybe<Scalars['String']['input']>;
   nodeId?: InputMaybe<Scalars['String']['input']>;
   status?: InputMaybe<InstanceStatus>;
+};
+
+
+export type QueryServiceInstancesHealthArgs = {
+  serviceId?: InputMaybe<Scalars['String']['input']>;
 };
 
 
@@ -727,7 +801,15 @@ export type QueryStreamKeysArgs = {
 };
 
 
-export type QueryStreamQualityChangesArgs = {
+export type QueryStreamMetaArgs = {
+  includeRaw?: InputMaybe<Scalars['Boolean']['input']>;
+  streamKey: Scalars['String']['input'];
+  targetBaseUrl?: InputMaybe<Scalars['String']['input']>;
+  targetNodeId?: InputMaybe<Scalars['String']['input']>;
+};
+
+
+export type QueryTrackListEventsArgs = {
   stream: Scalars['String']['input'];
   timeRange?: InputMaybe<TimeRangeInput>;
 };
@@ -835,6 +917,19 @@ export type ServiceInstance = {
   status: InstanceStatus;
   stoppedAt?: Maybe<Scalars['Time']['output']>;
   version?: Maybe<Scalars['String']['output']>;
+};
+
+export type ServiceInstanceHealth = {
+  __typename?: 'ServiceInstanceHealth';
+  clusterId: Scalars['String']['output'];
+  healthEndpoint?: Maybe<Scalars['String']['output']>;
+  host?: Maybe<Scalars['String']['output']>;
+  instanceId: Scalars['String']['output'];
+  lastHealthCheck?: Maybe<Scalars['Time']['output']>;
+  port: Scalars['Int']['output'];
+  protocol: Scalars['String']['output'];
+  serviceId: Scalars['String']['output'];
+  status: Scalars['String']['output'];
 };
 
 export enum SortOrder {
@@ -997,20 +1092,40 @@ export type StreamKey = {
   streamId: Scalars['ID']['output'];
 };
 
-export type StreamQualityChange = {
-  __typename?: 'StreamQualityChange';
-  changeType: QualityChangeType;
-  newCodec?: Maybe<Scalars['String']['output']>;
-  newQualityTier?: Maybe<Scalars['String']['output']>;
-  newResolution?: Maybe<Scalars['String']['output']>;
-  newTracks?: Maybe<Scalars['String']['output']>;
-  nodeId: Scalars['String']['output'];
-  previousCodec?: Maybe<Scalars['String']['output']>;
-  previousQualityTier?: Maybe<Scalars['String']['output']>;
-  previousResolution?: Maybe<Scalars['String']['output']>;
-  previousTracks?: Maybe<Scalars['String']['output']>;
-  stream: Scalars['String']['output'];
-  timestamp: Scalars['Time']['output'];
+export type StreamMetaResponse = {
+  __typename?: 'StreamMetaResponse';
+  metaSummary: StreamMetaSummary;
+  raw?: Maybe<Scalars['JSON']['output']>;
+};
+
+export type StreamMetaSummary = {
+  __typename?: 'StreamMetaSummary';
+  bufferWindowMs: Scalars['Int']['output'];
+  height?: Maybe<Scalars['Int']['output']>;
+  isLive: Scalars['Boolean']['output'];
+  jitterMs: Scalars['Int']['output'];
+  lastMs?: Maybe<Scalars['Int']['output']>;
+  nowMs?: Maybe<Scalars['Int']['output']>;
+  tracks: Array<StreamMetaTrack>;
+  type?: Maybe<Scalars['String']['output']>;
+  unixOffsetMs: Scalars['Int']['output'];
+  version?: Maybe<Scalars['Int']['output']>;
+  width?: Maybe<Scalars['Int']['output']>;
+};
+
+export type StreamMetaTrack = {
+  __typename?: 'StreamMetaTrack';
+  bitrateBps?: Maybe<Scalars['Int']['output']>;
+  channels?: Maybe<Scalars['Int']['output']>;
+  codec: Scalars['String']['output'];
+  firstMs?: Maybe<Scalars['Int']['output']>;
+  height?: Maybe<Scalars['Int']['output']>;
+  id: Scalars['String']['output'];
+  lastMs?: Maybe<Scalars['Int']['output']>;
+  nowMs?: Maybe<Scalars['Int']['output']>;
+  rate?: Maybe<Scalars['Int']['output']>;
+  type: Scalars['String']['output'];
+  width?: Maybe<Scalars['Int']['output']>;
 };
 
 export enum StreamStatus {
@@ -1019,6 +1134,24 @@ export enum StreamStatus {
   Offline = 'OFFLINE',
   Recording = 'RECORDING'
 }
+
+export type StreamTrack = {
+  __typename?: 'StreamTrack';
+  bitrateBps?: Maybe<Scalars['Int']['output']>;
+  bitrateKbps?: Maybe<Scalars['Int']['output']>;
+  buffer?: Maybe<Scalars['Int']['output']>;
+  channels?: Maybe<Scalars['Int']['output']>;
+  codec?: Maybe<Scalars['String']['output']>;
+  fps?: Maybe<Scalars['Float']['output']>;
+  hasBFrames?: Maybe<Scalars['Boolean']['output']>;
+  height?: Maybe<Scalars['Int']['output']>;
+  jitter?: Maybe<Scalars['Int']['output']>;
+  resolution?: Maybe<Scalars['String']['output']>;
+  sampleRate?: Maybe<Scalars['Int']['output']>;
+  trackName: Scalars['String']['output'];
+  trackType: Scalars['String']['output'];
+  width?: Maybe<Scalars['Int']['output']>;
+};
 
 export type StreamValidation = {
   __typename?: 'StreamValidation';
@@ -1113,10 +1246,12 @@ export type TimeRangeInput = {
 
 export type TrackListEvent = {
   __typename?: 'TrackListEvent';
+  nodeId?: Maybe<Scalars['String']['output']>;
   stream: Scalars['String']['output'];
   timestamp: Scalars['Time']['output'];
   trackCount: Scalars['Int']['output'];
   trackList: Scalars['String']['output'];
+  tracks?: Maybe<Array<StreamTrack>>;
 };
 
 export type UpdateStreamInput = {
@@ -1147,6 +1282,24 @@ export type User = {
   id: Scalars['ID']['output'];
   name?: Maybe<Scalars['String']['output']>;
   role: Scalars['String']['output'];
+};
+
+export type ViewerEndpoint = {
+  __typename?: 'ViewerEndpoint';
+  baseUrl: Scalars['String']['output'];
+  geoDistance?: Maybe<Scalars['Float']['output']>;
+  healthScore?: Maybe<Scalars['Float']['output']>;
+  loadScore?: Maybe<Scalars['Float']['output']>;
+  nodeId: Scalars['String']['output'];
+  outputs?: Maybe<Scalars['JSON']['output']>;
+  protocol: Scalars['String']['output'];
+  url: Scalars['String']['output'];
+};
+
+export type ViewerEndpointResponse = {
+  __typename?: 'ViewerEndpointResponse';
+  endpoints: Array<ViewerEndpoint>;
+  metadata?: Maybe<ContentMetadata>;
 };
 
 export type ViewerGeographic = {
@@ -1392,13 +1545,6 @@ export type CreatePaymentMutationVariables = Exact<{
 
 export type CreatePaymentMutation = { __typename?: 'Mutation', createPayment: { __typename?: 'Payment', id: string, amount: any, currency: any, method: PaymentMethod, status: PaymentStatus, createdAt: string } };
 
-export type UpdateBillingTierMutationVariables = Exact<{
-  tierId: Scalars['ID']['input'];
-}>;
-
-
-export type UpdateBillingTierMutation = { __typename?: 'Mutation', updateBillingTier: { __typename?: 'BillingStatus', nextBillingDate: string, outstandingAmount: number, status: string, currentTier: { __typename?: 'BillingTier', id: string, name: string, price: number, currency: string, features: Array<string> } } };
-
 export type CreateClipMutationVariables = Exact<{
   input: CreateClipInput;
 }>;
@@ -1558,6 +1704,11 @@ export type GetLoadBalancingMetricsQueryVariables = Exact<{
 
 export type GetLoadBalancingMetricsQuery = { __typename?: 'Query', loadBalancingMetrics: Array<{ __typename?: 'LoadBalancingMetric', timestamp: string, stream: string, selectedNode: string, nodeId?: string | null | undefined, clientIp?: string | null | undefined, clientCountry?: string | null | undefined, clientLatitude?: number | null | undefined, clientLongitude?: number | null | undefined, nodeLatitude?: number | null | undefined, nodeLongitude?: number | null | undefined, score?: number | null | undefined, status: string, details?: string | null | undefined, routingDistance?: number | null | undefined, eventType?: string | null | undefined, source?: string | null | undefined }> };
 
+export type AuthPlaceholderQueryVariables = Exact<{ [key: string]: never; }>;
+
+
+export type AuthPlaceholderQuery = { __typename: 'Query' };
+
 export type GetBillingTiersQueryVariables = Exact<{ [key: string]: never; }>;
 
 
@@ -1643,13 +1794,13 @@ export type GetCurrentStreamHealthQueryVariables = Exact<{
 
 export type GetCurrentStreamHealthQuery = { __typename?: 'Query', currentStreamHealth?: { __typename?: 'StreamHealthMetric', timestamp: string, stream: string, nodeId: string, healthScore: number, frameJitterMs?: number | null | undefined, keyframeStabilityMs?: number | null | undefined, issuesDescription?: string | null | undefined, hasIssues: boolean, bufferState: BufferState, packetLossPercentage?: number | null | undefined, qualityTier?: string | null | undefined } | null | undefined };
 
-export type GetStreamQualityChangesQueryVariables = Exact<{
+export type GetTrackListEventsQueryVariables = Exact<{
   stream: Scalars['String']['input'];
   timeRange?: InputMaybe<TimeRangeInput>;
 }>;
 
 
-export type GetStreamQualityChangesQuery = { __typename?: 'Query', streamQualityChanges: Array<{ __typename?: 'StreamQualityChange', timestamp: string, stream: string, nodeId: string, changeType: QualityChangeType, previousQualityTier?: string | null | undefined, newQualityTier?: string | null | undefined, previousResolution?: string | null | undefined, newResolution?: string | null | undefined, previousCodec?: string | null | undefined, newCodec?: string | null | undefined, previousTracks?: string | null | undefined, newTracks?: string | null | undefined }> };
+export type GetTrackListEventsQuery = { __typename?: 'Query', trackListEvents: Array<{ __typename?: 'TrackListEvent', timestamp: string, stream: string, nodeId?: string | null | undefined, trackList: string, trackCount: number, tracks?: Array<{ __typename?: 'StreamTrack', trackName: string, trackType: string, codec?: string | null | undefined, bitrateKbps?: number | null | undefined, bitrateBps?: number | null | undefined, buffer?: number | null | undefined, jitter?: number | null | undefined, width?: number | null | undefined, height?: number | null | undefined, fps?: number | null | undefined, resolution?: string | null | undefined, hasBFrames?: boolean | null | undefined, channels?: number | null | undefined, sampleRate?: number | null | undefined }> | null | undefined }> };
 
 export type GetStreamHealthAlertsQueryVariables = Exact<{
   stream?: InputMaybe<Scalars['String']['input']>;
@@ -1891,6 +2042,13 @@ export type SystemHealthSubscriptionVariables = Exact<{ [key: string]: never; }>
 
 export type SystemHealthSubscription = { __typename?: 'Subscription', systemHealth: { __typename?: 'SystemHealthEvent', node: string, cluster: string, status: NodeStatus, cpuUsage: number, memoryUsage: number, diskUsage: number, healthScore: number, timestamp: string } };
 
+export type AvailableClusterKeySpecifier = ('autoEnroll' | 'clusterId' | 'clusterName' | 'tiers' | AvailableClusterKeySpecifier)[];
+export type AvailableClusterFieldPolicy = {
+	autoEnroll?: FieldPolicy<any> | FieldReadFunction<any>,
+	clusterId?: FieldPolicy<any> | FieldReadFunction<any>,
+	clusterName?: FieldPolicy<any> | FieldReadFunction<any>,
+	tiers?: FieldPolicy<any> | FieldReadFunction<any>
+};
 export type BillingStatusKeySpecifier = ('currentTier' | 'nextBillingDate' | 'outstandingAmount' | 'status' | BillingStatusKeySpecifier)[];
 export type BillingStatusFieldPolicy = {
 	currentTier?: FieldPolicy<any> | FieldReadFunction<any>,
@@ -1906,6 +2064,19 @@ export type BillingTierFieldPolicy = {
 	id?: FieldPolicy<any> | FieldReadFunction<any>,
 	name?: FieldPolicy<any> | FieldReadFunction<any>,
 	price?: FieldPolicy<any> | FieldReadFunction<any>
+};
+export type BootstrapTokenKeySpecifier = ('createdAt' | 'expiresAt' | 'id' | 'isActive' | 'lastUsedAt' | 'name' | 'token' | 'type' | 'usageCount' | 'usageLimit' | BootstrapTokenKeySpecifier)[];
+export type BootstrapTokenFieldPolicy = {
+	createdAt?: FieldPolicy<any> | FieldReadFunction<any>,
+	expiresAt?: FieldPolicy<any> | FieldReadFunction<any>,
+	id?: FieldPolicy<any> | FieldReadFunction<any>,
+	isActive?: FieldPolicy<any> | FieldReadFunction<any>,
+	lastUsedAt?: FieldPolicy<any> | FieldReadFunction<any>,
+	name?: FieldPolicy<any> | FieldReadFunction<any>,
+	token?: FieldPolicy<any> | FieldReadFunction<any>,
+	type?: FieldPolicy<any> | FieldReadFunction<any>,
+	usageCount?: FieldPolicy<any> | FieldReadFunction<any>,
+	usageLimit?: FieldPolicy<any> | FieldReadFunction<any>
 };
 export type CityMetricKeySpecifier = ('city' | 'countryCode' | 'latitude' | 'longitude' | 'percentage' | 'viewerCount' | CityMetricKeySpecifier)[];
 export type CityMetricFieldPolicy = {
@@ -1931,28 +2102,21 @@ export type ClipFieldPolicy = {
 	updatedAt?: FieldPolicy<any> | FieldReadFunction<any>,
 	viewingUrls?: FieldPolicy<any> | FieldReadFunction<any>
 };
-export type ClipEventKeySpecifier = ('contentType' | 'durationSec' | 'filePath' | 'format' | 'ingestNodeId' | 'internalName' | 'message' | 'percent' | 'requestId' | 'routingDistanceKm' | 's3Url' | 'sizeBytes' | 'stage' | 'startMs' | 'startUnix' | 'stopMs' | 'stopUnix' | 'storageNodeId' | 'timestamp' | 'title' | ClipEventKeySpecifier)[];
+export type ClipEventKeySpecifier = ('contentType' | 'filePath' | 'ingestNodeId' | 'internalName' | 'message' | 'percent' | 'requestId' | 's3Url' | 'sizeBytes' | 'stage' | 'startUnix' | 'stopUnix' | 'timestamp' | ClipEventKeySpecifier)[];
 export type ClipEventFieldPolicy = {
 	contentType?: FieldPolicy<any> | FieldReadFunction<any>,
-	durationSec?: FieldPolicy<any> | FieldReadFunction<any>,
 	filePath?: FieldPolicy<any> | FieldReadFunction<any>,
-	format?: FieldPolicy<any> | FieldReadFunction<any>,
 	ingestNodeId?: FieldPolicy<any> | FieldReadFunction<any>,
 	internalName?: FieldPolicy<any> | FieldReadFunction<any>,
 	message?: FieldPolicy<any> | FieldReadFunction<any>,
 	percent?: FieldPolicy<any> | FieldReadFunction<any>,
 	requestId?: FieldPolicy<any> | FieldReadFunction<any>,
-	routingDistanceKm?: FieldPolicy<any> | FieldReadFunction<any>,
 	s3Url?: FieldPolicy<any> | FieldReadFunction<any>,
 	sizeBytes?: FieldPolicy<any> | FieldReadFunction<any>,
 	stage?: FieldPolicy<any> | FieldReadFunction<any>,
-	startMs?: FieldPolicy<any> | FieldReadFunction<any>,
 	startUnix?: FieldPolicy<any> | FieldReadFunction<any>,
-	stopMs?: FieldPolicy<any> | FieldReadFunction<any>,
 	stopUnix?: FieldPolicy<any> | FieldReadFunction<any>,
-	storageNodeId?: FieldPolicy<any> | FieldReadFunction<any>,
-	timestamp?: FieldPolicy<any> | FieldReadFunction<any>,
-	title?: FieldPolicy<any> | FieldReadFunction<any>
+	timestamp?: FieldPolicy<any> | FieldReadFunction<any>
 };
 export type ClipViewingUrlsKeySpecifier = ('dash' | 'hls' | 'mp4' | 'webm' | ClipViewingUrlsKeySpecifier)[];
 export type ClipViewingUrlsFieldPolicy = {
@@ -1971,6 +2135,13 @@ export type ClusterFieldPolicy = {
 	serviceInstances?: FieldPolicy<any> | FieldReadFunction<any>,
 	status?: FieldPolicy<any> | FieldReadFunction<any>
 };
+export type ClusterAccessKeySpecifier = ('accessLevel' | 'clusterId' | 'clusterName' | 'resourceLimits' | ClusterAccessKeySpecifier)[];
+export type ClusterAccessFieldPolicy = {
+	accessLevel?: FieldPolicy<any> | FieldReadFunction<any>,
+	clusterId?: FieldPolicy<any> | FieldReadFunction<any>,
+	clusterName?: FieldPolicy<any> | FieldReadFunction<any>,
+	resourceLimits?: FieldPolicy<any> | FieldReadFunction<any>
+};
 export type ConnectionEventKeySpecifier = ('city' | 'connectionAddr' | 'connector' | 'countryCode' | 'eventId' | 'eventType' | 'internalName' | 'latitude' | 'longitude' | 'nodeId' | 'sessionId' | 'tenantId' | 'timestamp' | ConnectionEventKeySpecifier)[];
 export type ConnectionEventFieldPolicy = {
 	city?: FieldPolicy<any> | FieldReadFunction<any>,
@@ -1986,6 +2157,21 @@ export type ConnectionEventFieldPolicy = {
 	sessionId?: FieldPolicy<any> | FieldReadFunction<any>,
 	tenantId?: FieldPolicy<any> | FieldReadFunction<any>,
 	timestamp?: FieldPolicy<any> | FieldReadFunction<any>
+};
+export type ContentMetadataKeySpecifier = ('clipSource' | 'contentId' | 'contentType' | 'createdAt' | 'description' | 'duration' | 'isLive' | 'recordingSize' | 'status' | 'tenantId' | 'title' | 'viewCount' | ContentMetadataKeySpecifier)[];
+export type ContentMetadataFieldPolicy = {
+	clipSource?: FieldPolicy<any> | FieldReadFunction<any>,
+	contentId?: FieldPolicy<any> | FieldReadFunction<any>,
+	contentType?: FieldPolicy<any> | FieldReadFunction<any>,
+	createdAt?: FieldPolicy<any> | FieldReadFunction<any>,
+	description?: FieldPolicy<any> | FieldReadFunction<any>,
+	duration?: FieldPolicy<any> | FieldReadFunction<any>,
+	isLive?: FieldPolicy<any> | FieldReadFunction<any>,
+	recordingSize?: FieldPolicy<any> | FieldReadFunction<any>,
+	status?: FieldPolicy<any> | FieldReadFunction<any>,
+	tenantId?: FieldPolicy<any> | FieldReadFunction<any>,
+	title?: FieldPolicy<any> | FieldReadFunction<any>,
+	viewCount?: FieldPolicy<any> | FieldReadFunction<any>
 };
 export type CountryMetricKeySpecifier = ('cities' | 'countryCode' | 'percentage' | 'viewerCount' | CountryMetricKeySpecifier)[];
 export type CountryMetricFieldPolicy = {
@@ -2081,8 +2267,9 @@ export type LoadBalancingMetricFieldPolicy = {
 	stream?: FieldPolicy<any> | FieldReadFunction<any>,
 	timestamp?: FieldPolicy<any> | FieldReadFunction<any>
 };
-export type MutationKeySpecifier = ('createClip' | 'createDeveloperToken' | 'createPayment' | 'createStream' | 'createStreamKey' | 'deleteClip' | 'deleteStream' | 'deleteStreamKey' | 'refreshStreamKey' | 'revokeDeveloperToken' | 'setStreamRecordingConfig' | 'startDVR' | 'stopDVR' | 'updateBillingTier' | 'updateStream' | 'updateTenant' | MutationKeySpecifier)[];
+export type MutationKeySpecifier = ('createBootstrapToken' | 'createClip' | 'createDeveloperToken' | 'createPayment' | 'createStream' | 'createStreamKey' | 'deleteClip' | 'deleteStream' | 'deleteStreamKey' | 'refreshStreamKey' | 'revokeBootstrapToken' | 'revokeDeveloperToken' | 'setStreamRecordingConfig' | 'startDVR' | 'stopDVR' | 'updateStream' | 'updateTenant' | MutationKeySpecifier)[];
 export type MutationFieldPolicy = {
+	createBootstrapToken?: FieldPolicy<any> | FieldReadFunction<any>,
 	createClip?: FieldPolicy<any> | FieldReadFunction<any>,
 	createDeveloperToken?: FieldPolicy<any> | FieldReadFunction<any>,
 	createPayment?: FieldPolicy<any> | FieldReadFunction<any>,
@@ -2092,11 +2279,11 @@ export type MutationFieldPolicy = {
 	deleteStream?: FieldPolicy<any> | FieldReadFunction<any>,
 	deleteStreamKey?: FieldPolicy<any> | FieldReadFunction<any>,
 	refreshStreamKey?: FieldPolicy<any> | FieldReadFunction<any>,
+	revokeBootstrapToken?: FieldPolicy<any> | FieldReadFunction<any>,
 	revokeDeveloperToken?: FieldPolicy<any> | FieldReadFunction<any>,
 	setStreamRecordingConfig?: FieldPolicy<any> | FieldReadFunction<any>,
 	startDVR?: FieldPolicy<any> | FieldReadFunction<any>,
 	stopDVR?: FieldPolicy<any> | FieldReadFunction<any>,
-	updateBillingTier?: FieldPolicy<any> | FieldReadFunction<any>,
 	updateStream?: FieldPolicy<any> | FieldReadFunction<any>,
 	updateTenant?: FieldPolicy<any> | FieldReadFunction<any>
 };
@@ -2165,19 +2352,23 @@ export type PlatformOverviewFieldPolicy = {
 	totalUsers?: FieldPolicy<any> | FieldReadFunction<any>,
 	totalViewers?: FieldPolicy<any> | FieldReadFunction<any>
 };
-export type QueryKeySpecifier = ('billingStatus' | 'billingTiers' | 'clip' | 'clipEvents' | 'clipViewingUrls' | 'clips' | 'cluster' | 'clusters' | 'connectionEvents' | 'currentStreamHealth' | 'developerTokens' | 'dvrRequests' | 'geographicDistribution' | 'invoice' | 'invoices' | 'loadBalancingMetrics' | 'node' | 'nodeMetrics' | 'nodeMetrics1h' | 'nodes' | 'platformOverview' | 'rebufferingEvents' | 'recordingConfig' | 'recordings' | 'routingEvents' | 'serviceInstances' | 'stream' | 'streamAnalytics' | 'streamHealthAlerts' | 'streamHealthMetrics' | 'streamKeys' | 'streamQualityChanges' | 'streams' | 'tenant' | 'tenantClusterAssignments' | 'usageRecords' | 'validateStreamKey' | 'viewerGeographics' | 'viewerMetrics' | 'viewerMetrics5m' | QueryKeySpecifier)[];
+export type QueryKeySpecifier = ('billingStatus' | 'billingTiers' | 'bootstrapTokens' | 'clip' | 'clipEvents' | 'clipViewingUrls' | 'clips' | 'cluster' | 'clusters' | 'clustersAccess' | 'clustersAvailable' | 'connectionEvents' | 'currentStreamHealth' | 'developerTokens' | 'discoverServices' | 'dvrRequests' | 'geographicDistribution' | 'invoice' | 'invoices' | 'loadBalancingMetrics' | 'node' | 'nodeMetrics' | 'nodeMetrics1h' | 'nodes' | 'platformOverview' | 'rebufferingEvents' | 'recordingConfig' | 'recordings' | 'resolveViewerEndpoint' | 'routingEvents' | 'serviceInstances' | 'serviceInstancesHealth' | 'stream' | 'streamAnalytics' | 'streamHealthAlerts' | 'streamHealthMetrics' | 'streamKeys' | 'streamMeta' | 'streams' | 'tenant' | 'tenantClusterAssignments' | 'trackListEvents' | 'usageRecords' | 'validateStreamKey' | 'viewerGeographics' | 'viewerMetrics' | 'viewerMetrics5m' | QueryKeySpecifier)[];
 export type QueryFieldPolicy = {
 	billingStatus?: FieldPolicy<any> | FieldReadFunction<any>,
 	billingTiers?: FieldPolicy<any> | FieldReadFunction<any>,
+	bootstrapTokens?: FieldPolicy<any> | FieldReadFunction<any>,
 	clip?: FieldPolicy<any> | FieldReadFunction<any>,
 	clipEvents?: FieldPolicy<any> | FieldReadFunction<any>,
 	clipViewingUrls?: FieldPolicy<any> | FieldReadFunction<any>,
 	clips?: FieldPolicy<any> | FieldReadFunction<any>,
 	cluster?: FieldPolicy<any> | FieldReadFunction<any>,
 	clusters?: FieldPolicy<any> | FieldReadFunction<any>,
+	clustersAccess?: FieldPolicy<any> | FieldReadFunction<any>,
+	clustersAvailable?: FieldPolicy<any> | FieldReadFunction<any>,
 	connectionEvents?: FieldPolicy<any> | FieldReadFunction<any>,
 	currentStreamHealth?: FieldPolicy<any> | FieldReadFunction<any>,
 	developerTokens?: FieldPolicy<any> | FieldReadFunction<any>,
+	discoverServices?: FieldPolicy<any> | FieldReadFunction<any>,
 	dvrRequests?: FieldPolicy<any> | FieldReadFunction<any>,
 	geographicDistribution?: FieldPolicy<any> | FieldReadFunction<any>,
 	invoice?: FieldPolicy<any> | FieldReadFunction<any>,
@@ -2191,17 +2382,20 @@ export type QueryFieldPolicy = {
 	rebufferingEvents?: FieldPolicy<any> | FieldReadFunction<any>,
 	recordingConfig?: FieldPolicy<any> | FieldReadFunction<any>,
 	recordings?: FieldPolicy<any> | FieldReadFunction<any>,
+	resolveViewerEndpoint?: FieldPolicy<any> | FieldReadFunction<any>,
 	routingEvents?: FieldPolicy<any> | FieldReadFunction<any>,
 	serviceInstances?: FieldPolicy<any> | FieldReadFunction<any>,
+	serviceInstancesHealth?: FieldPolicy<any> | FieldReadFunction<any>,
 	stream?: FieldPolicy<any> | FieldReadFunction<any>,
 	streamAnalytics?: FieldPolicy<any> | FieldReadFunction<any>,
 	streamHealthAlerts?: FieldPolicy<any> | FieldReadFunction<any>,
 	streamHealthMetrics?: FieldPolicy<any> | FieldReadFunction<any>,
 	streamKeys?: FieldPolicy<any> | FieldReadFunction<any>,
-	streamQualityChanges?: FieldPolicy<any> | FieldReadFunction<any>,
+	streamMeta?: FieldPolicy<any> | FieldReadFunction<any>,
 	streams?: FieldPolicy<any> | FieldReadFunction<any>,
 	tenant?: FieldPolicy<any> | FieldReadFunction<any>,
 	tenantClusterAssignments?: FieldPolicy<any> | FieldReadFunction<any>,
+	trackListEvents?: FieldPolicy<any> | FieldReadFunction<any>,
 	usageRecords?: FieldPolicy<any> | FieldReadFunction<any>,
 	validateStreamKey?: FieldPolicy<any> | FieldReadFunction<any>,
 	viewerGeographics?: FieldPolicy<any> | FieldReadFunction<any>,
@@ -2279,6 +2473,18 @@ export type ServiceInstanceFieldPolicy = {
 	status?: FieldPolicy<any> | FieldReadFunction<any>,
 	stoppedAt?: FieldPolicy<any> | FieldReadFunction<any>,
 	version?: FieldPolicy<any> | FieldReadFunction<any>
+};
+export type ServiceInstanceHealthKeySpecifier = ('clusterId' | 'healthEndpoint' | 'host' | 'instanceId' | 'lastHealthCheck' | 'port' | 'protocol' | 'serviceId' | 'status' | ServiceInstanceHealthKeySpecifier)[];
+export type ServiceInstanceHealthFieldPolicy = {
+	clusterId?: FieldPolicy<any> | FieldReadFunction<any>,
+	healthEndpoint?: FieldPolicy<any> | FieldReadFunction<any>,
+	host?: FieldPolicy<any> | FieldReadFunction<any>,
+	instanceId?: FieldPolicy<any> | FieldReadFunction<any>,
+	lastHealthCheck?: FieldPolicy<any> | FieldReadFunction<any>,
+	port?: FieldPolicy<any> | FieldReadFunction<any>,
+	protocol?: FieldPolicy<any> | FieldReadFunction<any>,
+	serviceId?: FieldPolicy<any> | FieldReadFunction<any>,
+	status?: FieldPolicy<any> | FieldReadFunction<any>
 };
 export type StreamKeySpecifier = ('createdAt' | 'description' | 'events' | 'health' | 'id' | 'name' | 'playbackId' | 'record' | 'recordings' | 'status' | 'streamKey' | 'updatedAt' | 'viewerMetrics5m' | StreamKeySpecifier)[];
 export type StreamFieldPolicy = {
@@ -2405,20 +2611,55 @@ export type StreamKeyFieldPolicy = {
 	lastUsedAt?: FieldPolicy<any> | FieldReadFunction<any>,
 	streamId?: FieldPolicy<any> | FieldReadFunction<any>
 };
-export type StreamQualityChangeKeySpecifier = ('changeType' | 'newCodec' | 'newQualityTier' | 'newResolution' | 'newTracks' | 'nodeId' | 'previousCodec' | 'previousQualityTier' | 'previousResolution' | 'previousTracks' | 'stream' | 'timestamp' | StreamQualityChangeKeySpecifier)[];
-export type StreamQualityChangeFieldPolicy = {
-	changeType?: FieldPolicy<any> | FieldReadFunction<any>,
-	newCodec?: FieldPolicy<any> | FieldReadFunction<any>,
-	newQualityTier?: FieldPolicy<any> | FieldReadFunction<any>,
-	newResolution?: FieldPolicy<any> | FieldReadFunction<any>,
-	newTracks?: FieldPolicy<any> | FieldReadFunction<any>,
-	nodeId?: FieldPolicy<any> | FieldReadFunction<any>,
-	previousCodec?: FieldPolicy<any> | FieldReadFunction<any>,
-	previousQualityTier?: FieldPolicy<any> | FieldReadFunction<any>,
-	previousResolution?: FieldPolicy<any> | FieldReadFunction<any>,
-	previousTracks?: FieldPolicy<any> | FieldReadFunction<any>,
-	stream?: FieldPolicy<any> | FieldReadFunction<any>,
-	timestamp?: FieldPolicy<any> | FieldReadFunction<any>
+export type StreamMetaResponseKeySpecifier = ('metaSummary' | 'raw' | StreamMetaResponseKeySpecifier)[];
+export type StreamMetaResponseFieldPolicy = {
+	metaSummary?: FieldPolicy<any> | FieldReadFunction<any>,
+	raw?: FieldPolicy<any> | FieldReadFunction<any>
+};
+export type StreamMetaSummaryKeySpecifier = ('bufferWindowMs' | 'height' | 'isLive' | 'jitterMs' | 'lastMs' | 'nowMs' | 'tracks' | 'type' | 'unixOffsetMs' | 'version' | 'width' | StreamMetaSummaryKeySpecifier)[];
+export type StreamMetaSummaryFieldPolicy = {
+	bufferWindowMs?: FieldPolicy<any> | FieldReadFunction<any>,
+	height?: FieldPolicy<any> | FieldReadFunction<any>,
+	isLive?: FieldPolicy<any> | FieldReadFunction<any>,
+	jitterMs?: FieldPolicy<any> | FieldReadFunction<any>,
+	lastMs?: FieldPolicy<any> | FieldReadFunction<any>,
+	nowMs?: FieldPolicy<any> | FieldReadFunction<any>,
+	tracks?: FieldPolicy<any> | FieldReadFunction<any>,
+	type?: FieldPolicy<any> | FieldReadFunction<any>,
+	unixOffsetMs?: FieldPolicy<any> | FieldReadFunction<any>,
+	version?: FieldPolicy<any> | FieldReadFunction<any>,
+	width?: FieldPolicy<any> | FieldReadFunction<any>
+};
+export type StreamMetaTrackKeySpecifier = ('bitrateBps' | 'channels' | 'codec' | 'firstMs' | 'height' | 'id' | 'lastMs' | 'nowMs' | 'rate' | 'type' | 'width' | StreamMetaTrackKeySpecifier)[];
+export type StreamMetaTrackFieldPolicy = {
+	bitrateBps?: FieldPolicy<any> | FieldReadFunction<any>,
+	channels?: FieldPolicy<any> | FieldReadFunction<any>,
+	codec?: FieldPolicy<any> | FieldReadFunction<any>,
+	firstMs?: FieldPolicy<any> | FieldReadFunction<any>,
+	height?: FieldPolicy<any> | FieldReadFunction<any>,
+	id?: FieldPolicy<any> | FieldReadFunction<any>,
+	lastMs?: FieldPolicy<any> | FieldReadFunction<any>,
+	nowMs?: FieldPolicy<any> | FieldReadFunction<any>,
+	rate?: FieldPolicy<any> | FieldReadFunction<any>,
+	type?: FieldPolicy<any> | FieldReadFunction<any>,
+	width?: FieldPolicy<any> | FieldReadFunction<any>
+};
+export type StreamTrackKeySpecifier = ('bitrateBps' | 'bitrateKbps' | 'buffer' | 'channels' | 'codec' | 'fps' | 'hasBFrames' | 'height' | 'jitter' | 'resolution' | 'sampleRate' | 'trackName' | 'trackType' | 'width' | StreamTrackKeySpecifier)[];
+export type StreamTrackFieldPolicy = {
+	bitrateBps?: FieldPolicy<any> | FieldReadFunction<any>,
+	bitrateKbps?: FieldPolicy<any> | FieldReadFunction<any>,
+	buffer?: FieldPolicy<any> | FieldReadFunction<any>,
+	channels?: FieldPolicy<any> | FieldReadFunction<any>,
+	codec?: FieldPolicy<any> | FieldReadFunction<any>,
+	fps?: FieldPolicy<any> | FieldReadFunction<any>,
+	hasBFrames?: FieldPolicy<any> | FieldReadFunction<any>,
+	height?: FieldPolicy<any> | FieldReadFunction<any>,
+	jitter?: FieldPolicy<any> | FieldReadFunction<any>,
+	resolution?: FieldPolicy<any> | FieldReadFunction<any>,
+	sampleRate?: FieldPolicy<any> | FieldReadFunction<any>,
+	trackName?: FieldPolicy<any> | FieldReadFunction<any>,
+	trackType?: FieldPolicy<any> | FieldReadFunction<any>,
+	width?: FieldPolicy<any> | FieldReadFunction<any>
 };
 export type StreamValidationKeySpecifier = ('error' | 'streamKey' | 'valid' | StreamValidationKeySpecifier)[];
 export type StreamValidationFieldPolicy = {
@@ -2475,12 +2716,14 @@ export type TimeRangeFieldPolicy = {
 	end?: FieldPolicy<any> | FieldReadFunction<any>,
 	start?: FieldPolicy<any> | FieldReadFunction<any>
 };
-export type TrackListEventKeySpecifier = ('stream' | 'timestamp' | 'trackCount' | 'trackList' | TrackListEventKeySpecifier)[];
+export type TrackListEventKeySpecifier = ('nodeId' | 'stream' | 'timestamp' | 'trackCount' | 'trackList' | 'tracks' | TrackListEventKeySpecifier)[];
 export type TrackListEventFieldPolicy = {
+	nodeId?: FieldPolicy<any> | FieldReadFunction<any>,
 	stream?: FieldPolicy<any> | FieldReadFunction<any>,
 	timestamp?: FieldPolicy<any> | FieldReadFunction<any>,
 	trackCount?: FieldPolicy<any> | FieldReadFunction<any>,
-	trackList?: FieldPolicy<any> | FieldReadFunction<any>
+	trackList?: FieldPolicy<any> | FieldReadFunction<any>,
+	tracks?: FieldPolicy<any> | FieldReadFunction<any>
 };
 export type UsageRecordKeySpecifier = ('cost' | 'id' | 'quantity' | 'resourceType' | 'timestamp' | 'unit' | UsageRecordKeySpecifier)[];
 export type UsageRecordFieldPolicy = {
@@ -2498,6 +2741,22 @@ export type UserFieldPolicy = {
 	id?: FieldPolicy<any> | FieldReadFunction<any>,
 	name?: FieldPolicy<any> | FieldReadFunction<any>,
 	role?: FieldPolicy<any> | FieldReadFunction<any>
+};
+export type ViewerEndpointKeySpecifier = ('baseUrl' | 'geoDistance' | 'healthScore' | 'loadScore' | 'nodeId' | 'outputs' | 'protocol' | 'url' | ViewerEndpointKeySpecifier)[];
+export type ViewerEndpointFieldPolicy = {
+	baseUrl?: FieldPolicy<any> | FieldReadFunction<any>,
+	geoDistance?: FieldPolicy<any> | FieldReadFunction<any>,
+	healthScore?: FieldPolicy<any> | FieldReadFunction<any>,
+	loadScore?: FieldPolicy<any> | FieldReadFunction<any>,
+	nodeId?: FieldPolicy<any> | FieldReadFunction<any>,
+	outputs?: FieldPolicy<any> | FieldReadFunction<any>,
+	protocol?: FieldPolicy<any> | FieldReadFunction<any>,
+	url?: FieldPolicy<any> | FieldReadFunction<any>
+};
+export type ViewerEndpointResponseKeySpecifier = ('endpoints' | 'metadata' | ViewerEndpointResponseKeySpecifier)[];
+export type ViewerEndpointResponseFieldPolicy = {
+	endpoints?: FieldPolicy<any> | FieldReadFunction<any>,
+	metadata?: FieldPolicy<any> | FieldReadFunction<any>
 };
 export type ViewerGeographicKeySpecifier = ('city' | 'connectionAddr' | 'countryCode' | 'eventType' | 'latitude' | 'longitude' | 'nodeId' | 'source' | 'stream' | 'timestamp' | 'viewerCount' | ViewerGeographicKeySpecifier)[];
 export type ViewerGeographicFieldPolicy = {
@@ -2542,6 +2801,10 @@ export type ViewerMetrics5mFieldPolicy = {
 	uniqueCountries?: FieldPolicy<any> | FieldReadFunction<any>
 };
 export type StrictTypedTypePolicies = {
+	AvailableCluster?: Omit<TypePolicy, "fields" | "keyFields"> & {
+		keyFields?: false | AvailableClusterKeySpecifier | (() => undefined | AvailableClusterKeySpecifier),
+		fields?: AvailableClusterFieldPolicy,
+	},
 	BillingStatus?: Omit<TypePolicy, "fields" | "keyFields"> & {
 		keyFields?: false | BillingStatusKeySpecifier | (() => undefined | BillingStatusKeySpecifier),
 		fields?: BillingStatusFieldPolicy,
@@ -2549,6 +2812,10 @@ export type StrictTypedTypePolicies = {
 	BillingTier?: Omit<TypePolicy, "fields" | "keyFields"> & {
 		keyFields?: false | BillingTierKeySpecifier | (() => undefined | BillingTierKeySpecifier),
 		fields?: BillingTierFieldPolicy,
+	},
+	BootstrapToken?: Omit<TypePolicy, "fields" | "keyFields"> & {
+		keyFields?: false | BootstrapTokenKeySpecifier | (() => undefined | BootstrapTokenKeySpecifier),
+		fields?: BootstrapTokenFieldPolicy,
 	},
 	CityMetric?: Omit<TypePolicy, "fields" | "keyFields"> & {
 		keyFields?: false | CityMetricKeySpecifier | (() => undefined | CityMetricKeySpecifier),
@@ -2570,9 +2837,17 @@ export type StrictTypedTypePolicies = {
 		keyFields?: false | ClusterKeySpecifier | (() => undefined | ClusterKeySpecifier),
 		fields?: ClusterFieldPolicy,
 	},
+	ClusterAccess?: Omit<TypePolicy, "fields" | "keyFields"> & {
+		keyFields?: false | ClusterAccessKeySpecifier | (() => undefined | ClusterAccessKeySpecifier),
+		fields?: ClusterAccessFieldPolicy,
+	},
 	ConnectionEvent?: Omit<TypePolicy, "fields" | "keyFields"> & {
 		keyFields?: false | ConnectionEventKeySpecifier | (() => undefined | ConnectionEventKeySpecifier),
 		fields?: ConnectionEventFieldPolicy,
+	},
+	ContentMetadata?: Omit<TypePolicy, "fields" | "keyFields"> & {
+		keyFields?: false | ContentMetadataKeySpecifier | (() => undefined | ContentMetadataKeySpecifier),
+		fields?: ContentMetadataFieldPolicy,
 	},
 	CountryMetric?: Omit<TypePolicy, "fields" | "keyFields"> & {
 		keyFields?: false | CountryMetricKeySpecifier | (() => undefined | CountryMetricKeySpecifier),
@@ -2658,6 +2933,10 @@ export type StrictTypedTypePolicies = {
 		keyFields?: false | ServiceInstanceKeySpecifier | (() => undefined | ServiceInstanceKeySpecifier),
 		fields?: ServiceInstanceFieldPolicy,
 	},
+	ServiceInstanceHealth?: Omit<TypePolicy, "fields" | "keyFields"> & {
+		keyFields?: false | ServiceInstanceHealthKeySpecifier | (() => undefined | ServiceInstanceHealthKeySpecifier),
+		fields?: ServiceInstanceHealthFieldPolicy,
+	},
 	Stream?: Omit<TypePolicy, "fields" | "keyFields"> & {
 		keyFields?: false | StreamKeySpecifier | (() => undefined | StreamKeySpecifier),
 		fields?: StreamFieldPolicy,
@@ -2682,9 +2961,21 @@ export type StrictTypedTypePolicies = {
 		keyFields?: false | StreamKeyKeySpecifier | (() => undefined | StreamKeyKeySpecifier),
 		fields?: StreamKeyFieldPolicy,
 	},
-	StreamQualityChange?: Omit<TypePolicy, "fields" | "keyFields"> & {
-		keyFields?: false | StreamQualityChangeKeySpecifier | (() => undefined | StreamQualityChangeKeySpecifier),
-		fields?: StreamQualityChangeFieldPolicy,
+	StreamMetaResponse?: Omit<TypePolicy, "fields" | "keyFields"> & {
+		keyFields?: false | StreamMetaResponseKeySpecifier | (() => undefined | StreamMetaResponseKeySpecifier),
+		fields?: StreamMetaResponseFieldPolicy,
+	},
+	StreamMetaSummary?: Omit<TypePolicy, "fields" | "keyFields"> & {
+		keyFields?: false | StreamMetaSummaryKeySpecifier | (() => undefined | StreamMetaSummaryKeySpecifier),
+		fields?: StreamMetaSummaryFieldPolicy,
+	},
+	StreamMetaTrack?: Omit<TypePolicy, "fields" | "keyFields"> & {
+		keyFields?: false | StreamMetaTrackKeySpecifier | (() => undefined | StreamMetaTrackKeySpecifier),
+		fields?: StreamMetaTrackFieldPolicy,
+	},
+	StreamTrack?: Omit<TypePolicy, "fields" | "keyFields"> & {
+		keyFields?: false | StreamTrackKeySpecifier | (() => undefined | StreamTrackKeySpecifier),
+		fields?: StreamTrackFieldPolicy,
 	},
 	StreamValidation?: Omit<TypePolicy, "fields" | "keyFields"> & {
 		keyFields?: false | StreamValidationKeySpecifier | (() => undefined | StreamValidationKeySpecifier),
@@ -2721,6 +3012,14 @@ export type StrictTypedTypePolicies = {
 	User?: Omit<TypePolicy, "fields" | "keyFields"> & {
 		keyFields?: false | UserKeySpecifier | (() => undefined | UserKeySpecifier),
 		fields?: UserFieldPolicy,
+	},
+	ViewerEndpoint?: Omit<TypePolicy, "fields" | "keyFields"> & {
+		keyFields?: false | ViewerEndpointKeySpecifier | (() => undefined | ViewerEndpointKeySpecifier),
+		fields?: ViewerEndpointFieldPolicy,
+	},
+	ViewerEndpointResponse?: Omit<TypePolicy, "fields" | "keyFields"> & {
+		keyFields?: false | ViewerEndpointResponseKeySpecifier | (() => undefined | ViewerEndpointResponseKeySpecifier),
+		fields?: ViewerEndpointResponseFieldPolicy,
 	},
 	ViewerGeographic?: Omit<TypePolicy, "fields" | "keyFields"> & {
 		keyFields?: false | ViewerGeographicKeySpecifier | (() => undefined | ViewerGeographicKeySpecifier),
@@ -2948,25 +3247,6 @@ export const CreatePaymentDocument = gql`
 export type CreatePaymentMutationFn = Apollo.MutationFunction<CreatePaymentMutation, CreatePaymentMutationVariables>;
 export type CreatePaymentMutationResult = Apollo.MutationResult<CreatePaymentMutation>;
 export type CreatePaymentMutationOptions = Apollo.BaseMutationOptions<CreatePaymentMutation, CreatePaymentMutationVariables>;
-export const UpdateBillingTierDocument = gql`
-    mutation UpdateBillingTier($tierId: ID!) {
-  updateBillingTier(tierId: $tierId) {
-    currentTier {
-      id
-      name
-      price
-      currency
-      features
-    }
-    nextBillingDate
-    outstandingAmount
-    status
-  }
-}
-    `;
-export type UpdateBillingTierMutationFn = Apollo.MutationFunction<UpdateBillingTierMutation, UpdateBillingTierMutationVariables>;
-export type UpdateBillingTierMutationResult = Apollo.MutationResult<UpdateBillingTierMutation>;
-export type UpdateBillingTierMutationOptions = Apollo.BaseMutationOptions<UpdateBillingTierMutation, UpdateBillingTierMutationVariables>;
 export const CreateClipDocument = gql`
     mutation CreateClip($input: CreateClipInput!) {
   createClip(input: $input) {
@@ -3339,6 +3619,12 @@ export const GetLoadBalancingMetricsDocument = gql`
 }
     `;
 export type GetLoadBalancingMetricsQueryResult = Apollo.QueryResult<GetLoadBalancingMetricsQuery, GetLoadBalancingMetricsQueryVariables>;
+export const AuthPlaceholderDocument = gql`
+    query AuthPlaceholder {
+  __typename
+}
+    `;
+export type AuthPlaceholderQueryResult = Apollo.QueryResult<AuthPlaceholderQuery, AuthPlaceholderQueryVariables>;
 export const GetBillingTiersDocument = gql`
     query GetBillingTiers {
   billingTiers {
@@ -3521,25 +3807,34 @@ export const GetCurrentStreamHealthDocument = gql`
 }
     `;
 export type GetCurrentStreamHealthQueryResult = Apollo.QueryResult<GetCurrentStreamHealthQuery, GetCurrentStreamHealthQueryVariables>;
-export const GetStreamQualityChangesDocument = gql`
-    query GetStreamQualityChanges($stream: String!, $timeRange: TimeRangeInput) {
-  streamQualityChanges(stream: $stream, timeRange: $timeRange) {
+export const GetTrackListEventsDocument = gql`
+    query GetTrackListEvents($stream: String!, $timeRange: TimeRangeInput) {
+  trackListEvents(stream: $stream, timeRange: $timeRange) {
     timestamp
     stream
     nodeId
-    changeType
-    previousQualityTier
-    newQualityTier
-    previousResolution
-    newResolution
-    previousCodec
-    newCodec
-    previousTracks
-    newTracks
+    trackList
+    trackCount
+    tracks {
+      trackName
+      trackType
+      codec
+      bitrateKbps
+      bitrateBps
+      buffer
+      jitter
+      width
+      height
+      fps
+      resolution
+      hasBFrames
+      channels
+      sampleRate
+    }
   }
 }
     `;
-export type GetStreamQualityChangesQueryResult = Apollo.QueryResult<GetStreamQualityChangesQuery, GetStreamQualityChangesQueryVariables>;
+export type GetTrackListEventsQueryResult = Apollo.QueryResult<GetTrackListEventsQuery, GetTrackListEventsQueryVariables>;
 export const GetStreamHealthAlertsDocument = gql`
     query GetStreamHealthAlerts($stream: String, $timeRange: TimeRangeInput) {
   streamHealthAlerts(stream: $stream, timeRange: $timeRange) {

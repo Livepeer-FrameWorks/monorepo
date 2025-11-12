@@ -1,7 +1,33 @@
-<script>
-  import { formatBytes, formatDate, formatUptime, formatPercentage } from '$lib/utils/formatters.js';
-  export let node;
-  export let compact = false;
+<script lang="ts">
+  import { formatBytes, formatDate, formatUptime } from "$lib/utils/formatters.js";
+
+  interface NodeTelemetry {
+    name?: string;
+    nodeId?: string;
+    region?: string;
+    location?: string;
+    status?: "online" | "offline" | "healthy" | "unhealthy" | "degraded" | "warning" | string;
+    cpuUsage?: number;
+    memoryUsage?: number;
+    networkIn?: number;
+    networkOut?: number;
+    diskUsage?: number;
+    uptime?: number;
+    version?: string;
+    streamCount?: number;
+    latitude?: number;
+    longitude?: number;
+    nodeUrl?: string;
+    lastUpdated?: string | number | Date;
+  }
+
+  interface Props {
+    node: NodeTelemetry;
+    compact?: boolean;
+    actions?: import("svelte").Snippet<[NodeTelemetry]>;
+  }
+
+  let { node, compact = false, actions }: Props = $props();
 </script>
 
 <div class="bg-slate-800 border border-slate-700 rounded-lg p-6 hover:border-slate-600 transition-colors">
@@ -212,12 +238,12 @@
 
   <!-- Actions -->
   <div class="flex items-center justify-end mt-4 space-x-2">
-    <slot name="actions" {node} />
+    {@render actions?.({ node, })}
     
     {#if node.nodeId}
       <button 
         class="text-blue-400 hover:text-blue-300 text-sm font-medium transition-colors"
-        on:click={() => {/* Navigate to node details */}}
+        onclick={() => {/* Navigate to node details */}}
       >
         View Details
       </button>

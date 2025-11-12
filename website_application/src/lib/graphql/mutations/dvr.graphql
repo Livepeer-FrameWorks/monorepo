@@ -20,7 +20,13 @@ mutation StopDVR($dvrHash: ID!) {
   stopDVR(dvrHash: $dvrHash)
 }
 
-mutation SetStreamRecordingConfig($internalName: String!, $enabled: Boolean!, $retentionDays: Int, $format: String, $segmentDuration: Int) {
+mutation SetStreamRecordingConfig(
+  $internalName: String!
+  $enabled: Boolean!
+  $retentionDays: Int
+  $format: String
+  $segmentDuration: Int
+) {
   setStreamRecordingConfig(
     internalName: $internalName
     enabled: $enabled

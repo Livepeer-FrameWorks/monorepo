@@ -1,20 +1,19 @@
 <script>
   import { onMount } from 'svelte';
-  import { page } from '$app/stores';
-  import { goto } from '$app/navigation';
+  import { page } from '$app/state';
   import Player from '$lib/components/Player.svelte';
   import LoadingSpinner from '$lib/components/LoadingSpinner.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
 
-  let contentType = '';
-  let contentId = '';
-  let loading = true;
-  let error = '';
-  let playerConfig = null;
+  let contentType = $state('');
+  let contentId = $state('');
+  let loading = $state(true);
+  let error = $state('');
+  let playerConfig = $state(null);
 
   onMount(async () => {
     // Parse URL parameters
-    const params = $page.url.searchParams;
+    const params = page.url.searchParams;
     contentType = params.get('type') || '';
     contentId = params.get('id') || '';
 
@@ -95,7 +94,7 @@
       <div class="absolute top-0 left-0 right-0 z-50 bg-black bg-opacity-50 p-4">
         <div class="flex items-center justify-between">
           <button 
-            on:click={goBack}
+            onclick={goBack}
             class="text-white hover:text-gray-300 flex items-center"
           >
             <svg class="w-6 h-6 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">

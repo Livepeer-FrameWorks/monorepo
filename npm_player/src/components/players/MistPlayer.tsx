@@ -102,30 +102,19 @@ const MistPlayer: React.FC<MistPlayerProps> = ({
   }, [isBrowser, streamName, playerUri, useIFrame, developmentMode, muted, poster]);
 
   if (useIFrame) {
-    const iframeElement = (
+    return (
       <iframe
-        style={{
-          width: '100%',
-          maxWidth: '100%',
-          height: '100%',
-          border: 'none',
-          minHeight: '300px',
-        }}
+        className="fw-player-embed"
         src={htmlUri}
         title={`MistPlayer - ${streamName}`}
       />
     );
-    return iframeElement;
   }
 
   return <div
     ref={containerRef}
     id="mistplayer"
-    style={{
-      width: '100%',
-      maxWidth: '100%',
-      height: '100%',
-    }}
+    className="fw-player-container"
   >
     <noscript>
       <a href={htmlUri} target="_blank" rel="noopener noreferrer">
@@ -177,11 +166,11 @@ export class MistPlayerImpl extends BasePlayer {
 
   async initialize(container: HTMLElement, source: StreamSource, options: PlayerOptions): Promise<HTMLVideoElement> {
     this.container = container;
+    container.classList.add('fw-player-container');
     
     // Create a div for MistPlayer to use
     const mistDiv = document.createElement('div');
-    mistDiv.style.width = '100%';
-    mistDiv.style.height = '100%';
+    mistDiv.classList.add('fw-player-container');
     container.appendChild(mistDiv);
     
     // Create a proxy video element for compatibility

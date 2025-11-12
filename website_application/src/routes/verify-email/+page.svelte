@@ -1,15 +1,16 @@
 <script>
   import { onMount } from "svelte";
-  import { page } from "$app/stores";
-  import { base } from "$app/paths";
+  import { page } from "$app/state";
+  import { resolve } from "$app/paths";
   import { AUTH_URL } from "$lib/authAPI.js";
+  import { Button } from "$lib/components/ui/button";
 
-  let verificationStatus = "pending"; // pending, success, error
-  let message = "";
-  let loading = false;
+  let verificationStatus = $state("pending"); // pending, success, error
+  let message = $state("");
+  let loading = $state(false);
 
   onMount(async () => {
-    const token = $page.url.searchParams.get("token");
+    const token = page.url.searchParams.get("token");
 
     if (token) {
       // Verify the token
@@ -34,7 +35,7 @@
             data.error ||
             "Verification failed. The token may be invalid or expired.";
         }
-      } catch (error) {
+      } catch {
         verificationStatus = "error";
         message = "Network error during verification.";
       } finally {
@@ -69,10 +70,10 @@
       </h1>
     </div>
 
-    <div class="glow-card p-8 text-center">
+    <div class="message-card text-center">
       {#if loading}
         <div class="flex justify-center items-center space-y-4">
-          <div class="loading-spinner mr-2" />
+          <div class="loading-spinner mr-2"></div>
           <p class="text-tokyo-night-fg-dark">Verifying your email...</p>
         </div>
       {:else if verificationStatus === "success"}
@@ -94,7 +95,9 @@
           </div>
           <p class="text-tokyo-night-fg-dark">{message}</p>
           <div class="mt-6">
-            <a href="{base}/login" class="btn-primary"> Continue to Sign In </a>
+            <Button href={resolve("/login")} class="w-full justify-center">
+              Continue to Sign In
+            </Button>
           </div>
         </div>
       {:else if verificationStatus === "error"}
@@ -116,12 +119,16 @@
           </div>
           <p class="text-tokyo-night-red">{message}</p>
           <div class="mt-6 space-y-3">
-            <a href="{base}/register" class="btn-secondary block text-center">
+            <Button
+              href={resolve("/register")}
+              variant="outline"
+              class="w-full justify-center"
+            >
               Try Registering Again
-            </a>
-            <a href="{base}/login" class="btn-primary block text-center">
+            </Button>
+            <Button href={resolve("/login")} class="w-full justify-center">
               Continue to Sign In
-            </a>
+            </Button>
           </div>
         </div>
       {:else}

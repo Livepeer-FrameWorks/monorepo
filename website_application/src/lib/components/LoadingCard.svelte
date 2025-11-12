@@ -1,8 +1,16 @@
-<script>
-  /** @type {'stream' | 'clip' | 'metric' | 'analytics' | 'infrastructure' | 'generic'} */
-  export let variant = 'generic';
-  /** @type {string} */
-  export let className = '';
+<script lang="ts">
+  interface Props {
+    variant?:
+      | "stream"
+      | "clip"
+      | "metric"
+      | "analytics"
+      | "infrastructure"
+      | "generic";
+    class?: string;
+  }
+
+  let { variant = "generic", class: className = "" }: Props = $props();
 </script>
 
 {#if variant === 'stream'}
@@ -64,7 +72,7 @@
 
 {:else if variant === 'metric'}
   <!-- Metric Card Skeleton -->
-  <div class="glow-card p-6 text-center {className}">
+  <div class="metric-card text-center {className}">
     <div class="skeleton w-8 h-8 mx-auto mb-3 rounded"></div>
     <div class="skeleton-text-lg w-16 mx-auto mb-1"></div>
     <div class="skeleton-text-sm w-20 mx-auto"></div>
@@ -75,7 +83,7 @@
   <div class="bg-tokyo-night-surface rounded-lg p-6 {className}">
     <div class="skeleton-text-lg w-48 mb-4"></div>
     <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
-      {#each Array(4) as _}
+      {#each Array(4) as _, index (index)}
         <div class="text-center">
           <div class="skeleton-text-lg w-12 mx-auto mb-1"></div>
           <div class="skeleton-text-sm w-16 mx-auto"></div>

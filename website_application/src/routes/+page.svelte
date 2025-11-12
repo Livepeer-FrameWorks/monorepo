@@ -1,12 +1,20 @@
 <script>
-  import { onMount, onDestroy } from "svelte";
-  import { goto } from "$app/navigation";
-  import { base } from "$app/paths";
+  import { onMount } from "svelte";
+  import { resolve } from "$app/paths";
   import { auth } from "$lib/stores/auth";
   import { analyticsService } from "$lib/graphql/services/analytics.js";
   import { billingService } from "$lib/graphql/services/billing.js";
   import { toast } from "$lib/stores/toast.js";
-  import { getIconComponent } from "$lib/iconUtils.js";
+  import { getIconComponent } from "$lib/iconUtils";
+  import { Button } from "$lib/components/ui/button";
+  import { GridSeam } from "$lib/components/layout";
+  import DashboardMetricCard from "$lib/components/shared/DashboardMetricCard.svelte";
+  import StreamStatsGrid from "$lib/components/dashboard/StreamStatsGrid.svelte";
+  import ConnectionStatusBanner from "$lib/components/dashboard/ConnectionStatusBanner.svelte";
+  import PrimaryStreamCard from "$lib/components/dashboard/PrimaryStreamCard.svelte";
+  import ServiceStatusList from "$lib/components/dashboard/ServiceStatusList.svelte";
+  import LiveStreamHealthCards from "$lib/components/dashboard/LiveStreamHealthCards.svelte";
+  import ObsSetupGuide from "$lib/components/dashboard/ObsSetupGuide.svelte";
   import {
     realtimeStreams,
     streamMetrics,
@@ -14,27 +22,27 @@
     connectionStatus,
   } from "$lib/stores/realtime";
 
-  let isAuthenticated = false;
+  let isAuthenticated = $state(false);
   /** @type {any} */
-  let user = null;
+  let user = $state(null);
   /** @type {any[]} */
-  let streams = [];
-  let loading = true;
+  let streams = $state([]);
+  let loading = $state(true);
 
   // Real-time dashboard data
   /** @type {any[]} */
-  let realtimeData = [];
+  let realtimeData = $state([]);
   /** @type {any} */
-  let liveMetrics = {};
-  let totalRealtimeViewers = 0;
+  let liveMetrics = $state({});
+  let totalRealtimeViewers = $state(0);
   /** @type {{ status: string, message: string }} */
-  let wsConnectionStatus = { status: "disconnected", message: "Disconnected" };
+  let wsConnectionStatus = $state({ status: "disconnected", message: "Disconnected" });
 
   // Usage and billing data
   /** @type {any} */
-  let usageData = null;
+  let usageData = $state(null);
   /** @type {any} */
-  let billingStatus = null;
+  let billingStatus = $state(null);
 
   // Subscribe to auth store
   auth.subscribe((/** @type {any} */ authState) => {
@@ -93,13 +101,13 @@
   // Note: Authentication redirects are handled by +layout.svelte
 
   // Get primary stream (most recently active or first stream)
-  $: primaryStream =
-    streams && streams.length > 0
+  let primaryStream =
+    $derived(streams && streams.length > 0
       ? streams.find((s) => s.status === "live") || streams[0]
-      : null;
+      : null);
 
   // Enhanced stream stats with real-time data
-  $: enhancedStreamStats = {
+  let enhancedStreamStats = $derived({
     total: streams?.length || 0,
     live:
       streams?.filter((s) => s.status === "live").length ||
@@ -110,12 +118,12 @@
         ? totalRealtimeViewers
         : streams?.reduce((sum, s) => sum + (s.viewers || 0), 0) || 0,
     realtimeStreams: realtimeData?.length || 0,
-  };
+  });
 
   // Calculate total bandwidth from live metrics
-  $: totalBandwidth = Object.values(liveMetrics).reduce((total, stream) => {
+  let totalBandwidth = $derived(Object.values(liveMetrics).reduce((total, stream) => {
     return total + (stream.bandwidth_in || 0) + (stream.bandwidth_out || 0);
-  }, 0);
+  }, 0));
 
   /**
    * @param {string} text
@@ -151,9 +159,19 @@
 
 {#if loading}
   <div class="flex items-center justify-center min-h-64">
-    <div class="loading-spinner w-8 h-8" />
+    <div class="loading-spinner w-8 h-8"></div>
   </div>
 {:else if isAuthenticated}
+  {@const SvelteComponent = getIconComponent('Play')}
+  {@const SvelteComponent_1 = getIconComponent('Users')}
+  {@const SvelteComponent_2 = getIconComponent('Wifi')}
+  {@const SvelteComponent_3 = getIconComponent('CreditCard')}
+  {@const SvelteComponent_6 = getIconComponent('Video')}
+  {@const SvelteComponent_7 = getIconComponent('BarChart3')}
+  {@const SvelteComponent_8 = getIconComponent('CreditCard')}
+  {@const SvelteComponent_9 = getIconComponent('CreditCard')}
+  {@const SvelteComponent_10 = getIconComponent('Zap')}
+  {@const SvelteComponent_11 = getIconComponent('BarChart3')}
   <div class="page-transition">
     <!-- Welcome Header -->
     <div class="mb-8">
@@ -166,70 +184,57 @@
     </div>
 
     <!-- Real-time Dashboard Stats -->
-    <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
-      <!-- Live Streams -->
-      <div class="glow-card p-6 text-center relative">
-        <div class="absolute top-3 right-3">
-          <div class="flex items-center space-x-1 text-xs">
-            <div
-              class="w-2 h-2 rounded-full {wsConnectionStatus.status ===
-              'connected'
-                ? 'bg-tokyo-night-green animate-pulse'
-                : 'bg-tokyo-night-red'}"
-            />
-            <span class="text-tokyo-night-comment">Live</span>
-          </div>
-        </div>
-        <div class="text-3xl mb-2">
-          <svelte:component this={getIconComponent('Play')} class="w-8 h-8 text-tokyo-night-red mx-auto" />
-        </div>
-        <div class="text-2xl font-bold text-tokyo-night-green mb-1">
-          {enhancedStreamStats.live}
-        </div>
-        <div class="text-sm text-tokyo-night-comment">Streams Live</div>
+    <GridSeam cols={4} stack="md" surface="panel" class="mb-8">
+      <div>
+        <DashboardMetricCard
+          icon={SvelteComponent}
+          iconColor="text-tokyo-night-red"
+          value={enhancedStreamStats.live}
+          valueColor="text-tokyo-night-green"
+          label="Streams Live"
+          statusIndicator={{
+            connected: wsConnectionStatus.status === "connected",
+            label: "Live",
+          }}
+        />
       </div>
 
-      <!-- Total Viewers -->
-      <div class="glow-card p-6 text-center">
-        <div class="text-3xl mb-2">
-          <svelte:component this={getIconComponent('Users')} class="w-8 h-8 text-tokyo-night-cyan mx-auto" />
-        </div>
-        <div class="text-2xl font-bold text-tokyo-night-cyan mb-1">
-          {formatNumber(enhancedStreamStats.totalViewers)}
-        </div>
-        <div class="text-sm text-tokyo-night-comment">Total Viewers</div>
+      <div>
+        <DashboardMetricCard
+          icon={SvelteComponent_1}
+          iconColor="text-tokyo-night-cyan"
+          value={formatNumber(enhancedStreamStats.totalViewers)}
+          valueColor="text-tokyo-night-cyan"
+          label="Total Viewers"
+        />
       </div>
 
-      <!-- Bandwidth Usage -->
-      <div class="glow-card p-6 text-center">
-        <div class="text-3xl mb-2">
-          <svelte:component this={getIconComponent('Wifi')} class="w-8 h-8 text-tokyo-night-purple mx-auto" />
-        </div>
-        <div class="text-2xl font-bold text-tokyo-night-purple mb-1">
-          {formatBytes(totalBandwidth)}/s
-        </div>
-        <div class="text-sm text-tokyo-night-comment">Bandwidth</div>
+      <div>
+        <DashboardMetricCard
+          icon={SvelteComponent_2}
+          iconColor="text-tokyo-night-purple"
+          value={`${formatBytes(totalBandwidth)}/s`}
+          valueColor="text-tokyo-night-purple"
+          label="Bandwidth"
+        />
       </div>
 
-      <!-- Usage This Week -->
-      <div class="glow-card p-6 text-center">
-        <div class="text-3xl mb-2">
-          <svelte:component this={getIconComponent('CreditCard')} class="w-8 h-8 text-tokyo-night-yellow mx-auto" />
-        </div>
-        <div class="text-2xl font-bold text-tokyo-night-yellow mb-1">
-          {usageData?.stream_hours
-            ? formatNumber(usageData.stream_hours)
-            : "0"}h
-        </div>
-        <div class="text-sm text-tokyo-night-comment">Stream Hours (7d)</div>
+      <div>
+        <DashboardMetricCard
+          icon={SvelteComponent_3}
+          iconColor="text-tokyo-night-yellow"
+          value={`${usageData?.stream_hours ? formatNumber(usageData.stream_hours) : "0"}h`}
+          valueColor="text-tokyo-night-yellow"
+          label="Stream Hours (7d)"
+        />
       </div>
-    </div>
+    </GridSeam>
 
     <!-- Main Content Grid -->
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
       <!-- Streams Overview Card -->
-      <div class="card">
-        <div class="card-header">
+      <div class="panel">
+        <div class="mb-6 pb-4 border-b border-tokyo-night-fg-gutter/30">
           <h2 class="text-xl font-semibold text-tokyo-night-fg mb-2">
             Stream Central
           </h2>
@@ -240,141 +245,46 @@
 
         <div class="space-y-6">
           <!-- Stream Stats Grid with Real-time Data -->
-          <div class="grid grid-cols-3 gap-4">
-            <div class="text-center">
-              <div class="text-2xl font-bold text-tokyo-night-fg">
-                {enhancedStreamStats.total}
-              </div>
-              <div class="text-xs text-tokyo-night-comment">Total Streams</div>
-            </div>
-            <div class="text-center">
-              <div class="text-2xl font-bold text-tokyo-night-green">
-                {enhancedStreamStats.live}
-              </div>
-              <div class="text-xs text-tokyo-night-comment">Live Now</div>
-            </div>
-            <div class="text-center">
-              <div class="text-2xl font-bold text-tokyo-night-cyan">
-                {formatNumber(enhancedStreamStats.totalViewers)}
-              </div>
-              <div class="text-xs text-tokyo-night-comment">
-                Current Viewers
-              </div>
-            </div>
-          </div>
+          <StreamStatsGrid
+            totalStreams={enhancedStreamStats.total}
+            liveStreams={enhancedStreamStats.live}
+            totalViewers={formatNumber(enhancedStreamStats.totalViewers)}
+          />
 
           <!-- Real-time Connection Status -->
-          {#if wsConnectionStatus.status !== "connected"}
-            <div
-              class="bg-tokyo-night-yellow/10 border border-tokyo-night-yellow/30 rounded-lg p-3"
-            >
-              <div class="flex items-center space-x-2 text-sm">
-                <div
-                  class="w-2 h-2 rounded-full bg-tokyo-night-yellow animate-pulse"
-                />
-                <span class="text-tokyo-night-yellow"
-                  >{wsConnectionStatus.message}</span
-                >
-              </div>
-            </div>
-          {/if}
+          <ConnectionStatusBanner
+            visible={wsConnectionStatus.status !== "connected"}
+            message={wsConnectionStatus.message}
+          />
 
           <!-- Primary Stream Details -->
-          {#if primaryStream}
-            <div
-              class="bg-tokyo-night-bg-highlight p-4 rounded-lg border border-tokyo-night-fg-gutter"
-            >
-              <div class="flex items-center justify-between mb-3">
-                <h3 class="font-semibold text-tokyo-night-fg">
-                  {primaryStream.name ||
-                    `Stream ${primaryStream.id.slice(0, 8)}`}
-                </h3>
-                <div class="flex items-center space-x-2">
-                  <div
-                    class="w-2 h-2 rounded-full {primaryStream.status === 'live'
-                      ? 'bg-tokyo-night-green animate-pulse'
-                      : 'bg-tokyo-night-red'}"
-                  />
-                  <span class="text-xs text-tokyo-night-comment capitalize">
-                    {primaryStream.status || "offline"}
-                  </span>
-                </div>
-              </div>
-
-              <div class="grid grid-cols-2 gap-4 text-sm mb-4">
-                <div>
-                  <p class="text-tokyo-night-comment">Viewers</p>
-                  <p class="font-semibold text-tokyo-night-fg">
-                    {primaryStream.viewers || 0}
-                  </p>
-                </div>
-                <div>
-                  <p class="text-tokyo-night-comment">Resolution</p>
-                  <p class="font-semibold text-tokyo-night-fg">
-                    {primaryStream.resolution || "Unknown"}
-                  </p>
-                </div>
-              </div>
-
-              <!-- Stream Key (Primary Stream) -->
-              <div>
-                <label
-                  for="primary-stream-key"
-                  class="block text-sm font-medium text-tokyo-night-fg-dark mb-2"
-                  >Stream Key</label
-                >
-                <div class="flex items-center space-x-3">
-                  <input
-                    id="primary-stream-key"
-                    type="text"
-                    value={primaryStream.streamKey || "Loading..."}
-                    readonly
-                    class="input flex-1 font-mono text-sm"
-                  />
-                  <button
-                    on:click={() => copyToClipboard(primaryStream.streamKey)}
-                    class="btn-secondary"
-                    disabled={!primaryStream.streamKey}
-                  >
-                    Copy
-                  </button>
-                </div>
-                <p class="text-xs text-tokyo-night-comment mt-2">
-                  Keep your stream key private. Anyone with this key can
-                  broadcast to your channel.
-                </p>
-              </div>
-            </div>
-          {:else}
-            <div class="text-center py-6">
-              <div class="text-4xl mb-2">
-                <svelte:component this={getIconComponent('Video')} class="w-10 h-10 text-tokyo-night-fg-dark mx-auto" />
-              </div>
-              <p class="text-tokyo-night-fg-dark mb-4">No streams found</p>
-              <a href="{base}/streams" class="btn-primary">
-                <svelte:component this={getIconComponent('Plus')} class="w-4 h-4 mr-2" />
-                Create Your First Stream
-              </a>
-            </div>
-          {/if}
+          <PrimaryStreamCard
+            stream={primaryStream}
+            onCopyStreamKey={copyToClipboard}
+            createStreamUrl={resolve("/streams")}
+          />
 
           <!-- Quick Actions -->
           <div class="flex space-x-3">
-            <a href="{base}/streams" class="btn-primary flex-1 text-center">
-              <svelte:component this={getIconComponent('Video')} class="w-4 h-4 mr-2" />
+            <Button href={resolve("/streams")} class="flex-1 justify-center gap-2">
+              <SvelteComponent_6 class="w-4 h-4" />
               Manage Streams
-            </a>
-            <a href="{base}/analytics" class="btn-secondary flex-1 text-center">
-              <svelte:component this={getIconComponent('BarChart3')} class="w-4 h-4 mr-2" />
+            </Button>
+            <Button
+              href={resolve("/analytics")}
+              variant="outline"
+              class="flex-1 justify-center gap-2"
+            >
+              <SvelteComponent_7 class="w-4 h-4" />
               View Analytics
-            </a>
+            </Button>
           </div>
         </div>
       </div>
 
       <!-- Usage & Billing Overview Card -->
-      <div class="card">
-        <div class="card-header">
+      <div class="panel">
+        <div class="mb-6 pb-4 border-b border-tokyo-night-fg-gutter/30">
           <h2 class="text-xl font-semibold text-tokyo-night-fg mb-2">
             Your Account
           </h2>
@@ -449,27 +359,28 @@
 
           <!-- Quick Actions -->
           <div class="space-y-3">
-            <a
-              href="{base}/analytics/usage"
-              class="btn-primary w-full text-center block"
+            <Button
+              href={resolve("/analytics/usage")}
+              class="w-full justify-center gap-2"
             >
-              <svelte:component this={getIconComponent('CreditCard')} class="w-4 h-4 mr-2" />
+              <SvelteComponent_8 class="w-4 h-4" />
               View Detailed Usage & Costs
-            </a>
-            <a
-              href="{base}/account/billing"
-              class="btn-secondary w-full text-center block"
+            </Button>
+            <Button
+              href={resolve("/account/billing")}
+              variant="outline"
+              class="w-full justify-center gap-2"
             >
-              <svelte:component this={getIconComponent('CreditCard')} class="w-4 h-4 mr-2" />
+              <SvelteComponent_9 class="w-4 h-4" />
               Manage Billing
-            </a>
+            </Button>
           </div>
         </div>
       </div>
 
       <!-- System Health & Real-time Status Card -->
-      <div class="card">
-        <div class="card-header">
+      <div class="panel">
+        <div class="mb-6 pb-4 border-b border-tokyo-night-fg-gutter/30">
           <h2 class="text-xl font-semibold text-tokyo-night-fg mb-2">
             Platform Status
           </h2>
@@ -480,228 +391,40 @@
 
         <div class="space-y-6">
           <!-- Connection Status -->
-          <div class="space-y-3">
-            <h3 class="font-semibold text-tokyo-night-fg text-sm">
-              Platform Status
-            </h3>
-
-            <div class="space-y-2">
-              <!-- WebSocket Connection -->
-              <div
-                class="flex items-center justify-between p-3 bg-tokyo-night-bg-highlight rounded-lg"
-              >
-                <div class="flex items-center space-x-3">
-                  <div
-                    class="w-3 h-3 rounded-full {wsConnectionStatus.status ===
-                    'connected'
-                      ? 'bg-tokyo-night-green'
-                      : wsConnectionStatus.status === 'reconnecting'
-                      ? 'bg-tokyo-night-yellow animate-pulse'
-                      : 'bg-tokyo-night-red'}"
-                  />
-                  <span class="text-sm text-tokyo-night-fg"
-                    >Real-time Updates</span
-                  >
-                </div>
-                <span class="text-xs text-tokyo-night-comment capitalize"
-                  >{wsConnectionStatus.message}</span
-                >
-              </div>
-
-              <!-- Streaming Service -->
-              <div
-                class="flex items-center justify-between p-3 bg-tokyo-night-bg-highlight rounded-lg"
-              >
-                <div class="flex items-center space-x-3">
-                  <div class="w-3 h-3 rounded-full bg-tokyo-night-green" />
-                  <span class="text-sm text-tokyo-night-fg"
-                    >Streaming Service</span
-                  >
-                </div>
-                <span class="text-xs text-tokyo-night-comment">Operational</span
-                >
-              </div>
-
-              <!-- Analytics Service -->
-              <div
-                class="flex items-center justify-between p-3 bg-tokyo-night-bg-highlight rounded-lg"
-              >
-                <div class="flex items-center space-x-3">
-                  <div
-                    class="w-3 h-3 rounded-full {usageData
-                      ? 'bg-tokyo-night-green'
-                      : 'bg-tokyo-night-yellow'}"
-                  />
-                  <span class="text-sm text-tokyo-night-fg"
-                    >Analytics Service</span
-                  >
-                </div>
-                <span class="text-xs text-tokyo-night-comment"
-                  >{usageData ? "Operational" : "Loading"}</span
-                >
-              </div>
-            </div>
-          </div>
+          <ServiceStatusList
+            wsStatus={wsConnectionStatus}
+            analyticsLoaded={!!usageData}
+          />
 
           <!-- Real-time Stream Health -->
-          {#if Object.keys(liveMetrics).length > 0}
-            <div class="space-y-3">
-              <h3 class="font-semibold text-tokyo-night-fg text-sm">
-                Live Stream Health
-              </h3>
-
-              {#each Object.entries(liveMetrics) as [streamId, metrics]}
-                <div class="p-3 bg-tokyo-night-bg-highlight rounded-lg">
-                  <div class="flex items-center justify-between mb-2">
-                    <span class="text-sm font-medium text-tokyo-night-fg"
-                      >Stream {streamId.slice(0, 8)}</span
-                    >
-                    <div class="flex items-center space-x-1">
-                      <div
-                        class="w-2 h-2 bg-tokyo-night-green rounded-full animate-pulse"
-                      />
-                      <span class="text-xs text-tokyo-night-comment">Live</span>
-                    </div>
-                  </div>
-
-                  <div class="grid grid-cols-2 gap-2 text-xs">
-                    <div>
-                      <span class="text-tokyo-night-comment">Bandwidth:</span>
-                      <span class="text-tokyo-night-fg ml-1"
-                        >{formatBytes(
-                          (metrics.bandwidth_in || 0) +
-                            (metrics.bandwidth_out || 0)
-                        )}/s</span
-                      >
-                    </div>
-                    <div>
-                      <span class="text-tokyo-night-comment">Bitrate:</span>
-                      <span class="text-tokyo-night-fg ml-1"
-                        >{metrics.bitrate_kbps || "Unknown"} kbps</span
-                      >
-                    </div>
-                    {#if metrics.video_codec || metrics.audio_codec}
-                      <div class="col-span-2">
-                        <span class="text-tokyo-night-comment">Codecs:</span>
-                        <span class="text-tokyo-night-fg ml-1">
-                          {#if metrics.video_codec}
-                            Video: {metrics.video_codec}{#if metrics.audio_codec},
-                            {/if}
-                          {/if}
-                          {#if metrics.audio_codec}
-                            Audio: {metrics.audio_codec}
-                          {/if}
-                        </span>
-                      </div>
-                    {/if}
-                  </div>
-                </div>
-              {/each}
-            </div>
-          {/if}
+          <LiveStreamHealthCards
+            {liveMetrics}
+            {formatBytes}
+          />
 
           <!-- Quick Actions for System -->
           <div class="space-y-2">
-            <a
-              href="{base}/analytics/realtime"
-              class="btn-primary w-full text-center block"
+            <Button
+              href={resolve("/analytics/realtime")}
+              class="w-full justify-center gap-2"
             >
-              <svelte:component this={getIconComponent('Zap')} class="w-4 h-4 mr-2" />
+              <SvelteComponent_10 class="w-4 h-4" />
               Real-time Analytics
-            </a>
-            <a href="{base}/analytics" class="btn-secondary w-full text-center block">
-              <svelte:component this={getIconComponent('BarChart3')} class="w-4 h-4 mr-2" />
+            </Button>
+            <Button
+              href={resolve("/analytics")}
+              variant="outline"
+              class="w-full justify-center gap-2"
+            >
+              <SvelteComponent_11 class="w-4 h-4" />
               Full Analytics
-            </a>
+            </Button>
           </div>
         </div>
       </div>
     </div>
 
     <!-- Quick Setup Guide - Full Width Section -->
-    <div class="mt-8">
-      <div class="card">
-        <div class="card-header">
-          <h2 class="text-xl font-semibold text-tokyo-night-fg mb-2">
-            New to Streaming?
-          </h2>
-          <p class="text-tokyo-night-fg-dark">
-            Quick setup guide for streaming with OBS
-          </p>
-        </div>
-
-        <div class="space-y-4">
-          <!-- Step 1 -->
-          <div class="flex items-start space-x-4">
-            <div
-              class="w-8 h-8 bg-tokyo-night-cyan text-tokyo-night-bg font-bold rounded-full flex items-center justify-center text-sm"
-            >
-              1
-            </div>
-            <div>
-              <h3 class="font-semibold text-tokyo-night-fg">
-                Get OBS Studio (It's Free!)
-              </h3>
-              <p class="text-sm text-tokyo-night-fg-dark">
-                The most popular streaming software - works on any computer
-              </p>
-              <a
-                href="https://obsproject.com/"
-                target="_blank"
-                class="text-tokyo-night-cyan hover:underline text-sm"
-              >
-                Download OBS Studio →
-              </a>
-            </div>
-          </div>
-
-          <!-- Step 2 -->
-          <div class="flex items-start space-x-4">
-            <div
-              class="w-8 h-8 bg-tokyo-night-cyan text-tokyo-night-bg font-bold rounded-full flex items-center justify-center text-sm"
-            >
-              2
-            </div>
-            <div>
-              <h3 class="font-semibold text-tokyo-night-fg">
-                Connect OBS to FrameWorks
-              </h3>
-              <p class="text-sm text-tokyo-night-fg-dark mb-2">
-                Just copy these settings into OBS (Settings → Stream):
-              </p>
-              <div
-                class="bg-tokyo-night-bg-highlight p-3 rounded border border-tokyo-night-fg-gutter"
-              >
-                <p class="text-xs text-tokyo-night-comment">Server URL:</p>
-                <p class="font-mono text-sm text-tokyo-night-fg">
-                  rtmp://localhost:1935/live
-                </p>
-                <p class="text-xs text-tokyo-night-comment mt-2">Stream Key:</p>
-                <p class="font-mono text-sm text-tokyo-night-fg">
-                  {primaryStream?.streamKey
-                    ? `${primaryStream.streamKey.slice(0, 12)}...`
-                    : "Create a stream first"}
-                </p>
-              </div>
-            </div>
-          </div>
-
-          <!-- Step 3 -->
-          <div class="flex items-start space-x-4">
-            <div
-              class="w-8 h-8 bg-tokyo-night-cyan text-tokyo-night-bg font-bold rounded-full flex items-center justify-center text-sm"
-            >
-              3
-            </div>
-            <div>
-              <h3 class="font-semibold text-tokyo-night-fg">Start Streaming</h3>
-              <p class="text-sm text-tokyo-night-fg-dark">
-                Click "Start Streaming" in OBS to begin broadcasting
-              </p>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
+    <ObsSetupGuide streamKey={primaryStream?.streamKey || null} />
   </div>
 {/if}

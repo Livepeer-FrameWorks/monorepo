@@ -1,2 +1,4 @@
-# User authentication queries - handled via REST API
-# This file is kept for future GraphQL auth queries if needed
+# Placeholder auth query. Replace when real auth GraphQL operations are added.
+query AuthPlaceholder {
+  __typename
+}

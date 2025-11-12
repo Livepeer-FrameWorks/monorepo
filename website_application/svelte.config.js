@@ -1,16 +1,16 @@
-import adapter from '@sveltejs/adapter-node';
-import { vitePreprocess } from '@sveltejs/kit/vite';
+import adapter from "@sveltejs/adapter-node";
+import { vitePreprocess } from "@sveltejs/vite-plugin-svelte";
 
 /** @type {import('@sveltejs/kit').Config} */
 const config = {
-	preprocess: vitePreprocess(),
+  preprocess: vitePreprocess(),
 
-	kit: {
-		adapter: adapter(),
-		paths: {
-			base: process.env.BASE_PATH || ''
-		}
-	}
+  kit: {
+    adapter: adapter(),
+    paths: {
+      base: process.env.BASE_PATH || "",
+    },
+  },
 };
 
-export default config; 
+export default config;

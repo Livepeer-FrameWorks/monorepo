@@ -2,8 +2,9 @@
   import { onMount } from 'svelte';
   import { errorBoundary } from '$lib/stores/errorBoundary.js';
   import { toast } from '$lib/stores/toast.js';
+  import { Button } from "$lib/components/ui/button";
 
-  let errorState = { hasError: false, error: null, errorMessage: null, errorInfo: null };
+  let errorState = $state({ hasError: false, error: null, errorMessage: null, errorInfo: null });
   
   // Subscribe to error boundary store
   errorBoundary.subscribe((state) => {
@@ -95,18 +96,12 @@
       </div>
 
       <div class="flex justify-end space-x-3">
-        <button
-          class="btn-secondary"
-          on:click={handleDismiss}
-        >
+        <Button variant="outline" onclick={handleDismiss}>
           Dismiss
-        </button>
-        <button
-          class="btn-primary"
-          on:click={handleReload}
-        >
+        </Button>
+        <Button onclick={handleReload}>
           Reload Page
-        </button>
+        </Button>
       </div>
 
       <div class="mt-4 pt-4 border-t border-tokyo-night-fg-gutter">

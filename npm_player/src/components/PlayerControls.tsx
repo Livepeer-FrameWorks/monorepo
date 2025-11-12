@@ -1,15 +1,20 @@
-import React, { useState, useEffect } from 'react';
-import { globalPlayerManager } from '../core';
-import { 
-  PlayPauseIcon, 
-  SkipBackIcon, 
-  SkipForwardIcon, 
-  VolumeIcon, 
-  FullscreenToggleIcon, 
-  PictureInPictureIcon, 
-  ClosedCaptionsIcon, 
-  LiveIcon 
-} from './Icons';
+import React, { useEffect, useMemo, useState } from "react";
+import { globalPlayerManager } from "../core";
+import { cn } from "../lib/utils";
+import { Badge } from "../ui/badge";
+import { Button } from "../ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
+import { Slider } from "../ui/slider";
+import {
+  ClosedCaptionsIcon,
+  FullscreenToggleIcon,
+  LiveIcon,
+  PictureInPictureIcon,
+  PlayPauseIcon,
+  SkipBackIcon,
+  SkipForwardIcon,
+  VolumeIcon
+} from "./Icons";
 
 interface PlayerControlsProps {
   currentTime: number;
@@ -19,517 +24,334 @@ interface PlayerControlsProps {
   onSeek?: (time: number) => void;
 }
 
-const PlayerControls: React.FC<PlayerControlsProps> = ({ 
-  currentTime, 
-  duration, 
+const SPEED_PRESETS = [0.5, 1, 1.5, 2];
+
+const PlayerControls: React.FC<PlayerControlsProps> = ({
+  currentTime,
+  duration,
   isVisible = true,
-  className = '',
-  onSeek 
+  className,
+  onSeek
 }) => {
   if (!isVisible) return null;
 
+  const player = globalPlayerManager.getCurrentPlayer();
+  const video = player?.getVideoElement();
+  const qualities = player?.getQualities?.() ?? [];
+  const textTracks = player?.getTextTracks?.() ?? [];
+
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [isMuted, setIsMuted] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [volumeValue, setVolumeValue] = useState<number>(() => {
+    if (!video) return 100;
+    return Math.round(video.volume * 100);
+  });
+  const [playbackRate, setPlaybackRate] = useState<number>(() => video?.playbackRate ?? 1);
+  const [qualityValue, setQualityValue] = useState<string>("auto");
+  const [captionValue, setCaptionValue] = useState<string>("none");
+
   const formatTime = (seconds: number): string => {
-    const t = Math.floor(seconds);
-    const m = String(Math.floor(t / 60)).padStart(2, '0');
-    const s = String(t % 60).padStart(2, '0');
-    return `${m}:${s}`;
+    if (!Number.isFinite(seconds) || seconds < 0) {
+      return "LIVE";
+    }
+    const total = Math.floor(seconds);
+    const hours = Math.floor(total / 3600);
+    const minutes = Math.floor((total % 3600) / 60);
+    const secs = total % 60;
+    if (hours > 0) {
+      return `${hours}:${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+    }
+    return `${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
   };
 
-  const handlePlayPause = () => {
-    const player = globalPlayerManager.getCurrentPlayer();
-    const video = player?.getVideoElement();
+  const isLive = player?.isLive?.() || !Number.isFinite(duration);
+  const isNearLive = isLive && video && Number.isFinite(video.duration)
+    ? video.duration - video.currentTime < 2
+    : false;
+
+  const qualityOptions = useMemo(() => {
+    const opts = qualities.map((quality) => ({
+      value: quality.id,
+      label: quality.label
+    }));
+    if (!opts.some((opt) => opt.value === "auto")) {
+      opts.unshift({ value: "auto", label: "Auto" });
+    }
+    return opts;
+  }, [qualities]);
+
+  const captionOptions = useMemo(() => {
+    const base = [{ value: "none", label: "Off" }];
+    if (!textTracks.length) return base;
+    return base.concat(textTracks.map((track) => ({ value: track.id, label: track.label ?? track.id })));
+  }, [textTracks]);
+
+  useEffect(() => {
     if (!video) return;
-    
+
+    const updatePlayingState = () => setIsPlaying(!video.paused);
+    const updateMutedState = () => {
+      const muted = video.muted || video.volume === 0;
+      setIsMuted(muted);
+      setVolumeValue(Math.round(video.volume * 100));
+    };
+    const updateFullscreenState = () => {
+      if (typeof document === "undefined") return;
+      setIsFullscreen(!!document.fullscreenElement);
+    };
+    const updatePlaybackRate = () => setPlaybackRate(video.playbackRate);
+
+    updatePlayingState();
+    updateMutedState();
+    updateFullscreenState();
+    updatePlaybackRate();
+
+    video.addEventListener("play", updatePlayingState);
+    video.addEventListener("pause", updatePlayingState);
+    video.addEventListener("volumechange", updateMutedState);
+    video.addEventListener("ratechange", updatePlaybackRate);
+
+    if (typeof document !== "undefined") {
+      document.addEventListener("fullscreenchange", updateFullscreenState);
+    }
+
+    return () => {
+      video.removeEventListener("play", updatePlayingState);
+      video.removeEventListener("pause", updatePlayingState);
+      video.removeEventListener("volumechange", updateMutedState);
+      video.removeEventListener("ratechange", updatePlaybackRate);
+      if (typeof document !== "undefined") {
+        document.removeEventListener("fullscreenchange", updateFullscreenState);
+      }
+    };
+  }, [video]);
+
+  useEffect(() => {
+    const activeTrack = textTracks.find((track) => track.active);
+    setCaptionValue(activeTrack ? activeTrack.id : "none");
+  }, [textTracks]);
+
+  const handlePlayPause = () => {
+    if (!video) return;
     if (video.paused) {
-      video.play().catch(() => {});
+      video.play().catch(() => undefined);
     } else {
       video.pause();
     }
   };
 
-  const handleSeek = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const player = globalPlayerManager.getCurrentPlayer();
-    const video = player?.getVideoElement();
-    if (!video || !isFinite(video.duration)) return;
-    
-    const pct = Number(event.target.value) / 1000;
-    const newTime = video.duration * pct;
-    video.currentTime = newTime;
-    onSeek?.(newTime);
-  };
-
-  const handleMute = () => {
-    const player = globalPlayerManager.getCurrentPlayer();
-    if (!player) return;
-    player.setMuted?.(!player.isMuted?.());
-  };
-
-  const handleVolumeChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const player = globalPlayerManager.getCurrentPlayer();
-    const video = player?.getVideoElement();
-    if (!video) return;
-    video.volume = Math.max(0, Math.min(1, Number(event.target.value) / 100));
-  };
-
   const handleSkipBack = () => {
-    const video = globalPlayerManager.getCurrentPlayer()?.getVideoElement();
     if (!video) return;
     video.currentTime = Math.max(0, video.currentTime - 10);
   };
 
   const handleSkipForward = () => {
-    const video = globalPlayerManager.getCurrentPlayer()?.getVideoElement();
     if (!video) return;
-    const maxTime = isFinite(video.duration) ? video.duration : video.currentTime + 10;
+    const maxTime = Number.isFinite(video.duration) ? video.duration : video.currentTime + 10;
     video.currentTime = Math.min(maxTime, video.currentTime + 10);
   };
 
-  const handleFullscreen = () => {
-    const container = document.querySelector('[data-player-container="true"]') as HTMLElement;
-    if (!container) return;
-    
-    if (document.fullscreenElement) {
-      document.exitFullscreen().catch(() => {});
+  const handleSeekChange = (value: number[]) => {
+    const pct = value[0] ?? 0;
+    if (!video || !Number.isFinite(video.duration)) return;
+    const newTime = video.duration * (pct / 1000);
+    video.currentTime = newTime;
+    onSeek?.(newTime);
+  };
+
+  const handleMute = () => {
+    if (!player || !video) return;
+    const nextMuted = !(player.isMuted?.() ?? video.muted);
+    player.setMuted?.(nextMuted);
+    video.muted = nextMuted;
+    setIsMuted(nextMuted);
+    if (nextMuted) {
+      setVolumeValue(0);
     } else {
-      container.requestFullscreen().catch(() => {});
+      setVolumeValue(Math.round(video.volume * 100));
+    }
+  };
+
+  const handleVolumeChange = (value: number[]) => {
+    if (!video) return;
+    const next = Math.max(0, Math.min(100, value[0] ?? 0));
+    const normalized = next / 100;
+    video.volume = normalized;
+    video.muted = next === 0;
+    setVolumeValue(next);
+    setIsMuted(next === 0);
+  };
+
+  const handleFullscreen = () => {
+    if (typeof document === "undefined") return;
+    const container = document.querySelector('[data-player-container="true"]') as HTMLElement | null;
+    if (!container) return;
+    if (document.fullscreenElement) {
+      document.exitFullscreen().catch(() => undefined);
+    } else {
+      container.requestFullscreen().catch(() => undefined);
     }
   };
 
   const handlePictureInPicture = () => {
-    const player = globalPlayerManager.getCurrentPlayer();
     player?.requestPiP?.();
   };
 
   const handleGoLive = () => {
-    const player = globalPlayerManager.getCurrentPlayer();
     player?.jumpToLive?.();
   };
 
-  const handleSpeedChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
-    const player = globalPlayerManager.getCurrentPlayer();
-    const rate = Number(event.target.value);
+  const handleSpeedChange = (value: string) => {
+    const rate = Number(value);
+    setPlaybackRate(rate);
     player?.setPlaybackRate?.(rate);
   };
 
-  const handleQualityChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
-    const player = globalPlayerManager.getCurrentPlayer();
-    player?.selectQuality?.(event.target.value);
+  const handleQualityChange = (value: string) => {
+    setQualityValue(value);
+    player?.selectQuality?.(value);
   };
 
-  const handleCaptionToggle = () => {
-    const player = globalPlayerManager.getCurrentPlayer();
-    const tracks = player?.getTextTracks?.();
-    if (!player || !tracks?.length) return;
-    
-    const active = tracks.find(t => t.active);
-    player.selectTextTrack?.(active ? null : tracks[0].id);
-  };
-
-  const handleCaptionChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
-    const player = globalPlayerManager.getCurrentPlayer();
-    const val = event.target.value;
-    if (val === 'none') {
+  const handleCaptionChange = (value: string) => {
+    setCaptionValue(value);
+    if (value === "none") {
       player?.selectTextTrack?.(null);
     } else {
-      player?.selectTextTrack?.(val);
+      player?.selectTextTrack?.(value);
     }
   };
 
-  // Track state for dynamic icons
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [isMuted, setIsMuted] = useState(false);
-  const [isFullscreen, setIsFullscreen] = useState(false);
-
-  // Get current player state
-  const player = globalPlayerManager.getCurrentPlayer();
-  const video = player?.getVideoElement();
-  const qualities = player?.getQualities?.() || [];
-  const textTracks = player?.getTextTracks?.() || [];
-  const isLive = player?.isLive?.() || (video ? !isFinite(video.duration) : false);
-  const isNearLive = video && isFinite(video.duration) ? (video.duration - video.currentTime) < 2 : false;
-
-  // Update state based on video element
-  useEffect(() => {
-    if (!video) return;
-    
-    const updatePlayingState = () => setIsPlaying(!video.paused);
-    const updateMutedState = () => setIsMuted(video.muted || video.volume === 0);
-    const updateFullscreenState = () => setIsFullscreen(!!document.fullscreenElement);
-    
-    // Initial state
-    updatePlayingState();
-    updateMutedState();
-    updateFullscreenState();
-    
-    // Event listeners
-    video.addEventListener('play', updatePlayingState);
-    video.addEventListener('pause', updatePlayingState);
-    video.addEventListener('volumechange', updateMutedState);
-    document.addEventListener('fullscreenchange', updateFullscreenState);
-    
-    return () => {
-      video.removeEventListener('play', updatePlayingState);
-      video.removeEventListener('pause', updatePlayingState);
-      video.removeEventListener('volumechange', updateMutedState);
-      document.removeEventListener('fullscreenchange', updateFullscreenState);
-    };
-  }, [video]);
-
-  // Calculate seek bar value
-  const seekValue = (() => {
-    if (!isFinite(duration) || duration <= 0) return 0;
+  const seekValue = useMemo(() => {
+    if (!Number.isFinite(duration) || duration <= 0) return 0;
     const pct = currentTime / duration;
     return Math.max(0, Math.min(1000, Math.round(pct * 1000)));
-  })();
+  }, [currentTime, duration]);
 
-  const seekTitle = (() => {
-    if (!isFinite(duration)) return 'Live';
-    const currentFormatted = formatTime(currentTime);
-    const durationFormatted = formatTime(duration);
-    return `${currentFormatted} / ${durationFormatted}`;
-  })();
+  const seekTitle = useMemo(() => {
+    if (!Number.isFinite(duration)) return "Live";
+    return `${formatTime(currentTime)} / ${formatTime(duration)}`;
+  }, [currentTime, duration]);
 
-  // Responsive breakpoints
-  const isMobile = window.innerWidth < 768;
-  const isTablet = window.innerWidth >= 768 && window.innerWidth < 1024;
-
-  const controlsStyles = {
-    container: {
-      position: 'absolute' as const,
-      left: 0,
-      right: 0,
-      bottom: 0,
-      minHeight: isMobile ? '48px' : '56px',
-      display: 'flex',
-      alignItems: 'center',
-      gap: isMobile ? '8px' : '12px',
-      padding: isMobile ? '6px 10px' : '8px 14px',
-      background: 'var(--fw-controls-bg, linear-gradient(180deg, rgba(0,0,0,0) 0%, rgba(0,0,0,0.55) 100%))',
-      color: 'var(--fw-controls-fg, #fff)',
-      flexWrap: 'wrap' as const,
-      fontSize: isMobile ? '12px' : '14px',
-      userSelect: 'none' as const
-    },
-    button: {
-      color: 'inherit',
-      background: 'transparent',
-      border: 0,
-      cursor: 'pointer',
-      padding: isMobile ? '2px' : '4px',
-      borderRadius: '4px',
-      transition: 'background-color 0.2s ease',
-      ':hover': {
-        backgroundColor: 'rgba(255,255,255,0.1)'
-      }
-    },
-    select: {
-      color: 'inherit',
-      background: 'rgba(0,0,0,0.5)',
-      border: '1px solid rgba(255,255,255,0.3)',
-      borderRadius: '4px',
-      padding: '2px 4px',
-      fontSize: isMobile ? '11px' : '12px'
-    },
-    slider: {
-      height: '4px',
-      background: 'rgba(255,255,255,0.3)',
-      outline: 'none',
-      cursor: 'pointer',
-      borderRadius: '2px'
-    }
-  };
+  const timeDisplay = Number.isFinite(duration) ? `${formatTime(currentTime)} / ${formatTime(duration)}` : formatTime(currentTime);
 
   return (
-    <div 
-      className={`player-controls ${className}`}
-      style={controlsStyles.container}
-    >
-      {/* Primary Controls Group */}
-      <div className="controls-group controls-primary" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-        <button
-          className="control-button play-pause"
-          aria-label="Play/Pause"
-          title="Play/Pause (Space)"
-          onClick={handlePlayPause}
-          style={{
-            color: 'inherit',
-            background: 'transparent',
-            border: 0,
-            cursor: 'pointer',
-            fontSize: '16px',
-            padding: '4px',
-            borderRadius: '4px'
-          }}
-        >
-          <PlayPauseIcon isPlaying={isPlaying} size={18} />
-        </button>
+    <div className={cn("fw-player-surface pointer-events-none absolute inset-x-0 bottom-0 px-2 pb-2 sm:px-4 sm:pb-4", className)}>
+      <div className="pointer-events-auto flex w-full flex-wrap items-center gap-2 rounded-lg bg-gradient-to-t from-black/80 via-black/60 to-black/5 px-3 py-2 text-foreground sm:gap-3 sm:px-4 sm:py-3">
+        <div className="flex items-center gap-1 sm:gap-2">
+          <Button type="button" size="icon" variant="ghost" aria-label={isPlaying ? "Pause" : "Play"} onClick={handlePlayPause}>
+            <PlayPauseIcon isPlaying={isPlaying} size={18} />
+          </Button>
+          <Button type="button" size="icon" variant="ghost" aria-label="Skip back 10 seconds" onClick={handleSkipBack}>
+            <SkipBackIcon size={16} />
+          </Button>
+          <Button type="button" size="icon" variant="ghost" aria-label="Skip forward 10 seconds" onClick={handleSkipForward}>
+            <SkipForwardIcon size={16} />
+          </Button>
+        </div>
 
-        <button
-          className="control-button skip-back"
-          aria-label="Skip Back 10s"
-          title="Back 10s (←)"
-          onClick={handleSkipBack}
-          style={{
-            color: 'inherit',
-            background: 'transparent',
-            border: 0,
-            cursor: 'pointer',
-            fontSize: '12px',
-            padding: '4px 6px',
-            borderRadius: '4px'
-          }}
-        >
-          <SkipBackIcon size={18} />
-        </button>
+        <div className="flex min-w-[140px] flex-1 items-center gap-2 sm:min-w-[220px]">
+          <span className="hidden font-mono text-[11px] leading-none text-muted-foreground sm:inline">{timeDisplay}</span>
+          <Slider
+            aria-label="Seek"
+            max={1000}
+            step={1}
+            value={[seekValue]}
+            onValueChange={handleSeekChange}
+            className="relative flex-1"
+            title={seekTitle}
+          />
+        </div>
 
-        <button
-          className="control-button skip-forward"
-          aria-label="Skip Forward 10s"
-          title="Forward 10s (→)"
-          onClick={handleSkipForward}
-          style={{
-            color: 'inherit',
-            background: 'transparent',
-            border: 0,
-            cursor: 'pointer',
-            fontSize: '12px',
-            padding: '4px 6px',
-            borderRadius: '4px'
-          }}
-        >
-          <SkipForwardIcon size={18} />
-        </button>
-      </div>
+        <div className="hidden items-center gap-2 sm:flex">
+          <Button type="button" size="icon" variant="ghost" aria-label={isMuted ? "Unmute" : "Mute"} onClick={handleMute}>
+            <VolumeIcon isMuted={isMuted} size={16} />
+          </Button>
+          <div className="w-[104px]">
+            <Slider
+              aria-label="Volume"
+              max={100}
+              step={1}
+              value={[volumeValue]}
+              onValueChange={handleVolumeChange}
+              className="w-full"
+            />
+          </div>
+        </div>
 
-      {/* Time Display */}
-      <span 
-        className="time-display"
-        style={{ 
-          color: 'inherit', 
-          fontVariantNumeric: 'tabular-nums', 
-          fontSize: '12px',
-          minWidth: '40px'
-        }}
-      >
-        {formatTime(currentTime)}
-      </span>
+        <div className="flex items-center gap-2 sm:ml-auto sm:gap-3">
+          {textTracks.length > 0 && (
+            <Select value={captionValue} onValueChange={handleCaptionChange}>
+              <SelectTrigger className="w-[120px]">
+                <div className="flex items-center gap-2">
+                  <ClosedCaptionsIcon size={16} />
+                  <SelectValue />
+                </div>
+              </SelectTrigger>
+              <SelectContent>
+                {captionOptions.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
 
-      {/* Seek Bar */}
-      <input
-        className="seek-bar"
-        aria-label="Seek"
-        title={seekTitle}
-        type="range"
-        min={0}
-        max={1000}
-        value={seekValue}
-        onChange={handleSeek}
-        style={{
-          flex: 1,
-          minWidth: '160px',
-          height: '4px',
-          background: 'rgba(255,255,255,0.3)',
-          outline: 'none',
-          cursor: 'pointer'
-        }}
-      />
+          {qualityOptions.length > 0 && (
+            <Select value={qualityValue} onValueChange={handleQualityChange}>
+              <SelectTrigger className="w-[110px]">
+                <SelectValue placeholder="Quality" />
+              </SelectTrigger>
+              <SelectContent>
+                {qualityOptions.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
 
-      {/* Audio Controls Group */}
-      <div className="controls-group controls-audio" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-        <button
-          className="control-button mute"
-          aria-label="Mute"
-          title="Mute (M)"
-          onClick={handleMute}
-          style={{
-            color: 'inherit',
-            background: 'transparent',
-            border: 0,
-            cursor: 'pointer',
-            fontSize: '14px',
-            padding: '4px',
-            borderRadius: '4px'
-          }}
-        >
-          <VolumeIcon isMuted={isMuted} size={16} />
-        </button>
-
-        <input
-          className="volume-slider"
-          aria-label="Volume"
-          title="Volume (↑/↓)"
-          type="range"
-          min={0}
-          max={100}
-          defaultValue={100}
-          onChange={handleVolumeChange}
-          style={{
-            width: '60px',
-            height: '4px',
-            background: 'rgba(255,255,255,0.3)',
-            outline: 'none',
-            cursor: 'pointer'
-          }}
-        />
-      </div>
-
-      {/* Settings Group */}
-      <div className="controls-group controls-settings" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-        {/* Caption Controls */}
-        {textTracks.length > 0 && (
-          <>
-            <button
-              className="control-button captions"
-              aria-label="Toggle Captions"
-              title="Toggle captions"
-              onClick={handleCaptionToggle}
-              style={{
-                color: 'inherit',
-                background: 'transparent',
-                border: 0,
-                cursor: 'pointer',
-                fontSize: '12px',
-                padding: '4px 6px',
-                borderRadius: '4px'
-              }}
-            >
-              <ClosedCaptionsIcon size={16} />
-            </button>
-
-            <select
-              className="caption-track-select"
-              aria-label="Caption Track"
-              defaultValue="none"
-              onChange={handleCaptionChange}
-              style={{
-                color: 'inherit',
-                background: 'rgba(0,0,0,0.5)',
-                border: '1px solid rgba(255,255,255,0.3)',
-                borderRadius: '4px',
-                padding: '2px 4px',
-                fontSize: '12px'
-              }}
-            >
-              <option value="none">None</option>
-              {textTracks.map(track => (
-                <option key={track.id} value={track.id}>
-                  {track.label}
-                </option>
+          <Select value={String(playbackRate)} onValueChange={handleSpeedChange}>
+            <SelectTrigger className="w-[90px]">
+              <SelectValue placeholder="Speed" />
+            </SelectTrigger>
+            <SelectContent>
+              {SPEED_PRESETS.map((rate) => (
+                <SelectItem key={rate} value={String(rate)}>
+                  {rate}x
+                </SelectItem>
               ))}
-            </select>
-          </>
-        )}
+            </SelectContent>
+          </Select>
+        </div>
 
-        {/* Quality Control */}
-        {qualities.length > 0 && (
-          <select
-            className="quality-select"
-            aria-label="Quality"
-            defaultValue="auto"
-            onChange={handleQualityChange}
-            style={{
-              color: 'inherit',
-              background: 'rgba(0,0,0,0.5)',
-              border: '1px solid rgba(255,255,255,0.3)',
-              borderRadius: '4px',
-              padding: '2px 4px',
-              fontSize: '12px'
-            }}
-          >
-            {qualities.map(quality => (
-              <option key={quality.id} value={quality.id}>
-                {quality.label}
-              </option>
-            ))}
-          </select>
-        )}
-
-        {/* Speed Control */}
-        <select
-          className="speed-select"
-          aria-label="Speed"
-          defaultValue="1"
-          onChange={handleSpeedChange}
-          style={{
-            color: 'inherit',
-            background: 'rgba(0,0,0,0.5)',
-            border: '1px solid rgba(255,255,255,0.3)',
-            borderRadius: '4px',
-            padding: '2px 4px',
-            fontSize: '12px'
-          }}
-        >
-          <option value="0.5">0.5x</option>
-          <option value="1">1x</option>
-          <option value="1.5">1.5x</option>
-          <option value="2">2x</option>
-        </select>
-      </div>
-
-      {/* Live/System Controls Group */}
-      <div className="controls-group controls-system" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-        {/* Live Button */}
-        {isLive && (
-          <button
-            className="control-button go-live"
-            aria-label="Go Live"
-            title="Jump to live"
-            onClick={handleGoLive}
-            style={{
-              color: 'inherit',
-              background: 'transparent',
-              border: 0,
-              cursor: 'pointer',
-              fontSize: '12px',
-              padding: '4px 6px',
-              borderRadius: '4px',
-              fontWeight: isNearLive ? 'bold' : 'normal'
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-              <LiveIcon size={12} color={isNearLive ? '#ff4444' : 'currentColor'} />
-              LIVE
-            </div>
-          </button>
-        )}
-
-        {/* Fullscreen */}
-        <button
-          className="control-button fullscreen"
-          aria-label="Fullscreen"
-          title="Fullscreen (F)"
-          onClick={handleFullscreen}
-          style={{
-            color: 'inherit',
-            background: 'transparent',
-            border: 0,
-            cursor: 'pointer',
-            fontSize: '14px',
-            padding: '4px',
-            borderRadius: '4px'
-          }}
-        >
-          <FullscreenToggleIcon isFullscreen={isFullscreen} size={16} />
-        </button>
-
-        {/* Picture in Picture */}
-        <button
-          className="control-button pip"
-          aria-label="Picture in Picture"
-          title="Picture in Picture"
-          onClick={handlePictureInPicture}
-          style={{
-            color: 'inherit',
-            background: 'transparent',
-            border: 0,
-            cursor: 'pointer',
-            fontSize: '14px',
-            padding: '4px',
-            borderRadius: '4px'
-          }}
-        >
-          <PictureInPictureIcon size={16} />
-        </button>
+        <div className="flex items-center gap-2 sm:gap-3">
+          {isLive && (
+            <Button
+              type="button"
+              variant="ghost"
+              className="inline-flex items-center gap-2 text-xs uppercase tracking-wide"
+              onClick={handleGoLive}
+            >
+              <Badge
+                variant={isNearLive ? "default" : "outline"}
+                className={cn("flex items-center gap-1 px-2 py-0.5", !isNearLive && "bg-transparent text-foreground")}
+              >
+                <LiveIcon size={10} color={isNearLive ? "#ffffff" : "currentColor"} />
+                Live
+              </Badge>
+              {!isNearLive && <span className="text-muted-foreground">Catch up</span>}
+            </Button>
+          )}
+          <Button type="button" size="icon" variant="ghost" aria-label="Toggle fullscreen" onClick={handleFullscreen}>
+            <FullscreenToggleIcon isFullscreen={isFullscreen} size={16} />
+          </Button>
+          <Button type="button" size="icon" variant="ghost" aria-label="Toggle picture in picture" onClick={handlePictureInPicture}>
+            <PictureInPictureIcon size={16} />
+          </Button>
+        </div>
       </div>
     </div>
   );

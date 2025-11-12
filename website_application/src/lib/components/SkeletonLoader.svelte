@@ -1,12 +1,23 @@
 <script>
-  /** @type {'text' | 'text-sm' | 'text-lg' | 'card' | 'avatar' | 'chart' | 'metric' | 'table-row' | 'custom'} */
-  export let type = 'text';
-  /** @type {string} */
-  export let className = '';
-  /** @type {number} */
-  export let count = 1;
-  /** @type {boolean} */
-  export let inline = false;
+  
+  
+  
+  
+  /**
+   * @typedef {Object} Props
+   * @property {'text' | 'text-sm' | 'text-lg' | 'card' | 'avatar' | 'chart' | 'metric' | 'table-row' | 'custom'} [type]
+   * @property {string} [className]
+   * @property {number} [count]
+   * @property {boolean} [inline]
+   */
+
+  /** @type {Props} */
+  let {
+    type = 'text',
+    className = '',
+    count = 1,
+    inline = false
+  } = $props();
 
   const baseClasses = {
     'text': 'skeleton-text',
@@ -24,12 +35,12 @@
 </script>
 
 <div class={containerClass}>
-  {#each Array(count) as _, i}
+  {#each Array(count) as _, i (i)}
     <div 
       class="{baseClasses[type]} {className}"
       style="animation-delay: {i * 0.1}s"
       role="presentation"
       aria-hidden="true"
-    />
+></div>
   {/each}
 </div>

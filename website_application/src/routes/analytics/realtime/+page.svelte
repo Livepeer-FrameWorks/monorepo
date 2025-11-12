@@ -1,57 +1,46 @@
 <script>
   import { onMount, onDestroy } from "svelte";
-  import { base } from "$app/paths";
+  import { resolve } from "$app/paths";
   import { auth } from "$lib/stores/auth";
   import { streamsService } from "$lib/graphql/services/streams.js";
   import { analyticsService } from "$lib/graphql/services/analytics.js";
   import { infrastructureService } from "$lib/graphql/services/infrastructure.js";
-  import { routingService } from "$lib/graphql/services/routing.js";
-  import { performanceService } from "$lib/graphql/services/performance.js";
   import { subscribeToSystemHealth } from "$lib/stores/realtime.js";
   import { toast } from "$lib/stores/toast.js";
-  import { getIconComponent } from "$lib/iconUtils.js";
+  import { getIconComponent } from "$lib/iconUtils";
+  import { Button } from "$lib/components/ui/button";
 
   let isAuthenticated = false;
-  /** @type {any} */
-  let user = null;
-  let loading = true;
+  let loading = $state(true);
   /** @type {ReturnType<typeof setInterval> | null} */
   let refreshInterval = null;
   let unsubscribeSystemHealth = null;
 
   // Real streams data
   /** @type {any[]} */
-  let streams = [];
+  let streams = $state([]);
   
   // Real-time metrics aggregated from actual streams
-  let liveMetrics = {
+  let liveMetrics = $state({
     totalViewers: 0,
     activeStreams: 0,
     totalBandwidthIn: 0,
     totalBandwidthOut: 0,
     avgLatency: "N/A",
     lastUpdated: new Date()
-  };
+  });
 
   // Real viewer activity from actual stream metrics (last 20 data points)
   /** @type {Array<{time: Date, viewers: number}>} */
-  let viewerActivity = [];
+  let viewerActivity = $state([]);
 
   // Real node data from infrastructure service
   /** @type {Array<any>} */
-  let nodeData = [];
-
-  // Routing and performance data
-  /** @type {Array<any>} */
-  let routingEvents = [];
-  let routingEfficiency = { efficiency: 0, avgScore: 0, totalDecisions: 0 };
-  let nodeHealth = { healthy: 0, degraded: 0, unhealthy: 0, total: 0 };
-  let platformPerformance = { totalViewers: 0, avgViewers: 0, avgConnectionQuality: 0 };
+  let nodeData = $state([]);
 
   // Subscribe to auth store
   auth.subscribe((/** @type {any} */ authState) => {
     isAuthenticated = authState.isAuthenticated;
-    user = authState.user?.user || null;
     streams = authState.user?.streams || [];
   });
 
@@ -61,8 +50,6 @@
     }
     await loadRealStreams();
     await loadNodeData();
-    await loadRoutingData();
-    await loadPerformanceData();
     await updateRealTimeMetrics();
     startRealTimeUpdates();
     // Subscribe to system health for self-hosted infrastructure monitoring
@@ -122,48 +109,10 @@
   async function loadNodeData() {
     try {
       nodeData = await infrastructureService.getNodes();
-      console.log("Node data loaded:", nodeData);
     } catch (error) {
       console.error("Error loading node data:", error);
       toast.warning("Failed to load infrastructure data. Node information may be unavailable.");
       nodeData = [];
-    }
-  }
-
-  async function loadRoutingData() {
-    try {
-      const timeRange = {
-        start: new Date(Date.now() - 60 * 60 * 1000).toISOString(), // Last hour
-        end: new Date().toISOString()
-      };
-      
-      // Load recent routing events and efficiency data
-      const [events, efficiency, health] = await Promise.all([
-        routingService.getPlatformRoutingEvents(timeRange),
-        routingService.getRoutingEfficiency(null, timeRange), // All streams
-        routingService.getNodeHealthSummary(timeRange)
-      ]);
-      
-      routingEvents = events;
-      routingEfficiency = efficiency;
-      nodeHealth = health;
-    } catch (error) {
-      console.error("Failed to load routing data:", error);
-      toast.warning("Failed to load routing data. Load balancing information may be unavailable.");
-    }
-  }
-
-  async function loadPerformanceData() {
-    try {
-      const timeRange = {
-        start: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
-        end: new Date().toISOString()
-      };
-      
-      platformPerformance = await performanceService.getPlatformSummary(timeRange);
-    } catch (error) {
-      console.error("Failed to load performance data:", error);
-      toast.warning("Failed to load performance data. Platform metrics may be incomplete.");
     }
   }
 
@@ -188,7 +137,10 @@
   }
 
   // Calculate max viewer count for chart scaling
-  $: maxViewers = viewerActivity.length > 0 ? Math.max(...viewerActivity.map(point => point.viewers)) : 1;
+  let maxViewers = $derived(viewerActivity.length > 0 ? Math.max(...viewerActivity.map(point => point.viewers)) : 1);
+
+  const SvelteComponent = $derived(getIconComponent('Zap'));
+  const SvelteComponent_1 = $derived(getIconComponent('RefreshCw'));
 </script>
 
 <svelte:head>
@@ -200,7 +152,7 @@
   <div class="flex justify-between items-start">
     <div>
       <div class="flex items-center space-x-3 mb-2">
-        <svelte:component this={getIconComponent('Zap')} class="w-8 h-8 text-tokyo-night-fg" />
+        <SvelteComponent class="w-8 h-8 text-tokyo-night-fg" />
         <h1 class="text-3xl font-bold text-tokyo-night-fg">Real-time Analytics</h1>
       </div>
       <p class="text-tokyo-night-fg-dark">
@@ -215,21 +167,26 @@
           Live • Updated {liveMetrics.lastUpdated.toLocaleTimeString()}
         </span>
       </div>
-      <button class="btn-secondary" on:click={updateRealTimeMetrics}>
-        <svelte:component this={getIconComponent('RefreshCw')} class="w-4 h-4 mr-2" />
+      <Button variant="outline" onclick={updateRealTimeMetrics}>
+        <SvelteComponent_1 class="w-4 h-4 mr-2" />
         Refresh
-      </button>
+      </Button>
     </div>
   </div>
 
   {#if loading}
     <div class="flex items-center justify-center min-h-64">
-      <div class="loading-spinner w-8 h-8" />
+      <div class="loading-spinner w-8 h-8"></div>
     </div>
   {:else}
     <!-- Real Live Metrics Cards -->
+    {@const SvelteComponent_2 = getIconComponent('Users')}
+    {@const SvelteComponent_3 = getIconComponent('Video')}
+    {@const SvelteComponent_4 = getIconComponent('Download')}
+    {@const SvelteComponent_5 = getIconComponent('Upload')}
+    {@const SvelteComponent_6 = getIconComponent('Zap')}
     <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-6">
-      <div class="glow-card p-6 relative overflow-hidden">
+      <div class="metric-card relative overflow-hidden">
         <div class="flex items-center justify-between">
           <div>
             <p class="text-sm text-tokyo-night-comment">Total Viewers</p>
@@ -237,12 +194,12 @@
               {liveMetrics.totalViewers}
             </p>
           </div>
-          <svelte:component this={getIconComponent('Users')} class="w-6 h-6 text-tokyo-night-blue" />
+          <SvelteComponent_2 class="w-6 h-6 text-tokyo-night-blue" />
         </div>
         <div class="absolute bottom-0 left-0 right-0 h-1 bg-tokyo-night-blue opacity-20 animate-pulse"></div>
       </div>
 
-      <div class="glow-card p-6 relative overflow-hidden">
+      <div class="metric-card relative overflow-hidden">
         <div class="flex items-center justify-between">
           <div>
             <p class="text-sm text-tokyo-night-comment">Active Streams</p>
@@ -251,12 +208,12 @@
             </p>
             <p class="text-xs text-tokyo-night-comment">of {streams.length} total</p>
           </div>
-          <svelte:component this={getIconComponent('Video')} class="w-6 h-6 text-tokyo-night-green" />
+          <SvelteComponent_3 class="w-6 h-6 text-tokyo-night-green" />
         </div>
         <div class="absolute bottom-0 left-0 right-0 h-1 bg-tokyo-night-green opacity-20 animate-pulse"></div>
       </div>
 
-      <div class="glow-card p-6 relative overflow-hidden">
+      <div class="metric-card relative overflow-hidden">
         <div class="flex items-center justify-between">
           <div>
             <p class="text-sm text-tokyo-night-comment">Bandwidth In</p>
@@ -264,12 +221,12 @@
               {formatBandwidth(liveMetrics.totalBandwidthIn)}
             </p>
           </div>
-          <svelte:component this={getIconComponent('Download')} class="w-6 h-6 text-tokyo-night-cyan" />
+          <SvelteComponent_4 class="w-6 h-6 text-tokyo-night-cyan" />
         </div>
         <div class="absolute bottom-0 left-0 right-0 h-1 bg-tokyo-night-cyan opacity-20 animate-pulse"></div>
       </div>
 
-      <div class="glow-card p-6 relative overflow-hidden">
+      <div class="metric-card relative overflow-hidden">
         <div class="flex items-center justify-between">
           <div>
             <p class="text-sm text-tokyo-night-comment">Bandwidth Out</p>
@@ -277,12 +234,12 @@
               {formatBandwidth(liveMetrics.totalBandwidthOut)}
             </p>
           </div>
-          <svelte:component this={getIconComponent('Upload')} class="w-6 h-6 text-tokyo-night-yellow" />
+          <SvelteComponent_5 class="w-6 h-6 text-tokyo-night-yellow" />
         </div>
         <div class="absolute bottom-0 left-0 right-0 h-1 bg-tokyo-night-yellow opacity-20 animate-pulse"></div>
       </div>
 
-      <div class="glow-card p-6 relative overflow-hidden">
+      <div class="metric-card relative overflow-hidden">
         <div class="flex items-center justify-between">
           <div>
             <p class="text-sm text-tokyo-night-comment">Avg Latency</p>
@@ -290,19 +247,21 @@
               {liveMetrics.avgLatency}
             </p>
           </div>
-          <svelte:component this={getIconComponent('Zap')} class="w-6 h-6 text-tokyo-night-purple" />
+          <SvelteComponent_6 class="w-6 h-6 text-tokyo-night-purple" />
         </div>
         <div class="absolute bottom-0 left-0 right-0 h-1 bg-tokyo-night-purple opacity-20 animate-pulse"></div>
       </div>
     </div>
 
     <!-- Real-time Charts -->
+    {@const SvelteComponent_7 = getIconComponent('TrendingUp')}
+    {@const SvelteComponent_8 = getIconComponent('Server')}
     <div class="grid grid-cols-1 xl:grid-cols-3 gap-8">
       <!-- Live Viewer Activity Chart -->
       <div class="xl:col-span-2 card">
         <div class="card-header">
           <div class="flex items-center space-x-2 mb-2">
-            <svelte:component this={getIconComponent('TrendingUp')} class="w-5 h-5 text-tokyo-night-fg" />
+            <SvelteComponent_7 class="w-5 h-5 text-tokyo-night-fg" />
             <h2 class="text-xl font-semibold text-tokyo-night-fg">Live Viewer Activity</h2>
           </div>
           <p class="text-tokyo-night-fg-dark">
@@ -315,7 +274,7 @@
             <!-- Real Chart with actual data -->
             <div class="bg-tokyo-night-bg-highlight p-4 rounded-lg">
               <div class="flex items-end space-x-1 h-40">
-                {#each viewerActivity as point, i}
+                {#each viewerActivity as point, i (point.time.getTime ? point.time.getTime() : i)}
                   <div 
                     class="bg-tokyo-night-blue flex-1 rounded-t transition-all duration-500 relative group"
                     style="height: {maxViewers > 0 ? (point.viewers / maxViewers) * 100 : 0}%"
@@ -359,7 +318,7 @@
       <div class="card">
         <div class="card-header">
           <div class="flex items-center space-x-2 mb-2">
-            <svelte:component this={getIconComponent('Server')} class="w-5 h-5 text-tokyo-night-fg" />
+            <SvelteComponent_8 class="w-5 h-5 text-tokyo-night-fg" />
             <h2 class="text-xl font-semibold text-tokyo-night-fg">Infrastructure Nodes</h2>
           </div>
           <p class="text-tokyo-night-fg-dark">
@@ -369,7 +328,7 @@
 
         <div class="space-y-3">
           {#if nodeData.length > 0}
-            {#each nodeData as node}
+            {#each nodeData as node (node.id ?? node.nodeId ?? node.name)}
               <div class="flex items-center justify-between bg-tokyo-night-bg-highlight p-4 rounded-lg">
                 <div>
                   <h3 class="font-semibold text-tokyo-night-fg">{node.name}</h3>
@@ -398,10 +357,11 @@
     </div>
 
     <!-- Current Active Streams -->
+    {@const SvelteComponent_9 = getIconComponent('Video')}
     <div class="card">
       <div class="card-header">
         <div class="flex items-center space-x-2 mb-2">
-          <svelte:component this={getIconComponent('Video')} class="w-5 h-5 text-tokyo-night-fg" />
+          <SvelteComponent_9 class="w-5 h-5 text-tokyo-night-fg" />
           <h2 class="text-xl font-semibold text-tokyo-night-fg">Active Streams</h2>
         </div>
         <p class="text-tokyo-night-fg-dark">
@@ -411,7 +371,7 @@
 
       {#if streams.length > 0}
         <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {#each streams as stream}
+          {#each streams as stream (stream.id ?? stream.name)}
             <div class="bg-tokyo-night-bg-highlight p-4 rounded-lg border border-tokyo-night-fg-gutter">
               <div class="flex items-center justify-between mb-2">
                 <h3 class="font-semibold text-tokyo-night-fg">
@@ -445,18 +405,20 @@
           {/each}
         </div>
       {:else}
+        {@const SvelteComponent_10 = getIconComponent('Video')}
+        {@const SvelteComponent_11 = getIconComponent('Plus')}
         <div class="text-center py-8">
-          <svelte:component this={getIconComponent('Video')} class="w-16 h-16 text-tokyo-night-comment mx-auto mb-4" />
+          <SvelteComponent_10 class="w-16 h-16 text-tokyo-night-comment mx-auto mb-4" />
           <h3 class="text-lg font-semibold text-tokyo-night-fg mb-2">
             No Streams Found
           </h3>
           <p class="text-tokyo-night-comment mb-4">
             Create your first stream to see real-time analytics
           </p>
-          <a href="{base}/streams" class="btn-primary">
-            <svelte:component this={getIconComponent('Plus')} class="w-4 h-4 mr-2" />
+          <Button href={resolve("/streams")} class="gap-2">
+            <SvelteComponent_11 class="w-4 h-4" />
             Create Stream
-          </a>
+          </Button>
         </div>
       {/if}
     </div>

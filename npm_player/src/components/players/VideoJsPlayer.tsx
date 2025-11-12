@@ -40,7 +40,7 @@ const VideoJsPlayer: React.FC<Props> = ({ src, type = 'application/x-mpegURL', m
   }, [src, type, muted, autoPlay, controls, onError]);
 
   return (
-    <video ref={videoRef} className="video-js vjs-default-skin" playsInline style={{ width: '100%', height: '100%' }} />
+    <video ref={videoRef} className="video-js vjs-default-skin fw-player-video" playsInline />
   );
 };
 
@@ -85,13 +85,13 @@ export class VideoJsPlayerImpl extends BasePlayer {
 
   async initialize(container: HTMLElement, source: StreamSource, options: PlayerOptions): Promise<HTMLVideoElement> {
     this.container = container;
+    container.classList.add('fw-player-container');
     
     const video = document.createElement('video');
-    video.style.width = '100%';
-    video.style.height = '100%';
+    video.classList.add('fw-player-video');
     video.setAttribute('playsinline', '');
     video.setAttribute('crossorigin', 'anonymous');
-    video.className = 'video-js vjs-default-skin';
+    video.className = 'video-js vjs-default-skin fw-player-video';
     
     if (options.autoplay) video.autoplay = true;
     if (options.muted) video.muted = true;
@@ -179,5 +179,3 @@ export class VideoJsPlayerImpl extends BasePlayer {
 }
 
 export default VideoJsPlayer;
-
-

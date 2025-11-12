@@ -21,8 +21,16 @@ fragment RecordingConfigInfo on RecordingConfig {
   segmentDuration
 }
 
-query GetDVRRequests($internalName: String, $status: String, $pagination: PaginationInput) {
-  dvrRequests(internalName: $internalName, status: $status, pagination: $pagination) {
+query GetDVRRequests(
+  $internalName: String
+  $status: String
+  $pagination: PaginationInput
+) {
+  dvrRequests(
+    internalName: $internalName
+    status: $status
+    pagination: $pagination
+  ) {
     dvrRecordings {
       ...DVRRequestInfo
     }

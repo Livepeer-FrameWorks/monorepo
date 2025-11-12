@@ -66,10 +66,10 @@ export class MewsWsPlayerImpl extends BasePlayer {
 
   async initialize(container: HTMLElement, source: StreamSource, options: PlayerOptions): Promise<HTMLVideoElement> {
     this.container = container;
+    container.classList.add('fw-player-container');
     
     const video = document.createElement('video');
-    video.style.width = '100%';
-    video.style.height = '100%';
+    video.classList.add('fw-player-video');
     video.setAttribute('playsinline', '');
     video.setAttribute('crossorigin', 'anonymous');
     
@@ -613,10 +613,8 @@ const MewsWsPlayer: React.FC<Props> = ({ wsUrl, muted = true, autoPlay = true, c
   }, [wsUrl, muted, onError]);
 
   return (
-    <video ref={videoRef} autoPlay={autoPlay} muted={muted} controls={controls} playsInline style={{ width: '100%', height: '100%' }} />
+    <video ref={videoRef} autoPlay={autoPlay} muted={muted} controls={controls} playsInline className="fw-player-video" />
   );
 };
 
 export default MewsWsPlayer;
-
-

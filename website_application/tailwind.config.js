@@ -1,57 +1,69 @@
 /** @type {import('tailwindcss').Config} */
 export default {
-  content: ['./src/**/*.{html,js,svelte,ts}'],
+  content: ["./src/**/*.{html,js,svelte,ts}"],
   theme: {
     extend: {
       colors: {
-        // Tokyo Night color scheme - matching marketing website
-        'tokyo-night': {
-          'bg': '#1a1b26',
-          'bg-dark': '#16161e',
-          'bg-light': '#24283b',
-          'fg': '#c0caf5',
-          'fg-dark': '#a9b1d6',
-          'fg-gutter': '#3b4261',
-          'comment': '#565f89',
-          'cyan': '#7dcfff',
-          'blue': '#7aa2f7',
-          'purple': '#9d7cd8',
-          'red': '#f7768e',
-          'orange': '#ff9e64',
-          'yellow': '#e0af68',
-          'green': '#9ece6a',
-          'teal': '#73daca',
-          'terminal-black': '#414868',
-        }
+        // Tokyo Night color scheme - now using HSL tokens for alpha transparency
+        "tokyo-night": {
+          bg: "hsl(var(--tn-bg) / <alpha-value>)",
+          "bg-dark": "hsl(var(--tn-bg-dark) / <alpha-value>)",
+          "bg-light": "hsl(var(--tn-bg-highlight) / <alpha-value>)",
+          "bg-highlight": "hsl(var(--tn-bg-highlight) / <alpha-value>)",
+          "bg-visual": "hsl(var(--tn-bg-visual) / <alpha-value>)",
+          fg: "hsl(var(--tn-fg) / <alpha-value>)",
+          "fg-dark": "hsl(var(--tn-fg-dark) / <alpha-value>)",
+          "fg-gutter": "hsl(var(--tn-fg-gutter) / <alpha-value>)",
+          comment: "hsl(var(--tn-comment) / <alpha-value>)",
+          terminal: "hsl(var(--tn-terminal) / <alpha-value>)",
+          cyan: "hsl(var(--tn-cyan) / <alpha-value>)",
+          blue: "hsl(var(--tn-blue) / <alpha-value>)",
+          purple: "hsl(var(--tn-purple) / <alpha-value>)",
+          red: "hsl(var(--tn-red) / <alpha-value>)",
+          orange: "hsl(var(--tn-orange) / <alpha-value>)",
+          yellow: "hsl(var(--tn-yellow) / <alpha-value>)",
+          green: "hsl(var(--tn-green) / <alpha-value>)",
+          teal: "hsl(var(--tn-teal) / <alpha-value>)",
+          magenta: "hsl(var(--tn-magenta) / <alpha-value>)",
+          surface: "hsl(var(--tn-bg-highlight) / <alpha-value>)",
+          selection: "hsl(var(--tn-bg-visual) / <alpha-value>)",
+        },
       },
       fontFamily: {
-        'mono': ['JetBrains Mono', 'Fira Code', 'monospace'],
-        'sans': ['Inter', 'system-ui', 'sans-serif'],
+        mono: ["JetBrains Mono", "Fira Code", "monospace"],
+        sans: ["Inter", "system-ui", "sans-serif"],
+      },
+      borderRadius: {
+        lg: "var(--radius)",
+        md: "calc(var(--radius) - 2px)",
+        sm: "calc(var(--radius) - 4px)",
+      },
+      boxShadow: {
+        brand: "0 24px 48px rgba(6, 15, 65, 0.45)",
+        "brand-soft": "0 20px 40px rgba(6, 15, 65, 0.25)",
+        "brand-subtle": "0 12px 28px rgba(6, 15, 65, 0.18)",
+        "brand-strong": "0 32px 64px rgba(6, 15, 65, 0.6)",
+        "inset-brand": "inset 0 1px 0 hsl(var(--tn-fg) / 0.05)",
       },
       animation: {
-        'glow': 'glow 2s ease-in-out infinite alternate',
-        'float': 'float 3s ease-in-out infinite',
-        'pulse-slow': 'pulse 3s ease-in-out infinite',
-        'gradient': 'gradient 6s ease infinite',
+        float: "float 3s ease-in-out infinite",
+        "pulse-slow": "pulse 3s ease-in-out infinite",
+        gradient: "gradient 6s ease infinite",
       },
       keyframes: {
-        glow: {
-          '0%': { boxShadow: '0 0 5px #7aa2f7' },
-          '100%': { boxShadow: '0 0 20px #7aa2f7, 0 0 30px #7aa2f7' }
-        },
         float: {
-          '0%, 100%': { transform: 'translateY(0px)' },
-          '50%': { transform: 'translateY(-10px)' }
+          "0%, 100%": { transform: "translateY(0px)" },
+          "50%": { transform: "translateY(-10px)" },
         },
         gradient: {
-          '0%, 100%': { backgroundPosition: '0% 50%' },
-          '50%': { backgroundPosition: '100% 50%' }
-        }
+          "0%, 100%": { backgroundPosition: "0% 50%" },
+          "50%": { backgroundPosition: "100% 50%" },
+        },
       },
       backgroundSize: {
-        '300%': '300%',
-      }
+        "300%": "300%",
+      },
     },
   },
   plugins: [],
-} 
+};

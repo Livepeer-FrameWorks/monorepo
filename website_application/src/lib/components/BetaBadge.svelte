@@ -1,10 +1,21 @@
-<script>
-  export let label = 'Public Beta';
-  export let className = '';
+<script lang="ts">
+  import { Badge } from "$lib/components/ui/badge";
+
+  interface Props {
+    label?: string;
+    className?: string;
+    variant?: import("$lib/components/ui/badge").BadgeVariant;
+    tone?: import("$lib/components/ui/badge").BadgeTone;
+  }
+
+  let {
+    label = "Public Beta",
+    className = "",
+    variant = "secondary",
+    tone = undefined,
+  }: Props = $props();
 </script>
 
-<span
-  class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold border bg-tokyo-night-blue/15 border-tokyo-night-blue text-tokyo-night-blue {className}"
->
+<Badge class={`uppercase tracking-wide ${className}`} variant={variant} tone={tone}>
   {label}
-</span>
+</Badge>

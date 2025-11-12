@@ -1,7 +1,29 @@
-<script>
-  import { formatBytes, formatDate, formatNumber } from '$lib/utils/formatters.js';
-  export let stream;
-  export let compact = false;
+<script lang="ts">
+  import { formatBytes, formatDate, formatNumber } from "$lib/utils/formatters.js";
+  import { resolve } from "$app/paths";
+  import { Badge } from "$lib/components/ui/badge";
+  interface Props {
+    stream: StreamDetails;
+    compact?: boolean;
+    actions?: import("svelte").Snippet<[StreamDetails]>;
+  }
+
+  interface StreamDetails {
+    streamName?: string;
+    internalName?: string;
+    id?: string;
+    status?: "live" | "offline" | "error" | string;
+    currentViewers?: number;
+    peakViewers?: number;
+    bandwidthOut?: number;
+    totalConnections?: number;
+    resolution?: string;
+    bitrateKbps?: number;
+    location?: string;
+    lastUpdated?: string | number | Date;
+  }
+
+  let { stream, compact = false, actions }: Props = $props();
 </script>
 
 <div class="bg-slate-800 border border-slate-700 rounded-lg p-6 hover:border-slate-600 transition-colors">
@@ -19,12 +41,12 @@
     <!-- Status Badge -->
     <div class="ml-4">
       {#if stream.status}
-        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium {
-          stream.status === 'live' ? 'bg-green-900/30 text-green-400 border border-green-500/30' :
-          stream.status === 'offline' ? 'bg-gray-900/30 text-gray-400 border border-gray-500/30' :
-          stream.status === 'error' ? 'bg-red-900/30 text-red-400 border border-red-500/30' :
-          'bg-slate-700 text-slate-300'
-        }">
+        <Badge
+          variant="outline"
+          tone={stream.status === 'live' ? 'green' :
+                stream.status === 'error' ? 'red' :
+                'neutral'}
+        >
           <span class="w-2 h-2 rounded-full mr-1.5 {
             stream.status === 'live' ? 'bg-green-400' :
             stream.status === 'offline' ? 'bg-gray-400' :
@@ -32,7 +54,7 @@
             'bg-slate-400'
           }"></span>
           {stream.status}
-        </span>
+        </Badge>
       {/if}
     </div>
   </div>
@@ -124,11 +146,11 @@
 
   <!-- Actions -->
   <div class="flex items-center justify-end mt-4 space-x-2">
-    <slot name="actions" {stream} />
+    {@render actions?.({ stream, })}
     
     {#if stream.id}
-      <a 
-        href="/streams/{stream.id}" 
+      <a
+        href={resolve(`/streams/${stream.id}`)}
         class="text-blue-400 hover:text-blue-300 text-sm font-medium transition-colors"
       >
         View Details

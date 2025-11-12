@@ -1,26 +1,25 @@
 <script>
   import { onMount, onDestroy } from "svelte";
-  import { page } from "$app/stores";
+  import { page } from "$app/state";
   import { goto } from "$app/navigation";
-  import { base } from "$app/paths";
+  import { resolve } from "$app/paths";
   import { healthService } from "$lib/graphql/services/health.js";
   import { streamsService } from "$lib/graphql/services/streams.js";
   import HealthScoreIndicator from "$lib/components/health/HealthScoreIndicator.svelte";
   import BufferStateIndicator from "$lib/components/health/BufferStateIndicator.svelte";
-  import QualityMetrics from "$lib/components/health/QualityMetrics.svelte";
   import LoadingCard from "$lib/components/LoadingCard.svelte";
-  import { getIconComponent } from "$lib/iconUtils.js";
+  import { getIconComponent } from "$lib/iconUtils";
 
-  let streamId = $page.params.id;
-  let stream = null;
-  let currentHealth = null;
-  let healthMetrics = [];
-  let healthAlerts = [];
-  let qualityChanges = [];
-  let rebufferingEvents = [];
-  let comprehensiveAnalysis = null;
-  let loading = true;
-  let error = null;
+  let streamId = page.params.id;
+  let stream = $state(null);
+  let currentHealth = $state(null);
+  let healthMetrics = $state([]);
+  let healthAlerts = $state([]);
+  let trackListEvents = $state([]);
+  let rebufferingEvents = $state([]);
+  let comprehensiveAnalysis = $state(null);
+  let loading = $state(true);
+  let error = $state(null);
 
   // Time range for historical data (last 24 hours)
   const timeRange = {
@@ -74,17 +73,17 @@
       loading = true;
       
       // Load all health data in parallel
-      const [healthData, alertsData, changesData, rebufferData, currentData] = await Promise.all([
+      const [healthData, alertsData, trackData, rebufferData, currentData] = await Promise.all([
         healthService.getStreamHealthMetrics(streamId, timeRange),
         healthService.getStreamHealthAlerts(streamId, timeRange),
-        healthService.getStreamQualityChanges(streamId, timeRange),
+        healthService.getTrackListEvents(streamId, timeRange),
         healthService.getRebufferingEvents(streamId, timeRange),
         healthService.getCurrentStreamHealth(streamId)
       ]);
 
       healthMetrics = healthData || [];
       healthAlerts = alertsData || [];
-      qualityChanges = changesData || [];
+      trackListEvents = trackData || [];
       rebufferingEvents = rebufferData || [];
       currentHealth = currentData;
 
@@ -120,7 +119,7 @@
   }
 
   function navigateBack() {
-    goto(`${base}/streams`);
+    goto(resolve("/streams"));
   }
 
   function getTrendColor(trend) {
@@ -139,8 +138,8 @@
     }
   }
 
-  function getStabilityColor(stability) {
-    switch (stability) {
+  function getTrackActivityColor(activity) {
+    switch (activity) {
       case 'stable': return 'text-green-400';
       case 'minor-changes': return 'text-yellow-400';
       case 'unstable': return 'text-red-400';
@@ -157,6 +156,8 @@
       default: return 'text-tokyo-night-fg';
     }
   }
+
+  const SvelteComponent = $derived(getIconComponent('ArrowLeft'));
 </script>
 
 <svelte:head>
@@ -169,10 +170,10 @@
     <div class="mb-8">
       <div class="flex items-center space-x-4 mb-4">
         <button
-          on:click={navigateBack}
+          onclick={navigateBack}
           class="p-2 rounded-lg bg-tokyo-night-surface hover:bg-tokyo-night-selection transition-colors"
         >
-          <svelte:component this={getIconComponent('ArrowLeft')} class="w-5 h-5" />
+          <SvelteComponent class="w-5 h-5" />
         </button>
         
         <div>
@@ -197,12 +198,13 @@
         </div>
       </div>
     {:else if error}
+      {@const SvelteComponent_1 = getIconComponent('AlertTriangle')}
       <div class="bg-red-900/20 border border-red-500/30 rounded-lg p-6 text-center">
-        <svelte:component this={getIconComponent('AlertTriangle')} class="w-12 h-12 text-red-400 mx-auto mb-4" />
+        <SvelteComponent_1 class="w-12 h-12 text-red-400 mx-auto mb-4" />
         <h3 class="text-lg font-semibold text-red-400 mb-2">Error Loading Health Data</h3>
         <p class="text-red-300">{error}</p>
         <button
-          on:click={loadHealthData}
+          onclick={loadHealthData}
           class="mt-4 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors"
         >
           Retry
@@ -263,6 +265,9 @@
 
       <!-- Comprehensive Health Analysis -->
       {#if comprehensiveAnalysis?.analysis}
+        {@const SvelteComponent_2 = getIconComponent(getTrendIcon(comprehensiveAnalysis.analysis.healthTrend))}
+        {@const SvelteComponent_3 = getIconComponent('Activity')}
+        {@const SvelteComponent_4 = getIconComponent('Pause')}
         <div class="bg-tokyo-night-surface rounded-lg p-6 mb-8">
           <h2 class="text-xl font-semibold text-tokyo-night-cyan mb-6">Health Analysis Summary</h2>
           
@@ -282,8 +287,7 @@
             <!-- Health Trend -->
             <div class="text-center">
               <div class="flex items-center justify-center space-x-2 mb-2">
-                <svelte:component 
-                  this={getIconComponent(getTrendIcon(comprehensiveAnalysis.analysis.healthTrend))} 
+                <SvelteComponent_2 
                   class="w-6 h-6 {getTrendColor(comprehensiveAnalysis.analysis.healthTrend)}" 
                 />
                 <span class={getTrendColor(comprehensiveAnalysis.analysis.healthTrend)}>
@@ -293,25 +297,23 @@
               <p class="text-sm text-tokyo-night-comment">Health Trend</p>
             </div>
 
-            <!-- Quality Stability -->
+            <!-- Track Activity -->
             <div class="text-center">
               <div class="flex items-center justify-center space-x-2 mb-2">
-                <svelte:component 
-                  this={getIconComponent('Activity')} 
-                  class="w-6 h-6 {getStabilityColor(comprehensiveAnalysis.analysis.qualityStability)}" 
+                <SvelteComponent_3 
+                  class="w-6 h-6 {getTrackActivityColor(comprehensiveAnalysis.analysis.trackListActivity)}" 
                 />
-                <span class={getStabilityColor(comprehensiveAnalysis.analysis.qualityStability)}>
-                  {comprehensiveAnalysis.analysis.qualityStability.replace('-', ' ')}
+                <span class={getTrackActivityColor(comprehensiveAnalysis.analysis.trackListActivity)}>
+                  {comprehensiveAnalysis.analysis.trackListActivity.replace('-', ' ')}
                 </span>
               </div>
-              <p class="text-sm text-tokyo-night-comment">Quality Stability</p>
+              <p class="text-sm text-tokyo-night-comment">Track Activity</p>
             </div>
 
             <!-- Rebuffer Impact -->
             <div class="text-center">
               <div class="flex items-center justify-center space-x-2 mb-2">
-                <svelte:component 
-                  this={getIconComponent('Pause')} 
+                <SvelteComponent_4 
                   class="w-6 h-6 {getImpactColor(comprehensiveAnalysis.analysis.rebufferImpact)}" 
                 />
                 <span class={getImpactColor(comprehensiveAnalysis.analysis.rebufferImpact)}>
@@ -331,11 +333,11 @@
           
           {#if healthAlerts.length > 0}
             <div class="space-y-3 max-h-96 overflow-y-auto">
-              {#each healthAlerts.slice(0, 10) as alert}
+              {#each healthAlerts.slice(0, 10) as alert (alert.id ?? alert.timestamp)}
+                {@const SvelteComponent_5 = getIconComponent(getAlertTypeIcon(alert.alertType))}
                 <div class="border border-tokyo-night-selection rounded-lg p-3">
                   <div class="flex items-start space-x-3">
-                    <svelte:component 
-                      this={getIconComponent(getAlertTypeIcon(alert.alertType))} 
+                    <SvelteComponent_5 
                       class="w-5 h-5 {healthService.getAlertSeverityColor(alert.severity)} mt-0.5" 
                     />
                     <div class="flex-1">
@@ -359,44 +361,51 @@
           {/if}
         </div>
 
-        <!-- Quality Changes -->
+        <!-- Track List Updates -->
         <div class="bg-tokyo-night-surface rounded-lg p-6">
-          <h3 class="text-lg font-semibold text-tokyo-night-cyan mb-4">Quality Changes</h3>
+          <h3 class="text-lg font-semibold text-tokyo-night-cyan mb-4">Track List Updates</h3>
           
-          {#if qualityChanges.length > 0}
+          {#if trackListEvents.length > 0}
             <div class="space-y-3 max-h-96 overflow-y-auto">
-              {#each qualityChanges.slice(0, 10) as change}
+              {#each trackListEvents.slice(0, 10) as event (event.timestamp ?? event.stream)}
                 <div class="border border-tokyo-night-selection rounded-lg p-3">
                   <div class="flex justify-between items-start mb-2">
-                    <h4 class="font-medium text-tokyo-night-fg">{change.changeType.replace('_', ' ')}</h4>
-                    <span class="text-xs text-tokyo-night-comment">{formatTimestamp(change.timestamp)}</span>
+                    <div>
+                      <h4 class="font-medium text-tokyo-night-fg">{event.trackCount} tracks active</h4>
+                      {#if event.nodeId}
+                        <p class="text-xs text-tokyo-night-comment">Node: {event.nodeId}</p>
+                      {/if}
+                    </div>
+                    <span class="text-xs text-tokyo-night-comment">{formatTimestamp(event.timestamp)}</span>
                   </div>
-                  
-                  {#if change.previousQualityTier && change.newQualityTier}
-                    <p class="text-sm text-tokyo-night-fg">
-                      Quality: <span class="text-red-400">{change.previousQualityTier}</span> → 
-                      <span class="text-green-400">{change.newQualityTier}</span>
-                    </p>
+
+                  {#if event.trackList}
+                    <p class="text-sm text-tokyo-night-fg whitespace-pre-line">{event.trackList}</p>
                   {/if}
-                  
-                  {#if change.previousResolution && change.newResolution}
-                    <p class="text-sm text-tokyo-night-fg">
-                      Resolution: <span class="text-red-400">{change.previousResolution}</span> → 
-                      <span class="text-green-400">{change.newResolution}</span>
-                    </p>
-                  {/if}
-                  
-                  {#if change.previousCodec && change.newCodec}
-                    <p class="text-sm text-tokyo-night-fg">
-                      Codec: <span class="text-red-400">{change.previousCodec}</span> → 
-                      <span class="text-green-400">{change.newCodec}</span>
-                    </p>
+
+                  {#if event.tracks && event.tracks.length > 0}
+                    <div class="mt-2 text-xs text-tokyo-night-comment space-y-1">
+                      {#each event.tracks.slice(0, 3) as track}
+                        <div>
+                          <span class="text-tokyo-night-fg font-medium">{track.trackName}</span>
+                          {#if track.codec}
+                            <span>· {track.codec}</span>
+                          {/if}
+                          {#if track.width && track.height}
+                            <span>· {track.width}x{track.height}</span>
+                          {/if}
+                          {#if track.bitrateKbps}
+                            <span>· {track.bitrateKbps} kbps</span>
+                          {/if}
+                        </div>
+                      {/each}
+                    </div>
                   {/if}
                 </div>
               {/each}
             </div>
           {:else}
-            <p class="text-tokyo-night-comment text-center py-8">No quality changes detected</p>
+            <p class="text-tokyo-night-comment text-center py-8">No track list updates recorded</p>
           {/if}
         </div>
       </div>
@@ -407,11 +416,12 @@
           <h3 class="text-lg font-semibold text-tokyo-night-cyan mb-4">Rebuffering Events</h3>
           
           <div class="space-y-3 max-h-64 overflow-y-auto">
-            {#each rebufferingEvents.slice(0, 10) as event}
+            {#each rebufferingEvents.slice(0, 10) as event (event.timestamp ?? event.id)}
+              {@const SvelteComponent_6 = getIconComponent('Pause')}
               <div class="border border-tokyo-night-selection rounded-lg p-3">
                 <div class="flex justify-between items-start">
                   <div class="flex items-center space-x-2">
-                    <svelte:component this={getIconComponent('Pause')} class="w-4 h-4 text-orange-400" />
+                    <SvelteComponent_6 class="w-4 h-4 text-orange-400" />
                     <span class="font-medium text-tokyo-night-fg">
                       {event.rebufferStart ? 'Rebuffer Started' : 'Rebuffer Ended'}
                     </span>
@@ -448,8 +458,9 @@
         <h3 class="text-lg font-semibold text-tokyo-night-cyan mb-4">Historical Health Trends</h3>
         
         {#if healthMetrics.length > 0}
+          {@const SvelteComponent_7 = getIconComponent('TrendingUp')}
           <div class="text-center py-8">
-            <svelte:component this={getIconComponent('TrendingUp')} class="w-12 h-12 text-tokyo-night-comment mx-auto mb-4" />
+            <SvelteComponent_7 class="w-12 h-12 text-tokyo-night-comment mx-auto mb-4" />
             <p class="text-tokyo-night-comment">
               Chart visualization coming soon<br>
               <span class="text-sm">Collected {healthMetrics.length} data points over the last 24 hours</span>

@@ -1,10 +1,23 @@
 <!-- Protocol documentation component -->
-<script>
-  export let hostname = window.location.hostname;
-  export let port = window.location.port;
-  export let streamName = '';
-  
-  $: baseUrl = `${hostname}${port ? ':' + port : ''}`;
+<script lang="ts">
+  interface Props {
+    hostname?: string;
+    port?: string | number;
+    streamName?: string;
+  }
+
+  const defaultHostname =
+    typeof window !== "undefined" ? window.location.hostname : "localhost";
+  const defaultPort =
+    typeof window !== "undefined" ? window.location.port : "";
+
+  let {
+    hostname = defaultHostname,
+    port = defaultPort,
+    streamName = "",
+  }: Props = $props();
+
+  let baseUrl = $derived(`${hostname}${port ? `:${String(port)}` : ""}`);
 </script>
 
 <div class="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
