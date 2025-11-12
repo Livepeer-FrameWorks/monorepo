@@ -20,7 +20,7 @@ COPY api_gateway/ ./
 ARG VERSION=dev
 ARG GIT_COMMIT=docker
 ARG BUILD_DATE
-ARG COMPONENT_NAME=gateway
+ARG COMPONENT_NAME=bridge
 ARG COMPONENT_VERSION=0.0.0
 
 RUN go mod download

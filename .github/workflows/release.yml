@@ -20,7 +20,7 @@ jobs:
       fail-fast: false
       matrix:
         service:
-          - { name: gateway,           context: api_gateway,            dockerfile: api_gateway/Dockerfile }
+          - { name: bridge,            context: api_gateway,            dockerfile: api_gateway/Dockerfile }
           - { name: quartermaster,     context: api_tenants,            dockerfile: api_tenants/Dockerfile }
           - { name: commodore,         context: api_control,            dockerfile: api_control/Dockerfile }
           - { name: purser,            context: api_billing,            dockerfile: api_billing/Dockerfile }
@@ -73,6 +73,7 @@ jobs:
         with:
           context: .
           file: ${{ matrix.service.dockerfile }}
+          platforms: linux/amd64,linux/arm64
           push: true
           provenance: true
           sbom: true
@@ -94,7 +95,7 @@ jobs:
           cat > dist/image-${{ matrix.service.name }}.json <<JSON
           {
             "name": "${{ matrix.service.name }}",
-            "image": "${{ env.REGISTRY }}/frameworks-${{ matrix.service.name }}:${{ github.ref_name }}",
+            "image": "docker.io/livepeerframeworks/frameworks-${{ matrix.service.name }}:${{ github.ref_name }}",
             "digest": "${{ steps.build.outputs.digest }}",
             "service_version": "${{ steps.svcver.outputs.version }}",
             "git_commit": "${{ github.sha }}"
@@ -197,6 +198,7 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build and push Docker image
+        id: build
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -210,6 +212,24 @@ jobs:
             livepeerframeworks/frameworks-${{ matrix.webapp.name }}:${{ github.ref_name }}
           cache-from: type=gha,scope=${{ matrix.webapp.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.webapp.name }}
+
+      - name: Write digest artifact
+        run: |
+          mkdir -p dist
+          cat > dist/image-${{ matrix.webapp.name }}.json <<JSON
+          {
+            "name": "${{ matrix.webapp.name }}",
+            "image": "docker.io/livepeerframeworks/frameworks-${{ matrix.webapp.name }}:${{ github.ref_name }}",
+            "digest": "${{ steps.build.outputs.digest }}",
+            "git_commit": "${{ github.sha }}"
+          }
+          JSON
+
+      - name: Upload digest artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-digest-${{ matrix.webapp.name }}
+          path: dist/image-${{ matrix.webapp.name }}.json
 
       - name: Upload static bundle artifact
         uses: actions/upload-artifact@v4
@@ -265,9 +285,83 @@ jobs:
           name: cli-${{ matrix.goos }}-${{ matrix.goarch }}
           path: dist/cli/*
 
+  build-service-binaries:
+    name: Build Service Binaries
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - { name: bridge,            context: api_gateway,            cmd_path: ./cmd/bridge }
+          - { name: quartermaster,     context: api_tenants,            cmd_path: ./cmd/quartermaster }
+          - { name: commodore,         context: api_control,            cmd_path: ./cmd/commodore }
+          - { name: purser,            context: api_billing,            cmd_path: ./cmd/purser }
+          - { name: foghorn,           context: api_balancing,          cmd_path: ./cmd/foghorn }
+          - { name: decklog,           context: api_firehose,           cmd_path: cmd/decklog/main.go }
+          - { name: periscope-ingest,  context: api_analytics_ingest,   cmd_path: ./cmd/periscope }
+          - { name: periscope-query,   context: api_analytics_query,    cmd_path: ./cmd/periscope }
+          - { name: signalman,         context: api_realtime,           cmd_path: ./cmd/signalman }
+          - { name: helmsman,          context: api_sidecar,            cmd_path: ./cmd/helmsman }
+        arch:
+          - { goos: linux, goarch: amd64 }
+          - { goos: linux, goarch: arm64 }
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache-dependency-path: ${{ matrix.service.context }}/go.sum
+
+      - name: Read service version
+        id: svcver
+        run: |
+          VERSION_FILE="${{ matrix.service.context }}/VERSION"
+          if [[ -f "$VERSION_FILE" ]]; then
+            echo "version=$(tr -d '\n' < "$VERSION_FILE")" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=0.0.0" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.arch.goos }}
+          GOARCH: ${{ matrix.arch.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          set -euo pipefail
+          cd ${{ matrix.service.context }}
+
+          BINARY_NAME="frameworks-${{ matrix.service.name }}-${{ matrix.arch.goos }}-${{ matrix.arch.goarch }}"
+          OUTPUT="frameworks-${{ matrix.service.name }}-${{ github.ref_name }}-${{ matrix.arch.goos }}-${{ matrix.arch.goarch }}"
+
+          go build -ldflags "\
+            -X frameworks/pkg/version.Version=${{ github.ref_name }} \
+            -X frameworks/pkg/version.GitCommit=${{ github.sha }} \
+            -X frameworks/pkg/version.BuildDate=$(date -u '+%Y-%m-%dT%H:%M:%SZ') \
+            -X frameworks/pkg/version.ComponentName=${{ matrix.service.name }} \
+            -X frameworks/pkg/version.ComponentVersion=${{ steps.svcver.outputs.version }} \
+            -s -w" \
+            -o "${BINARY_NAME}" \
+            ${{ matrix.service.cmd_path }}
+
+          # Create output directory
+          mkdir -p ../dist/binaries/${{ matrix.service.name }}
+
+          # Package binary with platform version in filename
+          tar czf "../dist/binaries/${{ matrix.service.name }}/${OUTPUT}.tar.gz" "${BINARY_NAME}"
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.service.name }}-${{ matrix.arch.goos }}-${{ matrix.arch.goarch }}
+          path: dist/binaries/${{ matrix.service.name }}/*.tar.gz
+
   manifest:
     name: Generate & Publish Manifest
-    needs: [build-images, build-webapps, build-cli]
+    needs: [build-images, build-webapps, build-cli, build-service-binaries]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -277,22 +371,124 @@ jobs:
           pattern: image-digest-*
           path: dist/digests
           merge-multiple: true
+
+      - name: Fetch MistServer metadata from latest release
+        id: mistserver
+        run: |
+          set -euo pipefail
+
+          # Get latest MistServer release info via GitHub API
+          RELEASE=$(curl -sL https://api.github.com/repos/Livepeer-FrameWorks/mistserver/releases/latest)
+
+          # Extract tag_name and asset download URLs
+          TAG=$(echo "$RELEASE" | jq -r '.tag_name')
+          DIGEST_URL=$(echo "$RELEASE" | jq -r '.assets[] | select(.name=="docker-digest.txt") | .browser_download_url')
+          TAG_URL=$(echo "$RELEASE" | jq -r '.assets[] | select(.name=="docker-tag.txt") | .browser_download_url')
+
+          # Download the metadata files
+          DIGEST=$(curl -sL "$DIGEST_URL")
+          DOCKER_TAG=$(curl -sL "$TAG_URL")
+
+          echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "tag=${DOCKER_TAG}" >> "$GITHUB_OUTPUT"
+          echo "release_tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Fetched MistServer latest release: ${TAG}"
+          echo "Docker tag: ${DOCKER_TAG}, Digest: ${DIGEST}"
+
       - name: Generate manifest
         run: |
-          echo "platform_version: ${{ github.ref_name }}" > dist/manifest.yaml
-          echo "git_commit: ${{ github.sha }}" >> dist/manifest.yaml
-          echo "release_date: $(date -u '+%Y-%m-%dT%H:%M:%SZ')" >> dist/manifest.yaml
+          set -euo pipefail
+
+          # Header
+          cat > dist/manifest.yaml <<YAML
+          platform_version: ${{ github.ref_name }}
+          git_commit: ${{ github.sha }}
+          release_date: $(date -u '+%Y-%m-%dT%H:%M:%SZ')
+
+          YAML
+
+          # Services (microservices with service_version field)
           echo "services:" >> dist/manifest.yaml
           for f in dist/digests/*.json; do
             name=$(jq -r .name "$f")
+            # Skip webapp/website - they go in interfaces section
+            if [[ "$name" == "webapp" || "$name" == "website" ]]; then
+              continue
+            fi
+
             image=$(jq -r .image "$f")
             digest=$(jq -r .digest "$f")
             svcver=$(jq -r .service_version "$f")
-            echo "  - name: ${name}" >> dist/manifest.yaml
-            echo "    service_version: ${svcver}" >> dist/manifest.yaml
-            echo "    image: ${image}" >> dist/manifest.yaml
-            echo "    digest: ${digest}" >> dist/manifest.yaml
+
+            cat >> dist/manifest.yaml <<YAML
+            - name: ${name}
+              service_version: ${svcver}
+              image: ${image}
+              digest: ${digest}
+          YAML
           done
+
+          # Native Binaries (for bare-metal deployment)
+          echo "" >> dist/manifest.yaml
+          echo "native_binaries:" >> dist/manifest.yaml
+          for f in dist/digests/*.json; do
+            name=$(jq -r .name "$f")
+            # Skip webapp/website - they don't have native binaries
+            # Skip forms-api - it's Node.js, no Go binary
+            if [[ "$name" == "webapp" || "$name" == "website" || "$name" == "forms-api" ]]; then
+              continue
+            fi
+
+            cat >> dist/manifest.yaml <<YAML
+            - name: ${name}
+              artifacts:
+                - arch: linux-amd64
+                  file: frameworks-${name}-${{ github.ref_name }}-linux-amd64.tar.gz
+                - arch: linux-arm64
+                  file: frameworks-${name}-${{ github.ref_name }}-linux-arm64.tar.gz
+          YAML
+          done
+
+          # Interfaces (webapp/website reference implementations)
+          echo "" >> dist/manifest.yaml
+          echo "interfaces:" >> dist/manifest.yaml
+          for f in dist/digests/*.json; do
+            name=$(jq -r .name "$f")
+            # Only include webapp/website
+            if [[ "$name" != "webapp" && "$name" != "website" ]]; then
+              continue
+            fi
+
+            image=$(jq -r .image "$f")
+            digest=$(jq -r .digest "$f")
+
+            # Determine build dir and bundle name
+            if [[ "$name" == "webapp" ]]; then
+              bundle="webapp-build.tar.gz"
+            else
+              bundle="website-build.tar.gz"
+            fi
+
+            cat >> dist/manifest.yaml <<YAML
+            - name: ${name}
+              image: ${image}
+              digest: ${digest}
+              static_bundle: ${bundle}
+          YAML
+          done
+
+          # External Dependencies (MistServer from separate repo)
+          echo "" >> dist/manifest.yaml
+          cat >> dist/manifest.yaml <<YAML
+          external_dependencies:
+            - name: mistserver
+              image: docker.io/livepeerframeworks/mistserver:${{ steps.mistserver.outputs.tag }}
+              digest: "${{ steps.mistserver.outputs.digest }}"
+          YAML
+
+          # Infrastructure Requirements (from config/infrastructure.yaml)
+          echo "" >> dist/manifest.yaml
+          cat config/infrastructure.yaml >> dist/manifest.yaml
       - name: Upload manifest artifact
         uses: actions/upload-artifact@v4
         with:
@@ -303,6 +499,12 @@ jobs:
         with:
           pattern: cli-*
           path: dist/cli
+          merge-multiple: true
+      - name: Download service binary artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: binary-*
+          path: dist/binaries
           merge-multiple: true
       - name: Download webapp bundle
         uses: actions/download-artifact@v4
@@ -323,6 +525,7 @@ jobs:
           files: |
             dist/manifest.yaml
             dist/cli/*
+            dist/binaries/*.tar.gz
             dist/webapp-build.tar.gz
             dist/website-build.tar.gz
         env:
@@ -369,25 +572,44 @@ jobs:
           # Commit and push
           git config user.name "github-actions"
           git config user.email "github-actions@users.noreply.github.com"
-          git checkout -b "${RELEASE_BRANCH}"
+
+          # Fetch branch if it exists
+          git fetch origin "${RELEASE_BRANCH}" || true
+
+          # Create or reset to new content
+          git checkout -B "${RELEASE_BRANCH}"
           git add releases/${{ github.ref_name }}.yaml channels/${channel}.yaml
           git commit -m "Release manifest for ${{ github.ref_name }}"
-          git push origin "${RELEASE_BRANCH}"
+          git push --force origin "${RELEASE_BRANCH}"
 
-      - name: Create PR to env repo
+      - name: Create or update PR to env repo
         env:
           GH_TOKEN: ${{ secrets.GITOPS_REPO_TOKEN }}
         run: |
           cd env-repo
-          gh pr create \
+
+          # Check if PR already exists
+          PR_NUMBER=$(gh pr list \
             --repo "${{ env.ENV_REPO }}" \
-            --base main \
             --head "${RELEASE_BRANCH}" \
-            --title "Release ${{ github.ref_name }} manifest" \
-            --body "This PR adds the release manifest for ${{ github.ref_name }}.
+            --base main \
+            --json number \
+            --jq '.[0].number' 2>/dev/null || echo "")
+
+          if [[ -n "$PR_NUMBER" ]]; then
+            echo "PR #${PR_NUMBER} already exists and was updated via branch push"
+            echo "https://github.com/${{ env.ENV_REPO }}/pull/${PR_NUMBER}"
+          else
+            gh pr create \
+              --repo "${{ env.ENV_REPO }}" \
+              --base main \
+              --head "${RELEASE_BRANCH}" \
+              --title "Release ${{ github.ref_name }} manifest" \
+              --body "This PR adds the release manifest for ${{ github.ref_name }}.
 
           It maps each service to image@digest and includes component versions.
 
           **Platform Version:** \`${{ github.ref_name }}\`
           **Git Commit:** \`${{ github.sha }}\`
           **Release Date:** \`$(date -u '+%Y-%m-%dT%H:%M:%SZ')\`"
+          fi

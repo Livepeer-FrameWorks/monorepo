@@ -1,0 +1,65 @@
+# Infrastructure Requirements for FrameWorks Platform
+# This file tracks tested infrastructure versions for each platform release
+# Update manually when bumping infrastructure components
+
+infrastructure:
+  - name: postgresql
+    tested_version: "15.14"
+    minimum_version: "14.0"
+    image: postgres:15
+    dev_version: "15.14"
+    prod_version: "15.12-YB-2025.1.0.0"
+    notes: "Dev uses PostgreSQL 15.14. Prod uses YugabyteDB (PostgreSQL 15.12 compatible)"
+
+  - name: kafka
+    tested_version: "7.4.0"
+    minimum_version: "3.4.0"
+    image: confluentinc/cp-kafka:7.4.0
+    dev_version: "7.4.0 (Confluent Platform)"
+    prod_version: "3.9.1"
+    notes: "Dev uses Confluent Platform 7.4.0. Prod uses Apache Kafka 3.9.1"
+
+  - name: zookeeper
+    tested_version: "7.4.0"
+    minimum_version: "3.4.0"
+    image: confluentinc/cp-zookeeper:7.4.0
+    notes: "Required for Kafka. Confluent Platform includes Zookeeper"
+
+  - name: clickhouse
+    tested_version: "25.9.2.1"
+    minimum_version: "18.16.1"
+    image: clickhouse/clickhouse-server:latest
+    dev_version: "25.9.2.1"
+    prod_version: "18.16.1"
+    notes: "WARNING: Dev (25.9.2.1) and Prod (18.16.1) have significant version gap. Consider upgrading prod"
+
+  - name: prometheus
+    tested_version: "3.6.0"
+    minimum_version: "2.40.0"
+    image: prom/prometheus:latest
+    dev_version: "3.6.0"
+    prod_alternative: "VictoriaMetrics v1.122.0"
+    notes: "Dev uses Prometheus 3.6.0. Prod uses VictoriaMetrics v1.122.0 (Prometheus-compatible)"
+
+  - name: victoriametrics
+    tested_version: "v1.122.0"
+    minimum_version: "v1.100.0"
+    image: victoriametrics/victoria-metrics:latest
+    prod_version: "v1.122.0"
+    notes: "Production alternative to Prometheus. Prometheus-compatible API"
+
+  - name: grafana
+    tested_version: "12.2.0"
+    minimum_version: "11.0.0"
+    image: grafana/grafana:latest
+    dev_version: "12.2.0"
+    prod_version: "11.6.1"
+    notes: "Requires grafana-clickhouse-datasource plugin for ClickHouse integration"
+
+  - name: nginx
+    tested_version: "1.29.3"
+    minimum_version: "1.24.0"
+    image: nginx:alpine
+    dev_version: "1.29.3 (alpine)"
+    prod_version: "1.29.1"
+    notes: "Alpine variant for smaller footprint in dev/docker environments"
