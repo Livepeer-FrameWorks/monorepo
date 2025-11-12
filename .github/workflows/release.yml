@@ -347,34 +347,47 @@ jobs:
         with:
           name: release-manifest
           path: dist
-      - name: Commit manifest into env repo
+      - name: Commit and push manifest to env repo
         run: |
           set -euo pipefail
-          mkdir -p env-repo/releases
-          cp dist/manifest.yaml env-repo/releases/${{ github.ref_name }}.yaml
+          cd env-repo
+
+          # Create release manifest
+          mkdir -p releases
+          cp ../dist/manifest.yaml releases/${{ github.ref_name }}.yaml
+
           # Update channel pointer
           channel="stable"
           if [[ "${{ github.ref_name }}" == *"-rc."* ]]; then channel="rc"; fi
-          mkdir -p env-repo/channels
-          cat > env-repo/channels/${channel}.yaml <<YAML
+          mkdir -p channels
+          cat > channels/${channel}.yaml <<YAML
           platform_version: ${{ github.ref_name }}
           manifest: releases/${{ github.ref_name }}.yaml
           updated_at: $(date -u '+%Y-%m-%dT%H:%M:%SZ')
           YAML
-          cd env-repo
+
+          # Commit and push
           git config user.name "github-actions"
           git config user.email "github-actions@users.noreply.github.com"
-          git checkout -b "${RELEASE_BRANCH}" || git checkout "${RELEASE_BRANCH}"
+          git checkout -b "${RELEASE_BRANCH}"
           git add releases/${{ github.ref_name }}.yaml channels/${channel}.yaml
           git commit -m "Release manifest for ${{ github.ref_name }}"
+          git push origin "${RELEASE_BRANCH}"
+
       - name: Create PR to env repo
-        uses: peter-evans/create-pull-request@v6
-        with:
-          token: ${{ secrets.GITOPS_REPO_TOKEN }}
-          path: env-repo
-          branch: ${{ env.RELEASE_BRANCH }}
-          title: "Release ${{ github.ref_name }} manifest"
-          commit-message: "Release ${{ github.ref_name }} manifest"
-          body: |
-            This PR adds the release manifest for ${{ github.ref_name }}.
-            It maps each service to image@digest and includes component versions.
+        env:
+          GH_TOKEN: ${{ secrets.GITOPS_REPO_TOKEN }}
+        run: |
+          cd env-repo
+          gh pr create \
+            --repo "${{ env.ENV_REPO }}" \
+            --base main \
+            --head "${RELEASE_BRANCH}" \
+            --title "Release ${{ github.ref_name }} manifest" \
+            --body "This PR adds the release manifest for ${{ github.ref_name }}.
+
+          It maps each service to image@digest and includes component versions.
+
+          **Platform Version:** \`${{ github.ref_name }}\`
+          **Git Commit:** \`${{ github.sha }}\`
+          **Release Date:** \`$(date -u '+%Y-%m-%dT%H:%M:%SZ')\`"
