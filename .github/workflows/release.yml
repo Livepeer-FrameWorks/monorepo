@@ -111,8 +111,8 @@ jobs:
       fail-fast: false
       matrix:
         webapp:
-          - { name: webapp, context: website_application, env_prefix: VITE }
-          - { name: website, context: website_marketing, env_prefix: VITE }
+          - { name: webapp, context: website_application, env_prefix: VITE, build_dir: build }
+          - { name: website, context: website_marketing, env_prefix: VITE, build_dir: dist }
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -173,7 +173,7 @@ jobs:
       - name: Create static bundle
         run: |
           cd ${{ matrix.webapp.context }}
-          tar czf ../${{ matrix.webapp.name }}-build.tar.gz build/
+          tar czf ../${{ matrix.webapp.name }}-build.tar.gz ${{ matrix.webapp.build_dir }}/
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -197,7 +197,8 @@ jobs:
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
-          context: ${{ matrix.webapp.context }}
+          context: .
+          file: ${{ matrix.webapp.context }}/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
           provenance: true
