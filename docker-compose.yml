@@ -38,6 +38,7 @@ services:
       PERISCOPE_QUERY_URL: ${PERISCOPE_QUERY_URL}
       PURSER_URL: ${PURSER_URL}
       SIGNALMAN_WS_URL: ${SIGNALMAN_WS_URL}
+      WS_MAX_CONNECTIONS_PER_TENANT: ${WS_MAX_CONNECTIONS_PER_TENANT}
       JWT_SECRET: ${JWT_SECRET}
       SERVICE_TOKEN: ${SERVICE_TOKEN}
       DECKLOG_URL: ${DECKLOG_URL}
@@ -124,9 +125,13 @@ services:
     platform: linux/amd64
     shm_size: '2gb'  # Allocate 2GB of shared memory for MistServer
     ports:
-      - "4242:4242"      # Controller
-      - "1935:1935"      # RTMP
-      - "8080:8080"      # HTTP
+      - "4242:4242"       # Controller
+      - "8080:8080"       # HTTP
+      - "1935:1935"       # RTMP
+      - "5554:5554"       # RTSP
+      - "4200:4200"       # DTSC (Mist internal format; used for stream replication)
+      - "8889:8889/udp"   # TS-SRT
+      - "18203:18203/udp" # WebRTC
     volumes:
       # TODO: Make this read-only once initial configuration is stable
       # Currently writable as we're actively developing/testing configs
@@ -771,6 +776,7 @@ services:
       dockerfile: website_application/Dockerfile
       args:
         - BUILD_ENV=${BUILD_ENV}
+        - APP_PORT=${WEBAPP_PORT}
         - VITE_AUTH_URL=${VITE_AUTH_URL}
         - VITE_GRAPHQL_HTTP_URL=${VITE_GRAPHQL_HTTP_URL}
         - VITE_GRAPHQL_WS_URL=${VITE_GRAPHQL_WS_URL}
@@ -787,8 +793,12 @@ services:
     depends_on:
       commodore:
         condition: service_started
+    environment:
+      - NODE_ENV=${NODE_ENV}
+      - PORT=${WEBAPP_PORT}
+      - HOST=0.0.0.0
     ports:
-      - "18030:18030"
+      - "${WEBAPP_PORT:-18030}:${WEBAPP_PORT:-18030}"
     networks:
       - frameworks
     mem_limit: 512m
@@ -808,6 +818,7 @@ services:
       dockerfile: website_marketing/Dockerfile
       args:
         - BUILD_ENV=${BUILD_ENV}
+        - APP_PORT=${WEBSITE_PORT}
         - VITE_APP_URL=${VITE_APP_URL}
         - VITE_GATEWAY_URL=${VITE_GATEWAY_URL}
         - VITE_GITHUB_URL=${VITE_GITHUB_URL}
@@ -821,14 +832,14 @@ services:
         - VITE_CONTACT_API_URL=${VITE_CONTACT_API_URL}
     hostname: website
     environment:
-      - NODE_ENV=production
+      - NODE_ENV=${NODE_ENV}
+      - PORT=${WEBSITE_PORT}
+      - HOST=0.0.0.0
     ports:
-      - "18031:18031"
+      - "${WEBSITE_PORT:-18031}:${WEBSITE_PORT:-18031}"
     depends_on:
-      commodore:
+      bridge:
         condition: service_started
-      quartermaster:
-        condition: service_healthy
     restart: unless-stopped
     networks:
       - frameworks

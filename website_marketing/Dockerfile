@@ -59,6 +59,10 @@ RUN pnpm --filter frameworks-website... run build
 
 FROM node:24-alpine AS runner
 
+ARG APP_PORT=18031
+ENV PORT=${APP_PORT}
+ENV HOST=0.0.0.0
+
 RUN apk add --no-cache ca-certificates tzdata \
   && npm install -g serve \
   && addgroup -g 1001 -S appuser \
@@ -71,9 +75,9 @@ COPY --from=builder /app/website_marketing/dist ./dist
 RUN chown -R appuser:appuser /app
 USER appuser
 
-EXPOSE 18031
+EXPOSE ${APP_PORT}
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-  CMD wget --no-verbose --tries=1 --spider http://localhost:18031/health || exit 1
+  CMD wget --no-verbose --tries=1 --spider http://localhost:${PORT:-18031}/health || exit 1
 
-CMD ["serve", "-s", "dist", "-l", "18031"]
+CMD ["sh", "-c", "serve -s dist -l ${PORT:-18031}"]

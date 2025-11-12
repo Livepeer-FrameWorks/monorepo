@@ -64,6 +64,43 @@ func NewClient(config Config) *Client {
 	}
 }
 
+// GetBillingStatus retrieves the current billing status for the tenant associated with the request context.
+func (c *Client) GetBillingStatus(ctx context.Context) (*models.BillingStatus, error) {
+	url := fmt.Sprintf("%s/billing/status", c.baseURL)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	// Use user's JWT from context if available, otherwise fall back to service token
+	if jwtToken := ctx.Value("jwt_token"); jwtToken != nil {
+		if tokenStr, ok := jwtToken.(string); ok && tokenStr != "" {
+			req.Header.Set("Authorization", "Bearer "+tokenStr)
+		}
+	} else if c.serviceToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.serviceToken)
+	}
+
+	resp, err := clients.DoWithRetry(ctx, c.httpClient, req, c.retryConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call Purser: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("Purser error (%d): %s", resp.StatusCode, string(body))
+	}
+
+	var status models.BillingStatus
+	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return &status, nil
+}
+
 // GetTenantTierInfo retrieves tier information for a tenant
 func (c *Client) GetTenantTierInfo(ctx context.Context, tenantID string) (*purser.TenantTierInfoResponse, error) {
 	url := fmt.Sprintf("%s/billing/status", c.baseURL)

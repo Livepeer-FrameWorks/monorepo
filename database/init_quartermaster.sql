@@ -401,10 +401,13 @@ CREATE TABLE IF NOT EXISTS quartermaster.bootstrap_tokens (
     token VARCHAR(128) UNIQUE NOT NULL,
     -- Scope and intended usage
     kind VARCHAR(32) NOT NULL, -- 'edge_node' | 'service'
+    name TEXT NOT NULL DEFAULT 'Bootstrap Token',
     tenant_id UUID,            -- optional; required for edge_node
     cluster_id VARCHAR(100),   -- optional; for service bootstrap in provider clusters
     expected_ip INET,          -- optional hint
     metadata JSONB DEFAULT '{}',
+    usage_limit INTEGER,
+    usage_count INTEGER NOT NULL DEFAULT 0,
     -- Lifecycle
     expires_at TIMESTAMP NOT NULL,
     used_at TIMESTAMP,

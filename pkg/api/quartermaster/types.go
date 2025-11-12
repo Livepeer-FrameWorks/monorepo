@@ -318,12 +318,15 @@ type ServicesHealthResponse struct {
 
 type BootstrapToken struct {
 	ID         string                 `json:"id"`
+	Name       string                 `json:"name"`
 	Token      string                 `json:"token"`
 	Kind       string                 `json:"kind"` // edge_node | service
 	TenantID   *string                `json:"tenant_id,omitempty"`
 	ClusterID  *string                `json:"cluster_id,omitempty"`
 	ExpectedIP *string                `json:"expected_ip,omitempty"`
 	Metadata   map[string]interface{} `json:"metadata,omitempty"`
+	UsageLimit *int                   `json:"usage_limit,omitempty"`
+	UsageCount int                    `json:"usage_count"`
 	ExpiresAt  time.Time              `json:"expires_at"`
 	UsedAt     *time.Time             `json:"used_at,omitempty"`
 	CreatedBy  *string                `json:"created_by,omitempty"`
@@ -331,11 +334,13 @@ type BootstrapToken struct {
 }
 
 type CreateBootstrapTokenRequest struct {
+	Name       string                 `json:"name" binding:"required"`
 	Kind       string                 `json:"kind" binding:"required"`
 	TenantID   *string                `json:"tenant_id,omitempty"`
 	ClusterID  *string                `json:"cluster_id,omitempty"`
 	ExpectedIP *string                `json:"expected_ip,omitempty"`
 	Metadata   map[string]interface{} `json:"metadata,omitempty"`
+	UsageLimit *int                   `json:"usage_limit,omitempty"`
 	TTL        string                 `json:"ttl"` // e.g., "24h"
 }
 

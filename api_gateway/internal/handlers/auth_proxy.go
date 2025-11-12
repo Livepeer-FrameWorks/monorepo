@@ -6,10 +6,17 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
+	"frameworks/pkg/clients"
 	"frameworks/pkg/logging"
 
 	"github.com/gin-gonic/gin"
+)
+
+var (
+	authProxyRetry = clients.DefaultRetryConfig()
+	authHTTPClient = &http.Client{Timeout: 5 * time.Second}
 )
 
 // AuthProxy handles proxying authentication requests to Commodore
@@ -79,9 +86,8 @@ func (ap *AuthProxy) ProxyToCommodore(path string) gin.HandlerFunc {
 			proxyReq.Header.Set("X-Forwarded-For", c.ClientIP())
 		}
 
-		// Make the request
-		client := &http.Client{}
-		resp, err := client.Do(proxyReq)
+		// Make the request with shared retry logic
+		resp, err := clients.DoWithRetry(c.Request.Context(), authHTTPClient, proxyReq, authProxyRetry)
 		if err != nil {
 			ap.logger.WithError(err).Error("Failed to make request to Commodore")
 			c.JSON(http.StatusBadGateway, gin.H{"error": "Service temporarily unavailable"})

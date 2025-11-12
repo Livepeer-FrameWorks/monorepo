@@ -30,9 +30,8 @@ type streamBufferTrackPayload struct {
 
 // DoGetStreamAnalytics returns analytics for a specific stream
 func (r *Resolver) DoGetStreamAnalytics(ctx context.Context, streamId string, timeRange *model.TimeRangeInput) (*models.StreamAnalytics, error) {
-	// Check for demo mode
 	if middleware.IsDemoMode(ctx) {
-		r.Logger.Debug("Returning demo stream analytics data")
+		r.Logger.Debug("Demo mode: returning synthetic stream analytics")
 		return demo.GenerateStreamAnalytics(streamId), nil
 	}
 
@@ -64,10 +63,8 @@ func (r *Resolver) DoGetStreamAnalytics(ctx context.Context, streamId string, ti
 
 // DoGetViewerMetrics returns viewer metrics
 func (r *Resolver) DoGetViewerMetrics(ctx context.Context, stream *string, timeRange *model.TimeRangeInput) ([]*models.AnalyticsViewerSession, error) {
-	// Check for demo mode
 	if middleware.IsDemoMode(ctx) {
-		r.Logger.Debug("Returning demo viewer metrics data")
-		// Map demo output to AnalyticsViewerSession pointers with minimal fields
+		r.Logger.Debug("Demo mode: returning synthetic viewer metrics")
 		demoMetrics := demo.GenerateViewerMetrics()
 		out := make([]*models.AnalyticsViewerSession, 0, len(demoMetrics))
 		for _, dm := range demoMetrics {
@@ -123,9 +120,8 @@ func (r *Resolver) DoGetViewerMetrics(ctx context.Context, stream *string, timeR
 
 // DoGetPlatformOverview returns platform-wide metrics
 func (r *Resolver) DoGetPlatformOverview(ctx context.Context, timeRange *model.TimeRangeInput) (*periscope.PlatformOverviewResponse, error) {
-	// Check for demo mode
 	if middleware.IsDemoMode(ctx) {
-		r.Logger.Debug("Returning demo platform overview data")
+		r.Logger.Debug("Demo mode: returning synthetic platform overview")
 		return demo.GeneratePlatformOverview(), nil
 	}
 
@@ -152,9 +148,8 @@ func (r *Resolver) DoGetPlatformOverview(ctx context.Context, timeRange *model.T
 
 // DoGetStreamHealthMetrics returns stream health metrics
 func (r *Resolver) DoGetStreamHealthMetrics(ctx context.Context, streamId string, timeRange *model.TimeRangeInput) ([]*periscope.StreamHealthMetric, error) {
-	// Check for demo mode
 	if middleware.IsDemoMode(ctx) {
-		r.Logger.Debug("Returning demo stream health metrics data")
+		r.Logger.Debug("Demo mode: returning synthetic stream health metrics")
 		return demo.GenerateStreamHealthMetrics(), nil
 	}
 
@@ -208,40 +203,34 @@ func (r *Resolver) DoGetCurrentStreamHealth(ctx context.Context, streamId string
 	return nil, nil
 }
 
-// DoGetStreamQualityChanges returns quality change events for a stream
-func (r *Resolver) DoGetStreamQualityChanges(ctx context.Context, streamId string, timeRange *model.TimeRangeInput) ([]*model.StreamQualityChange, error) {
-	// Check for demo mode
+// DoGetTrackListEvents returns track list updates for a stream
+func (r *Resolver) DoGetTrackListEvents(ctx context.Context, streamID string, timeRange *model.TimeRangeInput) ([]*periscope.AnalyticsTrackListEvent, error) {
 	if middleware.IsDemoMode(ctx) {
-		r.Logger.Debug("Returning demo stream quality changes data")
-		return demo.GenerateStreamQualityChanges(), nil
+		r.Logger.Debug("Demo mode: returning synthetic track list events")
+		return demo.GenerateTrackListEvents(), nil
 	}
 
-	// Convert time range for Periscope client
 	var startTime, endTime *time.Time
 	if timeRange != nil {
 		startTime = &timeRange.Start
 		endTime = &timeRange.End
 	}
 
-	// For now, get track list events as a proxy for quality changes
-	// TODO: Add dedicated GetStreamQualityChanges method to Periscope client
-	tracks, err := r.Clients.Periscope.GetTrackListEvents(ctx, streamId, startTime, endTime)
+	events, err := r.Clients.Periscope.GetTrackListEvents(ctx, streamID, startTime, endTime)
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to get track list events")
-		return nil, fmt.Errorf("failed to get quality changes: %w", err)
+		r.Logger.WithError(err).
+			WithField("stream", streamID).
+			Error("Failed to get track list events")
+		return nil, fmt.Errorf("failed to get track list events: %w", err)
 	}
 
-	// Convert to quality changes (simplified for now)
-	var result []*model.StreamQualityChange
-	for _, track := range *tracks {
-		result = append(result, &model.StreamQualityChange{
-			Timestamp:      track.Timestamp,
-			Stream:         streamId,
-			NodeID:         track.NodeID,
-			ChangeType:     model.QualityChangeTypeTrackUpdate,
-			NewTracks:      &track.TrackList,
-			NewQualityTier: func() *string { tier := fmt.Sprintf("Track %d", track.TrackCount); return &tier }(),
-		})
+	if events == nil || len(*events) == 0 {
+		return []*periscope.AnalyticsTrackListEvent{}, nil
+	}
+
+	result := make([]*periscope.AnalyticsTrackListEvent, len(*events))
+	for i := range *events {
+		result[i] = &((*events)[i])
 	}
 
 	return result, nil
@@ -249,9 +238,8 @@ func (r *Resolver) DoGetStreamQualityChanges(ctx context.Context, streamId strin
 
 // DoGetStreamHealthAlerts returns health alerts for streams
 func (r *Resolver) DoGetStreamHealthAlerts(ctx context.Context, streamId *string, timeRange *model.TimeRangeInput) ([]*model.StreamHealthAlert, error) {
-	// Check for demo mode
 	if middleware.IsDemoMode(ctx) {
-		r.Logger.Debug("Returning demo stream health alerts data")
+		r.Logger.Debug("Demo mode: returning synthetic stream health alerts")
 		return demo.GenerateStreamHealthAlerts(), nil
 	}
 
@@ -321,9 +309,8 @@ func (r *Resolver) DoGetStreamHealthAlerts(ctx context.Context, streamId *string
 
 // DoGetRebufferingEvents returns rebuffering events for a stream
 func (r *Resolver) DoGetRebufferingEvents(ctx context.Context, streamId string, timeRange *model.TimeRangeInput) ([]*model.RebufferingEvent, error) {
-	// Check for demo mode
 	if middleware.IsDemoMode(ctx) {
-		r.Logger.Debug("Returning demo rebuffering events data")
+		r.Logger.Debug("Demo mode: returning synthetic rebuffering events")
 		return demo.GenerateRebufferingEvents(), nil
 	}
 
@@ -389,12 +376,9 @@ func (r *Resolver) DoGetRebufferingEvents(ctx context.Context, streamId string, 
 
 // DoGetViewerGeographics returns geographic data for individual viewer/connection events
 func (r *Resolver) DoGetViewerGeographics(ctx context.Context, stream *string, timeRange *model.TimeRangeInput) ([]*periscope.ConnectionEvent, error) {
-	// Check for demo mode
 	if middleware.IsDemoMode(ctx) {
-		r.Logger.Debug("Returning demo viewer geographic data")
-		// Return adapted demo as periscope.ConnectionEvent
-		demoCE := demo.GenerateViewerGeographics()
-		return demoCE, nil
+		r.Logger.Debug("Demo mode: returning synthetic viewer geographics")
+		return demo.GenerateViewerGeographics(), nil
 	}
 
 	// Get geographic data from Periscope Query
@@ -511,9 +495,8 @@ func jitterFromTrack(track streamBufferTrackPayload) (float64, bool) {
 
 // DoGetGeographicDistribution returns aggregated geographic distribution analytics
 func (r *Resolver) DoGetGeographicDistribution(ctx context.Context, stream *string, timeRange *model.TimeRangeInput) (*model.GeographicDistribution, error) {
-	// Check for demo mode
 	if middleware.IsDemoMode(ctx) {
-		r.Logger.Debug("Returning demo geographic distribution data")
+		r.Logger.Debug("Demo mode: returning synthetic geographic distribution")
 		return demo.GenerateGeographicDistribution(), nil
 	}
 
@@ -624,9 +607,8 @@ func (r *Resolver) DoGetGeographicDistribution(ctx context.Context, stream *stri
 
 // DoGetLoadBalancingMetrics returns load balancing and routing metrics with geographic context
 func (r *Resolver) DoGetLoadBalancingMetrics(ctx context.Context, timeRange *model.TimeRangeInput) ([]*model.LoadBalancingMetric, error) {
-	// Check for demo mode
 	if middleware.IsDemoMode(ctx) {
-		r.Logger.Debug("Returning demo load balancing metrics data")
+		r.Logger.Debug("Demo mode: returning synthetic load balancing metrics")
 		return demo.GenerateLoadBalancingMetrics(), nil
 	}
 

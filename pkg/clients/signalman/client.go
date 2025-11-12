@@ -278,6 +278,16 @@ func (c *Client) GetSubscriptions() []string {
 	return append([]string(nil), c.subscriptions...) // Return a copy
 }
 
+// TenantID returns the tenant ID associated with the client
+func (c *Client) TenantID() string {
+	c.mutex.RLock()
+	defer c.mutex.RUnlock()
+	if c.tenantID == nil {
+		return ""
+	}
+	return *c.tenantID
+}
+
 // Close closes the WebSocket connection
 func (c *Client) Close() error {
 	c.mutex.Lock()

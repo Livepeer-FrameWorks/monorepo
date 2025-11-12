@@ -580,32 +580,6 @@ func GenerateStreamHealthMetrics() []*periscope.StreamHealthMetric {
 	}
 }
 
-// GenerateStreamQualityChanges creates demo stream quality changes
-func GenerateStreamQualityChanges() []*model.StreamQualityChange {
-	now := time.Now()
-	return []*model.StreamQualityChange{
-		{
-			Timestamp:           now.Add(-10 * time.Minute),
-			Stream:              "demo_live_stream_001",
-			NodeID:              "node_demo_us_west_01",
-			ChangeType:          model.QualityChangeTypeResolutionChange,
-			PreviousResolution:  func() *string { r := "720p30"; return &r }(),
-			NewResolution:       func() *string { r := "1080p30"; return &r }(),
-			PreviousQualityTier: func() *string { q := "HD"; return &q }(),
-			NewQualityTier:      func() *string { q := "Full HD"; return &q }(),
-		},
-		{
-			Timestamp:      now.Add(-5 * time.Minute),
-			Stream:         "demo_live_stream_001",
-			NodeID:         "node_demo_us_west_01",
-			ChangeType:     model.QualityChangeTypeTrackUpdate,
-			PreviousTracks: func() *string { t := "Video: H264 720p30"; return &t }(),
-			NewTracks:      func() *string { t := "Video: H264 1080p30, Audio: AAC 128k"; return &t }(),
-			NewQualityTier: func() *string { q := "Full HD with Audio"; return &q }(),
-		},
-	}
-}
-
 // GenerateStreamHealthAlerts creates demo stream health alerts
 func GenerateStreamHealthAlerts() []*model.StreamHealthAlert {
 	now := time.Now()

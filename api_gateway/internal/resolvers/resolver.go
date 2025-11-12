@@ -35,7 +35,8 @@ type Resolver struct {
 func NewResolver(serviceClients *clients.ServiceClients, logger logging.Logger, metrics *GraphQLMetrics) *Resolver {
 	// Initialize WebSocket manager
 	signalmanURL := config.RequireEnv("SIGNALMAN_WS_URL")
-	wsManager := NewWebSocketManager(signalmanURL, logger, metrics)
+	maxWSConnections := config.GetEnvInt("WS_MAX_CONNECTIONS_PER_TENANT", 5)
+	wsManager := NewWebSocketManager(signalmanURL, logger, metrics, maxWSConnections)
 
 	return &Resolver{
 		Clients:   serviceClients,

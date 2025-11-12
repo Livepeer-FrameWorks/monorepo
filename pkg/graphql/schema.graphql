@@ -46,7 +46,7 @@ type Query {
   
   # New health and quality queries
   streamHealthMetrics(stream: String!, timeRange: TimeRangeInput): [StreamHealthMetric!]!
-  streamQualityChanges(stream: String!, timeRange: TimeRangeInput): [StreamQualityChange!]!
+  trackListEvents(stream: String!, timeRange: TimeRangeInput): [TrackListEvent!]!
   streamHealthAlerts(stream: String, timeRange: TimeRangeInput): [StreamHealthAlert!]!
   currentStreamHealth(stream: String!): StreamHealthMetric
   rebufferingEvents(stream: String!, timeRange: TimeRangeInput): [RebufferingEvent!]!
@@ -108,7 +108,6 @@ type Mutation {
 
   # Billing operations (via Purser)
   createPayment(input: CreatePaymentInput!): Payment!
-  updateBillingTier(tierId: ID!): BillingStatus!
 
   # Infrastructure operations (via Quartermaster)
   updateTenant(input: UpdateTenantInput!): Tenant!
@@ -327,9 +326,28 @@ type ViewerMetrics {
 
 type TrackListEvent {
   stream: String!
+  nodeId: String
   trackList: String!
   trackCount: Int!
   timestamp: Time!
+  tracks: [StreamTrack!]
+}
+
+type StreamTrack {
+  trackName: String!
+  trackType: String!
+  codec: String
+  bitrateKbps: Int
+  bitrateBps: Int
+  buffer: Int
+  jitter: Int
+  width: Int
+  height: Int
+  fps: Float
+  resolution: String
+  hasBFrames: Boolean
+  channels: Int
+  sampleRate: Int
 }
 
 type SystemHealthEvent {
@@ -617,16 +635,6 @@ enum BufferState {
   RECOVER
 }
 
-# Quality change types
-enum QualityChangeType {
-  CODEC_CHANGE
-  RESOLUTION_CHANGE
-  BITRATE_CHANGE
-  TRACK_ADDED
-  TRACK_REMOVED
-  TRACK_UPDATE
-}
-
 # Alert severity levels
 enum AlertSeverity {
   LOW
@@ -682,26 +690,6 @@ type StreamHealthMetric {
   
   # Raw track metadata
   trackMetadata: JSON
-}
-
-# Stream quality changes tracking
-type StreamQualityChange {
-  timestamp: Time!
-  stream: String!
-  nodeId: String!
-  changeType: QualityChangeType!
-  
-  # Change details
-  previousQualityTier: String
-  newQualityTier: String
-  previousResolution: String
-  newResolution: String
-  previousCodec: String
-  newCodec: String
-  
-  # Track data
-  previousTracks: String  # JSON
-  newTracks: String       # JSON
 }
 
 # Stream health alerts for issues

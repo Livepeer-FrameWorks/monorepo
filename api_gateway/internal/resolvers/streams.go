@@ -9,6 +9,7 @@ import (
 
 	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/demo"
+	"frameworks/api_gateway/internal/loaders"
 	"frameworks/api_gateway/internal/middleware"
 	"frameworks/pkg/api/commodore"
 	"frameworks/pkg/models"
@@ -44,8 +45,7 @@ func (r *Resolver) DoGetStreams(ctx context.Context) ([]*models.Stream, error) {
 		return nil, fmt.Errorf("user not authenticated")
 	}
 
-	// Get streams from Commodore
-	streams, err := r.Clients.Commodore.GetStreams(ctx, userToken)
+	streamsResp, err := r.getStreamsMemoized(ctx, userToken)
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to get streams")
 		if r.Metrics != nil {
@@ -55,9 +55,9 @@ func (r *Resolver) DoGetStreams(ctx context.Context) ([]*models.Stream, error) {
 	}
 
 	// Convert from []models.Stream to []*models.Stream
-	result := make([]*models.Stream, len(*streams))
-	for i := range *streams {
-		result[i] = &(*streams)[i]
+	result := make([]*models.Stream, len(*streamsResp))
+	for i := range *streamsResp {
+		result[i] = &(*streamsResp)[i]
 	}
 
 	if r.Metrics != nil {
@@ -79,29 +79,43 @@ func (r *Resolver) DoGetStream(ctx context.Context, id string) (*models.Stream, 
 		}
 	}()
 
-	// Get all streams and find the one with matching ID
-	// Note: Could be optimized with a dedicated GetStream endpoint
-	streams, err := r.DoGetStreams(ctx)
-	if err != nil {
+	if middleware.IsDemoMode(ctx) {
+		streams := demo.GenerateStreams()
+		for _, stream := range streams {
+			if stream.ID == id {
+				if r.Metrics != nil {
+					r.Metrics.Operations.WithLabelValues("stream", "success").Inc()
+				}
+				return stream, nil
+			}
+		}
 		if r.Metrics != nil {
 			r.Metrics.Operations.WithLabelValues("stream", "error").Inc()
 		}
-		return nil, err
+		return nil, fmt.Errorf("stream not found")
 	}
 
-	for _, stream := range streams {
-		if stream.ID == id {
-			if r.Metrics != nil {
-				r.Metrics.Operations.WithLabelValues("stream", "success").Inc()
-			}
-			return stream, nil
+	userToken, ok := ctx.Value("jwt_token").(string)
+	if !ok || userToken == "" {
+		if r.Metrics != nil {
+			r.Metrics.Operations.WithLabelValues("stream", "error").Inc()
 		}
+		return nil, fmt.Errorf("user not authenticated")
+	}
+
+	stream, err := r.getStreamMemoized(ctx, userToken, id)
+	if err != nil {
+		r.Logger.WithError(err).WithField("stream_id", id).Error("Failed to get stream")
+		if r.Metrics != nil {
+			r.Metrics.Operations.WithLabelValues("stream", "error").Inc()
+		}
+		return nil, fmt.Errorf("failed to get stream: %w", err)
 	}
 
 	if r.Metrics != nil {
-		r.Metrics.Operations.WithLabelValues("stream", "error").Inc()
+		r.Metrics.Operations.WithLabelValues("stream", "success").Inc()
 	}
-	return nil, fmt.Errorf("stream not found")
+	return stream, nil
 }
 
 // DoCreateStream creates a new stream
@@ -903,4 +917,40 @@ func (r *Resolver) DoGetStreamMeta(ctx context.Context, streamKey string, target
 // intPtr returns a pointer to the int value
 func intPtr(i int) *int {
 	return &i
+}
+
+func (r *Resolver) getStreamsMemoized(ctx context.Context, userToken string) (*[]models.Stream, error) {
+	if lds := loaders.FromContext(ctx); lds != nil && lds.Memo != nil {
+		key := fmt.Sprintf("commodore:get_streams:%s", userToken)
+		val, err := lds.Memo.GetOrLoad(key, func() (interface{}, error) {
+			return r.Clients.Commodore.GetStreams(ctx, userToken)
+		})
+		if err != nil {
+			return nil, err
+		}
+		streams, ok := val.(*[]models.Stream)
+		if !ok {
+			return nil, fmt.Errorf("unexpected cache type for %s", key)
+		}
+		return streams, nil
+	}
+	return r.Clients.Commodore.GetStreams(ctx, userToken)
+}
+
+func (r *Resolver) getStreamMemoized(ctx context.Context, userToken, streamID string) (*models.Stream, error) {
+	if lds := loaders.FromContext(ctx); lds != nil && lds.Memo != nil {
+		key := fmt.Sprintf("commodore:get_stream:%s:%s", userToken, streamID)
+		val, err := lds.Memo.GetOrLoad(key, func() (interface{}, error) {
+			return r.Clients.Commodore.GetStream(ctx, userToken, streamID)
+		})
+		if err != nil {
+			return nil, err
+		}
+		stream, ok := val.(*models.Stream)
+		if !ok {
+			return nil, fmt.Errorf("unexpected cache type for %s", key)
+		}
+		return stream, nil
+	}
+	return r.Clients.Commodore.GetStream(ctx, userToken, streamID)
 }

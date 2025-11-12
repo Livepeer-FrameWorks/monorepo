@@ -13,12 +13,11 @@ import (
 
 // DoCreateBootstrapToken creates a new bootstrap token (service token auth required)
 func (r *Resolver) DoCreateBootstrapToken(ctx context.Context, input model.CreateBootstrapTokenInput) (*models.BootstrapToken, error) {
-	// Check if demo mode
 	if middleware.IsDemoMode(ctx) {
-		r.Logger.Debug("Returning demo bootstrap token creation")
+		r.Logger.Debug("Demo mode: returning synthetic bootstrap token")
 		tokenValue := "bt_demo_12345678901234567890123456789012"
 		now := time.Now()
-		exp := now.AddDate(0, 0, 30) // 30 days default
+		exp := now.AddDate(0, 0, 30)
 		if input.ExpiresIn != nil {
 			exp = now.AddDate(0, 0, *input.ExpiresIn)
 		}
@@ -42,7 +41,12 @@ func (r *Resolver) DoCreateBootstrapToken(ctx context.Context, input model.Creat
 
 	// Convert GraphQL input to Quartermaster request
 	req := &qmapi.CreateBootstrapTokenRequest{
-		Kind: string(input.Type), // Map Type enum to Kind field
+		Name:     input.Name,
+		Kind:     string(input.Type),
+		Metadata: map[string]interface{}{},
+	}
+	if input.UsageLimit != nil {
+		req.UsageLimit = input.UsageLimit
 	}
 
 	// Handle optional expiration - convert days to TTL string
@@ -66,22 +70,22 @@ func (r *Resolver) DoCreateBootstrapToken(ctx context.Context, input model.Creat
 	// The Quartermaster response has a Token field that contains the BootstrapToken struct
 	return &models.BootstrapToken{
 		ID:         tokenResp.Token.ID,
-		Name:       input.Name, // Use name from input since Quartermaster doesn't store it
+		Name:       tokenResp.Token.Name,
 		Token:      tokenResp.Token.Token,
-		Type:       tokenResp.Token.Kind, // Map Kind back to Type
-		UsageLimit: input.UsageLimit,     // Use from input since Quartermaster doesn't support it yet
-		UsageCount: 0,                    // Not tracked by current Quartermaster API
+		Type:       tokenResp.Token.Kind,
+		UsageLimit: tokenResp.Token.UsageLimit,
+		UsageCount: tokenResp.Token.UsageCount,
 		ExpiresAt:  &tokenResp.Token.ExpiresAt,
-		CreatedAt:  time.Now(), // Use current time since not in response
+		CreatedAt:  tokenResp.Token.CreatedAt,
 		LastUsedAt: tokenResp.Token.UsedAt,
-		IsActive:   tokenResp.Token.UsedAt == nil, // Consider active if not used
+		IsActive:   tokenResp.Token.UsedAt == nil,
 	}, nil
 }
 
 // DoRevokeBootstrapToken revokes a bootstrap token (service token auth required)
 func (r *Resolver) DoRevokeBootstrapToken(ctx context.Context, id string) (bool, error) {
 	if middleware.IsDemoMode(ctx) {
-		r.Logger.Debug("Returning demo bootstrap token revocation")
+		r.Logger.Debug("Demo mode: revoke bootstrap token noop")
 		return true, nil
 	}
 
@@ -103,7 +107,7 @@ func (r *Resolver) DoRevokeBootstrapToken(ctx context.Context, id string) (bool,
 // DoGetBootstrapTokens retrieves all bootstrap tokens (service token auth required)
 func (r *Resolver) DoGetBootstrapTokens(ctx context.Context) ([]*models.BootstrapToken, error) {
 	if middleware.IsDemoMode(ctx) {
-		r.Logger.Debug("Returning demo bootstrap tokens")
+		r.Logger.Debug("Demo mode: returning synthetic bootstrap tokens")
 		now := time.Now()
 		exp1 := now.AddDate(0, 1, 0)
 		exp2 := now.AddDate(0, 0, 7)
@@ -150,18 +154,16 @@ func (r *Resolver) DoGetBootstrapTokens(ctx context.Context) ([]*models.Bootstra
 	// Convert response to bound models
 	result := make([]*models.BootstrapToken, len(tokensResp.Tokens))
 	for i, token := range tokensResp.Tokens {
-		// Map Quartermaster BootstrapToken to our model
-		// Note: Quartermaster doesn't store Name, UsageLimit, UsageCount in the current API
 		result[i] = &models.BootstrapToken{
 			ID:         token.ID,
-			Name:       fmt.Sprintf("Token %s", token.ID[:8]), // Generate a display name
-			Type:       token.Kind,                            // Map Kind to Type
-			UsageLimit: nil,                                   // Not tracked by current Quartermaster API
-			UsageCount: 0,                                     // Not tracked by current Quartermaster API
+			Name:       token.Name,
+			Type:       token.Kind,
+			UsageLimit: token.UsageLimit,
+			UsageCount: token.UsageCount,
 			ExpiresAt:  &token.ExpiresAt,
-			CreatedAt:  time.Now(), // Not in response, use a placeholder
+			CreatedAt:  token.CreatedAt,
 			LastUsedAt: token.UsedAt,
-			IsActive:   token.UsedAt == nil, // Consider active if not used
+			IsActive:   token.UsedAt == nil,
 		}
 	}
 

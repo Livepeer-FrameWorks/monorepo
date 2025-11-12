@@ -423,6 +423,43 @@ func (c *Client) GetStreams(ctx context.Context, userToken string) (*commodore.S
 	return &streams, nil
 }
 
+// GetStream retrieves a specific stream for the authenticated user
+func (c *Client) GetStream(ctx context.Context, userToken, streamID string) (*models.Stream, error) {
+	endpoint := fmt.Sprintf("%s/streams/%s", c.baseURL, url.PathEscape(streamID))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+userToken)
+
+	resp, err := clients.DoWithRetry(ctx, c.httpClient, req, c.retryConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get stream: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		var errorResp commodore.ErrorResponse
+		if len(body) > 0 && json.Unmarshal(body, &errorResp) == nil && errorResp.Error != "" {
+			return nil, fmt.Errorf("failed to get stream: %s", errorResp.Error)
+		}
+		return nil, fmt.Errorf("failed to get stream with status %d", resp.StatusCode)
+	}
+
+	var stream models.Stream
+	if err := json.Unmarshal(body, &stream); err != nil {
+		return nil, fmt.Errorf("failed to parse stream response: %w", err)
+	}
+
+	return &stream, nil
+}
+
 // CreateStream creates a new stream
 func (c *Client) CreateStream(ctx context.Context, userToken string, req *commodore.CreateStreamRequest) (*commodore.StreamResponse, error) {
 	jsonData, err := json.Marshal(req)
@@ -1310,13 +1347,13 @@ func (c *Client) ResolveViewerEndpoint(ctx context.Context, contentType, content
 		return nil, fmt.Errorf("failed to resolve viewer endpoints: %s", errorResp.Error)
 	}
 
-    var viewerResp commodore.ViewerEndpointResponse
-    if err := json.Unmarshal(body, &viewerResp); err != nil {
-        return nil, fmt.Errorf("failed to parse viewer endpoint response: %w", err)
-    }
+	var viewerResp commodore.ViewerEndpointResponse
+	if err := json.Unmarshal(body, &viewerResp); err != nil {
+		return nil, fmt.Errorf("failed to parse viewer endpoint response: %w", err)
+	}
 
-    // Return full response including metadata; callers can flatten endpoints as needed
-    return &viewerResp, nil
+	// Return full response including metadata; callers can flatten endpoints as needed
+	return &viewerResp, nil
 }
 
 // GetStreamMeta fetches Mist JSON meta via Commodore proxy with optional target params

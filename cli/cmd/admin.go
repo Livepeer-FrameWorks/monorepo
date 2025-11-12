@@ -165,6 +165,8 @@ func newAdminBootstrapTokensCreateCmd() *cobra.Command {
 	var expectedIP string
 	var ttl string
 	var metadata string
+	var name string
+	var usageLimit int
 	cmd := &cobra.Command{Use: "create", Short: "Create bootstrap token (edge_node|service)", RunE: func(cmd *cobra.Command, args []string) error {
 		qm, ctxCfg, err := qmClientFromContext()
 		if err != nil {
@@ -173,7 +175,10 @@ func newAdminBootstrapTokensCreateCmd() *cobra.Command {
 		if strings.TrimSpace(ctxCfg.Auth.ServiceToken) == "" && strings.TrimSpace(ctxCfg.Auth.JWT) == "" {
 			return fmt.Errorf("service token or JWT required; run 'frameworks login' first")
 		}
-		req := &qmapi.CreateBootstrapTokenRequest{Kind: kind, TTL: ttl, Metadata: map[string]interface{}{}}
+		if strings.TrimSpace(name) == "" {
+			return fmt.Errorf("name is required")
+		}
+		req := &qmapi.CreateBootstrapTokenRequest{Name: name, Kind: kind, TTL: ttl, Metadata: map[string]interface{}{}}
 		if tenantID != "" {
 			req.TenantID = &tenantID
 		}
@@ -182,6 +187,9 @@ func newAdminBootstrapTokensCreateCmd() *cobra.Command {
 		}
 		if expectedIP != "" {
 			req.ExpectedIP = &expectedIP
+		}
+		if usageLimit > 0 {
+			req.UsageLimit = &usageLimit
 		}
 		if strings.TrimSpace(metadata) != "" {
 			// parse simple key=value,key2=value2
@@ -216,6 +224,8 @@ func newAdminBootstrapTokensCreateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&expectedIP, "expected-ip", "", "expected client IP (optional)")
 	cmd.Flags().StringVar(&ttl, "ttl", "24h", "time-to-live (e.g., 24h)")
 	cmd.Flags().StringVar(&metadata, "metadata", "", "comma-separated key=value metadata")
+	cmd.Flags().StringVar(&name, "name", "Bootstrap Token", "display name for the token")
+	cmd.Flags().IntVar(&usageLimit, "usage-limit", 0, "maximum allowed uses (default 0 = single use)")
 	return cmd
 }
 

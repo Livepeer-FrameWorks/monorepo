@@ -270,21 +270,6 @@ type StreamMetaTrack struct {
 	FirstMs    *int   `json:"firstMs,omitempty"`
 }
 
-type StreamQualityChange struct {
-	Timestamp           time.Time         `json:"timestamp"`
-	Stream              string            `json:"stream"`
-	NodeID              string            `json:"nodeId"`
-	ChangeType          QualityChangeType `json:"changeType"`
-	PreviousQualityTier *string           `json:"previousQualityTier,omitempty"`
-	NewQualityTier      *string           `json:"newQualityTier,omitempty"`
-	PreviousResolution  *string           `json:"previousResolution,omitempty"`
-	NewResolution       *string           `json:"newResolution,omitempty"`
-	PreviousCodec       *string           `json:"previousCodec,omitempty"`
-	NewCodec            *string           `json:"newCodec,omitempty"`
-	PreviousTracks      *string           `json:"previousTracks,omitempty"`
-	NewTracks           *string           `json:"newTracks,omitempty"`
-}
-
 type StreamValidation struct {
 	Valid     bool    `json:"valid"`
 	StreamKey string  `json:"streamKey"`
@@ -891,69 +876,6 @@ func (e *PaymentStatus) UnmarshalJSON(b []byte) error {
 }
 
 func (e PaymentStatus) MarshalJSON() ([]byte, error) {
-	var buf bytes.Buffer
-	e.MarshalGQL(&buf)
-	return buf.Bytes(), nil
-}
-
-type QualityChangeType string
-
-const (
-	QualityChangeTypeCodecChange      QualityChangeType = "CODEC_CHANGE"
-	QualityChangeTypeResolutionChange QualityChangeType = "RESOLUTION_CHANGE"
-	QualityChangeTypeBitrateChange    QualityChangeType = "BITRATE_CHANGE"
-	QualityChangeTypeTrackAdded       QualityChangeType = "TRACK_ADDED"
-	QualityChangeTypeTrackRemoved     QualityChangeType = "TRACK_REMOVED"
-	QualityChangeTypeTrackUpdate      QualityChangeType = "TRACK_UPDATE"
-)
-
-var AllQualityChangeType = []QualityChangeType{
-	QualityChangeTypeCodecChange,
-	QualityChangeTypeResolutionChange,
-	QualityChangeTypeBitrateChange,
-	QualityChangeTypeTrackAdded,
-	QualityChangeTypeTrackRemoved,
-	QualityChangeTypeTrackUpdate,
-}
-
-func (e QualityChangeType) IsValid() bool {
-	switch e {
-	case QualityChangeTypeCodecChange, QualityChangeTypeResolutionChange, QualityChangeTypeBitrateChange, QualityChangeTypeTrackAdded, QualityChangeTypeTrackRemoved, QualityChangeTypeTrackUpdate:
-		return true
-	}
-	return false
-}
-
-func (e QualityChangeType) String() string {
-	return string(e)
-}
-
-func (e *QualityChangeType) UnmarshalGQL(v any) error {
-	str, ok := v.(string)
-	if !ok {
-		return fmt.Errorf("enums must be strings")
-	}
-
-	*e = QualityChangeType(str)
-	if !e.IsValid() {
-		return fmt.Errorf("%s is not a valid QualityChangeType", str)
-	}
-	return nil
-}
-
-func (e QualityChangeType) MarshalGQL(w io.Writer) {
-	fmt.Fprint(w, strconv.Quote(e.String()))
-}
-
-func (e *QualityChangeType) UnmarshalJSON(b []byte) error {
-	s, err := strconv.Unquote(string(b))
-	if err != nil {
-		return err
-	}
-	return e.UnmarshalGQL(s)
-}
-
-func (e QualityChangeType) MarshalJSON() ([]byte, error) {
 	var buf bytes.Buffer
 	e.MarshalGQL(&buf)
 	return buf.Bytes(), nil

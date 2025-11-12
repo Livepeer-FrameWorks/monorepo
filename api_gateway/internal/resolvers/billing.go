@@ -3,6 +3,7 @@ package resolvers
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"frameworks/api_gateway/graph/model"
@@ -14,12 +15,12 @@ import (
 
 // DoGetBillingTiers returns available billing tiers
 func (r *Resolver) DoGetBillingTiers(ctx context.Context) ([]*models.BillingTier, error) {
-	// Check for demo mode
 	if middleware.IsDemoMode(ctx) {
-		r.Logger.Debug("Returning demo billing tiers data")
+		r.Logger.Debug("Demo mode: returning synthetic billing tiers")
 		return demo.GenerateBillingTiers(), nil
 	}
 
+	// Check for demo mode
 	r.Logger.Info("Fetching billing tiers from Purser")
 
 	resp, err := r.Clients.Purser.GetBillingTiers(ctx)
@@ -41,9 +42,8 @@ func (r *Resolver) DoGetBillingTiers(ctx context.Context) ([]*models.BillingTier
 
 // DoGetInvoices returns tenant invoices
 func (r *Resolver) DoGetInvoices(ctx context.Context) ([]*models.Invoice, error) {
-	// Check for demo mode
 	if middleware.IsDemoMode(ctx) {
-		r.Logger.Debug("Returning demo invoices data")
+		r.Logger.Debug("Demo mode: returning synthetic invoices")
 		return demo.GenerateInvoices(), nil
 	}
 
@@ -107,9 +107,8 @@ func (r *Resolver) DoGetInvoice(ctx context.Context, id string) (*models.Invoice
 
 // DoGetBillingStatus returns current billing status for tenant
 func (r *Resolver) DoGetBillingStatus(ctx context.Context) (*models.BillingStatus, error) {
-	// Check for demo mode
 	if middleware.IsDemoMode(ctx) {
-		r.Logger.Debug("Returning demo billing status data")
+		r.Logger.Debug("Demo mode: returning synthetic billing status")
 		return demo.GenerateBillingStatus(), nil
 	}
 
@@ -120,65 +119,86 @@ func (r *Resolver) DoGetBillingStatus(ctx context.Context) (*models.BillingStatu
 
 	r.Logger.WithField("tenant_id", tenantID).Info("Getting billing status")
 
-	// Get subscription info from Purser
-	subscription, err := r.Clients.Purser.GetSubscription(ctx, tenantID)
+	// Get full billing status from Purser
+	status, err := r.Clients.Purser.GetBillingStatus(ctx)
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to get subscription")
+		r.Logger.WithError(err).Error("Failed to get billing status from Purser")
 		return nil, fmt.Errorf("failed to get billing status: %w", err)
 	}
 
-	// Build BillingStatus from available subscription data
-	// Default next billing date to beginning of next month
-	now := time.Now()
-	nextMonth := time.Date(now.Year(), now.Month()+1, 1, 0, 0, 0, 0, now.Location())
-
-	status := &models.BillingStatus{
-		TenantID:        tenantID,
-		Status:          "active",
-		NextBillingDate: &nextMonth,
+	if status == nil {
+		return nil, fmt.Errorf("failed to get billing status: empty response")
 	}
 
-	if subscription.Subscription != nil {
-		status.Status = subscription.Subscription.Status
-		// Convert subscription info to tenant subscription
-		status.Subscription = models.TenantSubscription{
-			ID:       subscription.Subscription.ID,
-			TenantID: subscription.Subscription.TenantID,
-			TierID:   subscription.Subscription.TierID,
-			Status:   subscription.Subscription.Status,
-		}
+	if status.TenantID == "" {
+		status.TenantID = tenantID
+	}
 
-		// Calculate next billing date from subscription start date and billing period
-		if subscription.Subscription.StartDate != "" {
-			if startDate, err := time.Parse("2006-01-02", subscription.Subscription.StartDate); err == nil {
-				switch subscription.Subscription.BillingPeriod {
-				case "monthly":
-					// Find next month from start date that's in the future
-					nextBilling := startDate
-					for nextBilling.Before(now) {
-						nextBilling = nextBilling.AddDate(0, 1, 0)
-					}
-					status.NextBillingDate = &nextBilling
-				case "yearly":
-					// Find next year from start date that's in the future
-					nextBilling := startDate
-					for nextBilling.Before(now) {
-						nextBilling = nextBilling.AddDate(1, 0, 0)
-					}
-					status.NextBillingDate = &nextBilling
-				}
-			}
+	// Ensure subscription metadata is complete
+	status.Subscription.TenantID = tenantID
+
+	// Normalize subscription status
+	if status.Status == "" {
+		status.Status = status.Subscription.Status
+	}
+	if status.Status == "" {
+		status.Status = "active"
+	}
+
+	// Normalize next billing date
+	if status.NextBillingDate == nil && status.Subscription.NextBillingDate != nil {
+		status.NextBillingDate = status.Subscription.NextBillingDate
+	}
+
+	if status.NextBillingDate == nil {
+		nextBilling := computeNextBillingDate(status.Subscription.StartedAt, status.Tier.BillingPeriod)
+		if nextBilling != nil {
+			status.NextBillingDate = nextBilling
 		}
+	}
+
+	if status.NextBillingDate == nil {
+		now := time.Now()
+		nextMonth := time.Date(now.Year(), now.Month()+1, 1, 0, 0, 0, 0, now.Location())
+		status.NextBillingDate = &nextMonth
 	}
 
 	return status, nil
 }
 
+func computeNextBillingDate(start time.Time, billingPeriod string) *time.Time {
+	if start.IsZero() {
+		return nil
+	}
+
+	period := strings.ToLower(strings.TrimSpace(billingPeriod))
+	if period == "" {
+		return nil
+	}
+
+	next := start
+	now := time.Now()
+
+	switch period {
+	case "monthly", "month":
+		for !next.After(now) {
+			next = next.AddDate(0, 1, 0)
+		}
+	case "yearly", "annual", "annually":
+		for !next.After(now) {
+			next = next.AddDate(1, 0, 0)
+		}
+	default:
+		return nil
+	}
+
+	return &next
+}
+
 // DoGetUsageRecords returns usage records for tenant
 func (r *Resolver) DoGetUsageRecords(ctx context.Context, timeRange *model.TimeRangeInput) ([]*models.UsageRecord, error) {
-	// Check for demo mode
 	if middleware.IsDemoMode(ctx) {
-		r.Logger.Debug("Returning demo usage records data")
+		r.Logger.Debug("Demo mode: returning synthetic usage records")
 		return demo.GenerateUsageRecords(), nil
 	}
 
@@ -246,7 +266,7 @@ func (r *Resolver) DoGetUsageRecords(ctx context.Context, timeRange *model.TimeR
 // DoCreatePayment processes a payment
 func (r *Resolver) DoCreatePayment(ctx context.Context, input model.CreatePaymentInput) (*models.Payment, error) {
 	if middleware.IsDemoMode(ctx) {
-		r.Logger.Debug("Returning demo payment creation")
+		r.Logger.Debug("Demo mode: returning synthetic payment")
 		cur := "EUR"
 		if input.Currency != nil {
 			cur = string(*input.Currency)
@@ -313,25 +333,4 @@ func (r *Resolver) DoCreatePayment(ctx context.Context, input model.CreatePaymen
 	payment.UpdatedAt = payment.CreatedAt
 
 	return payment, nil
-}
-
-// DoUpdateBillingTier changes the tenant's billing tier
-func (r *Resolver) DoUpdateBillingTier(ctx context.Context, tierID string) (*models.BillingStatus, error) {
-	if middleware.IsDemoMode(ctx) {
-		r.Logger.Debug("Returning demo billing tier update")
-		return demo.GenerateBillingStatus(), nil
-	}
-
-	tenantID, ok := ctx.Value("tenant_id").(string)
-	if !ok {
-		return nil, fmt.Errorf("tenant context required")
-	}
-
-	r.Logger.WithField("tenant_id", tenantID).
-		WithField("tier_id", tierID).
-		Info("Updating billing tier")
-
-	// TODO: Add UpdateBillingTier method to Purser client
-	// For now, return current status
-	return r.DoGetBillingStatus(ctx)
 }

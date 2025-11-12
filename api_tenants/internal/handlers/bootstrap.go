@@ -126,7 +126,7 @@ func BootstrapEdgeNode(c *gin.Context) {
 	}
 
 	// Mark token used
-	_, _ = db.Exec(`UPDATE quartermaster.bootstrap_tokens SET used_at = NOW() WHERE token = $1`, req.Token)
+	_, _ = db.Exec(`UPDATE quartermaster.bootstrap_tokens SET used_at = NOW(), usage_count = usage_count + 1 WHERE token = $1`, req.Token)
 
 	c.JSON(http.StatusOK, qmapi.BootstrapEdgeNodeResponse{
 		NodeID:    nodeID,
@@ -169,7 +169,7 @@ func BootstrapService(c *gin.Context) {
 			c.JSON(http.StatusUnauthorized, qmapi.ErrorResponse{Error: "invalid bootstrap token"})
 			return
 		}
-		_, _ = db.Exec(`UPDATE quartermaster.bootstrap_tokens SET used_at = NOW() WHERE token=$1`, *req.Token)
+		_, _ = db.Exec(`UPDATE quartermaster.bootstrap_tokens SET used_at = NOW(), usage_count = usage_count + 1 WHERE token=$1`, *req.Token)
 	} else {
 		// Fallback: requires service token auth; choose any active provider cluster
 		_ = db.QueryRow(`SELECT cluster_id FROM quartermaster.infrastructure_clusters WHERE is_active = true ORDER BY cluster_name LIMIT 1`).Scan(&clusterID)

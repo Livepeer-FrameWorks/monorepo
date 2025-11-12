@@ -30,6 +30,7 @@ jobs:
           - { name: periscope-query,   context: api_analytics_query,    dockerfile: api_analytics_query/Dockerfile }
           - { name: signalman,         context: api_realtime,           dockerfile: api_realtime/Dockerfile }
           - { name: helmsman,          context: api_sidecar,            dockerfile: api_sidecar/Dockerfile }
+          - { name: forms-api,         context: api_forms,              dockerfile: api_forms/Dockerfile }
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -47,12 +48,21 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Log in to DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
       - name: Read service component version (optional)
         id: svcver
         run: |
-          FILE="${{ matrix.service.context }}/VERSION"
-          if [[ -f "$FILE" ]]; then
-            echo "version=$(tr -d '\n' < "$FILE")" >> "$GITHUB_OUTPUT"
+          VERSION_FILE="${{ matrix.service.context }}/VERSION"
+          PACKAGE_JSON="${{ matrix.service.context }}/package.json"
+          if [[ -f "$VERSION_FILE" ]]; then
+            echo "version=$(tr -d '\n' < "$VERSION_FILE")" >> "$GITHUB_OUTPUT"
+          elif [[ -f "$PACKAGE_JSON" ]]; then
+            echo "version=$(jq -r .version "$PACKAGE_JSON")" >> "$GITHUB_OUTPUT"
           else
             echo "version=0.0.0" >> "$GITHUB_OUTPUT"
           fi
@@ -74,6 +84,7 @@ jobs:
             COMPONENT_VERSION=${{ steps.svcver.outputs.version }}
           tags: |
             ${{ env.REGISTRY }}/frameworks-${{ matrix.service.name }}:${{ github.ref_name }}
+            livepeerframeworks/frameworks-${{ matrix.service.name }}:${{ github.ref_name }}
 
       - name: Write digest artifact
         run: |
@@ -92,6 +103,111 @@ jobs:
         with:
           name: image-digests
           path: dist/image-${{ matrix.service.name }}.json
+
+  build-webapps:
+    name: Build Web Applications
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        webapp:
+          - { name: webapp, context: website_application, env_prefix: VITE }
+          - { name: website, context: website_marketing, env_prefix: VITE }
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+          cache-dependency-path: '${{ matrix.webapp.context }}/pnpm-lock.yaml'
+
+      - name: Install dependencies
+        run: |
+          cd ${{ matrix.webapp.context }}
+          pnpm install --frozen-lockfile
+
+      - name: Build application
+        env:
+          # webapp (website_application) variables
+          VITE_AUTH_URL: ${{ secrets.VITE_AUTH_URL }}
+          VITE_GRAPHQL_HTTP_URL: ${{ secrets.VITE_GRAPHQL_HTTP_URL }}
+          VITE_GRAPHQL_WS_URL: ${{ secrets.VITE_GRAPHQL_WS_URL }}
+          VITE_RTMP_DOMAIN: ${{ secrets.VITE_RTMP_DOMAIN }}
+          VITE_HTTP_DOMAIN: ${{ secrets.VITE_HTTP_DOMAIN }}
+          VITE_CDN_DOMAIN: ${{ secrets.VITE_CDN_DOMAIN }}
+          VITE_RTMP_PATH: ${{ secrets.VITE_RTMP_PATH }}
+          VITE_HLS_PATH: ${{ secrets.VITE_HLS_PATH }}
+          VITE_WEBRTC_PATH: ${{ secrets.VITE_WEBRTC_PATH }}
+          VITE_EMBED_PATH: ${{ secrets.VITE_EMBED_PATH }}
+          VITE_MARKETING_SITE_URL: ${{ secrets.VITE_MARKETING_SITE_URL }}
+          VITE_TURNSTILE_AUTH_SITE_KEY: ${{ secrets.VITE_TURNSTILE_AUTH_SITE_KEY }}
+          # website (website_marketing) variables
+          VITE_APP_URL: ${{ secrets.VITE_APP_URL }}
+          VITE_CONTACT_API_URL: ${{ secrets.VITE_CONTACT_API_URL }}
+          VITE_GATEWAY_URL: ${{ secrets.VITE_GATEWAY_URL }}
+          VITE_GITHUB_URL: ${{ secrets.VITE_GITHUB_URL }}
+          VITE_LIVEPEER_URL: ${{ secrets.VITE_LIVEPEER_URL }}
+          VITE_LIVEPEER_EXPLORER_URL: ${{ secrets.VITE_LIVEPEER_EXPLORER_URL }}
+          VITE_CONTACT_EMAIL: ${{ secrets.VITE_CONTACT_EMAIL }}
+          VITE_FORUM_URL: ${{ secrets.VITE_FORUM_URL }}
+          VITE_DISCORD_URL: ${{ secrets.VITE_DISCORD_URL }}
+          VITE_DEMO_STREAM_NAME: ${{ secrets.VITE_DEMO_STREAM_NAME }}
+          VITE_COMPANY_NAME: ${{ secrets.VITE_COMPANY_NAME }}
+          VITE_DOMAIN: ${{ secrets.VITE_DOMAIN }}
+          VITE_TURNSTILE_FORMS_SITE_KEY: ${{ secrets.VITE_TURNSTILE_FORMS_SITE_KEY }}
+        run: |
+          cd ${{ matrix.webapp.context }}
+          pnpm run build
+
+      - name: Create static bundle
+        run: |
+          cd ${{ matrix.webapp.context }}
+          tar czf ../${{ matrix.webapp.name }}-build.tar.gz build/
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ matrix.webapp.context }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: true
+          sbom: true
+          tags: |
+            ${{ env.REGISTRY }}/frameworks-${{ matrix.webapp.name }}:${{ github.ref_name }}
+            livepeerframeworks/frameworks-${{ matrix.webapp.name }}:${{ github.ref_name }}
+
+      - name: Upload static bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.webapp.name }}-bundle
+          path: ${{ matrix.webapp.name }}-build.tar.gz
 
   build-cli:
     name: Build CLI binaries
@@ -145,7 +261,7 @@ jobs:
 
   manifest:
     name: Generate & Publish Manifest
-    needs: [build-images, build-cli]
+    needs: [build-images, build-webapps, build-cli]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -180,6 +296,16 @@ jobs:
         with:
           name: cli-binaries
           path: dist/cli
+      - name: Download webapp bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: webapp-bundle
+          path: dist/
+      - name: Download website bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: website-bundle
+          path: dist/
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -189,6 +315,8 @@ jobs:
           files: |
             dist/manifest.yaml
             dist/cli/*
+            dist/webapp-build.tar.gz
+            dist/website-build.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

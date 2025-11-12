@@ -168,6 +168,13 @@ func merge(dst map[string]string, src map[string]string) {
 }
 
 func computeDerived(env map[string]string) error {
+	if strings.TrimSpace(env["WEBAPP_PORT"]) == "" {
+		env["WEBAPP_PORT"] = "18030"
+	}
+	if strings.TrimSpace(env["WEBSITE_PORT"]) == "" {
+		env["WEBSITE_PORT"] = "18031"
+	}
+
 	pgUser, err := require(env, "POSTGRES_USER")
 	if err != nil {
 		return err

@@ -15,13 +15,41 @@ import (
 
 // WebSocketManager manages WebSocket connections to Signalman for GraphQL subscriptions
 type WebSocketManager struct {
-	clients      map[string]*signalmanclient.Client // Key: userID:tenantID
-	logger       logging.Logger
-	mutex        sync.RWMutex
-	signalmanURL string
-	cleanup      chan string // Channel for cleanup signals
-	stopChan     chan struct{}
-	metrics      *GraphQLMetrics
+	clients                 map[string]*signalmanclient.Client // Key: userID:tenantID
+	logger                  logging.Logger
+	mutex                   sync.RWMutex
+	signalmanURL            string
+	cleanup                 chan string // Channel for cleanup signals
+	stopChan                chan struct{}
+	metrics                 *GraphQLMetrics
+	maxConnectionsPerTenant int
+	tenantConnectionCounts  map[string]int
+}
+
+func (wm *WebSocketManager) incrementTenantConnection(tenantID string) {
+	if wm.maxConnectionsPerTenant <= 0 || tenantID == "" {
+		return
+	}
+	wm.tenantConnectionCounts[tenantID]++
+}
+
+func (wm *WebSocketManager) decrementTenantConnection(tenantID string) {
+	if wm.maxConnectionsPerTenant <= 0 || tenantID == "" {
+		return
+	}
+	if current, ok := wm.tenantConnectionCounts[tenantID]; ok {
+		if current <= 1 {
+			delete(wm.tenantConnectionCounts, tenantID)
+		} else {
+			wm.tenantConnectionCounts[tenantID] = current - 1
+		}
+	}
+}
+
+func (wm *WebSocketManager) removeClientLocked(key string, client *signalmanclient.Client) {
+	client.Close()
+	delete(wm.clients, key)
+	wm.decrementTenantConnection(client.TenantID())
 }
 
 // ConnectionConfig represents configuration for a WebSocket connection
@@ -32,14 +60,16 @@ type ConnectionConfig struct {
 }
 
 // NewWebSocketManager creates a new WebSocket connection manager
-func NewWebSocketManager(signalmanURL string, logger logging.Logger, metrics *GraphQLMetrics) *WebSocketManager {
+func NewWebSocketManager(signalmanURL string, logger logging.Logger, metrics *GraphQLMetrics, maxConnectionsPerTenant int) *WebSocketManager {
 	wm := &WebSocketManager{
-		clients:      make(map[string]*signalmanclient.Client),
-		logger:       logger,
-		signalmanURL: signalmanURL,
-		cleanup:      make(chan string, 10),
-		stopChan:     make(chan struct{}),
-		metrics:      metrics,
+		clients:                 make(map[string]*signalmanclient.Client),
+		logger:                  logger,
+		signalmanURL:            signalmanURL,
+		cleanup:                 make(chan string, 10),
+		stopChan:                make(chan struct{}),
+		metrics:                 metrics,
+		maxConnectionsPerTenant: maxConnectionsPerTenant,
+		tenantConnectionCounts:  make(map[string]int),
 	}
 
 	// Start cleanup goroutine
@@ -67,6 +97,17 @@ func (wm *WebSocketManager) GetOrCreateConnection(ctx context.Context, config Co
 	if client, exists := wm.clients[key]; exists && client.IsConnected() {
 		return client, nil
 	}
+	if client, exists := wm.clients[key]; exists {
+		wm.removeClientLocked(key, client)
+	}
+
+	if wm.maxConnectionsPerTenant > 0 && wm.tenantConnectionCounts[config.TenantID] >= wm.maxConnectionsPerTenant {
+		wm.logger.WithFields(logging.Fields{
+			"tenant_id": config.TenantID,
+			"limit":     wm.maxConnectionsPerTenant,
+		}).Warn("Reached max Signalman connections for tenant")
+		return nil, fmt.Errorf("tenant %s has reached the max number of active subscriptions", config.TenantID)
+	}
 
 	// Create new client with authentication
 	client := signalmanclient.NewClient(signalmanclient.Config{
@@ -92,6 +133,7 @@ func (wm *WebSocketManager) GetOrCreateConnection(ctx context.Context, config Co
 	}
 
 	wm.clients[key] = client
+	wm.incrementTenantConnection(config.TenantID)
 
 	// Record successful connection
 	if wm.metrics != nil {
@@ -496,8 +538,7 @@ func (wm *WebSocketManager) CleanupConnection(userID, tenantID string) {
 	defer wm.mutex.Unlock()
 
 	if client, exists := wm.clients[key]; exists {
-		client.Close()
-		delete(wm.clients, key)
+		wm.removeClientLocked(key, client)
 
 		wm.logger.WithFields(logging.Fields{
 			"user_id":   userID,
@@ -520,8 +561,7 @@ func (wm *WebSocketManager) cleanupWorker() {
 			// Handle specific cleanup request
 			wm.mutex.Lock()
 			if client, exists := wm.clients[key]; exists {
-				client.Close()
-				delete(wm.clients, key)
+				wm.removeClientLocked(key, client)
 			}
 			wm.mutex.Unlock()
 		case <-ticker.C:
@@ -545,8 +585,7 @@ func (wm *WebSocketManager) periodicCleanup() {
 
 	for _, key := range toRemove {
 		if client, exists := wm.clients[key]; exists {
-			client.Close()
-			delete(wm.clients, key)
+			wm.removeClientLocked(key, client)
 		}
 	}
 
@@ -566,8 +605,7 @@ func (wm *WebSocketManager) Shutdown() error {
 
 	// Close all connections
 	for key, client := range wm.clients {
-		client.Close()
-		delete(wm.clients, key)
+		wm.removeClientLocked(key, client)
 	}
 
 	wm.logger.Info("WebSocket manager shutdown completed")

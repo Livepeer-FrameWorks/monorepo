@@ -117,7 +117,7 @@ func GraphQLAttachLoaders(sc *clients.ServiceClients) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ctx := c.Request.Context()
 		lds := loaders.New(sc)
-		ctx = context.WithValue(ctx, "loaders", lds)
+		ctx = loaders.ContextWithLoaders(ctx, lds)
 		c.Request = c.Request.WithContext(ctx)
 		c.Next()
 	}

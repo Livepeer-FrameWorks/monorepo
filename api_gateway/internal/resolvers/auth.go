@@ -70,11 +70,10 @@ func (r *Resolver) DoGetMe(ctx context.Context) (*models.User, error) {
 	}()
 
 	if middleware.IsDemoMode(ctx) {
-		r.Logger.Debug("Returning demo user data")
+		r.Logger.Debug("Demo mode: returning synthetic user profile")
 		if r.Metrics != nil {
 			r.Metrics.Operations.WithLabelValues("getMe", "demo").Inc()
 		}
-		// Return demo user data without calling Commodore
 		return &models.User{
 			ID:        "demo_user_developer",
 			Email:     "developer@frameworks.demo",

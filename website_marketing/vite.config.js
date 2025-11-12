@@ -1,25 +1,32 @@
-import { defineConfig } from 'vite'
+import { defineConfig, loadEnv } from 'vite'
 import path from 'path'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
-export default defineConfig({
-  plugins: [react(), tailwindcss()],
-  resolve: {
-    alias: {
-      '@': path.resolve(__dirname, './src'),
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), '')
+
+  const host = env.HOST ?? '0.0.0.0'
+  const port = Number(env.PORT ?? 9004)
+
+  return {
+    plugins: [react(), tailwindcss()],
+    resolve: {
+      alias: {
+        '@': path.resolve(__dirname, './src'),
+      },
     },
-  },
-  server: {
-    host: '0.0.0.0',
-    port: 9004,
-    fs: {
-      // allow importing markdown and local library from repo root
-      allow: [path.resolve(__dirname, '..')]
+    server: {
+      host,
+      port,
+      fs: {
+        // allow importing markdown and local library from repo root
+        allow: [path.resolve(__dirname, '..')]
+      }
+    },
+    build: {
+      outDir: 'dist',
+      sourcemap: false
     }
-  },
-  build: {
-    outDir: 'dist',
-    sourcemap: false
   }
-}) 
+})

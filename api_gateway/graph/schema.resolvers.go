@@ -170,11 +170,6 @@ func (r *mutationResolver) CreatePayment(ctx context.Context, input model.Create
 	panic(fmt.Errorf("not implemented: CreatePayment - createPayment"))
 }
 
-// UpdateBillingTier is the resolver for the updateBillingTier field.
-func (r *mutationResolver) UpdateBillingTier(ctx context.Context, tierID string) (*models.BillingStatus, error) {
-	panic(fmt.Errorf("not implemented: UpdateBillingTier - updateBillingTier"))
-}
-
 // UpdateTenant is the resolver for the updateTenant field.
 func (r *mutationResolver) UpdateTenant(ctx context.Context, input model.UpdateTenantInput) (*models.Tenant, error) {
 	panic(fmt.Errorf("not implemented: UpdateTenant - updateTenant"))
@@ -440,9 +435,9 @@ func (r *queryResolver) StreamHealthMetrics(ctx context.Context, stream string, 
 	panic(fmt.Errorf("not implemented: StreamHealthMetrics - streamHealthMetrics"))
 }
 
-// StreamQualityChanges is the resolver for the streamQualityChanges field.
-func (r *queryResolver) StreamQualityChanges(ctx context.Context, stream string, timeRange *model.TimeRangeInput) ([]*model.StreamQualityChange, error) {
-	panic(fmt.Errorf("not implemented: StreamQualityChanges - streamQualityChanges"))
+// TrackListEvents is the resolver for the trackListEvents field.
+func (r *queryResolver) TrackListEvents(ctx context.Context, stream string, timeRange *model.TimeRangeInput) ([]*periscope.AnalyticsTrackListEvent, error) {
+	panic(fmt.Errorf("not implemented: TrackListEvents - trackListEvents"))
 }
 
 // StreamHealthAlerts is the resolver for the streamHealthAlerts field.

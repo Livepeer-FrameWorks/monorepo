@@ -15,6 +15,7 @@ type Loaders struct {
 	NodesByCluster            *NodesByClusterLoader
 	ServiceInstancesByCluster *ServiceInstancesByClusterLoader
 	ServiceInstancesByNode    *ServiceInstancesByNodeLoader
+	Memo                      *Memoizer
 }
 
 func New(serviceClients *clients.ServiceClients) *Loaders {
@@ -24,7 +25,63 @@ func New(serviceClients *clients.ServiceClients) *Loaders {
 		NodesByCluster:            NewNodesByClusterLoader(serviceClients),
 		ServiceInstancesByCluster: NewServiceInstancesByClusterLoader(serviceClients),
 		ServiceInstancesByNode:    NewServiceInstancesByNodeLoader(serviceClients),
+		Memo:                      NewMemoizer(),
 	}
+}
+
+const ctxKey = "loaders"
+
+// ContextWithLoaders stores loaders in the context
+func ContextWithLoaders(ctx context.Context, l *Loaders) context.Context {
+	return context.WithValue(ctx, ctxKey, l)
+}
+
+// FromContext retrieves loaders from the context
+func FromContext(ctx context.Context) *Loaders {
+	if ctx == nil {
+		return nil
+	}
+	if l, ok := ctx.Value(ctxKey).(*Loaders); ok {
+		return l
+	}
+	return nil
+}
+
+// Memoizer provides request-scoped memoization for arbitrary keys
+type Memoizer struct {
+	mu   sync.Mutex
+	data map[string]*memoEntry
+}
+
+type memoEntry struct {
+	value interface{}
+	err   error
+	ready chan struct{}
+}
+
+// NewMemoizer creates a new memoizer instance
+func NewMemoizer() *Memoizer {
+	return &Memoizer{data: make(map[string]*memoEntry)}
+}
+
+// GetOrLoad returns a cached value for key or invokes loader once per key
+func (m *Memoizer) GetOrLoad(key string, loader func() (interface{}, error)) (interface{}, error) {
+	if m == nil {
+		return loader()
+	}
+	m.mu.Lock()
+	if entry, ok := m.data[key]; ok {
+		m.mu.Unlock()
+		<-entry.ready
+		return entry.value, entry.err
+	}
+	entry := &memoEntry{ready: make(chan struct{})}
+	m.data[key] = entry
+	m.mu.Unlock()
+
+	entry.value, entry.err = loader()
+	close(entry.ready)
+	return entry.value, entry.err
 }
 
 // NodeLoader loads nodes by nodeID with request-scoped caching.

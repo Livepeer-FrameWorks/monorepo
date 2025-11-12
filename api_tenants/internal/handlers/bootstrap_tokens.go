@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	qmapi "frameworks/pkg/api/quartermaster"
@@ -22,6 +23,13 @@ func CreateBootstrapToken(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, qmapi.ErrorResponse{Error: "invalid request"})
 		return
+	}
+	if strings.TrimSpace(req.Name) == "" {
+		c.JSON(http.StatusBadRequest, qmapi.ErrorResponse{Error: "name required"})
+		return
+	}
+	if req.Metadata == nil {
+		req.Metadata = map[string]interface{}{}
 	}
 	if req.Kind != "edge_node" && req.Kind != "service" {
 		c.JSON(http.StatusBadRequest, qmapi.ErrorResponse{Error: "invalid kind"})
@@ -55,12 +63,13 @@ func CreateBootstrapToken(c *gin.Context) {
 	sMeta, _ := json.Marshal(req.Metadata)
 	var tenantIDStr, clusterIDStr, expectedIPStr, createdByStr sql.NullString
 	var metaOut sql.NullString
+	var usageLimit sql.NullInt64
 	err := db.QueryRow(`
-        INSERT INTO quartermaster.bootstrap_tokens (token, kind, tenant_id, cluster_id, expected_ip, metadata, expires_at)
-        VALUES ($1,$2,$3,$4,$5,$6,$7)
-        RETURNING id, token, kind, tenant_id::text, cluster_id, expected_ip::text, metadata::text, expires_at, used_at, created_by::text, created_at
-    `, token, req.Kind, req.TenantID, req.ClusterID, req.ExpectedIP, string(sMeta), expires).Scan(
-		&bt.ID, &bt.Token, &bt.Kind, &tenantIDStr, &clusterIDStr, &expectedIPStr, &metaOut, &bt.ExpiresAt, &bt.UsedAt, &createdByStr, &bt.CreatedAt,
+	        INSERT INTO quartermaster.bootstrap_tokens (token, kind, name, tenant_id, cluster_id, expected_ip, metadata, usage_limit, expires_at)
+	        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+	        RETURNING id, token, kind, name, tenant_id::text, cluster_id, expected_ip::text, metadata::text, usage_limit, usage_count, expires_at, used_at, created_by::text, created_at
+	    `, token, req.Kind, req.Name, req.TenantID, req.ClusterID, req.ExpectedIP, string(sMeta), req.UsageLimit, expires).Scan(
+		&bt.ID, &bt.Token, &bt.Kind, &bt.Name, &tenantIDStr, &clusterIDStr, &expectedIPStr, &metaOut, &usageLimit, &bt.UsageCount, &bt.ExpiresAt, &bt.UsedAt, &createdByStr, &bt.CreatedAt,
 	)
 	if err != nil {
 		logger.WithError(err).Error("failed to insert bootstrap token")
@@ -88,6 +97,10 @@ func CreateBootstrapToken(c *gin.Context) {
 		s := createdByStr.String
 		bt.CreatedBy = &s
 	}
+	if usageLimit.Valid {
+		v := int(usageLimit.Int64)
+		bt.UsageLimit = &v
+	}
 	c.JSON(http.StatusCreated, qmapi.CreateBootstrapTokenResponse{Token: bt})
 }
 
@@ -100,10 +113,10 @@ func ListBootstrapTokens(c *gin.Context) {
 		return
 	}
 	rows, err := db.Query(`
-        SELECT id, token, kind, COALESCE(tenant_id::text,NULL), COALESCE(cluster_id,NULL), COALESCE(expected_ip::text,NULL), metadata, expires_at, used_at, COALESCE(created_by::text,NULL), created_at
-        FROM quartermaster.bootstrap_tokens
-        ORDER BY created_at DESC
-    `)
+	        SELECT id, token, kind, name, COALESCE(tenant_id::text,NULL), COALESCE(cluster_id,NULL), COALESCE(expected_ip::text,NULL), metadata, usage_limit, usage_count, expires_at, used_at, COALESCE(created_by::text,NULL), created_at
+	        FROM quartermaster.bootstrap_tokens
+	        ORDER BY created_at DESC
+	    `)
 	if err != nil {
 		logger.WithError(err).Error("failed to list bootstrap tokens")
 		c.JSON(http.StatusInternalServerError, qmapi.ErrorResponse{Error: "failed to list tokens"})
@@ -115,7 +128,8 @@ func ListBootstrapTokens(c *gin.Context) {
 		var bt qmapi.BootstrapToken
 		var tenantIDStr, clusterIDStr, expectedIPStr, createdByStr sql.NullString
 		var metaJSON sql.NullString
-		if err := rows.Scan(&bt.ID, &bt.Token, &bt.Kind, &tenantIDStr, &clusterIDStr, &expectedIPStr, &metaJSON, &bt.ExpiresAt, &bt.UsedAt, &createdByStr, &bt.CreatedAt); err == nil {
+		var usageLimit sql.NullInt64
+		if err := rows.Scan(&bt.ID, &bt.Token, &bt.Kind, &bt.Name, &tenantIDStr, &clusterIDStr, &expectedIPStr, &metaJSON, &usageLimit, &bt.UsageCount, &bt.ExpiresAt, &bt.UsedAt, &createdByStr, &bt.CreatedAt); err == nil {
 			if tenantIDStr.Valid && tenantIDStr.String != "" {
 				s := tenantIDStr.String
 				bt.TenantID = &s
@@ -131,6 +145,10 @@ func ListBootstrapTokens(c *gin.Context) {
 			if createdByStr.Valid && createdByStr.String != "" {
 				s := createdByStr.String
 				bt.CreatedBy = &s
+			}
+			if usageLimit.Valid {
+				v := int(usageLimit.Int64)
+				bt.UsageLimit = &v
 			}
 			if metaJSON.Valid && metaJSON.String != "" {
 				var md map[string]interface{}
