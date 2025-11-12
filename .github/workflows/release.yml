@@ -101,7 +101,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: image-digests
+          name: image-digest-${{ matrix.service.name }}
           path: dist/image-${{ matrix.service.name }}.json
 
   build-webapps:
@@ -237,6 +237,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.22'
+          cache-dependency-path: cli/go.sum
       - name: Build CLI ${{ matrix.goos }}/${{ matrix.goarch }}
         env:
           GOOS: ${{ matrix.goos }}
@@ -265,8 +266,9 @@ jobs:
       - name: Download image digest artifacts
         uses: actions/download-artifact@v4
         with:
-          name: image-digests
+          pattern: image-digest-*
           path: dist/digests
+          merge-multiple: true
       - name: Generate manifest
         run: |
           echo "platform_version: ${{ github.ref_name }}" > dist/manifest.yaml
