@@ -85,6 +85,8 @@ jobs:
           tags: |
             ${{ env.REGISTRY }}/frameworks-${{ matrix.service.name }}:${{ github.ref_name }}
             livepeerframeworks/frameworks-${{ matrix.service.name }}:${{ github.ref_name }}
+          cache-from: type=gha,scope=${{ matrix.service.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service.name }}
 
       - name: Write digest artifact
         run: |
@@ -206,6 +208,8 @@ jobs:
           tags: |
             ${{ env.REGISTRY }}/frameworks-${{ matrix.webapp.name }}:${{ github.ref_name }}
             livepeerframeworks/frameworks-${{ matrix.webapp.name }}:${{ github.ref_name }}
+          cache-from: type=gha,scope=${{ matrix.webapp.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.webapp.name }}
 
       - name: Upload static bundle artifact
         uses: actions/upload-artifact@v4
