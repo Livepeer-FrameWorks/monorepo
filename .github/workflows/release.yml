@@ -10,7 +10,7 @@ permissions:
   packages: write      # push images to GHCR
 
 env:
-  REGISTRY: ghcr.io/${{ github.repository_owner }}
+  REGISTRY: ghcr.io/livepeer-frameworks
 
 jobs:
   build-images:
@@ -127,7 +127,7 @@ jobs:
         with:
           node-version: '20'
           cache: 'pnpm'
-          cache-dependency-path: '${{ matrix.webapp.context }}/pnpm-lock.yaml'
+          cache-dependency-path: 'pnpm-lock.yaml'
 
       - name: Install dependencies
         run: |
@@ -227,9 +227,6 @@ jobs:
           - goos: darwin
             goarch: arm64
             ext: ""
-          - goos: windows
-            goarch: amd64
-            ext: ".exe"
     steps:
       - uses: actions/checkout@v4
       - name: Sanitize platform tag to component version
@@ -256,7 +253,7 @@ jobs:
       - name: Upload CLI artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: cli-binaries
+          name: cli-${{ matrix.goos }}-${{ matrix.goarch }}
           path: dist/cli/*
 
   manifest:
@@ -294,8 +291,9 @@ jobs:
       - name: Download CLI artifacts
         uses: actions/download-artifact@v4
         with:
-          name: cli-binaries
+          pattern: cli-*
           path: dist/cli
+          merge-multiple: true
       - name: Download webapp bundle
         uses: actions/download-artifact@v4
         with:
