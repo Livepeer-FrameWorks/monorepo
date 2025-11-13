@@ -33,7 +33,7 @@ const ThumbnailOverlay: React.FC<ThumbnailOverlayProps> = ({
     >
       {thumbnailUrl && (
         <div
-          className="absolute inset-0 bg-cover bg-center"
+          className="fw-absolute inset-0 bg-cover bg-center"
           style={{ backgroundImage: `url(${thumbnailUrl})` }}
         />
       )}
@@ -45,13 +45,13 @@ const ThumbnailOverlay: React.FC<ThumbnailOverlayProps> = ({
         )}
       />
 
-      <div className="relative z-10 flex max-w-[320px] flex-col items-center gap-4 px-6 text-center text-sm sm:gap-6">
+      <div className="fw-relative z-10 flex max-w-[320px] flex-col items-center gap-4 px-6 text-center text-sm sm:gap-6">
         {showUnmuteMessage ? (
-          <div className="w-full rounded-lg border border-white/15 bg-black/80 p-4 text-sm text-white shadow-lg backdrop-blur">
-            <div className="mb-1 flex items-center justify-center gap-2 text-base font-semibold text-primary">
+          <div className="fw-w-full rounded-lg border border-white/15 bg-black/80 p-4 text-sm text-white shadow-lg backdrop-blur">
+            <div className="fw-mb-1 flex items-center justify-center gap-2 text-base font-semibold text-primary">
               <span aria-hidden="true">🔇</span> Click to unmute
             </div>
-            <p className="text-xs text-white/80">Stream is playing muted — tap to enable sound.</p>
+            <p className="fw-text-xs text-white/80">Stream is playing muted — tap to enable sound.</p>
           </div>
         ) : (
           <>
@@ -59,7 +59,7 @@ const ThumbnailOverlay: React.FC<ThumbnailOverlayProps> = ({
               type="button"
               size="icon"
               variant="secondary"
-              className="h-20 w-20 rounded-full bg-primary/90 text-primary-foreground shadow-lg shadow-primary/40 transition hover:bg-primary focus-visible:bg-primary"
+              className="fw-h-20 w-20 rounded-full bg-primary/90 text-primary-foreground shadow-lg shadow-primary/40 transition hover:bg-primary focus-visible:bg-primary"
               aria-label="Play stream"
             >
               <svg
@@ -71,11 +71,11 @@ const ThumbnailOverlay: React.FC<ThumbnailOverlayProps> = ({
                 <path d="M8 5v14l11-7z" />
               </svg>
             </Button>
-            <div className="w-full rounded-lg border border-white/10 bg-black/70 p-5 text-white shadow-inner backdrop-blur">
-              <p className="text-base font-semibold text-primary">
+            <div className="fw-w-full rounded-lg border border-white/10 bg-black/70 p-5 text-white shadow-inner backdrop-blur">
+              <p className="fw-text-base font-semibold text-primary">
                 {message ?? "Click to play"}
               </p>
-              <p className="mt-1 text-xs text-white/70">
+              <p className="fw-mt-1 text-xs text-white/70">
                 {message ? "Start streaming instantly" : "Jump into the live feed"}
               </p>
             </div>

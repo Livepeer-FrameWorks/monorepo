@@ -1,19 +1,33 @@
 # Forms Service
 
-Minimal contact API used for demos. Not part of the dev docker‑compose stack.
-
-Status
-- Minimal utility; evaluate third‑party providers vs. in‑house.
+Minimal contact API for handling contact form submissions. Go service using pkg/ infrastructure.
 
 ## Run (dev)
-- Run the service directly: `cd api_forms && npm install && npm run dev`
-- Configure the marketing site to point `VITE_CONTACT_API_URL` to this service.
+```bash
+cd api_forms
+go mod download
+go run ./cmd/forms
+```
 
-Configuration: copy `env.example` to `.env` and use the inline comments as reference. Do not commit secrets.
-Keep the following in mind:
+Configure the marketing site to point `VITE_CONTACT_API_URL` to this service.
 
-- `TURNSTILE_FORMS_SECRET_KEY` enables Cloudflare Turnstile verification for contact forms. Use Cloudflare's [test secret](https://developers.cloudflare.com/turnstile/troubleshooting/testing/) (`1x0000000000000000000000000000000AA`) for local development.
-- `ALLOWED_ORIGINS` should contain the marketing site domains allowed to submit the form.
+## Configuration
+
+Environment variables (see `env.example`):
+
+- `PORT` - Service port (default: 18032)
+- `TURNSTILE_FORMS_SECRET_KEY` - Cloudflare Turnstile verification. Use test secret `1x0000000000000000000000000000000AA` for local development.
+- `ALLOWED_ORIGINS` - Comma-separated list of allowed origins for CORS
+- `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` - Email configuration
+- `FROM_EMAIL` - Sender email address
+- `TO_EMAIL` - Recipient for contact form submissions
+
+## Build
+
+```bash
+cd api_forms
+CGO_ENABLED=0 go build -o forms ./cmd/forms
+```
 
 ## Build vs Buy Considerations
 

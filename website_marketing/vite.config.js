@@ -19,10 +19,6 @@ export default defineConfig(({ mode }) => {
     server: {
       host,
       port,
-      fs: {
-        // allow importing markdown and local library from repo root
-        allow: [path.resolve(__dirname, '..')]
-      }
     },
     build: {
       outDir: 'dist',

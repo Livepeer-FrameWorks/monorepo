@@ -1,7 +1,4 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
-
+@import "tailwindcss";
 @import "./animations.css";
 
 :root {
@@ -41,27 +38,44 @@
   animation: spin-slow 18s linear infinite;
 }
 
-@layer components {
-  .fw-player-root {
-    @apply relative h-full w-full overflow-hidden rounded-xl bg-black;
-  }
+/* Player-specific component styles */
+.fw-player-root {
+  position: relative;
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  border-radius: 0.75rem;
+  background-color: rgb(0 0 0);
+}
 
-  .fw-player-container {
-    @apply h-full w-full overflow-hidden rounded-xl bg-black;
-  }
+.fw-player-container {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  border-radius: 0.75rem;
+  background-color: rgb(0 0 0);
+}
 
-  .fw-player-video {
-    @apply h-full w-full rounded-xl object-contain bg-black;
-  }
+.fw-player-video {
+  height: 100%;
+  width: 100%;
+  border-radius: 0.75rem;
+  object-fit: contain;
+  background-color: rgb(0 0 0);
+}
 
-  .fw-player-embed {
-    @apply h-full w-full min-h-[300px] rounded-xl border-0 bg-black;
-  }
+.fw-player-embed {
+  height: 100%;
+  width: 100%;
+  min-height: 300px;
+  border-radius: 0.75rem;
+  border-width: 0;
+  background-color: rgb(0 0 0);
+}
 
-  .fw-player-dvd {
-    position: absolute;
-    pointer-events: none;
-    user-select: none;
-    -webkit-user-select: none;
-  }
+.fw-player-dvd {
+  position: absolute;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
 }

@@ -40,7 +40,7 @@ const VideoJsPlayer: React.FC<Props> = ({ src, type = 'application/x-mpegURL', m
   }, [src, type, muted, autoPlay, controls, onError]);
 
   return (
-    <video ref={videoRef} className="video-js vjs-default-skin fw-player-video" playsInline />
+    <video ref={videoRef} className="fw-video-js vjs-default-skin fw-player-video" playsInline />
   );
 };
 

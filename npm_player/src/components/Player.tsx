@@ -211,7 +211,7 @@ const Player: React.FC<PlayerProps> = ({
         onPlay={handlePlay}
         message={contentId}
         showUnmuteMessage={false}
-        className="absolute inset-0 z-10"
+        className="fw-absolute inset-0 z-10"
       />
     );
   }
@@ -223,7 +223,7 @@ const Player: React.FC<PlayerProps> = ({
         onPlay={handlePlay}
         message={null}
         showUnmuteMessage={true}
-        className="absolute inset-0 z-10"
+        className="fw-absolute inset-0 z-10"
       />
     );
   }
@@ -289,14 +289,14 @@ const Player: React.FC<PlayerProps> = ({
         <div
           role="status"
           aria-live="polite"
-          className="fw-player-surface absolute inset-0 flex items-center justify-center bg-black/40 backdrop-blur-sm"
+          className="fw-fw-player-surface absolute inset-0 flex items-center justify-center bg-black/40 backdrop-blur-sm"
         >
-          <div className="flex items-center gap-3 rounded-lg border border-white/10 bg-black/70 px-4 py-3 text-sm text-white shadow-lg">
+          <div className="fw-flex items-center gap-3 rounded-lg border border-white/10 bg-black/70 px-4 py-3 text-sm text-white shadow-lg">
             <span>{errorText ? "Playback error" : "Buffering…"}</span>
             {errorText && (
               <button
                 type="button"
-                className="rounded-md bg-white/90 px-3 py-1 text-xs font-medium text-black transition hover:bg-white"
+                className="fw-rounded-md bg-white/90 px-3 py-1 text-xs font-medium text-black transition hover:bg-white"
                 aria-label="Retry playback"
                 onClick={() => {
                   setErrorText(null);

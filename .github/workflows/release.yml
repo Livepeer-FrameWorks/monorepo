@@ -302,6 +302,7 @@ jobs:
           - { name: periscope-query,   context: api_analytics_query,    cmd_path: ./cmd/periscope }
           - { name: signalman,         context: api_realtime,           cmd_path: ./cmd/signalman }
           - { name: helmsman,          context: api_sidecar,            cmd_path: ./cmd/helmsman }
+          - { name: forms,             context: api_forms,              cmd_path: ./cmd/forms }
         arch:
           - { goos: linux, goarch: amd64 }
           - { goos: linux, goarch: arm64 }
@@ -434,8 +435,7 @@ jobs:
           for f in dist/digests/*.json; do
             name=$(jq -r .name "$f")
             # Skip webapp/website - they don't have native binaries
-            # Skip forms-api - it's Node.js, no Go binary
-            if [[ "$name" == "webapp" || "$name" == "website" || "$name" == "forms-api" ]]; then
+            if [[ "$name" == "webapp" || "$name" == "website" ]]; then
               continue
             fi
 

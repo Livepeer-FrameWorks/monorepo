@@ -318,7 +318,7 @@ func computeViteVariables(env map[string]string) error {
 	if err != nil {
 		return err
 	}
-	env["VITE_CONTACT_API_URL"] = formsPublicURL + "/api/contact"
+	env["VITE_CONTACT_API_URL"] = formsPublicURL
 
 	// 3. STREAMING - INGEST (Parse STREAMING_INGEST_URL for RTMP)
 	streamingIngestURL := valueOrDefault(env, "STREAMING_INGEST_URL", "rtmp://localhost:1935/live")

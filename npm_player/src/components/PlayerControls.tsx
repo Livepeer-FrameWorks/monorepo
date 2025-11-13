@@ -237,8 +237,8 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
 
   return (
     <div className={cn("fw-player-surface pointer-events-none absolute inset-x-0 bottom-0 px-2 pb-2 sm:px-4 sm:pb-4", className)}>
-      <div className="pointer-events-auto flex w-full flex-wrap items-center gap-2 rounded-lg bg-gradient-to-t from-black/80 via-black/60 to-black/5 px-3 py-2 text-foreground sm:gap-3 sm:px-4 sm:py-3">
-        <div className="flex items-center gap-1 sm:gap-2">
+      <div className="fw-pointer-events-auto flex w-full flex-wrap items-center gap-2 rounded-lg bg-gradient-to-t from-black/80 via-black/60 to-black/5 px-3 py-2 text-foreground sm:gap-3 sm:px-4 sm:py-3">
+        <div className="fw-flex items-center gap-1 sm:gap-2">
           <Button type="button" size="icon" variant="ghost" aria-label={isPlaying ? "Pause" : "Play"} onClick={handlePlayPause}>
             <PlayPauseIcon isPlaying={isPlaying} size={18} />
           </Button>
@@ -250,20 +250,20 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
           </Button>
         </div>
 
-        <div className="flex min-w-[140px] flex-1 items-center gap-2 sm:min-w-[220px]">
-          <span className="hidden font-mono text-[11px] leading-none text-muted-foreground sm:inline">{timeDisplay}</span>
+        <div className="fw-flex min-w-[140px] flex-1 items-center gap-2 sm:min-w-[220px]">
+          <span className="fw-hidden font-mono text-[11px] leading-none text-muted-foreground sm:inline">{timeDisplay}</span>
           <Slider
             aria-label="Seek"
             max={1000}
             step={1}
             value={[seekValue]}
             onValueChange={handleSeekChange}
-            className="relative flex-1"
+            className="fw-relative flex-1"
             title={seekTitle}
           />
         </div>
 
-        <div className="hidden items-center gap-2 sm:flex">
+        <div className="fw-hidden items-center gap-2 sm:flex">
           <Button type="button" size="icon" variant="ghost" aria-label={isMuted ? "Unmute" : "Mute"} onClick={handleMute}>
             <VolumeIcon isMuted={isMuted} size={16} />
           </Button>
@@ -279,11 +279,11 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
           </div>
         </div>
 
-        <div className="flex items-center gap-2 sm:ml-auto sm:gap-3">
+        <div className="fw-flex items-center gap-2 sm:ml-auto sm:gap-3">
           {textTracks.length > 0 && (
             <Select value={captionValue} onValueChange={handleCaptionChange}>
               <SelectTrigger className="w-[120px]">
-                <div className="flex items-center gap-2">
+                <div className="fw-flex items-center gap-2">
                   <ClosedCaptionsIcon size={16} />
                   <SelectValue />
                 </div>
@@ -327,12 +327,12 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
           </Select>
         </div>
 
-        <div className="flex items-center gap-2 sm:gap-3">
+        <div className="fw-flex items-center gap-2 sm:gap-3">
           {isLive && (
             <Button
               type="button"
               variant="ghost"
-              className="inline-flex items-center gap-2 text-xs uppercase tracking-wide"
+              className="fw-inline-flex items-center gap-2 text-xs uppercase tracking-wide"
               onClick={handleGoLive}
             >
               <Badge
