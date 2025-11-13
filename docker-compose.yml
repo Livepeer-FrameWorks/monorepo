@@ -730,10 +730,10 @@ services:
       retries: 3
       start_period: 10s
 
-  # Contact Forms API
-  forms-api:
+  # Forms service
+  forms:
     <<: *default-env
-    container_name: frameworks-forms-api
+    container_name: frameworks-forms
     build:
       context: .
       dockerfile: api_forms/Dockerfile

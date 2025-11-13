@@ -30,7 +30,7 @@ jobs:
           - { name: periscope-query,   context: api_analytics_query,    dockerfile: api_analytics_query/Dockerfile }
           - { name: signalman,         context: api_realtime,           dockerfile: api_realtime/Dockerfile }
           - { name: helmsman,          context: api_sidecar,            dockerfile: api_sidecar/Dockerfile }
-          - { name: forms-api,         context: api_forms,              dockerfile: api_forms/Dockerfile }
+          - { name: forms,             context: api_forms,              dockerfile: api_forms/Dockerfile }
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -385,6 +385,8 @@ jobs:
           TAG=$(echo "$RELEASE" | jq -r '.tag_name')
           DIGEST_URL=$(echo "$RELEASE" | jq -r '.assets[] | select(.name=="docker-digest.txt") | .browser_download_url')
           TAG_URL=$(echo "$RELEASE" | jq -r '.assets[] | select(.name=="docker-tag.txt") | .browser_download_url')
+          RELEASE_URL=$(echo "$RELEASE" | jq -r '.html_url')
+          ASSETS=$(echo "$RELEASE" | jq -c '[.assets[] | {name:.name, url:.browser_download_url, size:.size}]')
 
           # Download the metadata files
           DIGEST=$(curl -sL "$DIGEST_URL")
@@ -393,6 +395,8 @@ jobs:
           echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
           echo "tag=${DOCKER_TAG}" >> "$GITHUB_OUTPUT"
           echo "release_tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "release_url=${RELEASE_URL}" >> "$GITHUB_OUTPUT"
+          echo "assets=${ASSETS}" >> "$GITHUB_OUTPUT"
           echo "Fetched MistServer latest release: ${TAG}"
           echo "Docker tag: ${DOCKER_TAG}, Digest: ${DIGEST}"
 
@@ -484,7 +488,15 @@ jobs:
             - name: mistserver
               image: docker.io/livepeerframeworks/mistserver:${{ steps.mistserver.outputs.tag }}
               digest: "${{ steps.mistserver.outputs.digest }}"
+              release_url: "${{ steps.mistserver.outputs.release_url }}"
+              release_tag: "${{ steps.mistserver.outputs.release_tag }}"
           YAML
+
+          mist_assets='${{ steps.mistserver.outputs.assets }}'
+          if [[ -n "$mist_assets" && "$mist_assets" != "null" && "$mist_assets" != "[]" ]]; then
+            echo "              binaries:" >> dist/manifest.yaml
+            echo "$mist_assets" | jq -r '.[] | "                - name: \(.name)\n                  url: \(.url)" + (if .size then "\n                  size_bytes: \(.size)" else "" end)' >> dist/manifest.yaml
+          fi
 
           # Infrastructure Requirements (from config/infrastructure.yaml)
           echo "" >> dist/manifest.yaml
