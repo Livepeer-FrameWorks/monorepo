@@ -139,10 +139,10 @@ All configuration is handled through environment variables defined in `config.js
 
 ```javascript
 const config = {
-  appUrl: import.meta.env.VITE_APP_URL || 'http://localhost:9090',
-  apiUrl: import.meta.env.VITE_API_URL || 'http://localhost:9000',
+  appUrl: import.meta.env.VITE_APP_URL || 'http://localhost:18090/app',
   contactApiUrl: import.meta.env.VITE_CONTACT_API_URL || 'http://localhost:18032',
-  // ... other config options
+  gatewayUrl: import.meta.env.VITE_GATEWAY_URL || 'http://localhost:18090/graphql/',
+  // ... see config.js for all options
 }
 ```
 
@@ -200,4 +200,4 @@ docker run -p 80:80 frameworks-marketing
 Configuration for production is also managed via `.env`. Use `env.example` as the source of truth for available variables and descriptions.
 
 Note
-- The Contact API (`VITE_CONTACT_API_URL`, default `http://localhost:18032`) is not part of the dev docker-compose stack. To use the contact form locally, run the service separately: `cd monorepo/api_forms && npm install && npm run dev`.
+- The Contact API (`VITE_CONTACT_API_URL`, default `http://localhost:18032`) is included in the dev docker-compose stack as the `forms` service.

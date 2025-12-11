@@ -2,19 +2,22 @@ package main
 
 import (
 	"context"
-	"frameworks/api_analytics_query/internal/handlers"
+	"fmt"
+	"net"
+	"strconv"
+	"time"
+
+	periscopegrpc "frameworks/api_analytics_query/internal/grpc"
 	"frameworks/api_analytics_query/internal/metrics"
 	"frameworks/api_analytics_query/internal/scheduler"
-	qmapi "frameworks/pkg/api/quartermaster"
-	"frameworks/pkg/auth"
 	qmclient "frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/config"
 	"frameworks/pkg/database"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/monitoring"
+	pb "frameworks/pkg/proto"
 	"frameworks/pkg/server"
 	"frameworks/pkg/version"
-	"time"
 )
 
 func main() {
@@ -26,6 +29,8 @@ func main() {
 
 	logger.Info("Starting Periscope-Query (Analytics Query API)")
 
+	// PostgreSQL is ONLY used for billing_cursors (usage summary tracking)
+	// All analytics queries use ClickHouse exclusively
 	dbURL := config.RequireEnv("DATABASE_URL")
 	clickhouseHost := config.RequireEnv("CLICKHOUSE_HOST")
 	clickhouseDB := config.RequireEnv("CLICKHOUSE_DB")
@@ -33,15 +38,15 @@ func main() {
 	clickhousePassword := config.RequireEnv("CLICKHOUSE_PASSWORD")
 	jwtSecret := config.RequireEnv("JWT_SECRET")
 	serviceToken := config.RequireEnv("SERVICE_TOKEN")
-	quartermasterURL := config.RequireEnv("QUARTERMASTER_URL")
+	quartermasterGRPCAddr := config.GetEnv("QUARTERMASTER_GRPC_ADDR", "quartermaster:19002")
 
-	// Database configuration
+	// PostgreSQL for billing cursors only
 	dbConfig := database.DefaultConfig()
 	dbConfig.URL = dbURL
 	yugaDB := database.MustConnect(dbConfig, logger)
 	defer yugaDB.Close()
 
-	// Connect to ClickHouse
+	// Connect to ClickHouse (primary analytics database)
 	chConfig := database.DefaultClickHouseConfig()
 	chConfig.Addr = []string{clickhouseHost}
 	chConfig.Database = clickhouseDB
@@ -64,99 +69,81 @@ func main() {
 		"JWT_SECRET":      jwtSecret,
 	}))
 
-	// Create custom analytics query metrics
+	// Create custom analytics query metrics (used by gRPC server)
 	serviceMetrics := &metrics.Metrics{
 		AnalyticsQueries:  metricsCollector.NewCounter("analytics_queries_total", "Analytics queries executed", []string{"query_type", "status"}),
 		QueryDuration:     metricsCollector.NewHistogram("analytics_query_duration_seconds", "Analytics query duration", []string{"query_type"}, nil),
 		ClickHouseQueries: metricsCollector.NewCounter("clickhouse_queries_total", "ClickHouse queries executed", []string{"table", "status"}),
-		PostgresQueries:   metricsCollector.NewCounter("postgres_queries_total", "PostgreSQL queries executed", []string{"table", "status"}),
 	}
 
-	// Create database metrics
-	serviceMetrics.PostgresQueries, serviceMetrics.DBDuration, serviceMetrics.DBConnections = metricsCollector.CreateDatabaseMetrics()
-
-	// Initialize handlers with unified metrics
-	handlers.Init(yugaDB, clickhouse, logger, serviceMetrics)
-
-	// Initialize and start scheduler for billing summarization
+	// Initialize and start scheduler for billing summarization (uses yugaDB for cursors)
 	taskScheduler := scheduler.NewScheduler(yugaDB, clickhouse, logger)
 	taskScheduler.Start()
 	defer taskScheduler.Stop()
 
-	// Setup router with unified monitoring
+	// Setup router with unified monitoring (health/metrics only - all API routes removed, now handled via gRPC)
 	router := server.SetupServiceRouter(logger, "periscope-query", healthChecker, metricsCollector)
 
-	// API routes (root level - nginx adds /api/analytics/ prefix)
-	{
-		// All routes require authentication
-		protected := router.Group("")
-		protected.Use(auth.JWTAuthMiddleware([]byte(jwtSecret)))
-		{
-			// Stream analytics endpoints
-			streams := protected.Group("/analytics/streams")
-			{
-				streams.GET("", handlers.GetStreamAnalytics)
-				streams.GET("/:internal_name", handlers.GetStreamDetails)
-				streams.GET("/:internal_name/events", handlers.GetStreamEvents)
-				streams.GET("/:internal_name/viewers", handlers.GetViewerStats)
-				streams.GET("/:internal_name/track-list", handlers.GetTrackListEvents)
-				streams.GET("/:internal_name/buffer", handlers.GetStreamBufferEvents)
-				streams.GET("/:internal_name/end", handlers.GetStreamEndEvents)
-			}
-
-			// Time-series analytics endpoints
-			protected.GET("/analytics/viewer-metrics", handlers.GetViewerMetrics)
-			protected.GET("/analytics/connection-events", handlers.GetConnectionEvents)
-			protected.GET("/analytics/node-metrics", handlers.GetNodeMetrics)
-			protected.GET("/analytics/routing-events", handlers.GetRoutingEvents)
-			protected.GET("/analytics/clip-events", handlers.GetClipEvents)
-			protected.GET("/analytics/stream-health", handlers.GetStreamHealthMetrics)
-
-			// Aggregated analytics endpoints
-			protected.GET("/analytics/viewer-metrics/5m", handlers.GetViewerMetrics5m)
-			protected.GET("/analytics/node-metrics/1h", handlers.GetNodeMetrics1h)
-
-			// Platform analytics endpoints
-			platform := protected.Group("/analytics/platform")
-			{
-				platform.GET("/overview", handlers.GetPlatformOverview)
-				platform.GET("/metrics", handlers.GetPlatformMetrics)
-				platform.GET("/events", handlers.GetPlatformEvents)
-			}
-
-			// Realtime analytics endpoints
-			realtime := protected.Group("/analytics/realtime")
-			{
-				realtime.GET("/streams", handlers.GetRealtimeStreams)
-				realtime.GET("/viewers", handlers.GetRealtimeViewers)
-				realtime.GET("/events", handlers.GetRealtimeEvents)
-			}
-
-			// Usage endpoints
-			usage := protected.Group("/usage")
-			{
-				usage.GET("/summary", handlers.GetUsageSummary)
-				usage.POST("/trigger-hourly", handlers.TriggerHourlySummary)
-				usage.POST("/trigger-daily", handlers.TriggerDailySummary)
-			}
-		}
-	}
-
-	// Start server with graceful shutdown
-	serverConfig := server.DefaultConfig("periscope-query", "18004")
-	if err := server.Start(serverConfig, router, logger); err != nil {
-		logger.WithError(err).Fatal("Server startup failed")
-	}
-
-	// Best-effort service registration in Quartermaster
+	// Start gRPC server in a goroutine
+	grpcPort := config.GetEnv("GRPC_PORT", "19004")
 	go func() {
-		qc := qmclient.NewClient(qmclient.Config{BaseURL: quartermasterURL, ServiceToken: serviceToken, Logger: logger})
+		grpcAddr := fmt.Sprintf(":%s", grpcPort)
+		lis, err := net.Listen("tcp", grpcAddr)
+		if err != nil {
+			logger.WithError(err).Fatal("Failed to listen on gRPC port")
+		}
+
+		grpcServer := periscopegrpc.NewGRPCServer(periscopegrpc.GRPCServerConfig{
+			ClickHouse:   clickhouse,
+			Logger:       logger,
+			ServiceToken: serviceToken,
+			JWTSecret:    []byte(jwtSecret),
+			Metrics:      serviceMetrics,
+		})
+		logger.WithField("addr", grpcAddr).Info("Starting gRPC server")
+
+		if err := grpcServer.Serve(lis); err != nil {
+			logger.WithError(err).Fatal("gRPC server failed")
+		}
+	}()
+
+	// Start HTTP server with graceful shutdown (health/metrics only)
+	serverConfig := server.DefaultConfig("periscope-query", "18004")
+
+	// Best-effort service registration in Quartermaster (using gRPC)
+	// Must be launched BEFORE server.Start() which blocks
+	go func() {
+		qc, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
+			GRPCAddr:     quartermasterGRPCAddr,
+			Timeout:      10 * time.Second,
+			Logger:       logger,
+			ServiceToken: serviceToken,
+		})
+		if err != nil {
+			logger.WithError(err).Warn("Failed to create Quartermaster gRPC client")
+			return
+		}
+		defer qc.Close()
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if _, err := qc.BootstrapService(ctx, &qmapi.BootstrapServiceRequest{Type: "periscope_query", Version: version.Version, Protocol: "http", HealthEndpoint: func() *string { s := "/health"; return &s }(), Port: 18004}); err != nil {
+		healthEndpoint := "/health"
+		httpPort, _ := strconv.Atoi(serverConfig.Port)
+		advertiseHost := config.GetEnv("PERISCOPE_QUERY_HOST", "periscope-query")
+		if _, err := qc.BootstrapService(ctx, &pb.BootstrapServiceRequest{
+			Type:           "periscope_query",
+			Version:        version.Version,
+			Protocol:       "http",
+			HealthEndpoint: &healthEndpoint,
+			Port:           int32(httpPort),
+			AdvertiseHost:  &advertiseHost,
+		}); err != nil {
 			logger.WithError(err).Warn("Quartermaster bootstrap (periscope_query) failed")
 		} else {
 			logger.Info("Quartermaster bootstrap (periscope_query) ok")
 		}
 	}()
+
+	if err := server.Start(serverConfig, router, logger); err != nil {
+		logger.WithError(err).Fatal("Server startup failed")
+	}
 }

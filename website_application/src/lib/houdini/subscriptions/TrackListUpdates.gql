@@ -1,0 +1,34 @@
+subscription TrackListUpdates($stream: String!) {
+  trackListUpdates(stream: $stream) {
+    streamName
+    totalTracks
+    videoTrackCount
+    audioTrackCount
+    qualityTier
+    primaryWidth
+    primaryHeight
+    primaryFps
+    primaryVideoBitrate
+    primaryVideoCodec
+    primaryAudioBitrate
+    primaryAudioCodec
+    primaryAudioChannels
+    primaryAudioSampleRate
+    tracks {
+      trackName
+      trackType
+      codec
+      bitrateKbps
+      bitrateBps
+      buffer
+      jitter
+      width
+      height
+      fps
+      resolution
+      hasBFrames
+      channels
+      sampleRate
+    }
+  }
+}

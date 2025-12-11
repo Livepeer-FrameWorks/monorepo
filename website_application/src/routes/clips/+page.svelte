@@ -1,15 +1,24 @@
-<script>
+<script lang="ts">
   import { preventDefault } from "svelte/legacy";
 
-  import { onMount } from "svelte";
+  import { onMount, onDestroy } from "svelte";
+  import { resolve } from "$app/paths";
   import { auth } from "$lib/stores/auth";
-  import { streamsService } from "$lib/graphql/services/streams.js";
-  import { clipsService } from "$lib/graphql/services/clips.js";
+  import {
+    GetStreamsStore,
+    GetClipsConnectionStore,
+    CreateClipStore,
+    ClipLifecycleStore
+  } from "$houdini";
+  import type { ClipLifecycle$result } from "$houdini";
   import { toast } from "$lib/stores/toast.js";
   import LoadingCard from "$lib/components/LoadingCard.svelte";
   import EmptyState from "$lib/components/EmptyState.svelte";
   import ClipModal from "$lib/components/ClipModal.svelte";
   import { Button } from "$lib/components/ui/button";
+  import { ClipCard } from "$lib/components/cards";
+  import { GridSeam } from "$lib/components/layout";
+  import DashboardMetricCard from "$lib/components/shared/DashboardMetricCard.svelte";
   import {
     Dialog,
     DialogContent,
@@ -28,32 +37,61 @@
   } from "$lib/components/ui/select";
   import { getIconComponent } from "$lib/iconUtils";
 
-  let isAuthenticated = false;
-  let loading = $state(true);
+  // Houdini stores
+  const streamsStore = new GetStreamsStore();
+  const clipsConnectionStore = new GetClipsConnectionStore();
+  const createClipMutation = new CreateClipStore();
+  const clipLifecycleSub = new ClipLifecycleStore();
 
-  // Data
-  let streams = $state([]);
-  let clips = $state([]);
+  // Types from Houdini
+  type StreamData = NonNullable<NonNullable<typeof $streamsStore.data>["streams"]>[0];
+  type ClipData = NonNullable<NonNullable<NonNullable<typeof $clipsConnectionStore.data>["clipsConnection"]>["edges"]>[0]["node"];
+  type ClipLifecycleEvent = NonNullable<ClipLifecycle$result["clipLifecycle"]>;
+
+  let isAuthenticated = false;
+
+  // Derived state from Houdini stores
+  let loading = $derived($streamsStore.fetching || $clipsConnectionStore.fetching);
+  let streams = $derived($streamsStore.data?.streams ?? []);
+  let clipsEdges = $derived($clipsConnectionStore.data?.clipsConnection?.edges ?? []);
+  let clips = $derived(clipsEdges.map(e => e.node));
+  let hasMoreClips = $derived($clipsConnectionStore.data?.clipsConnection?.pageInfo?.hasNextPage ?? false);
+  let totalClipsCount = $derived($clipsConnectionStore.data?.clipsConnection?.totalCount ?? 0);
+
   let streamsError = $state(false);
+
+  // Pagination state
+  let loadingMoreClips = $state(false);
 
   // Clip creation
   let showCreateModal = $state(false);
   let creatingClip = $state(false);
   let selectedStreamId = $state("");
-  const selectedStreamLabel = $derived(() => {
-    if (!selectedStreamId) {
-      return "Select a stream";
-    }
-    const match = streams.find((stream) => stream.id === selectedStreamId);
-    return match?.name || "Select a stream";
-  });
+
+  let selectedStreamLabel = $derived(
+    !selectedStreamId
+      ? "Select a stream"
+      : streams.find((stream) => stream.id === selectedStreamId)?.name || "Select a stream"
+  );
+
   let clipTitle = $state("");
   let clipDescription = $state("");
   let startTime = $state(0);
   let endTime = $state(300); // 5 minutes default
 
   // Clip viewing
-  let selectedClip = $state(null);
+  let selectedClip = $state<ClipData | null>(null);
+
+  // Active stream for clip lifecycle subscription
+  let activeClipStream = $state<string | null>(null);
+
+  // Track clip progress for real-time updates
+  let clipProgress = $state<Record<string, { stage: string; percent: number; message?: string }>>({});
+
+  // Derived stats
+  let processingClips = $derived(clips.filter(c => c.status === "Processing" || c.status === "processing").length);
+  let completedClips = $derived(clips.filter(c => c.status === "Available" || c.status === "completed").length);
+  let failedClips = $derived(clips.filter(c => c.status === "Failed" || c.status === "failed").length);
 
   // Subscribe to auth store
   auth.subscribe((authState) => {
@@ -67,18 +105,101 @@
     await loadData();
   });
 
+  onDestroy(() => {
+    clipLifecycleSub.unlisten();
+  });
+
+  // Effect to handle clip lifecycle subscription updates
+  $effect(() => {
+    const event = $clipLifecycleSub.data?.clipLifecycle;
+    if (event) {
+      handleClipEvent(event);
+    }
+  });
+
+  // Start subscription when stream is selected for clip creation
+  function startClipSubscription(streamId: string) {
+    if (activeClipStream !== streamId) {
+      clipLifecycleSub.unlisten();
+      activeClipStream = streamId;
+      // Use stream.id (internal UUID) for subscriptions - this is the canonical identifier
+      clipLifecycleSub.listen({ stream: streamId });
+    }
+  }
+
+  // Clip stages map (matching protobuf enum)
+  const ClipStage = {
+    REQUESTED: 1,
+    QUEUED: 2,
+    PROGRESS: 3,
+    DONE: 4,
+    FAILED: 5,
+    DELETED: 6,
+  };
+
+  function handleClipEvent(event: ClipLifecycleEvent) {
+    // Update clip progress tracking
+    if (event.requestId) {
+      clipProgress[event.requestId] = {
+        stage: event.stage.toString(),
+        percent: event.progressPercent ?? 0,
+        message: event.error ?? undefined,
+      };
+      clipProgress = { ...clipProgress };
+    }
+
+    // Handle different stages
+    if (event.stage === ClipStage.DONE) {
+      toast.success(`Clip "${event.requestId}" is ready!`);
+      // Refresh clips list to show the new clip
+      loadData();
+    } else if (event.stage === ClipStage.FAILED) {
+      toast.error(`Clip creation failed: ${event.error || "Unknown error"}`);
+    } else if (event.stage === ClipStage.PROGRESS && event.progressPercent) {
+      // Progress update - could show in UI
+      console.log(`Clip ${event.requestId} progress: ${event.progressPercent}%`);
+    }
+  }
+
   async function loadData() {
     try {
-      loading = true;
       streamsError = false;
-      streams = await streamsService.getStreams();
-      clips = await clipsService.getClips(); // Load all clips
+
+      // Load streams and clips in parallel
+      await Promise.all([
+        streamsStore.fetch(),
+        clipsConnectionStore.fetch({ variables: { first: 50 } }),
+      ]);
+
+      if ($streamsStore.errors?.length || $clipsConnectionStore.errors?.length) {
+        console.error("Failed to load data:", $streamsStore.errors, $clipsConnectionStore.errors);
+        streamsError = true;
+        toast.error("Failed to load clips data. Please refresh the page.");
+      }
     } catch (error) {
       console.error("Failed to load data:", error);
       streamsError = true;
       toast.error("Failed to load clips data. Please refresh the page.");
+    }
+  }
+
+  async function loadMoreClips() {
+    if (!hasMoreClips || loadingMoreClips) return;
+
+    try {
+      loadingMoreClips = true;
+      const endCursor = $clipsConnectionStore.data?.clipsConnection?.pageInfo?.endCursor;
+      await clipsConnectionStore.fetch({
+        variables: {
+          first: 50,
+          after: endCursor ?? undefined,
+        },
+      });
+    } catch (error) {
+      console.error("Failed to load more clips:", error);
+      toast.error("Failed to load more clips.");
     } finally {
-      loading = false;
+      loadingMoreClips = false;
     }
   }
 
@@ -96,16 +217,33 @@
     try {
       creatingClip = true;
 
-      const newClip = await clipsService.createClip({
-        streamId: selectedStreamId,
-        title: clipTitle.trim(),
-        description: clipDescription.trim() || undefined,
-        startTime: Math.floor(startTime),
-        endTime: Math.floor(endTime),
+      // Find stream for subscription - use stream.id (internal UUID) as the canonical identifier
+      const selectedStream = streams.find(s => s.id === selectedStreamId);
+      if (selectedStream) {
+        startClipSubscription(selectedStream.id);
+      }
+
+      const result = await createClipMutation.mutate({
+        input: {
+          stream: selectedStreamId,
+          title: clipTitle.trim(),
+          description: clipDescription.trim() || undefined,
+          startTime: Math.floor(startTime),
+          endTime: Math.floor(endTime),
+        },
       });
 
-      // Add to clips array
-      clips = [...clips, newClip];
+      // Check for errors in the union type response using __typename
+      const createResult = result.data?.createClip;
+      if (createResult?.__typename === "Clip") {
+        // Success - Houdini's @list directive will auto-update the list
+        toast.success("Clip created successfully!");
+      } else if (createResult) {
+        // Error response - access message from the error types
+        // Houdini types error variants with a "non-exhaustive" pattern, so we cast
+        const errorResult = createResult as unknown as { message?: string };
+        toast.error(errorResult.message || "Failed to create clip");
+      }
 
       // Reset form
       showCreateModal = false;
@@ -114,8 +252,6 @@
       selectedStreamId = "";
       startTime = 0;
       endTime = 300;
-
-      toast.success("Clip created successfully!");
     } catch (error) {
       console.error("Failed to create clip:", error);
       toast.error("Failed to create clip. Please try again.");
@@ -124,166 +260,190 @@
     }
   }
 
-  function formatDuration(seconds) {
+  function formatDuration(seconds: number) {
     const minutes = Math.floor(seconds / 60);
     const remainingSeconds = seconds % 60;
     return `${minutes}:${remainingSeconds.toString().padStart(2, "0")}`;
   }
 
-  function formatDate(dateString) {
-    return new Date(dateString).toLocaleDateString();
-  }
-
-  function getStreamName(streamId) {
-    const stream = streams.find((s) => s.id === streamId);
-    return stream ? stream.name : streamId || "Unknown Stream";
-  }
-
-  function openClip(clip) {
-    // Add stream name to clip for modal display
-    selectedClip = {
-      ...clip,
-      streamName: getStreamName(clip.streamId || clip.stream),
-    };
+  function openClip(clip: ClipData) {
+    selectedClip = clip;
   }
 
   function closeClip() {
     selectedClip = null;
   }
+
+  // Icons
+  const ScissorsIcon = getIconComponent("Scissors");
+  const FilmIcon = getIconComponent("Film");
+  const CheckCircleIcon = getIconComponent("CheckCircle");
+  const LoaderIcon = getIconComponent("Loader");
+  const XCircleIcon = getIconComponent("XCircle");
+  const PlusIcon = getIconComponent("Plus");
 </script>
 
 <svelte:head>
   <title>Clips - FrameWorks</title>
 </svelte:head>
 
-<div class="min-h-screen bg-tokyo-night-bg text-tokyo-night-fg">
-  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-    <div class="flex items-center justify-between mb-8">
-      <div>
-        <h1 class="text-3xl font-bold text-tokyo-night-blue mb-2">
-          Clips Management
-        </h1>
-        <p class="text-tokyo-night-comment">
-          Create and manage video clips from your streams
-        </p>
-      </div>
-      {#if streamsError}
-        <Button
-          variant="destructive"
-          onclick={loadData}
-          title="Failed to load streams. Click to retry."
-        >
-          Retry Loading
-        </Button>
-      {:else if streams.length === 0 && !loading}
-        <Button
-          variant="outline"
-          disabled
-          title="No streams available. Create a stream first to make clips."
-          class="cursor-not-allowed opacity-60"
-        >
-          Create Clip
-        </Button>
-      {:else if !loading}
-        <Button onclick={() => (showCreateModal = true)}>Create Clip</Button>
-      {/if}
-    </div>
-
-    {#if loading}
-      <!-- Loading skeleton for clips grid -->
-      <div class="bg-tokyo-night-surface rounded-lg p-6">
-        <div class="skeleton-text-lg w-24 mb-4"></div>
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {#each Array(6) as _, index (index)}
-            <LoadingCard variant="clip" />
-          {/each}
+<div class="h-full flex flex-col">
+  <!-- Fixed Page Header -->
+  <div class="px-4 sm:px-6 lg:px-8 py-4 border-b border-border shrink-0">
+    <div class="flex justify-between items-center">
+      <div class="flex items-center gap-3">
+        <ScissorsIcon class="w-5 h-5 text-primary" />
+        <div>
+          <h1 class="text-xl font-bold text-foreground">Clips</h1>
+          <p class="text-sm text-muted-foreground">
+            Create and manage video clips from your streams
+          </p>
         </div>
       </div>
-    {:else}
-      <!-- Clips Grid -->
-      <div class="bg-tokyo-night-surface rounded-lg p-6">
-        <h2 class="text-xl font-semibold mb-4 text-tokyo-night-cyan">
-          Your Clips
-        </h2>
-
-        {#if clips.length === 0}
-          <EmptyState
-            title="No clips yet"
-            description="Create your first clip from a stream to get started"
-            actionText={streams.length > 0 ? "Create Your First Clip" : ""}
-            onAction={() => (showCreateModal = true)}
-            showAction={streams.length > 0}
+      <div class="flex items-center gap-3">
+        {#if streamsError}
+          <Button
+            variant="destructive"
+            onclick={loadData}
+            title="Failed to load streams. Click to retry."
           >
-            {@const SvelteComponent = getIconComponent("Scissors")}
-            <SvelteComponent
-              class="w-12 h-12 text-tokyo-night-fg-dark mx-auto mb-4"
-            />
-            {#if streams.length === 0}
-              <p class="text-tokyo-night-comment text-sm mt-2">
-                You need at least one stream to create clips
-              </p>
-            {/if}
-          </EmptyState>
+            Retry Loading
+          </Button>
+        {:else if streams.length === 0}
+          <Button
+            variant="outline"
+            disabled
+            title="No streams available. Create a stream first to make clips."
+            class="cursor-not-allowed opacity-60"
+          >
+            <PlusIcon class="w-4 h-4 mr-2" />
+            Create Clip
+          </Button>
         {:else}
-          <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {#each clips as clip (clip.id ?? clip.playbackId)}
-              {@const SvelteComponent_1 = getIconComponent("Play")}
-              <div
-                class="bg-tokyo-night-bg rounded-lg p-4 border border-tokyo-night-selection"
-              >
-                <div class="mb-3">
-                  <h3 class="font-semibold text-lg mb-1">{clip.title}</h3>
-                  <p class="text-sm text-tokyo-night-comment">
-                    From: {getStreamName(clip.stream)}
-                  </p>
-                </div>
-
-                {#if clip.description}
-                  <p class="text-sm text-tokyo-night-comment mb-3 line-clamp-2">
-                    {clip.description}
-                  </p>
-                {/if}
-
-                <div class="space-y-2 text-sm">
-                  <div class="flex justify-between">
-                    <span class="text-tokyo-night-comment">Duration</span>
-                    <span>{formatDuration(clip.duration)}</span>
-                  </div>
-                  <div class="flex justify-between">
-                    <span class="text-tokyo-night-comment">Start Time</span>
-                    <span>{formatDuration(clip.startTime)}</span>
-                  </div>
-                  <div class="flex justify-between">
-                    <span class="text-tokyo-night-comment">Status</span>
-                    <span
-                      class="px-2 py-1 text-xs rounded-full bg-tokyo-night-blue bg-opacity-20 text-tokyo-night-blue"
-                    >
-                      {clip.status}
-                    </span>
-                  </div>
-                  <div class="flex justify-between">
-                    <span class="text-tokyo-night-comment">Created</span>
-                    <span>{formatDate(clip.createdAt)}</span>
-                  </div>
-                </div>
-
-                <div class="mt-4 pt-4 border-t border-tokyo-night-selection">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    class="px-0 text-tokyo-night-cyan hover:text-primary transition-colors"
-                    onclick={() => openClip(clip)}
-                  >
-                    <SvelteComponent_1 class="w-4 h-4" />
-                    <span>Play Clip</span>
-                  </Button>
-                </div>
-              </div>
-            {/each}
-          </div>
+          <Button onclick={() => (showCreateModal = true)}>
+            <PlusIcon class="w-4 h-4 mr-2" />
+            Create Clip
+          </Button>
         {/if}
       </div>
-    {/if}
+    </div>
+  </div>
+
+  <!-- Scrollable Content -->
+  <div class="flex-1 overflow-y-auto">
+  {#if loading}
+    <div class="px-4 sm:px-6 lg:px-8 py-6">
+      <div class="flex items-center justify-center min-h-64">
+        <div class="loading-spinner w-8 h-8"></div>
+      </div>
+    </div>
+  {:else}
+    <div class="page-transition">
+
+      <!-- Stats Bar -->
+      <GridSeam cols={4} stack="2x2" surface="panel" flush={true} class="mb-0">
+        <div>
+          <DashboardMetricCard
+            icon={ScissorsIcon}
+            iconColor="text-primary"
+            value={totalClipsCount}
+            valueColor="text-primary"
+            label="Total Clips"
+          />
+        </div>
+        <div>
+          <DashboardMetricCard
+            icon={LoaderIcon}
+            iconColor="text-warning"
+            value={processingClips}
+            valueColor="text-warning"
+            label="Processing"
+          />
+        </div>
+        <div>
+          <DashboardMetricCard
+            icon={CheckCircleIcon}
+            iconColor="text-success"
+            value={completedClips}
+            valueColor="text-success"
+            label="Completed"
+          />
+        </div>
+        <div>
+          <DashboardMetricCard
+            icon={XCircleIcon}
+            iconColor="text-destructive"
+            value={failedClips}
+            valueColor="text-destructive"
+            label="Failed"
+          />
+        </div>
+      </GridSeam>
+
+      <!-- Main Content -->
+      <div class="dashboard-grid">
+        <!-- Clips Grid Slab -->
+        <div class="slab col-span-full">
+          <div class="slab-header">
+            <div class="flex items-center gap-2">
+              <ScissorsIcon class="w-4 h-4 text-accent-purple" />
+              <h3>Your Clips</h3>
+            </div>
+          </div>
+          <div class="slab-body--padded">
+            {#if clips.length === 0}
+              <EmptyState
+                title="No clips yet"
+                description="Create your first clip from a stream to get started"
+                actionText={streams.length > 0 ? "Create Your First Clip" : ""}
+                onAction={() => (showCreateModal = true)}
+                showAction={streams.length > 0}
+              >
+                <ScissorsIcon class="w-6 h-6 text-muted-foreground mx-auto mb-4" />
+                {#if streams.length === 0}
+                  <p class="text-muted-foreground text-sm mt-2">
+                    You need at least one stream to create clips
+                  </p>
+                {/if}
+              </EmptyState>
+            {:else}
+              <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                {#each clips as clip (clip.id)}
+                  <ClipCard
+                    {clip}
+                    streamName={clip.streamName}
+                    onPlay={() => openClip(clip)}
+                  />
+                {/each}
+              </div>
+
+              {#if hasMoreClips}
+                <div class="flex justify-center pt-6">
+                  <Button
+                    variant="outline"
+                    onclick={loadMoreClips}
+                    disabled={loadingMoreClips}
+                  >
+                    {#if loadingMoreClips}
+                      Loading...
+                    {:else}
+                      Load More Clips
+                    {/if}
+                  </Button>
+                </div>
+              {/if}
+            {/if}
+          </div>
+          <div class="slab-actions">
+            <Button href={resolve("/recordings")} variant="ghost" class="gap-2">
+              <FilmIcon class="w-4 h-4" />
+              View Recordings
+            </Button>
+          </div>
+        </div>
+      </div>
+    </div>
+  {/if}
   </div>
 </div>
 
@@ -305,13 +465,13 @@
         <div class="space-y-2">
           <label
             for="stream-select"
-            class="text-sm font-medium text-tokyo-night-comment"
+            class="text-sm font-medium text-muted-foreground"
           >
             Stream
           </label>
-          <Select bind:value={selectedStreamId}>
+          <Select bind:value={selectedStreamId} type="single">
             <SelectTrigger id="stream-select" class="w-full">
-              <span class={selectedStreamId ? "" : "text-tokyo-night-comment"}>
+              <span class={selectedStreamId ? "" : "text-muted-foreground"}>
                 {selectedStreamLabel}
               </span>
             </SelectTrigger>
@@ -330,7 +490,7 @@
         <div class="space-y-2">
           <label
             for="clip-title"
-            class="text-sm font-medium text-tokyo-night-comment"
+            class="text-sm font-medium text-muted-foreground"
           >
             Title
           </label>
@@ -346,7 +506,7 @@
         <div class="space-y-2">
           <label
             for="clip-description"
-            class="text-sm font-medium text-tokyo-night-comment"
+            class="text-sm font-medium text-muted-foreground"
           >
             Description (optional)
           </label>
@@ -362,7 +522,7 @@
           <div class="space-y-2">
             <label
               for="start-time"
-              class="text-sm font-medium text-tokyo-night-comment"
+              class="text-sm font-medium text-muted-foreground"
             >
               Start Time (seconds)
             </label>
@@ -378,7 +538,7 @@
           <div class="space-y-2">
             <label
               for="end-time"
-              class="text-sm font-medium text-tokyo-night-comment"
+              class="text-sm font-medium text-muted-foreground"
             >
               End Time (seconds)
             </label>
@@ -392,7 +552,7 @@
           </div>
         </div>
 
-        <p class="text-sm text-tokyo-night-comment">
+        <p class="text-sm text-muted-foreground">
           Duration: {formatDuration(Math.max(0, endTime - startTime))}
         </p>
       </div>
@@ -416,12 +576,3 @@
 
 <!-- Clip Player Modal -->
 <ClipModal clip={selectedClip} onClose={closeClip} />
-
-<style>
-  .line-clamp-2 {
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
-  }
-</style>

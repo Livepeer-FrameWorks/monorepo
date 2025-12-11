@@ -1,5 +1,5 @@
 # Build stage
-FROM golang:1.23.8-alpine AS builder
+FROM golang:1.24-alpine AS builder
 
 # Install build dependencies
 RUN apk add --no-cache git ca-certificates tzdata
@@ -16,6 +16,11 @@ COPY api_control/go.mod api_control/go.sum ./
 # Copy shared pkg module (maintain relative path for replace directive)
 COPY pkg/ ../pkg/
 
+# Download dependencies
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    go mod download
+
 # Copy service source code
 COPY api_control/ ./
 
@@ -26,14 +31,15 @@ ARG BUILD_DATE
 ARG COMPONENT_NAME=commodore
 ARG COMPONENT_VERSION=0.0.0
 
-RUN go mod download
-RUN CGO_ENABLED=0 GOOS=linux go build \
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=linux go build \
     -ldflags "-X frameworks/pkg/version.Version=${VERSION} \
               -X frameworks/pkg/version.GitCommit=${GIT_COMMIT} \
               -X frameworks/pkg/version.BuildDate=${BUILD_DATE} \
               -X frameworks/pkg/version.ComponentName=${COMPONENT_NAME} \
               -X frameworks/pkg/version.ComponentVersion=${COMPONENT_VERSION}" \
-    -a -installsuffix cgo -o commodore ./cmd/commodore
+    -o commodore ./cmd/commodore
 
 # Runtime stage
 FROM alpine:3.19
@@ -58,10 +64,10 @@ RUN chown frameworks:frameworks /app/commodore
 
 USER frameworks
 
-# Health check
+# Health check (using gRPC health endpoint)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD grpcurl -plaintext localhost:18001 grpc.health.v1.Health/Check || exit 1
+    CMD grpcurl -plaintext localhost:${GRPC_PORT:-19001} grpc.health.v1.Health/Check || exit 1
 
-EXPOSE 18001
+EXPOSE 18001 19001
 
 CMD ["./commodore"] 

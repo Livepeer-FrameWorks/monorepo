@@ -1,0 +1,8 @@
+query GetTenant {
+  tenant {
+    id
+    name
+    cluster
+    createdAt
+  }
+}

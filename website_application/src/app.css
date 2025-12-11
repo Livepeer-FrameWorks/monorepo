@@ -1,5 +1,6 @@
 @import "tailwindcss";
 @import "tw-animate-css";
+@import "leaflet/dist/leaflet.css";
 
 /* Import design tokens (HSL format for alpha transparency) */
 @import "./styles/tokens.css";
@@ -14,37 +15,42 @@
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --color-card: var(--card);
-  --color-card-foreground: var(--card-foreground);
-  --color-popover: var(--popover);
-  --color-popover-foreground: var(--popover-foreground);
-  --color-primary: var(--primary);
-  --color-primary-foreground: var(--primary-foreground);
-  --color-secondary: var(--secondary);
-  --color-secondary-foreground: var(--secondary-foreground);
-  --color-muted: var(--muted);
-  --color-muted-foreground: var(--muted-foreground);
-  --color-accent: var(--accent);
-  --color-accent-foreground: var(--accent-foreground);
-  --color-destructive: var(--destructive);
-  --color-border: var(--border);
-  --color-input: var(--input);
-  --color-ring: var(--ring);
-  --color-chart-1: var(--tn-blue);
-  --color-chart-2: var(--tn-cyan);
-  --color-chart-3: var(--tn-green);
-  --color-chart-4: var(--tn-orange);
-  --color-chart-5: var(--tn-red);
-  --color-sidebar: var(--tn-bg-dark);
-  --color-sidebar-foreground: var(--tn-fg);
-  --color-sidebar-primary: var(--tn-blue);
-  --color-sidebar-primary-foreground: var(--tn-bg);
-  --color-sidebar-accent: var(--tn-teal);
-  --color-sidebar-accent-foreground: var(--tn-bg);
-  --color-sidebar-border: var(--tn-fg-gutter);
-  --color-sidebar-ring: var(--tn-blue);
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+  --color-destructive: hsl(var(--destructive));
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+  /* Semantic status colors */
+  --color-success: hsl(var(--tn-green));
+  --color-warning: hsl(var(--tn-yellow));
+  --color-error: hsl(var(--tn-red));
+  --color-info: hsl(var(--tn-cyan));
+  --color-chart-1: hsl(var(--tn-blue));
+  --color-chart-2: hsl(var(--tn-cyan));
+  --color-chart-3: hsl(var(--tn-green));
+  --color-chart-4: hsl(var(--tn-orange));
+  --color-chart-5: hsl(var(--tn-red));
+  --color-sidebar: hsl(var(--tn-bg-dark));
+  --color-sidebar-foreground: hsl(var(--tn-fg));
+  --color-sidebar-primary: hsl(var(--tn-blue));
+  --color-sidebar-primary-foreground: hsl(var(--tn-bg));
+  --color-sidebar-accent: hsl(var(--tn-teal));
+  --color-sidebar-accent-foreground: hsl(var(--tn-bg));
+  --color-sidebar-border: hsl(var(--tn-fg-gutter));
+  --color-sidebar-ring: hsl(var(--tn-blue));
 }
 
 @layer base {
@@ -63,9 +69,21 @@
     min-height: 100vh;
     overflow-x: hidden;
     background:
-      linear-gradient(135deg, hsl(var(--tn-bg)) 0%, hsl(var(--tn-bg-highlight)) 100%),
-      radial-gradient(circle at 20% 30%, hsl(var(--tn-blue) / 0.08), transparent 50%),
-      radial-gradient(circle at 80% 70%, hsl(var(--tn-cyan) / 0.05), transparent 50%);
+      linear-gradient(
+        135deg,
+        hsl(var(--tn-bg)) 0%,
+        hsl(var(--tn-bg-highlight)) 100%
+      ),
+      radial-gradient(
+        circle at 20% 30%,
+        hsl(var(--tn-blue) / 0.08),
+        transparent 50%
+      ),
+      radial-gradient(
+        circle at 80% 70%,
+        hsl(var(--tn-cyan) / 0.05),
+        transparent 50%
+      );
     margin: 0;
     padding: 0;
     color: hsl(var(--foreground));
@@ -101,50 +119,32 @@
 
 @utility glass-card {
   background-color: hsl(var(--tn-bg-highlight) / 0.5);
-  @apply backdrop-blur-sm border border-border rounded-lg;
-}
-
-@utility glow-card {
-  /* DEPRECATED: Replace with context-specific card utilities below
-     The blue glow hover doesn't align with FrameWorks "Strong. Foundation" design philosophy. */
-  background-color: hsl(var(--tn-bg-highlight) / 0.5);
-  @apply backdrop-blur-sm border border-border rounded-lg transition-all duration-300;
-  box-shadow: 0 0 0 0 hsl(var(--tn-blue) / 0);
-  &:hover {
-    box-shadow: 0 10px 40px hsl(var(--tn-blue) / 0.2);
-    border-color: hsl(var(--tn-blue) / 0.3);
-  }
+  @apply backdrop-blur-sm border border-border;
 }
 
 /* Context-specific card patterns */
 @utility metric-card {
-  background: linear-gradient(160deg, hsl(var(--tn-bg-highlight) / 0.6), hsl(var(--tn-bg) / 0.5));
+  background: linear-gradient(
+    160deg,
+    hsl(var(--tn-bg-highlight) / 0.6),
+    hsl(var(--tn-bg) / 0.5)
+  );
   border: 1px solid hsl(var(--border));
-  border-radius: var(--radius-lg);
+  border-radius: 0;
   padding: 1.5rem;
   transition: border-color 0.2s ease;
 }
 
-@utility info-card {
-  background: hsl(var(--tn-bg-highlight) / 0.7);
-  border: 1px solid hsl(var(--border));
-  border-radius: var(--radius-lg);
-  padding: 1.5rem;
-}
-
 @utility stats-panel {
-  background: linear-gradient(160deg, hsl(var(--tn-bg-highlight) / 0.8), hsl(var(--tn-bg) / 0.6));
+  background: linear-gradient(
+    160deg,
+    hsl(var(--tn-bg-highlight) / 0.8),
+    hsl(var(--tn-bg) / 0.6)
+  );
   border: 1px solid hsl(var(--tn-blue) / 0.18);
-  border-radius: var(--radius-lg);
+  border-radius: 0;
   padding: 1.5rem;
   box-shadow: 0 8px 24px hsl(var(--tn-bg-dark) / 0.4);
-}
-
-@utility message-card {
-  background: hsl(var(--tn-bg-highlight));
-  border: 1px solid hsl(var(--border));
-  border-radius: var(--radius-lg);
-  padding: 2rem;
 }
 
 /* Navigation item - for sidebar links */
@@ -184,40 +184,10 @@
   @apply bg-clip-text text-transparent;
 }
 
-@utility logo-gradient {
-  background: linear-gradient(
-    to right,
-    hsl(var(--tn-blue)),
-    hsl(var(--tn-cyan)),
-    hsl(var(--tn-teal))
-  );
-  @apply p-[2px];
-}
-
-.logo-gradient img {
-  border-radius: inherit;
-}
-
-@utility gradient-bg {
-  background: linear-gradient(
-    to right,
-    hsl(var(--tn-blue)),
-    hsl(var(--tn-cyan)),
-    hsl(var(--tn-teal))
-  );
-  background-size: 300% 300%;
-  animation: gradient 6s ease infinite;
-}
-
-@utility code-block {
-  background-color: hsl(var(--tn-bg-dark));
-  border: 1px solid hsl(var(--tn-fg-gutter));
-  @apply rounded-lg p-4 font-mono text-sm overflow-x-auto;
-}
-
 /* Gradient animation keyframes */
 @keyframes gradient {
-  0%, 100% {
+  0%,
+  100% {
     background-position: 0% 50%;
   }
   50% {

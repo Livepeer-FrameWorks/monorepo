@@ -1,5 +1,6 @@
-<script>
+<script lang="ts" generics="T extends Row">
   import { createEventDispatcher } from "svelte";
+  import type { ComponentType } from "svelte";
   import {
     Card,
     CardContent,
@@ -18,41 +19,37 @@
     TableHeader,
     TableRow,
   } from "$lib/components/ui/table";
-  import { ArrowDownIcon } from "lucide-svelte";
-  import { ArrowUpIcon } from "lucide-svelte";
-  import { ChevronsUpDownIcon } from "lucide-svelte";
-  import { Loader2Icon } from "lucide-svelte";
+  import { ArrowDownIcon, ArrowUpIcon, ChevronsUpDownIcon, Loader2Icon } from "lucide-svelte";
 
-  /**
-   * @template Row extends Record<string, unknown>
-   * @typedef {object} Column
-   * @property {string} key
-   * @property {string} [title]
-   * @property {boolean} [sortable]
-   * @property {string} [class]
-   * @property {import('svelte').ComponentType} [component]
-   * @property {(value: unknown, item: Row) => string} [render]
-   */
+  type Row = Record<string, unknown>;
 
-  /**
-   * @typedef {Object} Props
-   * @property {Array<Record<string, unknown>>} [data]
-   * @property {Array<Column<Record<string, unknown>>>} [columns]
-   * @property {boolean} [loading]
-   * @property {unknown} [error]
-   * @property {boolean} [sortable]
-   * @property {boolean} [filterable]
-   * @property {boolean} [paginated]
-   * @property {number} [pageSize]
-   * @property {string} [searchQuery]
-   * @property {number} [currentPage]
-   * @property {boolean} [selectable]
-   * @property {Array<Record<string, unknown>>} [selectedItems]
-   * @property {string} [emptyMessage]
-   * @property {string} [loadingMessage]
-   */
+  interface Column {
+    key: string;
+    title?: string;
+    sortable?: boolean;
+    class?: string;
+    component?: ComponentType;
+    render?: (value: unknown, item: Row) => string;
+  }
 
-  /** @type {Props} */
+  interface Props<T extends Row> {
+    data?: T[];
+    columns?: Column[];
+    loading?: boolean;
+    error?: unknown;
+    sortable?: boolean;
+    filterable?: boolean;
+    paginated?: boolean;
+    pageSize?: number;
+    searchQuery?: string;
+    currentPage?: number;
+    selectable?: boolean;
+    selectedItems?: T[];
+    emptyMessage?: string;
+    loadingMessage?: string;
+  }
+
+
   let {
     data = [],
     columns = [],
@@ -68,27 +65,19 @@
     selectedItems = $bindable([]),
     emptyMessage = "No data available",
     loadingMessage = "Loading...",
-  } = $props();
+  }: Props<T> = $props();
 
   const dispatch = createEventDispatcher();
   const searchInputId = `data-table-search-${Math.random().toString(36).slice(2, 8)}`;
 
-  /** @type {string | null} */
-  let sortBy = $state(null);
-  /** @type {"asc"|"desc"} */
-  let sortOrder = $state("asc");
+  let sortBy = $state<string | null>(null);
+  let sortOrder = $state<"asc" | "desc">("asc");
 
-  /**
-   * @param {Array<Record<string, unknown>>} items
-   * @param {string} query
-   * @param {Array<Column<Record<string, unknown>>>} columns
-   * @returns {Array<Record<string, unknown>>}
-   */
-  function filterData(items, query, columns) {
+  function filterData<T extends Row>(items: T[], query: string, columns: Column[]): T[] {
     if (!query || !filterable) return items;
 
     const searchTerm = query.toLowerCase();
-    return items.filter((item) => {
+    return items.filter((item: T) => {
       return columns.some((column) => {
         const value = getNestedValue(item, column.key);
         return value && value.toString().toLowerCase().includes(searchTerm);
@@ -96,16 +85,10 @@
     });
   }
 
-  /**
-   * @param {Array<Record<string, unknown>>} items
-   * @param {string | null} column
-   * @param {"asc"|"desc"} order
-   * @returns {Array<Record<string, unknown>>}
-   */
-  function sortData(items, column, order) {
+  function sortData<T extends Row>(items: T[], column: string | null, order: "asc" | "desc"): T[] {
     if (!column || !sortable) return items;
 
-    return [...items].sort((a, b) => {
+    return [...items].sort((a: T, b: T) => {
       const aVal = getNestedValue(a, column);
       const bVal = getNestedValue(b, column);
 
@@ -123,31 +106,17 @@
     });
   }
 
-  /**
-   * @param {Array<Record<string, unknown>>} items
-   * @param {number} page
-   * @param {number} size
-   * @returns {Array<Record<string, unknown>>}
-   */
-  function paginateData(items, page, size) {
+  function paginateData<T extends Row>(items: T[], page: number, size: number): T[] {
     const start = (page - 1) * size;
     const end = start + size;
     return items.slice(start, end);
   }
 
-  /**
-   * @param {Record<string, unknown>} obj
-   * @param {string} key
-   * @returns {unknown}
-   */
-  function getNestedValue(obj, key) {
-    return key.split(".").reduce((o, k) => o?.[k], obj);
+  function getNestedValue<T extends Row>(obj: T, key: string): unknown {
+    return key.split(".").reduce((o: Record<string, any> | undefined, k) => o?.[k], obj as Record<string, any>);
   }
 
-  /**
-   * @param {Column<Record<string, unknown>>} column
-   */
-  function handleSort(column) {
+  function handleSort(column: Column) {
     if (!sortable || !column.sortable) return;
 
     if (sortBy === column.key) {
@@ -160,11 +129,7 @@
     dispatch("sort", { column: column.key, order: sortOrder });
   }
 
-  /**
-   * @param {Record<string, unknown>} item
-   * @param {boolean} checked
-   */
-  function handleSelect(item, checked) {
+  function handleSelect(item: T, checked: boolean) {
     if (checked) {
       selectedItems = [...selectedItems, item];
     } else {
@@ -174,18 +139,12 @@
     dispatch("select", { item, selected: checked, selectedItems });
   }
 
-  /**
-   * @param {boolean} checked
-   */
-  function handleSelectAll(checked) {
-    selectedItems = checked ? [...paginatedData] : [];
+  function handleSelectAll(checked: boolean) {
+    selectedItems = checked ? ([...paginatedData] as T[]) : [];
     dispatch("selectAll", { selected: checked, selectedItems });
   }
 
-  /**
-   * @param {number} page
-   */
-  function goToPage(page) {
+  function goToPage(page: number) {
     if (page >= 1 && page <= totalPages) {
       currentPage = page;
       dispatch("pageChange", { page });
@@ -204,12 +163,7 @@
     }
   }
 
-  /**
-   * @param {number} total
-   * @param {number} current
-   * @returns {number[]}
-   */
-  function buildVisiblePages(total, current) {
+  function buildVisiblePages(total: number, current: number): number[] {
     if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
     if (current <= 4) return Array.from({ length: 7 }, (_, i) => i + 1);
     if (current >= total - 3)

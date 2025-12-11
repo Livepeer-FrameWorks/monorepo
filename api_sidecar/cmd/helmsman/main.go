@@ -6,10 +6,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/joho/godotenv"
-
+	sidecarconfig "frameworks/api_sidecar/internal/config"
 	"frameworks/api_sidecar/internal/control"
 	"frameworks/api_sidecar/internal/handlers"
+	"frameworks/pkg/config"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/monitoring"
 	pb "frameworks/pkg/proto"
@@ -51,10 +51,11 @@ func main() {
 	// Setup structured logger
 	logger := logging.NewLoggerWithService("helmsman")
 
-	// Load environment variables from .env file
-	if err := godotenv.Load(); err != nil {
-		logger.Debug("No .env file found, using environment variables")
-	}
+	// Load environment variables
+	config.LoadEnv(logger)
+
+	// Load configuration
+	cfg := sidecarconfig.LoadHelmsmanConfig()
 
 	logger.Info("Starting FrameWorks Helmsman (Edge Sidecar)")
 
@@ -63,23 +64,11 @@ func main() {
 	metricsCollector := monitoring.NewMetricsCollector("helmsman", version.Version, version.GitCommit)
 
 	// Add health checks for external dependencies
-	commodoreURL := os.Getenv("COMMODORE_URL")
-	foghornURL := os.Getenv("FOGHORN_URL")
-	mistServerURL := os.Getenv("MISTSERVER_URL")
-
-	if commodoreURL != "" {
-		healthChecker.AddCheck("commodore", monitoring.HTTPServiceHealthCheck("Commodore", commodoreURL+"/health"))
-	}
-	if foghornURL != "" {
-		healthChecker.AddCheck("foghorn", monitoring.HTTPServiceHealthCheck("Foghorn", foghornURL+"/health"))
-	}
-	if mistServerURL != "" {
-		healthChecker.AddCheck("mistserver", monitoring.HTTPServiceHealthCheck("MistServer", mistServerURL+"/api"))
-	}
+	// Note: Helmsman only talks to MistServer (local) and Foghorn (gRPC stream)
+	healthChecker.AddCheck("mistserver", monitoring.HTTPServiceHealthCheck("MistServer", cfg.MistServerURL+"/api"))
 
 	healthChecker.AddCheck("config", monitoring.ConfigurationHealthCheck(map[string]string{
-		"NODE_ID": os.Getenv("NODE_ID"),
-		"PORT":    os.Getenv("PORT"),
+		"NODE_ID": cfg.NodeID,
 	}))
 
 	// Create infrastructure sidecar metrics using handlers.HandlerMetrics directly
@@ -89,29 +78,23 @@ func main() {
 		NodeHealthChecks:           metricsCollector.NewCounter("node_health_checks_total", "Node health check results", []string{"status"}),
 		ResourceAllocationDuration: metricsCollector.NewHistogram("resource_allocation_duration_seconds", "Resource allocation timing", []string{"operation"}, nil),
 	}
-	handlers.Init(logger, handlerMetrics)
+	handlers.Init(logger, handlerMetrics, cfg.NodeID)
 
 	// Initialize Prometheus monitoring
 	handlers.InitPrometheusMonitor(logger)
 
-	// Initialize cleanup monitor for storage management (reuse existing storage path)
-	storagePath := os.Getenv("HELMSMAN_STORAGE_LOCAL_PATH")
-	if storagePath != "" {
-		handlers.InitCleanupMonitor(logger, storagePath)
+	// Initialize cleanup monitor for storage management
+	if cfg.StorageLocalPath != "" {
+		handlers.InitCleanupMonitor(logger, cfg.StorageLocalPath)
 	}
 
 	// Start control client to Foghorn
-	control.Start(logger)
+	control.Start(logger, cfg)
 
-	// Add the local MistServer node to monitoring with default location
-	if mistServerURL == "" {
-		mistServerURL = "http://localhost:4242"
-	}
+	// Add the local MistServer node to monitoring (use configured node ID)
+	handlers.AddPrometheusNodeDirect(cfg.NodeID, cfg.MistServerURL)
 
-	// Add node with default location data for development
-	handlers.AddPrometheusNodeDirect("local-mistserver", mistServerURL)
-
-	logger.WithField("mistserver_url", mistServerURL).Info("Added MistServer node for monitoring")
+	logger.WithField("mistserver_url", cfg.MistServerURL).Info("Added MistServer node for monitoring")
 
 	// Setup router with unified monitoring
 	r := server.SetupServiceRouter(logger, "helmsman", healthChecker, metricsCollector)
@@ -128,7 +111,7 @@ func main() {
 	{
 		// MistServer Triggers (for stream routing and validation)
 		webhooks.POST("/mist/push_rewrite", handlers.HandlePushRewrite)
-		webhooks.POST("/mist/default_stream", handlers.HandleDefaultStream)
+		webhooks.POST("/mist/play_rewrite", handlers.HandlePlayRewrite)
 		webhooks.POST("/mist/stream_source", handlers.HandleStreamSource)
 
 		// MistServer Webhooks (for event forwarding)

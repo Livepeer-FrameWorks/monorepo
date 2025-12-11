@@ -4,64 +4,89 @@
     message: string;
   }
 
+  type ServiceState = "connected" | "loading" | "error";
+
   interface Props {
     wsStatus: ConnectionStatus;
-    analyticsLoaded: boolean;
+    controlPlane: ServiceState;
+    dataPlane: ServiceState;
   }
 
-  let { wsStatus, analyticsLoaded }: Props = $props();
+  let { wsStatus, controlPlane, dataPlane }: Props = $props();
 
   let wsStatusColor = $derived(
     wsStatus.status === "connected"
-      ? "bg-tokyo-night-green"
+      ? "bg-success"
       : wsStatus.status === "reconnecting"
-      ? "bg-tokyo-night-yellow animate-pulse"
-      : "bg-tokyo-night-red"
+      ? "bg-warning animate-pulse"
+      : "bg-destructive"
   );
 
-  let analyticsStatusColor = $derived(
-    analyticsLoaded ? "bg-tokyo-night-green" : "bg-tokyo-night-yellow"
+  let controlPlaneColor = $derived(
+    controlPlane === "connected"
+      ? "bg-success"
+      : controlPlane === "loading"
+      ? "bg-warning animate-pulse"
+      : "bg-destructive"
   );
+
+  let dataPlaneColor = $derived(
+    dataPlane === "connected"
+      ? "bg-success"
+      : dataPlane === "loading"
+      ? "bg-warning animate-pulse"
+      : "bg-destructive"
+  );
+
+  function getStatusLabel(state: ServiceState): string {
+    switch (state) {
+      case "connected": return "Connected";
+      case "loading": return "Connecting...";
+      case "error": return "Connection failed";
+    }
+  }
 </script>
 
 <div class="space-y-3">
-  <h3 class="font-semibold text-tokyo-night-fg text-sm">Platform Status</h3>
+  <h3 class="font-semibold text-foreground text-sm">Platform Status</h3>
 
   <div class="space-y-2">
-    <!-- WebSocket Connection -->
+    <!-- Control Plane (Auth) -->
     <div
-      class="flex items-center justify-between p-3 bg-tokyo-night-bg-highlight rounded-lg"
+      class="flex items-center justify-between p-3 bg-muted"
     >
       <div class="flex items-center space-x-3">
-        <div class="w-3 h-3 rounded-full {wsStatusColor}"></div>
-        <span class="text-sm text-tokyo-night-fg">Real-time Updates</span>
+        <div class="w-3 h-3 rounded-full {controlPlaneColor}"></div>
+        <span class="text-sm text-foreground">Control Plane</span>
       </div>
-      <span class="text-xs text-tokyo-night-comment capitalize"
-        >{wsStatus.message}</span
+      <span class="text-xs text-muted-foreground"
+        >{getStatusLabel(controlPlane)}</span
       >
     </div>
 
-    <!-- Streaming Service -->
+    <!-- Data Plane (GraphQL) -->
     <div
-      class="flex items-center justify-between p-3 bg-tokyo-night-bg-highlight rounded-lg"
+      class="flex items-center justify-between p-3 bg-muted"
     >
       <div class="flex items-center space-x-3">
-        <div class="w-3 h-3 rounded-full bg-tokyo-night-green"></div>
-        <span class="text-sm text-tokyo-night-fg">Streaming Service</span>
+        <div class="w-3 h-3 rounded-full {dataPlaneColor}"></div>
+        <span class="text-sm text-foreground">Data Plane</span>
       </div>
-      <span class="text-xs text-tokyo-night-comment">Operational</span>
+      <span class="text-xs text-muted-foreground"
+        >{getStatusLabel(dataPlane)}</span
+      >
     </div>
 
-    <!-- Analytics Service -->
+    <!-- Real-time (WebSocket) -->
     <div
-      class="flex items-center justify-between p-3 bg-tokyo-night-bg-highlight rounded-lg"
+      class="flex items-center justify-between p-3 bg-muted"
     >
       <div class="flex items-center space-x-3">
-        <div class="w-3 h-3 rounded-full {analyticsStatusColor}"></div>
-        <span class="text-sm text-tokyo-night-fg">Analytics Service</span>
+        <div class="w-3 h-3 rounded-full {wsStatusColor}"></div>
+        <span class="text-sm text-foreground">Real-time</span>
       </div>
-      <span class="text-xs text-tokyo-night-comment"
-        >{analyticsLoaded ? "Operational" : "Loading"}</span
+      <span class="text-xs text-muted-foreground capitalize"
+        >{wsStatus.message}</span
       >
     </div>
   </div>

@@ -1,0 +1,42 @@
+query GetConnectionEvents(
+  $stream: String
+  $timeRange: TimeRangeInput
+  $first: Int = 50
+  $after: String
+  $noCache: Boolean = false
+) {
+  connectionEventsConnection(
+    stream: $stream
+    timeRange: $timeRange
+    first: $first
+    after: $after
+    noCache: $noCache
+  ) @paginate(mode: Infinite) {
+    edges {
+      cursor
+      node {
+        eventId
+        timestamp
+        internalName
+        sessionId
+        connectionAddr
+        connector
+        nodeId
+        countryCode
+        city
+        latitude
+        longitude
+        clientBucket { h3Index resolution }
+        nodeBucket { h3Index resolution }
+        eventType
+        sessionDurationSeconds
+        bytesTransferred
+      }
+    }
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+    totalCount
+  }
+}

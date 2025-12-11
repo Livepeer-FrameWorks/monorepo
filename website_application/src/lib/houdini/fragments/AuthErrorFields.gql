@@ -1,0 +1,5 @@
+fragment AuthErrorFields on AuthError {
+  __typename
+  message
+  code
+}

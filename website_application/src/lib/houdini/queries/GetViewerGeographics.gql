@@ -1,0 +1,18 @@
+query GetViewerGeographics($stream: String, $timeRange: TimeRangeInput) {
+  viewerGeographics(stream: $stream, timeRange: $timeRange) {
+    timestamp
+    stream
+    nodeId
+    countryCode
+    city
+    latitude
+    longitude
+    viewerCount
+    connectionAddr
+    eventType
+    source
+    sessionDurationSeconds
+    bytesTransferred
+    connector
+  }
+}

@@ -1,0 +1,50 @@
+syntax = "proto3";
+
+package common;
+
+option go_package = "frameworks/pkg/proto";
+
+import "google/protobuf/timestamp.proto";
+
+// ============================================================================
+// Cursor-Based Pagination (Bidirectional)
+// ============================================================================
+//
+// Stable pagination using keyset (timestamp + id).
+// Works with Relay-style GraphQL connections.
+//
+// Cursor format: base64("ts:{timestamp_ms}:id:{unique_id}")
+// Example: base64("ts:1701936000000:id:abc123")
+//
+// Supports both forward (first/after) and backward (last/before) pagination.
+// If both are provided, last/before takes precedence.
+//
+// ============================================================================
+
+message CursorPaginationRequest {
+  // Forward pagination (most common - newest first)
+  int32 first = 1;              // Number of items to fetch forward
+  optional string after = 2;    // Opaque cursor - fetch items after this position
+
+  // Backward pagination (for "previous page" navigation)
+  int32 last = 3;               // Number of items to fetch backward
+  optional string before = 4;   // Opaque cursor - fetch items before this position
+}
+
+message CursorPaginationResponse {
+  int32 total_count = 1;
+  bool has_next_page = 2;
+  bool has_previous_page = 3;
+  optional string start_cursor = 4;  // Cursor of first item in result
+  optional string end_cursor = 5;    // Cursor of last item in result
+}
+
+// ============================================================================
+// Time Range
+// Matches GraphQL type TimeRange { start: Time!, end: Time! }
+// ============================================================================
+
+message TimeRange {
+  google.protobuf.Timestamp start = 1;
+  google.protobuf.Timestamp end = 2;
+}

@@ -1,0 +1,34 @@
+query GetStreams {
+  streams @list(name: "AllStreams") {
+    id
+    name
+    description
+    streamKey
+    playbackId
+    record
+    createdAt
+    updatedAt
+    metrics {
+      status
+      isLive
+      currentViewers
+      peakViewers
+      totalViews
+      startedAt
+      endedAt
+      duration
+      lastEventAt
+      lastEventType
+      # Quality metrics
+      bufferState
+      qualityTier
+      primaryWidth
+      primaryHeight
+      primaryFps
+      primaryCodec
+      primaryBitrate
+      hasIssues
+      issuesDescription
+    }
+  }
+}

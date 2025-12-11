@@ -1,0 +1,16 @@
+subscription ClipLifecycle($stream: String!) {
+  clipLifecycle(stream: $stream) {
+    stage
+    clipHash
+    requestId
+    progressPercent
+    filePath
+    s3Url
+    sizeBytes
+    error
+    startedAt
+    completedAt
+    nodeId
+    internalName
+  }
+}

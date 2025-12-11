@@ -32,6 +32,7 @@ type AnalyticsRoutingEvent struct {
 	NodeLatitude    float64   `json:"node_latitude"`
 	NodeLongitude   float64   `json:"node_longitude"`
 	NodeName        string    `json:"node_name"`
+	RoutingDistance *float64  `json:"routing_distance_km"`
 }
 
 // AnalyticsViewerSession5m represents a 5-minute aggregated viewer metric row

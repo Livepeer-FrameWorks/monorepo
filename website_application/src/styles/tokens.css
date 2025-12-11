@@ -10,31 +10,31 @@
        ======================================== */
 
     /* Core backgrounds */
-    --tn-bg: 235 19% 13%;           /* #1a1b26 - Main background */
-    --tn-bg-dark: 240 15% 10%;      /* #16161e - Darker variant */
+    --tn-bg: 235 19% 13%; /* #1a1b26 - Main background */
+    --tn-bg-dark: 240 15% 10%; /* #16161e - Darker variant */
     --tn-bg-highlight: 229 24% 19%; /* #24283b - Elevated surfaces */
-    --tn-bg-visual: 229 24% 24%;    /* #292e42 - Visual selection */
+    --tn-bg-visual: 229 24% 24%; /* #292e42 - Visual selection */
 
     /* Foreground colors */
-    --tn-fg: 229 73% 86%;           /* #c0caf5 - Primary text */
-    --tn-fg-dark: 229 35% 75%;      /* #a9b1d6 - Secondary text */
-    --tn-fg-gutter: 229 24% 31%;    /* #3b4261 - Gutters, borders */
+    --tn-fg: 229 73% 86%; /* #c0caf5 - Primary text */
+    --tn-fg-dark: 229 35% 75%; /* #a9b1d6 - Secondary text */
+    --tn-fg-gutter: 229 24% 31%; /* #3b4261 - Gutters, borders */
 
     /* Terminal colors */
     --tn-terminal-black: 235 19% 13%; /* #1a1b26 */
-    --tn-comment: 229 23% 44%;        /* #565f89 - Comments */
-    --tn-terminal: 229 23% 33%;       /* #414868 - Terminal bg */
+    --tn-comment: 229 23% 44%; /* #565f89 - Comments */
+    --tn-terminal: 229 23% 33%; /* #414868 - Terminal bg */
 
     /* Accent colors */
-    --tn-blue: 225 86% 70%;         /* #7aa2f7 - Primary accent */
-    --tn-cyan: 197 95% 74%;         /* #7dcfff - Info */
-    --tn-teal: 167 67% 63%;         /* #73daca - Success alt */
-    --tn-green: 89 51% 61%;         /* #9ece6a - Success */
-    --tn-yellow: 36 66% 64%;        /* #e0af68 - Warning */
-    --tn-orange: 22 100% 70%;       /* #ff9e64 - Warning alt */
-    --tn-red: 349 89% 72%;          /* #f7768e - Error */
-    --tn-magenta: 325 78% 73%;      /* #ff007c - Highlight */
-    --tn-purple: 264 85% 74%;       /* #bb9af7 - Accent */
+    --tn-blue: 225 86% 70%; /* #7aa2f7 - Primary accent */
+    --tn-cyan: 197 95% 74%; /* #7dcfff - Info */
+    --tn-teal: 167 67% 63%; /* #73daca - Success alt */
+    --tn-green: 89 51% 61%; /* #9ece6a - Success */
+    --tn-yellow: 36 66% 64%; /* #e0af68 - Warning */
+    --tn-orange: 22 100% 70%; /* #ff9e64 - Warning alt */
+    --tn-red: 349 89% 72%; /* #f7768e - Error */
+    --tn-magenta: 325 78% 73%; /* #ff007c - Highlight */
+    --tn-purple: 264 85% 74%; /* #bb9af7 - Accent */
 
     /* ========================================
        SEMANTIC TOKENS (shadcn/ui compatible)
@@ -88,36 +88,36 @@
     --brand-red: var(--tn-red);
 
     --brand-accent-strong: var(--tn-purple);
-    --brand-accent-soft: 265 78% 85%;  /* #d8c8fb - Lighter purple */
+    --brand-accent-soft: 265 78% 85%; /* #d8c8fb - Lighter purple */
 
     /* ========================================
        SPACING SCALE
        ======================================== */
 
-    --space-xs: 0.25rem;    /* 4px */
-    --space-sm: 0.5rem;     /* 8px */
-    --space-md: 1rem;       /* 16px */
-    --space-lg: 1.5rem;     /* 24px */
-    --space-xl: 2rem;       /* 32px */
-    --space-2xl: 3rem;      /* 48px */
-    --space-3xl: 4rem;      /* 64px */
-    --space-4xl: 6rem;      /* 96px */
+    --space-xs: 0.25rem; /* 4px */
+    --space-sm: 0.5rem; /* 8px */
+    --space-md: 1rem; /* 16px */
+    --space-lg: 1.5rem; /* 24px */
+    --space-xl: 2rem; /* 32px */
+    --space-2xl: 3rem; /* 48px */
+    --space-3xl: 4rem; /* 64px */
+    --space-4xl: 6rem; /* 96px */
 
     /* ========================================
        TYPOGRAPHY TOKENS
        ======================================== */
 
-    --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
-    --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+    --font-sans: "Inter", system-ui, -apple-system, sans-serif;
+    --font-mono: "JetBrains Mono", "Fira Code", monospace;
 
-    --text-xs: 0.75rem;     /* 12px */
-    --text-sm: 0.875rem;    /* 14px */
-    --text-base: 1rem;      /* 16px */
-    --text-lg: 1.125rem;    /* 18px */
-    --text-xl: 1.25rem;     /* 20px */
-    --text-2xl: 1.5rem;     /* 24px */
-    --text-3xl: 1.875rem;   /* 30px */
-    --text-4xl: 2.25rem;    /* 36px */
+    --text-xs: 0.75rem; /* 12px */
+    --text-sm: 0.875rem; /* 14px */
+    --text-base: 1rem; /* 16px */
+    --text-lg: 1.125rem; /* 18px */
+    --text-xl: 1.25rem; /* 20px */
+    --text-2xl: 1.5rem; /* 24px */
+    --text-3xl: 1.875rem; /* 30px */
+    --text-4xl: 2.25rem; /* 36px */
 
     --font-normal: 400;
     --font-medium: 500;
@@ -133,32 +133,6 @@
     --line-relaxed: 1.75;
   }
 
-  /* Dark mode (explicit, though we default to dark) */
-  .dark {
-    color-scheme: dark;
-
-    --background: var(--tn-bg);
-    --foreground: var(--tn-fg);
-    --card: var(--tn-bg-highlight);
-    --card-foreground: var(--tn-fg);
-    --popover: var(--tn-bg-highlight);
-    --popover-foreground: var(--tn-fg);
-    --primary: var(--tn-blue);
-    --primary-foreground: var(--tn-bg);
-    --secondary: var(--tn-terminal);
-    --secondary-foreground: var(--tn-fg-dark);
-    --muted: var(--tn-bg-visual);
-    --muted-foreground: var(--tn-fg-dark);
-    --accent: var(--tn-blue);
-    --accent-foreground: var(--tn-bg);
-    --accent-rgb: 122 162 247;
-    --destructive: var(--tn-red);
-    --destructive-foreground: var(--tn-bg);
-    --border: var(--tn-fg-gutter);
-    --input: var(--tn-fg-gutter);
-    --ring: var(--tn-blue);
-  }
-
   /* ========================================
      GLOBAL ELEMENT STYLES
      ======================================== */
@@ -171,7 +145,7 @@
     background-color: hsl(var(--background));
     color: hsl(var(--foreground));
     font-family: var(--font-sans);
-    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
     min-height: 100vh;
     overflow-x: hidden;
   }
@@ -187,11 +161,19 @@
 }
 
 .bg-brand-surface-muted {
-  background-color: color-mix(in srgb, hsl(var(--brand-surface-strong)) 82%, rgba(18, 20, 34, 0.25));
+  background-color: color-mix(
+    in srgb,
+    hsl(var(--brand-surface-strong)) 82%,
+    rgba(18, 20, 34, 0.25)
+  );
 }
 
 .bg-brand-surface-soft {
-  background-color: color-mix(in srgb, hsl(var(--brand-surface)) 88%, rgba(18, 20, 34, 0.12));
+  background-color: color-mix(
+    in srgb,
+    hsl(var(--brand-surface)) 88%,
+    rgba(18, 20, 34, 0.12)
+  );
 }
 
 .bg-brand-surface-strong {

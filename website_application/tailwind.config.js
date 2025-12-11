@@ -4,6 +4,18 @@ export default {
   theme: {
     extend: {
       colors: {
+        // Semantic status colors
+        success: "hsl(var(--tn-green) / <alpha-value>)",
+        warning: "hsl(var(--tn-yellow) / <alpha-value>)",
+        "warning-alt": "hsl(var(--tn-orange) / <alpha-value>)",
+        info: "hsl(var(--tn-cyan) / <alpha-value>)",
+        error: "hsl(var(--tn-red) / <alpha-value>)",
+
+        // Brand accents
+        accent: "hsl(var(--tn-blue) / <alpha-value>)",
+        "accent-purple": "hsl(var(--tn-purple) / <alpha-value>)",
+        "accent-teal": "hsl(var(--tn-teal) / <alpha-value>)",
+
         // Tokyo Night color scheme - now using HSL tokens for alpha transparency
         "tokyo-night": {
           bg: "hsl(var(--tn-bg) / <alpha-value>)",

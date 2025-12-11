@@ -1,8 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { globalPlayerManager } from "../core";
+import { usePlayerWithFallback } from "../context/PlayerContext";
 import { cn } from "../lib/utils";
-import { Badge } from "../ui/badge";
-import { Button } from "../ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
 import { Slider } from "../ui/slider";
 import {
@@ -33,10 +31,10 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
   className,
   onSeek
 }) => {
-  if (!isVisible) return null;
+  // Use context with fallback to global for backwards compatibility
+  const { player, videoElement: video } = usePlayerWithFallback();
 
-  const player = globalPlayerManager.getCurrentPlayer();
-  const video = player?.getVideoElement();
+  if (!isVisible) return null;
   const qualities = player?.getQualities?.() ?? [];
   const textTracks = player?.getTextTracks?.() ?? [];
 
@@ -236,38 +234,42 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
   const timeDisplay = Number.isFinite(duration) ? `${formatTime(currentTime)} / ${formatTime(duration)}` : formatTime(currentTime);
 
   return (
-    <div className={cn("fw-player-surface pointer-events-none absolute inset-x-0 bottom-0 px-2 pb-2 sm:px-4 sm:pb-4", className)}>
-      <div className="fw-pointer-events-auto flex w-full flex-wrap items-center gap-2 rounded-lg bg-gradient-to-t from-black/80 via-black/60 to-black/5 px-3 py-2 text-foreground sm:gap-3 sm:px-4 sm:py-3">
-        <div className="fw-flex items-center gap-1 sm:gap-2">
-          <Button type="button" size="icon" variant="ghost" aria-label={isPlaying ? "Pause" : "Play"} onClick={handlePlayPause}>
+    <div className={cn("fw-player-surface pointer-events-none absolute inset-x-0 bottom-0", className)}>
+      {/* Slab-based control bar - flush to edges, seams between groups */}
+      <div className="fw-control-bar fw-pointer-events-auto w-full">
+        {/* Playback controls group */}
+        <div className="fw-control-group">
+          <button type="button" className="fw-btn-flush" aria-label={isPlaying ? "Pause" : "Play"} onClick={handlePlayPause}>
             <PlayPauseIcon isPlaying={isPlaying} size={18} />
-          </Button>
-          <Button type="button" size="icon" variant="ghost" aria-label="Skip back 10 seconds" onClick={handleSkipBack}>
+          </button>
+          <button type="button" className="fw-btn-flush" aria-label="Skip back 10 seconds" onClick={handleSkipBack}>
             <SkipBackIcon size={16} />
-          </Button>
-          <Button type="button" size="icon" variant="ghost" aria-label="Skip forward 10 seconds" onClick={handleSkipForward}>
+          </button>
+          <button type="button" className="fw-btn-flush" aria-label="Skip forward 10 seconds" onClick={handleSkipForward}>
             <SkipForwardIcon size={16} />
-          </Button>
+          </button>
         </div>
 
-        <div className="fw-flex min-w-[140px] flex-1 items-center gap-2 sm:min-w-[220px]">
-          <span className="fw-hidden font-mono text-[11px] leading-none text-muted-foreground sm:inline">{timeDisplay}</span>
+        {/* Seek/timeline group */}
+        <div className="fw-control-group flex-1 min-w-[100px]">
+          <span className="hidden sm:inline font-mono text-[11px] leading-none text-[hsl(var(--tn-fg-dark))] mr-2 whitespace-nowrap">{timeDisplay}</span>
           <Slider
             aria-label="Seek"
             max={1000}
             step={1}
             value={[seekValue]}
             onValueChange={handleSeekChange}
-            className="fw-relative flex-1"
+            className="flex-1"
             title={seekTitle}
           />
         </div>
 
-        <div className="fw-hidden items-center gap-2 sm:flex">
-          <Button type="button" size="icon" variant="ghost" aria-label={isMuted ? "Unmute" : "Mute"} onClick={handleMute}>
+        {/* Volume group */}
+        <div className="fw-control-group hidden sm:flex">
+          <button type="button" className="fw-btn-flush" aria-label={isMuted ? "Unmute" : "Mute"} onClick={handleMute}>
             <VolumeIcon isMuted={isMuted} size={16} />
-          </Button>
-          <div className="w-[104px]">
+          </button>
+          <div className="w-[80px] px-2">
             <Slider
               aria-label="Volume"
               max={100}
@@ -279,18 +281,19 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
           </div>
         </div>
 
-        <div className="fw-flex items-center gap-2 sm:ml-auto sm:gap-3">
+        {/* Options group - captions, quality, speed */}
+        <div className="fw-control-group hidden md:flex">
           {textTracks.length > 0 && (
             <Select value={captionValue} onValueChange={handleCaptionChange}>
-              <SelectTrigger className="w-[120px]">
-                <div className="fw-flex items-center gap-2">
-                  <ClosedCaptionsIcon size={16} />
+              <SelectTrigger className="w-[100px] h-8 rounded-none border-0 bg-transparent text-[hsl(var(--tn-fg))]">
+                <div className="flex items-center gap-1.5">
+                  <ClosedCaptionsIcon size={14} />
                   <SelectValue />
                 </div>
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent className="rounded-none border-[hsl(var(--tn-fg-gutter)/0.3)]">
                 {captionOptions.map((option) => (
-                  <SelectItem key={option.value} value={option.value}>
+                  <SelectItem key={option.value} value={option.value} className="rounded-none">
                     {option.label}
                   </SelectItem>
                 ))}
@@ -300,12 +303,12 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
 
           {qualityOptions.length > 0 && (
             <Select value={qualityValue} onValueChange={handleQualityChange}>
-              <SelectTrigger className="w-[110px]">
+              <SelectTrigger className="w-[90px] h-8 rounded-none border-0 bg-transparent text-[hsl(var(--tn-fg))]">
                 <SelectValue placeholder="Quality" />
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent className="rounded-none border-[hsl(var(--tn-fg-gutter)/0.3)]">
                 {qualityOptions.map((option) => (
-                  <SelectItem key={option.value} value={option.value}>
+                  <SelectItem key={option.value} value={option.value} className="rounded-none">
                     {option.label}
                   </SelectItem>
                 ))}
@@ -314,12 +317,12 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
           )}
 
           <Select value={String(playbackRate)} onValueChange={handleSpeedChange}>
-            <SelectTrigger className="w-[90px]">
+            <SelectTrigger className="w-[70px] h-8 rounded-none border-0 bg-transparent text-[hsl(var(--tn-fg))]">
               <SelectValue placeholder="Speed" />
             </SelectTrigger>
-            <SelectContent>
+            <SelectContent className="rounded-none border-[hsl(var(--tn-fg-gutter)/0.3)]">
               {SPEED_PRESETS.map((rate) => (
-                <SelectItem key={rate} value={String(rate)}>
+                <SelectItem key={rate} value={String(rate)} className="rounded-none">
                   {rate}x
                 </SelectItem>
               ))}
@@ -327,30 +330,32 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
           </Select>
         </div>
 
-        <div className="fw-flex items-center gap-2 sm:gap-3">
+        {/* Live indicator + fullscreen group */}
+        <div className="fw-control-group">
           {isLive && (
-            <Button
+            <button
               type="button"
-              variant="ghost"
-              className="fw-inline-flex items-center gap-2 text-xs uppercase tracking-wide"
+              className="fw-btn-flush inline-flex items-center gap-1.5 text-xs uppercase tracking-wide"
               onClick={handleGoLive}
             >
-              <Badge
-                variant={isNearLive ? "default" : "outline"}
-                className={cn("flex items-center gap-1 px-2 py-0.5", !isNearLive && "bg-transparent text-foreground")}
-              >
-                <LiveIcon size={10} color={isNearLive ? "#ffffff" : "currentColor"} />
+              <span className={cn(
+                "flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-semibold",
+                isNearLive
+                  ? "bg-[hsl(var(--tn-red))] text-[hsl(var(--tn-bg-dark))]"
+                  : "border border-[hsl(var(--tn-fg-gutter)/0.5)] text-[hsl(var(--tn-fg-dark))]"
+              )}>
+                <LiveIcon size={8} color={isNearLive ? "currentColor" : "currentColor"} />
                 Live
-              </Badge>
-              {!isNearLive && <span className="text-muted-foreground">Catch up</span>}
-            </Button>
+              </span>
+              {!isNearLive && <span className="text-[hsl(var(--tn-fg-dark))] text-[10px]">Catch up</span>}
+            </button>
           )}
-          <Button type="button" size="icon" variant="ghost" aria-label="Toggle fullscreen" onClick={handleFullscreen}>
+          <button type="button" className="fw-btn-flush" aria-label="Toggle fullscreen" onClick={handleFullscreen}>
             <FullscreenToggleIcon isFullscreen={isFullscreen} size={16} />
-          </Button>
-          <Button type="button" size="icon" variant="ghost" aria-label="Toggle picture in picture" onClick={handlePictureInPicture}>
+          </button>
+          <button type="button" className="fw-btn-flush" aria-label="Toggle picture in picture" onClick={handlePictureInPicture}>
             <PictureInPictureIcon size={16} />
-          </Button>
+          </button>
         </div>
       </div>
     </div>

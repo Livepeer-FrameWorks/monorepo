@@ -184,8 +184,8 @@ const StatusPage = () => {
         <MarketingFinalCTA
           variant="band"
           eyebrow="Next steps"
-          title="Deploy with confidence"
-          description="Monitor your infrastructure health in real-time and get alerted when issues arise."
+          title="Ready to get started?"
+          description="Monitor your infrastructure health in real-time."
           primaryAction={{
             label: 'Start Free',
             href: config.appUrl,

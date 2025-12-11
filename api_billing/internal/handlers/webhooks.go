@@ -14,16 +14,11 @@ import (
 	"strings"
 	"time"
 
-	purserapi "frameworks/pkg/api/purser"
-	qmclient "frameworks/pkg/clients/quartermaster"
-	"frameworks/pkg/config"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/models"
 
 	"github.com/gin-gonic/gin"
 )
-
-// MollieWebhookPayload is imported from purserapi package to avoid duplication
 
 // Stripe webhook payload structure
 type StripeWebhookPayload struct {
@@ -324,7 +319,7 @@ func sendPaymentStatusEmail(invoiceID, paymentID, provider, status string) {
 
 // HandleMollieWebhook handles webhook notifications from Mollie payment processor
 func HandleMollieWebhook(c *gin.Context) {
-	var payload purserapi.MollieWebhookPayload
+	var payload MollieWebhookPayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
 		logger.WithFields(logging.Fields{
 			"error": err.Error(),
@@ -428,38 +423,33 @@ func HandleMollieWebhook(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "received"})
 }
 
-// getTenantInfo calls Quartermaster to get tenant information using shared client
+// getTenantInfo calls Quartermaster to get tenant information using gRPC
 func getTenantInfo(tenantID string) (*models.Tenant, error) {
-	quartermasterURL := config.RequireEnv("QUARTERMASTER_URL")
-	serviceToken := config.RequireEnv("SERVICE_TOKEN")
-
-	client := qmclient.NewClient(qmclient.Config{
-		BaseURL:      quartermasterURL,
-		ServiceToken: serviceToken,
-		Timeout:      10 * time.Second,
-		Logger:       logger,
-	})
+	if qmClient == nil {
+		return nil, fmt.Errorf("quartermaster client not initialized")
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	response, err := client.GetTenant(ctx, tenantID)
+	response, err := qmClient.GetTenant(ctx, tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get tenant from Quartermaster: %w", err)
 	}
 
-	if response.Error != "" {
-		return nil, fmt.Errorf("Quartermaster error: %s", response.Error)
+	if response.GetError() != "" {
+		return nil, fmt.Errorf("Quartermaster error: %s", response.GetError())
 	}
 
-	if response.Tenant == nil {
+	pbTenant := response.GetTenant()
+	if pbTenant == nil {
 		return nil, fmt.Errorf("tenant not found")
 	}
 
-	// Convert TenantInfo to models.Tenant
+	// Convert proto Tenant to models.Tenant
 	tenant := &models.Tenant{
-		ID:   response.Tenant.ID,
-		Name: response.Tenant.Name,
+		ID:   pbTenant.GetId(),
+		Name: pbTenant.GetName(),
 	}
 
 	return tenant, nil

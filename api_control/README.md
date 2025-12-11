@@ -1,6 +1,6 @@
 # Commodore (Control Plane)
 
-Commodore is the control API. It owns users, streams, API tokens and exposes tenant‑scoped HTTP endpoints.
+Commodore is the control API. It owns users, streams, API tokens and exposes tenant‑scoped gRPC endpoints (HTTP for health/metrics only).
 
 ## What it does
 - User authentication and authorization
@@ -17,7 +17,7 @@ Commodore is the control API. It owns users, streams, API tokens and exposes ten
 - Start the full stack from repo root: `docker-compose up -d`
 - Or run just Commodore: `cd api_control && go run ./cmd/commodore`
 
-Configuration comes from the shared `config/env` layers. Run `make env` (or `frameworks config env generate`) to materialize `.env` before starting the stack. Update `config/env/secrets.env` for local secrets; see `docs/configuration.md` for details. Do not commit secrets.
+Configuration comes from the shared `config/env` layers. Run `make env` (or `frameworks config env generate`) to materialize `.env` before starting the stack. Update `config/env/secrets.env` for local secrets. Do not commit secrets.
 
 Key secret:
 
@@ -25,8 +25,9 @@ Key secret:
 
 Health: `GET /health`.
 
-Cross‑refs: see root README “Ports” and docs/IMPLEMENTATION.md for event and boundary details. 
+Cross‑refs: see root README "Ports" for stack overview. 
 
-## Health & port
-- Health: `GET /health`
+## Health & ports
+- Health: `GET /health` (HTTP) or `grpc.health.v1.Health/Check` (gRPC)
 - HTTP: 18001
+- gRPC: 19001

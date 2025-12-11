@@ -1,0 +1,6 @@
+fragment RateLimitErrorFields on RateLimitError {
+  __typename
+  message
+  code
+  retryAfter
+}

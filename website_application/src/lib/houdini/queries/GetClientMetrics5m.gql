@@ -1,0 +1,38 @@
+query GetClientMetrics5m(
+  $stream: String
+  $nodeId: String
+  $timeRange: TimeRangeInput
+  $first: Int = 100
+  $after: String
+) {
+  clientMetrics5mConnection(
+    stream: $stream
+    nodeId: $nodeId
+    timeRange: $timeRange
+    first: $first
+    after: $after
+  ) {
+    edges {
+      cursor
+      node {
+        id
+        timestamp
+        internalName
+        nodeId
+        activeSessions
+        avgBandwidthIn
+        avgBandwidthOut
+        avgConnectionTime
+        packetLossRate
+        avgConnectionQuality
+      }
+    }
+    pageInfo {
+      hasNextPage
+      hasPreviousPage
+      startCursor
+      endCursor
+    }
+    totalCount
+  }
+}

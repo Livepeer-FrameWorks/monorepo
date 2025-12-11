@@ -1,0 +1,214 @@
+---
+title: "External Services"
+description: "Configuration guide for external services: Cloudflare, SSL, SMTP, and Payments."
+sidebar:
+  order: 9
+---
+
+FrameWorks automates much of the heavy lifting for external integrations. While the platform manages the complexity, you'll need to provide the credentials and API keys for these services to function.
+
+## Setting Up DNS
+
+**Purpose:** Domain management, geographic routing, load balancing
+
+**Required Provider:** Cloudflare (API support required for Navigator automation; *self-hosted Anycast planned*)
+
+**Managed By:** Navigator (`api_dns`) - automates DNS record management based on node inventory
+
+**What You Need:**
+- Cloudflare account
+- API token with permissions for DNS record management
+- Domain added to Cloudflare
+
+**What Navigator Automates:**
+- DNS record creation/updates based on Quartermaster node inventory
+- Smart routing: single node → A record, multiple nodes → load balancer pool
+- Pool and origin management
+- Geographic routing via Cloudflare load balancers
+- Stale origin cleanup when nodes go unhealthy
+
+**Manual Steps:**
+1. Create Cloudflare account
+2. Add your domain to Cloudflare
+3. Generate API token
+4. Set environment variables:
+   ```bash
+   export CLOUDFLARE_API_TOKEN="your-token"
+   export CLOUDFLARE_ZONE_ID="your-zone-id"
+   export CLOUDFLARE_ACCOUNT_ID="your-account-id"
+   ```
+
+**Future:** Self-hosted anycast DNS cluster (planned, requires ASN acquisition)
+
+---
+
+## SSL/TLS Certificates
+
+**Purpose:** HTTPS encryption for all services
+
+**Managed By:** Navigator (`api_dns`) - handles ACME certificate issuance and renewal
+
+**What Navigator Automates:**
+- Certificate issuance via ACME (Let's Encrypt) with DNS-01 validation
+- Automatic renewal (monitors expiration, renews when < 30 days remaining)
+- Certificate caching in PostgreSQL
+- Background renewal worker
+
+**No Manual Setup Required** - Navigator handles certificate lifecycle automatically.
+
+**Alternative Options:**
+- **Caddy** (automatic HTTPS) - for simpler deployments
+- **nginx + certbot** (Let's Encrypt) - for manual management
+
+---
+
+## GeoIP Database
+
+**Purpose:** IP geolocation for geographic routing and analytics
+
+**Provider:** MaxMind (GeoLite2 or GeoIP2)
+
+**What You Need:**
+- MaxMind account (free or paid)
+- License key
+
+**What CLI Automates:**
+- Database download
+- Periodic updates
+- Deployment to services (Foghorn, analytics)
+
+**Manual Steps:**
+1. Sign up at https://www.maxmind.com
+2. Generate license key
+3. Set environment variable:
+   ```bash
+   export MAXMIND_LICENSE_KEY="your-key"
+   ```
+
+**Usage:** Foghorn uses GeoIP for intelligent routing decisions
+
+---
+
+## Configuring SMTP
+
+**Purpose:** Notifications, alerts, transactional emails
+
+**Providers:** Fastmail, SendGrid, AWS SES, or any SMTP provider
+
+**What You Need:**
+- SMTP credentials (host, port, username, password)
+- Verified sender domain (for production)
+
+**What's Automated:**
+- Email templates
+- Delivery handling
+- Error retry logic
+
+**Manual Steps:**
+1. Choose email provider
+2. Generate SMTP credentials or app password
+3. Set environment variables:
+   ```bash
+   export SMTP_HOST="smtp.provider.com"
+   export SMTP_PORT="587"
+   export SMTP_USER="your-username"
+   export SMTP_PASS="your-password"
+   export SMTP_FROM="noreply@yourdomain.com"
+   ```
+
+**Used By:**
+- Forms API (contact form submissions)
+- Billing (invoice notifications)
+- Auth (password resets - if implemented)
+
+**Optional:** System runs without email; notifications will be logged instead
+
+---
+
+## Enabling Payments
+
+**Purpose:** Billing, subscriptions, payment handling
+
+**Provider:** Stripe
+
+**What You Need:**
+- Stripe account
+- API keys (publishable and secret)
+- Webhook signing secret
+
+**What's Automated:**
+- Webhook event handling
+- Subscription management
+- Payment processing
+
+**Manual Steps:**
+1. Create Stripe account at https://stripe.com
+2. Get API keys from dashboard
+3. Configure webhook endpoint: `https://yourdomain.com/api/webhooks/stripe`
+4. Set environment variables:
+   ```bash
+   export STRIPE_SECRET_KEY="sk_live_..."
+   export STRIPE_PUBLISHABLE_KEY="pk_live_..."
+   export STRIPE_WEBHOOK_SECRET="whsec_..."
+   ```
+
+**Used By:** Purser (billing API)
+
+**Optional:** Not required for basic platform operation
+
+---
+
+## Summary
+
+| Service | Provider | Required | Automated by |
+|---------|----------|----------|--------------|
+| DNS | Cloudflare (recommended) | Yes | Navigator (api_dns) |
+| SSL/TLS | Let's Encrypt (ACME) | Yes | Navigator (api_dns) |
+| GeoIP | MaxMind | Recommended | CLI (download & updates) |
+| SMTP | Any provider | Optional | Platform (email delivery) |
+| Payments | Stripe | Optional | Purser (webhook handling) |
+
+---
+
+## Environment Variables
+
+Complete list of required environment variables:
+
+```bash
+# DNS (Required - used by Navigator)
+export CLOUDFLARE_API_TOKEN="your-cloudflare-token"
+export CLOUDFLARE_ZONE_ID="your-zone-id"
+export CLOUDFLARE_ACCOUNT_ID="your-account-id"
+
+# GeoIP (Recommended)
+export MAXMIND_LICENSE_KEY="your-maxmind-key"
+
+# Email (Optional - platform runs without it)
+export SMTP_HOST="smtp.provider.com"
+export SMTP_PORT="587"
+export SMTP_USER="username"
+export SMTP_PASS="password"
+export SMTP_FROM="noreply@yourdomain.com"
+
+# Stripe (Optional - only if using billing)
+export STRIPE_SECRET_KEY="sk_live_..."
+export STRIPE_PUBLISHABLE_KEY="pk_live_..."
+export STRIPE_WEBHOOK_SECRET="whsec_..."
+```
+
+Store these securely using:
+- Environment files (`.env`)
+- Secrets manager (production)
+- CI/CD secrets (automated deployments)
+
+---
+
+## Next Steps
+
+1. Set up required external services (DNS, SSL automated)
+2. Configure optional services as needed (Email, GeoIP, Payments)
+3. Set environment variables
+4. Verify CLI can access external APIs
+5. Proceed with cluster provisioning
+
+For DNS operations, see [DNS Operations Guide](/cli/dns-operations)

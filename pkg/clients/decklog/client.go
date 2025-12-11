@@ -14,6 +14,7 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	grpc_health_v1 "google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/metadata"
 
 	pb "frameworks/pkg/proto"
 )
@@ -93,10 +94,11 @@ func (c *Client) Health(ctx context.Context, service string) (grpc_health_v1.Hea
 
 // BatchedClient provides direct protobuf event sending for services like Foghorn
 type BatchedClient struct {
-	conn   *grpc.ClientConn
-	client pb.DecklogServiceClient
-	logger logging.Logger
-	source string
+	conn         *grpc.ClientConn
+	client       pb.DecklogServiceClient
+	logger       logging.Logger
+	source       string
+	serviceToken string
 }
 
 // BatchedClientConfig represents configuration for the batched Decklog client
@@ -106,6 +108,7 @@ type BatchedClientConfig struct {
 	CACertFile    string
 	Timeout       time.Duration
 	Source        string // Source identifier for all events (e.g., "foghorn")
+	ServiceToken  string // Service token for authentication
 }
 
 // NewBatchedClient creates a new Decklog gRPC client
@@ -149,10 +152,11 @@ func NewBatchedClient(cfg BatchedClientConfig, logger logging.Logger) (*BatchedC
 	}
 
 	client := &BatchedClient{
-		conn:   conn,
-		client: pb.NewDecklogServiceClient(conn),
-		logger: logger,
-		source: source,
+		conn:         conn,
+		client:       pb.NewDecklogServiceClient(conn),
+		logger:       logger,
+		source:       source,
+		serviceToken: cfg.ServiceToken,
 	}
 
 	logger.WithFields(logging.Fields{
@@ -163,9 +167,18 @@ func NewBatchedClient(cfg BatchedClientConfig, logger logging.Logger) (*BatchedC
 	return client, nil
 }
 
+// authContext returns a context with service token authorization metadata
+func (c *BatchedClient) authContext() context.Context {
+	ctx := context.Background()
+	if c.serviceToken != "" {
+		ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+c.serviceToken)
+	}
+	return ctx
+}
+
 // SendTrigger sends an enriched MistTrigger to Decklog
 func (c *BatchedClient) SendTrigger(trigger *pb.MistTrigger) error {
-	ctx := context.Background()
+	ctx := c.authContext()
 	_, err := c.client.SendEvent(ctx, trigger)
 	if err != nil {
 		c.logger.WithFields(logging.Fields{
@@ -187,7 +200,7 @@ func (c *BatchedClient) SendTrigger(trigger *pb.MistTrigger) error {
 
 // SendLoadBalancing sends load balancing data to Decklog
 func (c *BatchedClient) SendLoadBalancing(data *pb.LoadBalancingData) error {
-	ctx := context.Background()
+	ctx := c.authContext()
 	// Wrap into unified envelope
 	trigger := &pb.MistTrigger{
 		TriggerType: "LOAD_BALANCING",
@@ -215,7 +228,7 @@ func (c *BatchedClient) SendLoadBalancing(data *pb.LoadBalancingData) error {
 
 // SendClipLifecycle sends clip lifecycle data to Decklog
 func (c *BatchedClient) SendClipLifecycle(data *pb.ClipLifecycleData) error {
-	ctx := context.Background()
+	ctx := c.authContext()
 	trigger := &pb.MistTrigger{
 		TriggerType: "CLIP_LIFECYCLE",
 		TriggerPayload: &pb.MistTrigger_ClipLifecycleData{
@@ -242,7 +255,7 @@ func (c *BatchedClient) SendClipLifecycle(data *pb.ClipLifecycleData) error {
 
 // SendDVRLifecycle sends DVR lifecycle data to Decklog
 func (c *BatchedClient) SendDVRLifecycle(data *pb.DVRLifecycleData) error {
-	ctx := context.Background()
+	ctx := c.authContext()
 	trigger := &pb.MistTrigger{
 		TriggerType: "DVR_LIFECYCLE",
 		TriggerPayload: &pb.MistTrigger_DvrLifecycleData{

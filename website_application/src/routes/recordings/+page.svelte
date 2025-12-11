@@ -1,8 +1,13 @@
-<script>
-  import { run } from "svelte/legacy";
-
-  import { onMount } from "svelte";
-  import { dvrService } from "$lib/graphql/services/dvr.js";
+<script lang="ts">
+  import { onMount, onDestroy } from "svelte";
+  import { resolve } from "$app/paths";
+  import {
+    GetDVRRequestsStore,
+    GetStreamsStore,
+    DvrLifecycleStore
+  } from "$houdini";
+  import type { DvrLifecycle$result } from "$houdini";
+  import { toast } from "$lib/stores/toast.js";
   import {
     formatBytes,
     formatDuration,
@@ -24,12 +29,35 @@
     SelectContent,
     SelectItem,
   } from "$lib/components/ui/select";
+  import { GridSeam } from "$lib/components/layout";
+  import DashboardMetricCard from "$lib/components/shared/DashboardMetricCard.svelte";
+  import { getIconComponent } from "$lib/iconUtils";
 
-  let recordings = $state([]);
-  let loading = $state(true);
-  let error = $state(null);
+  // Houdini stores
+  const dvrRequestsStore = new GetDVRRequestsStore();
+  const streamsStore = new GetStreamsStore();
+  const dvrLifecycleSub = new DvrLifecycleStore();
+
+  // Types from Houdini
+  type DvrRequestData = NonNullable<NonNullable<NonNullable<typeof $dvrRequestsStore.data>["dvrRecordingsConnection"]>["edges"]>[0]["node"];
+  type DvrLifecycleEvent = NonNullable<DvrLifecycle$result["dvrLifecycle"]>;
+  type StreamData = NonNullable<NonNullable<typeof $streamsStore.data>["streams"]>[0];
+
+  // Derived state from Houdini stores
+  let loading = $derived($dvrRequestsStore.fetching || $streamsStore.fetching);
+  let recordingsEdges = $derived($dvrRequestsStore.data?.dvrRecordingsConnection?.edges ?? []);
+  let recordings = $derived(recordingsEdges.map(e => e.node));
+  let streams = $derived($streamsStore.data?.streams ?? []);
+
+  let error = $state<string | null>(null);
   let statusFilter = $state("all");
-  const statusFilterLabels = {
+
+  // Track active subscription stream
+  let activeSubscriptionStream = $state<string | null>(null);
+
+  // Track DVR progress for real-time updates
+  let dvrProgress = $state<Record<string, { stage: string; percent: number; message?: string }>>({});
+  const statusFilterLabels: Record<string, string> = {
     all: "All Statuses",
     recording: "Recording",
     completed: "Completed",
@@ -39,10 +67,9 @@
   };
   let searchQuery = $state("");
 
-  // Pagination
+  // Pagination (client-side filtering)
   let currentPage = $state(1);
   let pageSize = 20;
-  let totalRecordings = $state(0);
 
   let filteredRecordings = $derived(
     recordings.filter((recording) => {
@@ -70,49 +97,121 @@
   );
 
   let totalPages = $derived(Math.ceil(filteredRecordings.length / pageSize));
-  run(() => {
-    totalRecordings = filteredRecordings.length;
-  });
+  let totalRecordings = $derived(filteredRecordings.length);
+
+  // Server-side pagination state
+  let hasMoreOnServer = $derived(
+    $dvrRequestsStore.data?.dvrRecordingsConnection?.pageInfo?.hasNextPage ?? false
+  );
+  let loadingMore = $state(false);
+
+  // Derived stats
+  let completedCount = $derived(filteredRecordings.filter((r) => r.status === "completed").length);
+  let recordingCount = $derived(filteredRecordings.filter((r) => r.status === "recording").length);
+  let failedCount = $derived(filteredRecordings.filter((r) => r.status === "failed").length);
 
   async function loadRecordings() {
     try {
-      loading = true;
-      const result = await dvrService.getDVRRequests();
+      error = null;
 
-      if (result.success) {
-        recordings = result.recordings || [];
-        error = null;
-      } else {
-        error = result.error || "Failed to load recordings";
-        recordings = [];
+      // Load streams and DVR requests in parallel
+      await Promise.all([
+        dvrRequestsStore.fetch({ variables: { first: 100 } }),
+        streamsStore.fetch(),
+      ]);
+
+      if ($dvrRequestsStore.errors?.length || $streamsStore.errors?.length) {
+        // Filter out AbortErrors from Houdini errors if they are exposed there
+        // usage of 'any' to bypass strict type checking on error objects for now
+        const dvrErrors = $dvrRequestsStore.errors?.filter((e: any) => e.message !== 'Aborted') ?? [];
+        const streamErrors = $streamsStore.errors?.filter((e: any) => e.message !== 'Aborted') ?? [];
+        
+        if (dvrErrors.length || streamErrors.length) {
+             console.error("Failed to load data:", dvrErrors, streamErrors);
+             error = "Failed to load recordings";
+        }
       }
-    } catch (err) {
+
+      // Start DVR subscription for the first stream (if any)
+      // Note: In a real scenario, you might want to subscribe to all streams
+      // but for simplicity, we'll just subscribe to the first one
+      // Use stream.id (internal UUID) for subscriptions - this is the canonical identifier
+      if (streams.length > 0 && !activeSubscriptionStream) {
+        startDvrSubscription(streams[0].id);
+      }
+    } catch (err: any) {
+      // Ignore AbortErrors which happen on navigation/cancellation
+      if (err.name === 'AbortError' || err.message === 'aborted' || err.message === 'Aborted') {
+        return;
+      }
       console.error("Failed to load recordings:", err);
       error = "Failed to load recordings";
-      recordings = [];
-    } finally {
-      loading = false;
     }
   }
 
-  function getStatusColor(status) {
+  function startDvrSubscription(streamId: string) {
+    if (activeSubscriptionStream !== streamId) {
+      dvrLifecycleSub.unlisten();
+      activeSubscriptionStream = streamId;
+      // Use stream.id (internal UUID) for subscriptions - this is the canonical identifier
+      dvrLifecycleSub.listen({ stream: streamId });
+    }
+  }
+
+  // Effect to handle DVR lifecycle subscription updates
+  $effect(() => {
+    const event = $dvrLifecycleSub.data?.dvrLifecycle;
+    if (event) {
+      handleDvrEvent(event);
+    }
+  });
+
+  function handleDvrEvent(event: DvrLifecycleEvent) {
+    // Update DVR progress tracking
+    const key = event.dvrHash;
+    if (key) {
+      dvrProgress[key] = {
+        stage: event.status,
+        percent: 0, // DVR doesn't have percentage
+        message: event.error ?? undefined,
+      };
+      dvrProgress = { ...dvrProgress };
+    }
+
+    // Handle different statuses
+    const status = event.status.toLowerCase();
+
+    // Check against likely proto enum values or simplified strings
+    if (status === "completed" || status === "status_stopped" || status === "stopped") {
+      toast.success(`Recording "${event.internalName}" completed!`);
+      // Refresh recordings list
+      loadRecordings();
+    } else if (status === "started" || status === "status_started") {
+      toast.success(`Recording started for "${event.internalName}"`);
+      loadRecordings();
+    } else if (status === "status_failed" || status === "failed" || status === "error") {
+      toast.error(`Recording failed: ${event.error || "Unknown error"}`);
+    }
+  }
+
+  function getStatusColor(status: string | null | undefined): string {
     switch (status?.toLowerCase()) {
       case "completed":
-        return "text-tokyo-night-green";
+        return "text-success";
       case "recording":
-        return "text-tokyo-night-yellow";
+        return "text-warning";
       case "processing":
-        return "text-tokyo-night-blue";
+        return "text-primary";
       case "failed":
-        return "text-tokyo-night-red";
+        return "text-destructive";
       case "paused":
-        return "text-tokyo-night-comment";
+        return "text-muted-foreground";
       default:
-        return "text-tokyo-night-fg-dark";
+        return "text-muted-foreground";
     }
   }
 
-  function getStatusIcon(status) {
+  function getStatusIcon(status: string | null | undefined): string {
     switch (status?.toLowerCase()) {
       case "completed":
         return "✓";
@@ -137,369 +236,446 @@
     if (currentPage > 1) currentPage--;
   }
 
-  function goToPage(page) {
+  function goToPage(page: number): void {
     if (page >= 1 && page <= totalPages) {
       currentPage = page;
+    }
+  }
+
+  async function loadMoreRecordings() {
+    if (!hasMoreOnServer || loadingMore) return;
+
+    loadingMore = true;
+    try {
+      await dvrRequestsStore.loadNextPage();
+    } catch (err) {
+      console.error("Failed to load more recordings:", err);
+    } finally {
+      loadingMore = false;
     }
   }
 
   onMount(() => {
     loadRecordings();
   });
+
+  onDestroy(() => {
+    // Clean up DVR subscription
+    dvrLifecycleSub.unlisten();
+  });
+
+  // Icons
+  const FilmIcon = getIconComponent("Film");
+  const ScissorsIcon = getIconComponent("Scissors");
+  const CheckCircleIcon = getIconComponent("CheckCircle");
+  const CircleDotIcon = getIconComponent("CircleDot");
+  const XCircleIcon = getIconComponent("XCircle");
+  const SearchIcon = getIconComponent("Search");
+  const FilterIcon = getIconComponent("Filter");
 </script>
 
 <svelte:head>
   <title>Recordings - FrameWorks</title>
 </svelte:head>
 
-<div class="min-h-screen bg-tokyo-night-bg text-tokyo-night-fg">
-  <div class="container mx-auto px-6 py-8">
-    <!-- Header -->
-    <div class="mb-8">
-      <h1 class="text-3xl font-bold text-tokyo-night-fg mb-2">Recordings</h1>
-      <p class="text-tokyo-night-fg-dark">
-        Manage and monitor all stream recordings
-      </p>
+<div class="h-full flex flex-col">
+  <!-- Fixed Page Header -->
+  <div class="px-4 sm:px-6 lg:px-8 py-4 border-b border-border shrink-0">
+    <div class="flex items-center gap-3">
+      <FilmIcon class="w-5 h-5 text-primary" />
+      <div>
+        <h1 class="text-xl font-bold text-foreground">Recordings</h1>
+        <p class="text-sm text-muted-foreground">
+          Manage and monitor all stream recordings
+        </p>
+      </div>
     </div>
+  </div>
 
-    <!-- Controls -->
-    <div
-      class="bg-tokyo-night-bg-light rounded-lg p-6 mb-6 border border-tokyo-night-fg-gutter"
-    >
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <!-- Search -->
+  <!-- Scrollable Content -->
+  <div class="flex-1 overflow-y-auto">
+  {#if loading}
+    <div class="px-4 sm:px-6 lg:px-8 py-6">
+      <div class="flex items-center justify-center min-h-64">
+        <div class="loading-spinner w-8 h-8"></div>
+      </div>
+    </div>
+  {:else}
+    <div class="page-transition">
+
+      <!-- Stats Bar -->
+      <GridSeam cols={4} stack="2x2" surface="panel" flush={true} class="mb-0">
         <div>
-          <label
-            for="search"
-            class="block text-sm font-medium text-tokyo-night-fg-dark mb-2"
-          >
-            Search Recordings
-          </label>
-          <Input
-            id="search"
-            type="text"
-            bind:value={searchQuery}
-            placeholder="Search by stream name, hash, or path..."
-            class="w-full"
+          <DashboardMetricCard
+            icon={FilmIcon}
+            iconColor="text-primary"
+            value={totalRecordings}
+            valueColor="text-primary"
+            label="Total Results"
           />
         </div>
-
-        <!-- Status Filter -->
         <div>
-          <label
-            for="status-filter"
-            class="block text-sm font-medium text-tokyo-night-fg-dark mb-2"
-          >
-            Status
-          </label>
-          <Select bind:value={statusFilter}>
-            <SelectTrigger id="status-filter" class="w-full">
-              {statusFilterLabels[statusFilter] ?? "All Statuses"}
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Statuses</SelectItem>
-              <SelectItem value="recording">Recording</SelectItem>
-              <SelectItem value="completed">Completed</SelectItem>
-              <SelectItem value="processing">Processing</SelectItem>
-              <SelectItem value="failed">Failed</SelectItem>
-              <SelectItem value="paused">Paused</SelectItem>
-            </SelectContent>
-          </Select>
+          <DashboardMetricCard
+            icon={CheckCircleIcon}
+            iconColor="text-success"
+            value={completedCount}
+            valueColor="text-success"
+            label="Completed"
+          />
         </div>
-      </div>
+        <div>
+          <DashboardMetricCard
+            icon={CircleDotIcon}
+            iconColor="text-warning"
+            value={recordingCount}
+            valueColor="text-warning"
+            label="Recording"
+          />
+        </div>
+        <div>
+          <DashboardMetricCard
+            icon={XCircleIcon}
+            iconColor="text-destructive"
+            value={failedCount}
+            valueColor="text-destructive"
+            label="Failed"
+          />
+        </div>
+      </GridSeam>
 
-      <!-- Stats -->
-      <div class="mt-6 pt-6 border-t border-tokyo-night-fg-gutter">
-        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-center">
-          <div>
-            <div class="text-2xl font-bold text-tokyo-night-fg">
-              {totalRecordings}
+      <!-- Main Content -->
+      <div class="dashboard-grid">
+        <!-- Filters Slab -->
+        <div class="slab col-span-full">
+          <div class="slab-header">
+            <div class="flex items-center gap-2">
+              <FilterIcon class="w-4 h-4 text-info" />
+              <h3>Filters</h3>
             </div>
-            <div class="text-sm text-tokyo-night-fg-dark">Total Results</div>
           </div>
-          <div>
-            <div class="text-2xl font-bold text-tokyo-night-green">
-              {filteredRecordings.filter((r) => r.status === "completed")
-                .length}
+          <div class="slab-body--padded">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <!-- Search -->
+              <div>
+                <label
+                  for="search"
+                  class="block text-sm font-medium text-muted-foreground mb-2"
+                >
+                  Search Recordings
+                </label>
+                <div class="relative">
+                  <SearchIcon class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                  <Input
+                    id="search"
+                    type="text"
+                    bind:value={searchQuery}
+                    placeholder="Search by stream name, hash, or path..."
+                    class="w-full pl-10"
+                  />
+                </div>
+              </div>
+
+              <!-- Status Filter -->
+              <div>
+                <label
+                  for="status-filter"
+                  class="block text-sm font-medium text-muted-foreground mb-2"
+                >
+                  Status
+                </label>
+                <Select bind:value={statusFilter} type="single">
+                  <SelectTrigger id="status-filter" class="w-full">
+                    {statusFilterLabels[statusFilter] ?? "All Statuses"}
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Statuses</SelectItem>
+                    <SelectItem value="recording">Recording</SelectItem>
+                    <SelectItem value="completed">Completed</SelectItem>
+                    <SelectItem value="processing">Processing</SelectItem>
+                    <SelectItem value="failed">Failed</SelectItem>
+                    <SelectItem value="paused">Paused</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
-            <div class="text-sm text-tokyo-night-fg-dark">Completed</div>
           </div>
-          <div>
-            <div class="text-2xl font-bold text-tokyo-night-yellow">
-              {filteredRecordings.filter((r) => r.status === "recording")
-                .length}
+        </div>
+
+        <!-- Recordings Table Slab -->
+        <div class="slab col-span-full">
+          <div class="slab-header">
+            <div class="flex items-center gap-2">
+              <FilmIcon class="w-4 h-4 text-info" />
+              <h3>All Recordings</h3>
             </div>
-            <div class="text-sm text-tokyo-night-fg-dark">Recording</div>
           </div>
-          <div>
-            <div class="text-2xl font-bold text-tokyo-night-red">
-              {filteredRecordings.filter((r) => r.status === "failed").length}
-            </div>
-            <div class="text-sm text-tokyo-night-fg-dark">Failed</div>
+          <div class="slab-body--flush">
+            {#if error}
+              <div class="p-6">
+                <div
+                  class="bg-destructive/10 border border-destructive/30 p-6 text-center"
+                >
+                  <div class="text-destructive mb-2">Error</div>
+                  <div class="text-foreground">{error}</div>
+                  <Button onclick={loadRecordings} class="mt-4">Retry</Button>
+                </div>
+              </div>
+            {:else if paginatedRecordings.length === 0}
+              <div class="p-12 text-center">
+                <FilmIcon class="w-6 h-6 text-muted-foreground mx-auto mb-4" />
+                <div class="text-muted-foreground mb-4">No recordings found</div>
+                {#if searchQuery || statusFilter !== "all"}
+                  <div class="text-muted-foreground text-sm mb-4">
+                    Try adjusting your filters
+                  </div>
+                  <Button
+                    variant="outline"
+                    onclick={() => {
+                      searchQuery = "";
+                      statusFilter = "all";
+                    }}
+                  >
+                    Clear Filters
+                  </Button>
+                {/if}
+              </div>
+            {:else}
+              <div class="overflow-x-auto">
+                <Table class="w-full">
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead
+                        class="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider"
+                      >
+                        Recording
+                      </TableHead>
+                      <TableHead
+                        class="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider"
+                      >
+                        Stream
+                      </TableHead>
+                      <TableHead
+                        class="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider"
+                      >
+                        Status
+                      </TableHead>
+                      <TableHead
+                        class="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider"
+                      >
+                        Duration
+                      </TableHead>
+                      <TableHead
+                        class="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider"
+                      >
+                        Size
+                      </TableHead>
+                      <TableHead
+                        class="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider"
+                      >
+                        Created
+                      </TableHead>
+                      <TableHead
+                        class="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider"
+                      >
+                        Actions
+                      </TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody class="divide-y divide-border">
+                    {#each paginatedRecordings as recording (recording.dvrHash)}
+                      <TableRow
+                        class="hover:bg-muted/50 transition-colors"
+                      >
+                        <TableCell class="px-6 py-4">
+                          <div class="flex flex-col">
+                            <div
+                              class="text-sm font-medium text-foreground truncate max-w-xs"
+                              title={recording.manifestPath}
+                            >
+                              {recording.manifestPath || recording.dvrHash}
+                            </div>
+                            <div class="text-xs text-muted-foreground font-mono">
+                              {recording.dvrHash}
+                            </div>
+                          </div>
+                        </TableCell>
+                        <TableCell class="px-6 py-4">
+                          <div class="flex flex-col">
+                            <div class="text-sm text-foreground">
+                              {recording.internalName || "Unknown"}
+                            </div>
+                            <div class="text-xs text-muted-foreground">
+                              {recording.storageNodeId || "N/A"}
+                            </div>
+                          </div>
+                        </TableCell>
+                        <TableCell class="px-6 py-4">
+                          <span
+                            class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-muted {getStatusColor(
+                              recording.status,
+                            )}"
+                          >
+                            <span class="mr-1">{getStatusIcon(recording.status)}</span
+                            >
+                            {recording.status || "Unknown"}
+                          </span>
+                        </TableCell>
+                        <TableCell class="px-6 py-4 text-sm text-foreground">
+                          {recording.durationSeconds
+                            ? formatDuration(recording.durationSeconds * 1000)
+                            : "N/A"}
+                        </TableCell>
+                        <TableCell class="px-6 py-4 text-sm text-foreground">
+                          {recording.sizeBytes
+                            ? formatBytes(recording.sizeBytes)
+                            : "N/A"}
+                        </TableCell>
+                        <TableCell class="px-6 py-4 text-sm text-foreground">
+                          {recording.createdAt
+                            ? formatDate(recording.createdAt)
+                            : "N/A"}
+                        </TableCell>
+                        <TableCell class="px-6 py-4">
+                          <div class="flex space-x-2">
+                            {#if recording.status === "completed" && recording.manifestPath}
+                              {@const manifestUrl = recording.manifestPath}
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                class="h-8 px-2 text-info hover:text-primary"
+                                title="View recording manifest"
+                                onclick={() => {
+                                  if (typeof window !== "undefined" && manifestUrl) {
+                                    window.open(
+                                      manifestUrl,
+                                      "_blank",
+                                      "noreferrer",
+                                    );
+                                  }
+                                }}
+                              >
+                                View
+                              </Button>
+                            {/if}
+                            {#if recording.status === "recording"}
+                              <span class="h-8 px-2 flex items-center text-xs text-warning">
+                                Recording...
+                              </span>
+                            {/if}
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    {/each}
+                  </TableBody>
+                </Table>
+              </div>
+
+              <!-- Pagination -->
+              {#if totalPages > 1}
+                <div
+                  class="bg-muted/30 px-6 py-3 flex items-center justify-between border-t border-border/30"
+                >
+                  <div class="flex-1 flex justify-between sm:hidden">
+                    <button
+                      onclick={prevPage}
+                      disabled={currentPage === 1}
+                      class="relative inline-flex items-center px-4 py-2 border border-border text-sm font-medium rounded-md text-foreground bg-card hover:bg-background disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Previous
+                    </button>
+                    <button
+                      onclick={nextPage}
+                      disabled={currentPage === totalPages}
+                      class="ml-3 relative inline-flex items-center px-4 py-2 border border-border text-sm font-medium rounded-md text-foreground bg-card hover:bg-background disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Next
+                    </button>
+                  </div>
+                  <div
+                    class="hidden sm:flex-1 sm:flex sm:items-center sm:justify-between"
+                  >
+                    <div>
+                      <p class="text-sm text-muted-foreground">
+                        Showing
+                        <span class="font-medium"
+                          >{(currentPage - 1) * pageSize + 1}</span
+                        >
+                        to
+                        <span class="font-medium"
+                          >{Math.min(currentPage * pageSize, totalRecordings)}</span
+                        >
+                        of
+                        <span class="font-medium">{totalRecordings}</span>
+                        results
+                      </p>
+                    </div>
+                    <div>
+                      <nav
+                        class="relative z-0 inline-flex rounded-md shadow-sm -space-x-px"
+                      >
+                        <button
+                          onclick={prevPage}
+                          disabled={currentPage === 1}
+                          class="relative inline-flex items-center px-2 py-2 border border-border bg-card text-sm font-medium text-foreground hover:bg-background disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          ←
+                        </button>
+                        {#each Array.from( { length: Math.min(7, totalPages) }, (_, i) => {
+                            if (totalPages <= 7) return i + 1;
+                            if (currentPage <= 4) return i + 1;
+                            if (currentPage >= totalPages - 3) return totalPages - 6 + i;
+                            return currentPage - 3 + i;
+                          }, ) as page (page)}
+                          <button
+                            onclick={() => goToPage(page)}
+                            class="relative inline-flex items-center px-4 py-2 border border-border text-sm font-medium {currentPage ===
+                            page
+                              ? 'bg-primary text-background border-primary'
+                              : 'bg-card text-foreground hover:bg-background'}"
+                          >
+                            {page}
+                          </button>
+                        {/each}
+                        <button
+                          onclick={nextPage}
+                          disabled={currentPage === totalPages}
+                          class="relative inline-flex items-center px-2 py-2 border border-border bg-card text-sm font-medium text-foreground hover:bg-background disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          →
+                        </button>
+                      </nav>
+                    </div>
+                  </div>
+                </div>
+              {/if}
+
+              <!-- Server-side Load More -->
+              {#if hasMoreOnServer}
+                <div class="flex justify-center py-4 border-t border-border/30">
+                  <Button
+                    variant="outline"
+                    onclick={loadMoreRecordings}
+                    disabled={loadingMore}
+                  >
+                    {#if loadingMore}
+                      Loading...
+                    {:else}
+                      Load More Recordings from Server
+                    {/if}
+                  </Button>
+                </div>
+              {/if}
+            {/if}
+          </div>
+          <div class="slab-actions">
+            <Button href={resolve("/clips")} variant="ghost" class="gap-2">
+              <ScissorsIcon class="w-4 h-4" />
+              View Clips
+            </Button>
           </div>
         </div>
       </div>
     </div>
-
-    {#if loading}
-      <div class="flex justify-center items-center py-12">
-        <div
-          class="animate-spin rounded-full h-8 w-8 border-b-2 border-tokyo-night-blue"
-        ></div>
-        <span class="ml-3 text-tokyo-night-fg-dark">Loading recordings...</span>
-      </div>
-    {:else if error}
-      <div
-        class="bg-tokyo-night-red/10 border border-tokyo-night-red/30 rounded-lg p-6 text-center"
-      >
-        <div class="text-tokyo-night-red mb-2">Error</div>
-        <div class="text-tokyo-night-fg">{error}</div>
-        <Button onclick={loadRecordings} class="mt-4">Retry</Button>
-      </div>
-    {:else if paginatedRecordings.length === 0}
-      <div
-        class="bg-tokyo-night-bg-light rounded-lg p-12 text-center border border-tokyo-night-fg-gutter"
-      >
-        <div class="text-tokyo-night-fg-dark mb-4">No recordings found</div>
-        {#if searchQuery || statusFilter !== "all"}
-          <div class="text-tokyo-night-comment text-sm mb-4">
-            Try adjusting your filters
-          </div>
-          <Button
-            variant="outline"
-            onclick={() => {
-              searchQuery = "";
-              statusFilter = "all";
-            }}
-          >
-            Clear Filters
-          </Button>
-        {/if}
-      </div>
-    {:else}
-      <!-- Recordings Table -->
-      <div
-        class="bg-tokyo-night-bg-light rounded-lg border border-tokyo-night-fg-gutter overflow-hidden"
-      >
-        <div class="overflow-x-auto">
-          <Table class="w-full">
-            <TableHeader>
-              <TableRow>
-                <TableHead
-                  class="px-6 py-3 text-left text-xs font-medium text-tokyo-night-fg-dark uppercase tracking-wider"
-                >
-                  Recording
-                </TableHead>
-                <TableHead
-                  class="px-6 py-3 text-left text-xs font-medium text-tokyo-night-fg-dark uppercase tracking-wider"
-                >
-                  Stream
-                </TableHead>
-                <TableHead
-                  class="px-6 py-3 text-left text-xs font-medium text-tokyo-night-fg-dark uppercase tracking-wider"
-                >
-                  Status
-                </TableHead>
-                <TableHead
-                  class="px-6 py-3 text-left text-xs font-medium text-tokyo-night-fg-dark uppercase tracking-wider"
-                >
-                  Duration
-                </TableHead>
-                <TableHead
-                  class="px-6 py-3 text-left text-xs font-medium text-tokyo-night-fg-dark uppercase tracking-wider"
-                >
-                  Size
-                </TableHead>
-                <TableHead
-                  class="px-6 py-3 text-left text-xs font-medium text-tokyo-night-fg-dark uppercase tracking-wider"
-                >
-                  Created
-                </TableHead>
-                <TableHead
-                  class="px-6 py-3 text-left text-xs font-medium text-tokyo-night-fg-dark uppercase tracking-wider"
-                >
-                  Actions
-                </TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody class="divide-y divide-tokyo-night-fg-gutter">
-              {#each paginatedRecordings as recording (recording.dvrHash ?? recording.id)}
-                <TableRow
-                  class="hover:bg-tokyo-night-bg-dark/50 transition-colors"
-                >
-                  <TableCell class="px-6 py-4">
-                    <div class="flex flex-col">
-                      <div
-                        class="text-sm font-medium text-tokyo-night-fg truncate max-w-xs"
-                        title={recording.manifestPath}
-                      >
-                        {recording.manifestPath || recording.dvrHash}
-                      </div>
-                      <div class="text-xs text-tokyo-night-comment font-mono">
-                        {recording.dvrHash}
-                      </div>
-                    </div>
-                  </TableCell>
-                  <TableCell class="px-6 py-4">
-                    <div class="flex flex-col">
-                      <div class="text-sm text-tokyo-night-fg">
-                        {recording.internalName || "Unknown"}
-                      </div>
-                      <div class="text-xs text-tokyo-night-comment">
-                        {recording.storageNodeId || "N/A"}
-                      </div>
-                    </div>
-                  </TableCell>
-                  <TableCell class="px-6 py-4">
-                    <span
-                      class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-tokyo-night-bg-dark {getStatusColor(
-                        recording.status,
-                      )}"
-                    >
-                      <span class="mr-1">{getStatusIcon(recording.status)}</span
-                      >
-                      {recording.status || "Unknown"}
-                    </span>
-                  </TableCell>
-                  <TableCell class="px-6 py-4 text-sm text-tokyo-night-fg">
-                    {recording.durationSeconds
-                      ? formatDuration(recording.durationSeconds * 1000)
-                      : "N/A"}
-                  </TableCell>
-                  <TableCell class="px-6 py-4 text-sm text-tokyo-night-fg">
-                    {recording.sizeBytes
-                      ? formatBytes(recording.sizeBytes)
-                      : "N/A"}
-                  </TableCell>
-                  <TableCell class="px-6 py-4 text-sm text-tokyo-night-fg">
-                    {recording.createdAt
-                      ? formatDate(recording.createdAt)
-                      : "N/A"}
-                  </TableCell>
-                  <TableCell class="px-6 py-4">
-                    <div class="flex space-x-2">
-                      {#if recording.status === "completed" && recording.manifestPath}
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          class="h-8 px-2 text-tokyo-night-cyan hover:text-tokyo-night-blue"
-                          title="View recording manifest"
-                          onclick={() => {
-                            if (typeof window !== "undefined") {
-                              window.open(
-                                recording.manifestPath,
-                                "_blank",
-                                "noreferrer",
-                              );
-                            }
-                          }}
-                        >
-                          View
-                        </Button>
-                      {/if}
-                      {#if recording.status === "recording"}
-                        <Button
-                          variant="ghost"
-                          class="h-8 px-2 text-tokyo-night-yellow hover:text-tokyo-night-orange"
-                          title="Stop recording"
-                        >
-                          Stop
-                        </Button>
-                      {/if}
-                      <Button
-                        variant="ghost"
-                        class="h-8 px-2 text-tokyo-night-fg-dark hover:text-tokyo-night-fg"
-                        title="View details"
-                      >
-                        Details
-                      </Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              {/each}
-            </TableBody>
-          </Table>
-        </div>
-
-        <!-- Pagination -->
-        {#if totalPages > 1}
-          <div
-            class="bg-tokyo-night-bg-dark px-6 py-3 flex items-center justify-between border-t border-tokyo-night-fg-gutter"
-          >
-            <div class="flex-1 flex justify-between sm:hidden">
-              <button
-                onclick={prevPage}
-                disabled={currentPage === 1}
-                class="relative inline-flex items-center px-4 py-2 border border-tokyo-night-fg-gutter text-sm font-medium rounded-md text-tokyo-night-fg bg-tokyo-night-bg-light hover:bg-tokyo-night-bg disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                Previous
-              </button>
-              <button
-                onclick={nextPage}
-                disabled={currentPage === totalPages}
-                class="ml-3 relative inline-flex items-center px-4 py-2 border border-tokyo-night-fg-gutter text-sm font-medium rounded-md text-tokyo-night-fg bg-tokyo-night-bg-light hover:bg-tokyo-night-bg disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                Next
-              </button>
-            </div>
-            <div
-              class="hidden sm:flex-1 sm:flex sm:items-center sm:justify-between"
-            >
-              <div>
-                <p class="text-sm text-tokyo-night-fg-dark">
-                  Showing
-                  <span class="font-medium"
-                    >{(currentPage - 1) * pageSize + 1}</span
-                  >
-                  to
-                  <span class="font-medium"
-                    >{Math.min(currentPage * pageSize, totalRecordings)}</span
-                  >
-                  of
-                  <span class="font-medium">{totalRecordings}</span>
-                  results
-                </p>
-              </div>
-              <div>
-                <nav
-                  class="relative z-0 inline-flex rounded-md shadow-sm -space-x-px"
-                >
-                  <button
-                    onclick={prevPage}
-                    disabled={currentPage === 1}
-                    class="relative inline-flex items-center px-2 py-2 rounded-l-md border border-tokyo-night-fg-gutter bg-tokyo-night-bg-light text-sm font-medium text-tokyo-night-fg hover:bg-tokyo-night-bg disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    ←
-                  </button>
-                  {#each Array.from( { length: Math.min(7, totalPages) }, (_, i) => {
-                      if (totalPages <= 7) return i + 1;
-                      if (currentPage <= 4) return i + 1;
-                      if (currentPage >= totalPages - 3) return totalPages - 6 + i;
-                      return currentPage - 3 + i;
-                    }, ) as page (page)}
-                    <button
-                      onclick={() => goToPage(page)}
-                      class="relative inline-flex items-center px-4 py-2 border border-tokyo-night-fg-gutter text-sm font-medium {currentPage ===
-                      page
-                        ? 'bg-tokyo-night-blue text-tokyo-night-bg border-tokyo-night-blue'
-                        : 'bg-tokyo-night-bg-light text-tokyo-night-fg hover:bg-tokyo-night-bg'}"
-                    >
-                      {page}
-                    </button>
-                  {/each}
-                  <button
-                    onclick={nextPage}
-                    disabled={currentPage === totalPages}
-                    class="relative inline-flex items-center px-2 py-2 rounded-r-md border border-tokyo-night-fg-gutter bg-tokyo-night-bg-light text-sm font-medium text-tokyo-night-fg hover:bg-tokyo-night-bg disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    →
-                  </button>
-                </nav>
-              </div>
-            </div>
-          </div>
-        {/if}
-      </div>
-    {/if}
+  {/if}
   </div>
 </div>

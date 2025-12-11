@@ -1,6 +1,6 @@
 # FrameWorks Infrastructure (Dev Configs)
 
-Dev-only configuration used by the root `docker-compose.yml`. These files help you run the full stack locally. Production deployment uses the CLI’s templates and docs under `docs/provisioning/`.
+Dev-only configuration used by the root `docker-compose.yml`. These files help you run the full stack locally. Production deployment uses the CLI's edge templates.
 
 ## What’s Here (used by dev compose)
 - `nginx/default.conf` — Dev reverse proxy for app, GraphQL, websocket and media endpoints
@@ -16,8 +16,11 @@ Dev-only configuration used by the root `docker-compose.yml`. These files help y
 
 ## Production
 - Production stacks, environment files, and system configs are generated and deployed via the FrameWorks CLI
-- See `docs/provisioning/` for requirements and deployment guides
+- **DNS & Certificates**: Public DNS management (by Navigator, `api_dns`) and automated certificate issuance (ACME) are now handled by a dedicated service. This paves the way for our upcoming self-hosted Anycast DNS.
+- **Networking**: Internal WireGuard mesh orchestration and local DNS are managed by Privateer (`api_mesh`), ensuring secure, automated service-to-service communication.
+- See `cli/README.md` and `website_docs/` for deployment guides
 
 ## Related
 - Root `README.md` — services and ports overview
-- `docs/provisioning/` — deployment methods, SSL, WireGuard, DNS
+- `cli/README.md` — edge deployment commands
+- `website_docs/` — deployment guides, DNS, WireGuard

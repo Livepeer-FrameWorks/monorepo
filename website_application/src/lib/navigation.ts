@@ -23,21 +23,13 @@ export interface Breadcrumb {
 }
 
 // Navigation configuration for FrameWorks webapp
-// Features marked as 'active' are implemented, 'soon' shows coming soon, 'disabled' is hidden
-//
-// FUTURE TIER SYSTEM:
-// When features are implemented, we'll add tier restrictions:
-// - tier: 'Free' - Available to all users
-// - tier: 'Pro' - Requires Pro subscription
-// - tier: 'Enterprise' - Enterprise features only
-// - badge: 'New', 'Popular', 'Beta' - Special feature highlights
 
 export const navigationConfig: Record<string, NavigationItem> = {
   // Main Dashboard - Always visible when authenticated
   dashboard: {
     name: "Dashboard",
     href: "/",
-    icon: "BarChart3",
+    icon: "LayoutDashboard",
     active: true,
     description: "Overview of your streams and analytics",
   },
@@ -50,9 +42,9 @@ export const navigationConfig: Record<string, NavigationItem> = {
       overview: {
         name: "Stream Overview",
         href: "/streams",
-        icon: "Monitor",
+        icon: "Radio",
         active: true,
-        description: "Manage your live streams",
+        description: "Quickly browse and manage your live streams",
       },
       browser: {
         name: "Browser Streaming",
@@ -66,14 +58,16 @@ export const navigationConfig: Record<string, NavigationItem> = {
         href: "/streams/settings",
         icon: "Settings",
         active: "soon",
-        description: "Configure transcoding, recording, and stream options",
+        description:
+          "Configure transcoding, recording, and other stream options",
       },
       composer: {
         name: "Stream Composer",
         href: "/streams/composer",
         icon: "Clapperboard",
         active: "soon",
-        description: "Multi-stream compositing with PiP and overlays",
+        description:
+          "Compose multiple input streams with picture-in-picture layouts",
       },
     },
   },
@@ -95,7 +89,7 @@ export const navigationConfig: Record<string, NavigationItem> = {
         href: "/recordings",
         icon: "Film",
         active: true,
-        description: "Access your stream recordings",
+        description: "Access stream DVR and manage your media library",
       },
     },
   },
@@ -103,21 +97,14 @@ export const navigationConfig: Record<string, NavigationItem> = {
   // Analytics & Insights
   analytics: {
     name: "Analytics",
-    icon: "TrendingUp",
+    icon: "BarChart3",
     children: {
       overview: {
         name: "Analytics Overview",
         href: "/analytics",
-        icon: "BarChart3",
+        icon: "ChartLine",
         active: true,
-        description: "View comprehensive streaming analytics",
-      },
-      realtime: {
-        name: "Real-time Stats",
-        href: "/analytics/realtime",
-        icon: "Zap",
-        active: true,
-        description: "Live viewer and performance metrics",
+        description: "View comprehensive streaming analytics with real-time metrics",
       },
       geographic: {
         name: "Geographic Analytics",
@@ -127,11 +114,11 @@ export const navigationConfig: Record<string, NavigationItem> = {
         description: "View viewer distribution and regional metrics",
       },
       usage: {
-        name: "Usage Analytics",
+        name: "Usage & Costs",
         href: "/analytics/usage",
-        icon: "Activity",
+        icon: "Gauge",
         active: true,
-        description: "Track resource usage and performance metrics",
+        description: "Track resource usage, storage, and costs",
       },
     },
   },
@@ -141,12 +128,19 @@ export const navigationConfig: Record<string, NavigationItem> = {
     name: "Infrastructure",
     icon: "Building2",
     children: {
-      nodes: {
-        name: "Node Management",
-        href: "/nodes",
+      overview: {
+        name: "Infrastructure Overview",
+        href: "/infrastructure",
         icon: "Server",
         active: true,
-        description: "Manage your Edge nodes worldwide",
+        description: "Monitor clusters, nodes, and system health in real-time",
+      },
+      network: {
+        name: "Network Explorer",
+        href: "/infrastructure/network",
+        icon: "Network",
+        active: true,
+        description: "Discover and connect to global video infrastructure",
       },
       devices: {
         name: "Device Discovery",
@@ -154,13 +148,6 @@ export const navigationConfig: Record<string, NavigationItem> = {
         icon: "Camera",
         active: "soon",
         description: "Auto-discover and configure AV devices",
-      },
-      network: {
-        name: "Network Status",
-        href: "/infrastructure/network",
-        icon: "Wifi",
-        active: "soon",
-        description: "Monitor network health and performance",
       },
     },
   },
@@ -192,12 +179,12 @@ export const navigationConfig: Record<string, NavigationItem> = {
     name: "Account",
     icon: "User",
     children: {
-      profile: {
-        name: "Profile Settings",
-        href: "/account/profile",
+      settings: {
+        name: "Settings",
+        href: "/settings",
         icon: "Settings",
-        active: "soon",
-        description: "Manage your account profile and preferences",
+        active: true,
+        description: "Manage profile and notifications",
       },
       billing: {
         name: "Billing & Plans",
@@ -205,13 +192,6 @@ export const navigationConfig: Record<string, NavigationItem> = {
         icon: "CreditCard",
         active: true,
         description: "Manage billing, subscriptions, and payment methods",
-      },
-      notifications: {
-        name: "Notifications",
-        href: "/account/notifications",
-        icon: "Bell",
-        active: "soon",
-        description: "Configure alerts and notification preferences",
       },
     },
   },
@@ -251,25 +231,25 @@ export const navigationConfig: Record<string, NavigationItem> = {
     icon: "Code2",
     children: {
       api: {
-        name: "API & Keys",
+        name: "API Tokens",
         href: "/developer/api",
-        icon: "BookOpen",
+        icon: "Key",
         active: true,
-        description: "API reference and manage API keys",
+        description: "Manage API keys for programmatic access",
       },
       webhooks: {
         name: "Webhooks",
         href: "/developer/webhooks",
         icon: "Link",
         active: "soon",
-        description: "Configure event notifications and integrations",
+        description: "Configure event notifications and external integrations",
       },
       sdk: {
         name: "SDKs & Libraries",
         href: "/developer/sdk",
         icon: "Package",
         active: "soon",
-        description: "Download SDKs and integration libraries",
+        description: "Ready-to-use SDKs and libraries for your projects",
       },
     },
   },
@@ -279,13 +259,6 @@ export const navigationConfig: Record<string, NavigationItem> = {
     name: "Support",
     icon: "MessageCircle",
     children: {
-      help: {
-        name: "Help Center",
-        href: "/support/help",
-        icon: "HelpCircle",
-        active: "soon",
-        description: "Browse documentation and tutorials",
-      },
       tickets: {
         name: "Support Tickets",
         href: "/support/tickets",

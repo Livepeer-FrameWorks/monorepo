@@ -1,0 +1,195 @@
+---
+title: "Deployment Overview"
+description: "Comprehensive guide to deploying FrameWorks on bare metal, including architecture, CLI usage, and operations."
+sidebar:
+  order: 5
+---
+
+import { Card, CardGrid, LinkCard, Aside } from '@astrojs/starlight/components';
+
+<Aside type="caution" title="Experimental Feature">
+Self-hosting and the FrameWorks CLI are currently in **active testing**. APIs and configuration formats may change. Proceed with caution for production environments.
+</Aside>
+
+Deploying FrameWorks gives you full ownership of your video infrastructure. While currently in active development, our CLI-driven approach aims to make self-hosting as simple as running a few commands.
+
+## Quick Start
+
+**Production Deployment (Recommended):**
+```bash
+# 1. Install CLI
+cd cli/ && go build -o frameworks && sudo mv frameworks /usr/local/bin/
+
+# 2. Review prerequisites
+# See: prerequisites.md
+
+# 3. Create cluster manifest
+# See: ../cli/cluster-manifest.md
+
+# 4. Deploy infrastructure
+frameworks cluster provision --manifest cluster.yaml --components infrastructure
+
+# 5. Initialize databases
+frameworks cluster init --manifest cluster.yaml
+
+# 6. Deploy applications
+frameworks cluster provision --manifest cluster.yaml --components applications
+
+# 7. Verify health
+frameworks cluster doctor --manifest cluster.yaml
+```
+
+**Local Development:**
+```bash
+# Quick local stack with Docker Compose
+cd monorepo
+cp config/env/secrets.env.example config/env/secrets.env  # First time only
+make env                  # Generate .env from layered config
+docker-compose up -d
+```
+
+See root `README.md` for local endpoints and ports.
+
+## Deployment Paths
+
+### 1. CLI Deployment (Recommended)
+
+The FrameWorks CLI automates the complex orchestration of multi-tier infrastructure, handling everything from SSH keys to database migrations.
+
+**Features:**
+- Multi-host SSH deployment
+- Docker and native (systemd) support
+- GitOps version management
+- Automated health validation
+- Backup/restore operations
+- Comprehensive diagnostics
+
+<CardGrid>
+  <LinkCard title="CLI Reference" href="/operators/cli-reference" description="Complete CLI command documentation." />
+  <LinkCard title="Cluster Manifest" href="/operators/cluster-manifest" description="Configure your deployment." />
+  <LinkCard title="Prerequisites" href="/operators/prerequisites" description="System requirements and setup." />
+  <LinkCard title="External Services" href="/operators/external-services" description="Third-party integrations." />
+</CardGrid>
+
+### 2. Advanced/Manual Deployment
+
+For deep understanding or custom scenarios:
+- [Bare Metal Reference](/operators/bare-metal)
+- [WireGuard Mesh Setup](/operators/wireguard)
+
+## Architecture
+
+For detailed architecture documentation including service tables, ports, deployment tiers, and data flow diagrams, see [Architecture Overview](/operators/architecture).
+
+**Quick Reference - Deployment Tiers:**
+- **Central Tier**: Commodore, Quartermaster, Purser, Navigator, Periscope + PostgreSQL, ClickHouse
+- **Regional Tier**: Bridge, Foghorn, Decklog, Signalman + Kafka
+- **Edge Tier**: MistServer, Helmsman, Livepeer Gateway
+
+**External Dependencies:**
+- [Cloudflare](/operators/external-services#cloudflare) - DNS management, geographic load balancing (self-hosted anycast DNS planned)
+- [SSL/TLS](/operators/external-services#ssl-certificates) - Let's Encrypt (Navigator for central via DNS-01, Caddy for edge via HTTP-01)
+- [SMTP](/operators/external-services#email) - Email notifications
+- [Stripe](/operators/external-services#stripe) - Payment processing (optional)
+
+## Security
+
+### Network Security
+- All inter-node communication over WireGuard VPN
+- TLS termination varies by tier:
+  - Development: Nginx reverse proxy (optional TLS)
+  - Edge nodes: Caddy (automatic HTTPS via HTTP-01)
+  - Central/Regional: Navigator-issued certificates (DNS-01) or internal mesh
+- Internal services communicate over encrypted mesh
+- Firewall rules restrict access to required ports
+
+### Data Security
+- Database connections use TLS
+- Kafka inter-broker encryption enabled
+- Service-to-service authentication with JWT tokens
+- Secrets managed via environment variables or Vault
+
+### Access Control
+- Multi-tenant isolation at application layer
+- Role-based access control (RBAC)
+- API rate limiting and DDoS protection
+- SSH key-based authentication for deployments
+
+## Monitoring & Observability
+
+### Metrics Collection
+- **Prometheus (dev) / vmagent (prod)** - Scrape exporters and remote_write to VictoriaMetrics
+- **Grafana** - Dashboards with VictoriaMetrics, ClickHouse, PostgreSQL datasources
+- **Custom Metrics** - Business KPIs and streaming analytics
+
+### Health Checks
+Use CLI commands for health monitoring:
+
+```bash
+# Comprehensive health check
+frameworks cluster doctor --manifest cluster.yaml
+
+# Detect service state
+frameworks cluster detect --manifest cluster.yaml
+
+# Validate specific service
+frameworks cluster validate postgres --manifest cluster.yaml
+
+# Diagnose network connectivity
+frameworks cluster diagnose network --manifest cluster.yaml
+
+# Check resource usage
+frameworks cluster diagnose resources --manifest cluster.yaml
+```
+
+### Logging
+- Structured JSON logging across all services
+- View logs via CLI: `frameworks cluster logs <service> --follow`
+- Centralized log aggregation with ELK stack (optional)
+- Log rotation and retention policies
+
+## Operations
+
+### Backup & Restore
+
+```bash
+# Backup all components
+frameworks cluster backup all --output /backups
+
+# Backup specific component
+frameworks cluster backup postgres --output /backups
+
+# Restore from backup
+frameworks cluster restore postgres --from /backups/postgres.sql
+```
+
+See [CLI Reference](/operators/cli-reference) for full command documentation.
+
+### Service Management
+
+```bash
+# View logs
+frameworks cluster logs commodore --follow
+
+# Restart service
+frameworks cluster restart bridge
+
+# Upgrade to new version
+frameworks cluster upgrade commodore --version stable
+```
+
+### Diagnostics
+
+```bash
+# Network connectivity test
+frameworks cluster diagnose network
+
+# Resource usage check
+frameworks cluster diagnose resources
+
+# Port conflict detection
+frameworks cluster diagnose ports
+
+# Kafka health check
+frameworks cluster diagnose kafka
+```

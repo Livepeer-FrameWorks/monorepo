@@ -1,0 +1,16 @@
+query GetRecordings($streamId: ID) {
+  recordings(streamId: $streamId) @list(name: "AllRecordings") {
+    id
+    streamId
+    title
+    duration
+    fileSizeBytes
+    playbackId
+    thumbnailUrl
+    startTime
+    endTime
+    status
+    createdAt
+    updatedAt
+  }
+}

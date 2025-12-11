@@ -1,0 +1,11 @@
+query GetStreamKeys($streamId: ID!) {
+  streamKeys(streamId: $streamId) @list(name: "StreamKeys") {
+    id
+    streamId
+    keyValue
+    keyName
+    isActive
+    lastUsedAt
+    createdAt
+  }
+}

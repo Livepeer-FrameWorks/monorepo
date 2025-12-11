@@ -7,6 +7,12 @@ option go_package = "frameworks/pkg/proto";
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/empty.proto";
 
+// Coarse geospatial bucket (H3 index + resolution)
+message GeoBucket {
+  uint64 h3_index = 1;   // H3 cell id encoded as uint64
+  uint32 resolution = 2; // H3 resolution (e.g., 5)
+}
+
 // Bidirectional control channel between Helmsman (client) and Foghorn (server)
 // Helmsman dials Foghorn and sends Register/NodeLifecycleUpdate; Foghorn sends ClipPullRequest
 
@@ -43,7 +49,16 @@ message ControlMessage {
     MistTrigger mist_trigger = 24;
     MistTriggerResponse mist_trigger_response = 25;
     ConfigSeed config_seed = 29;
+    ArtifactDeleted artifact_deleted = 30;
   }
+}
+
+message ArtifactDeleted {
+  string clip_hash = 1;
+  string file_path = 2;
+  string reason = 3; // "cleanup", "expired", "manual"
+  string node_id = 4;
+  uint64 size_bytes = 5;
 }
 
 message Register {
@@ -120,16 +135,17 @@ message Heartbeat {
 }
 
 message MistTrigger {
-  string trigger_type = 1;    // e.g., PUSH_REWRITE, VIEWER_RESOLVE, VIEWER_CONNECT, STREAM_BUFFER
+  string trigger_type = 1;    // e.g., PUSH_REWRITE, PLAY_REWRITE, VIEWER_CONNECT, STREAM_BUFFER
   string node_id = 3;         // Node that received the trigger
   int64 timestamp = 4;        // When trigger was received
   bool blocking = 5;          // Does this trigger need a response from Foghorn?
   string request_id = 6;      // For correlating responses
+  optional string tenant_id = 7; // Tenant context (enriched by Foghorn)
   
   // Typed trigger payloads (one of these will be set based on trigger_type)
   oneof trigger_payload {
     PushRewriteTrigger push_rewrite = 10;
-    ViewerResolveTrigger viewer_resolve = 11;          // formerly DefaultStreamTrigger
+    ViewerResolveTrigger play_rewrite = 11;          // formerly DefaultStreamTrigger
     StreamSourceTrigger stream_source = 12;            // VOD source resolution
     PushOutStartTrigger push_out_start = 13;
     PushEndTrigger push_end = 14;
@@ -146,6 +162,7 @@ message MistTrigger {
     LoadBalancingData load_balancing_data = 25;
     ClipLifecycleData clip_lifecycle_data = 26;
     DVRLifecycleData dvr_lifecycle_data = 27;
+    StorageSnapshot storage_snapshot = 28;
   }
 }
 
@@ -153,6 +170,25 @@ message MistTriggerResponse {
   string request_id = 1;      // Correlates to MistTrigger.request_id
   string response = 2;        // What to return to MistServer (empty string aborts for blocking triggers)
   bool abort = 3;             // Explicit abort flag
+}
+
+message StorageSnapshot {
+  string node_id = 1;
+  int64 timestamp = 2;
+  optional string tenant_id = 3; // Node Owner (Supplier)
+  optional string location = 4;
+  optional NodeCapabilities capabilities = 5;
+  
+  repeated TenantStorageUsage usage = 6;
+}
+
+message TenantStorageUsage {
+  string tenant_id = 1; // Resource Consumer
+  uint64 total_bytes = 2;
+  uint32 file_count = 3;
+  uint64 dvr_bytes = 4;
+  uint64 clip_bytes = 5;
+  uint64 recording_bytes = 6;
 }
 
 message ClipHashRequest {
@@ -230,23 +266,30 @@ message PushRewriteTrigger {
   string push_url = 1;
   string hostname = 2;
   string stream_name = 3;
-  
+
   // Enrichment fields for analytics (populated by Foghorn)
   optional string protocol = 4;
   optional string encoder = 5;
   optional string stream_settings = 6;
   optional string node_id = 7;
-  optional double latitude = 8;
-  optional double longitude = 9;
-  optional string location = 10;
+  optional double latitude = 8;          // Node latitude
+  optional double longitude = 9;         // Node longitude
+  optional string location = 10;         // Node location name
+
+  // Publisher GeoIP enrichment (from hostname IP)
+  optional string publisher_country_code = 11;
+  optional string publisher_city = 12;
+  optional double publisher_latitude = 13;
+  optional double publisher_longitude = 14;
+  optional GeoBucket publisher_bucket = 15;
+  optional GeoBucket node_bucket = 16;
 }
 
 // ViewerResolveTrigger represents a viewer-side resolve of a playback request.
 // This is NOT publisher ingest. It fires when a viewer requests a stream by
 // playback ID or artifact hash; enrichment may include geo and node context.
 message ViewerResolveTrigger {
-  string default_stream = 1;   // the default route name
-  string requested_stream = 2; // playback ID or artifact hash
+  string requested_stream = 2; // playback ID or artifact hash (original request)
   string viewer_host = 3;      // viewer IP/host
   string output_type = 4;      // HLS/DASH/WebRTC
   string request_url = 5;
@@ -257,6 +300,12 @@ message ViewerResolveTrigger {
   optional string city = 8;
   optional double latitude = 9;
   optional double longitude = 10;
+  optional GeoBucket client_bucket = 11;
+  optional GeoBucket node_bucket = 12;
+
+  // Resolved internal name (UUID format, no live+ prefix) for analytics correlation.
+  // This is the canonical stream identifier that matches across all analytics tables.
+  optional string resolved_internal_name = 13;
 }
 
 message StreamSourceTrigger {
@@ -266,6 +315,7 @@ message StreamSourceTrigger {
 message PushOutStartTrigger {
   string stream_name = 1;
   string push_target = 2;
+  optional string node_id = 3;
 }
 
 message PushEndTrigger {
@@ -275,6 +325,7 @@ message PushEndTrigger {
   string target_uri_after = 4;
   string log_messages = 5;
   string push_status = 6;
+  optional string node_id = 7;
 }
 
 // ViewerConnectTrigger (formerly USER_NEW) indicates a viewer connection.
@@ -285,6 +336,16 @@ message ViewerConnectTrigger {
   string connector = 4;
   string request_url = 5;
   string session_id = 6;
+  
+  // Enrichment fields
+  optional string node_id = 7;
+  optional string client_ip = 8;
+  optional string client_country = 9;
+  optional string client_city = 10;
+  optional double client_latitude = 11;
+  optional double client_longitude = 12;
+  optional GeoBucket client_bucket = 13;
+  optional GeoBucket node_bucket = 14;
 }
 
 // ViewerDisconnectTrigger (formerly USER_END) indicates a viewer disconnect.
@@ -306,6 +367,8 @@ message ViewerDisconnectTrigger {
   optional double longitude = 13;
   optional string session_identifier = 14;
   optional uint64 seconds_connected = 15;
+  optional GeoBucket client_bucket = 16;
+  optional GeoBucket node_bucket = 17;
 }
 
 message StreamBufferTrigger {
@@ -313,7 +376,7 @@ message StreamBufferTrigger {
   string buffer_state = 2;
   // Fully typed stream details (no more JSON strings)
   repeated StreamTrack tracks = 3;
-  optional float health_score = 4;
+  // REMOVED: health_score = 4 (derived metric, use raw signals instead)
   optional bool has_issues = 5;
   optional string issues_description = 6;
   optional int32 track_count = 7;
@@ -328,6 +391,7 @@ message StreamEndTrigger {
   optional int64 total_inputs = 5;
   optional int64 total_outputs = 6;
   optional int64 viewer_seconds = 7;
+  optional string node_id = 8;
 }
 
 // StreamTrackListTrigger (formerly LIVE_TRACK_LIST) provides track inventory.
@@ -392,9 +456,9 @@ message StreamLifecycleUpdate {
   optional uint64 viewer_seconds = 10;
   optional string stream_details = 11;  // JSON health data
   int64 timestamp = 12;
-  
-  // Quality and health metrics (calculated by Helmsman from MistServer data)
-  optional float health_score = 13;
+
+  // Quality metrics (calculated by Helmsman from MistServer data)
+  // REMOVED: health_score = 13 (derived metric, use raw signals instead)
   optional bool has_issues = 14;
   optional string issues_description = 15;
   optional int32 track_count = 16;
@@ -404,6 +468,9 @@ message StreamLifecycleUpdate {
   optional float primary_fps = 20;
   optional string primary_codec = 21;
   optional int32 primary_bitrate = 22;
+
+  // Stream timing (populated by Foghorn from state manager)
+  optional int64 started_at = 23;       // Unix timestamp when stream went live
 }
 
 message ClientLifecycleUpdate {
@@ -439,41 +506,46 @@ message NodeLifecycleUpdate {
   uint32 cpu_tenths = 2;         // 0-1000
   uint64 ram_max = 3;            // MiB
   uint64 ram_current = 4;        // MiB
-  uint64 up_speed = 5;           // bytes/sec
-  uint64 down_speed = 6;         // bytes/sec
-  uint64 bw_limit = 7;           // bytes/sec
+  uint64 shm_total_bytes = 5;
+  uint64 shm_used_bytes = 6;
+  uint64 disk_total_bytes = 7;
+  uint64 disk_used_bytes = 8;
+  uint64 up_speed = 9;           // bytes/sec
+  uint64 down_speed = 10;        // bytes/sec
+  uint64 bw_limit = 11;          // bytes/sec
+  
   // Geo/location
-  double latitude = 8;
-  double longitude = 9;
-  string location = 10;
-  uint32 active_streams = 11;
+  double latitude = 12;
+  double longitude = 13;
+  string location = 14;
+  uint32 active_streams = 15;
   
   // Extended metrics (matching HTTP payload)
-  string base_url = 12;
-  bool is_healthy = 13;
-  string event_type = 14;
-  int64 timestamp = 15;
+  string base_url = 16;
+  bool is_healthy = 17;
+  string event_type = 18;
+  int64 timestamp = 19;
   
   // Node capabilities
-  NodeCapabilities capabilities = 16;
+  NodeCapabilities capabilities = 20;
   
   // Storage information
-  StorageInfo storage = 17;
+  StorageInfo storage = 21;
   
   // Node limits and usage
-  NodeLimits limits = 18;
+  NodeLimits limits = 22;
   
   // Stream metrics
-  map<string, StreamData> streams = 19;
+  map<string, StreamData> streams = 23;
   
   // Stored artifacts
-  repeated StoredArtifact artifacts = 20;
+  repeated StoredArtifact artifacts = 24;
   
   // MistServer outputs configuration (parsed from koekjes endpoint)
-  string outputs_json = 21;
+  string outputs_json = 25;
   
   // Enrichment fields added by Foghorn
-  optional string tenant_id = 22;
+  optional string tenant_id = 26;
 }
 
 // Load balancing specific data (no trigger equivalent - generated by Foghorn routing)
@@ -494,9 +566,18 @@ message LoadBalancingData {
   // Enrichment fields added by Foghorn
   optional string tenant_id = 14;
   optional string internal_name = 15;
+  optional GeoBucket client_bucket = 16;
+  optional GeoBucket node_bucket = 17;
 }
 
 // Clip lifecycle specific data (separate from ClipProgress/ClipDone control messages)
+//
+// FOGHORN ENRICHMENT REQUIRED:
+// When forwarding clip lifecycle events to Decklog, Foghorn must enrich with:
+// - tenant_id, internal_name (already done)
+// - start_unix, stop_unix, start_ms, stop_ms, duration_sec from original ClipPullRequest
+// These fields must be included in ALL lifecycle stages (REQUESTED, PROGRESS, DONE, FAILED)
+// so that Periscope can track clip state without needing to merge events.
 message ClipLifecycleData {
   enum Stage {
     STAGE_UNSPECIFIED = 0;
@@ -505,6 +586,7 @@ message ClipLifecycleData {
     STAGE_PROGRESS = 3;
     STAGE_DONE = 4;
     STAGE_FAILED = 5;
+    STAGE_DELETED = 6;
   }
   Stage stage = 1;
   string clip_hash = 2;
@@ -520,9 +602,22 @@ message ClipLifecycleData {
   // Enrichment fields added by Foghorn
   optional string tenant_id = 12;
   optional string internal_name = 13;
+  // Clip time boundaries (enriched by Foghorn from original ClipPullRequest)
+  optional int64 start_unix = 14;
+  optional int64 stop_unix = 15;
+  optional int64 start_ms = 16;
+  optional int64 stop_ms = 17;
+  optional int64 duration_sec = 18;
 }
 
 // DVR lifecycle specific data (separate from DVR control messages)
+//
+// FOGHORN ENRICHMENT REQUIRED:
+// When forwarding DVR lifecycle events to Decklog, Foghorn must enrich with:
+// - tenant_id, internal_name (already done)
+// - started_at, ended_at from DVRStartRequest/DVRStopped (time boundaries)
+// These fields must be included in ALL lifecycle statuses so that Periscope
+// can track DVR state without needing to merge events.
 message DVRLifecycleData {
   enum Status {
     STATUS_UNSPECIFIED = 0;
@@ -530,12 +625,13 @@ message DVRLifecycleData {
     STATUS_RECORDING = 2;
     STATUS_STOPPED = 3;
     STATUS_FAILED = 4;
+    STATUS_DELETED = 5;
   }
   Status status = 1;
   string dvr_hash = 2;
   optional string manifest_path = 3;
-  optional int64 started_at = 4;
-  optional int64 ended_at = 5;
+  optional int64 started_at = 4;       // Unix timestamp when recording started
+  optional int64 ended_at = 5;         // Unix timestamp when recording ended
   optional uint64 size_bytes = 6;
   optional int32 segment_count = 7;
   optional string error = 8;
@@ -594,14 +690,13 @@ message StreamTrack {
   optional int32 channels = 13;
   optional int32 sample_rate = 14;
   
-  // Frame timing and quality metrics
+  // Frame timing metrics (raw from MistServer keys object)
   optional int32 frames_max = 15;
   optional int32 frames_min = 16;
   optional double frame_ms_max = 17;
   optional double frame_ms_min = 18;
-  optional double frame_jitter_ms = 19;
-  optional double keyframe_stability_ms = 20;
-  optional double keyframe_interval_ms = 21;
+  optional double keyframe_ms_max = 19;  // Raw keyframe interval max (from keys.ms_max)
+  optional double keyframe_ms_min = 20;  // Raw keyframe interval min (from keys.ms_min)
 }
 
 message StoredArtifact {

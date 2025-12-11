@@ -12,6 +12,7 @@
     value: string | number;
     valueColor: string;
     label: string;
+    subtitle?: string | null;
     statusIndicator?: StatusIndicator | null;
   }
 
@@ -21,6 +22,7 @@
     value,
     valueColor,
     label,
+    subtitle = null,
     statusIndicator = null,
   }: Props = $props();
 </script>
@@ -31,10 +33,10 @@
       <div class="flex items-center space-x-1 text-xs">
         <div
           class="w-2 h-2 rounded-full {statusIndicator.connected
-            ? 'bg-tokyo-night-green animate-pulse'
-            : 'bg-tokyo-night-red'}"
+            ? 'bg-success animate-pulse'
+            : 'bg-destructive'}"
         ></div>
-        <span class="text-tokyo-night-comment">{statusIndicator.label}</span>
+        <span class="text-muted-foreground">{statusIndicator.label}</span>
       </div>
     </div>
   {/if}
@@ -47,5 +49,8 @@
     {value}
   </div>
 
-  <div class="text-sm text-tokyo-night-comment">{label}</div>
+  <div class="text-sm text-muted-foreground">{label}</div>
+  {#if subtitle}
+    <div class="text-xs text-muted-foreground/70 mt-0.5">{subtitle}</div>
+  {/if}
 </div>

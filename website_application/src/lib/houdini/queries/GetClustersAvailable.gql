@@ -1,0 +1,8 @@
+query GetClustersAvailable {
+  clustersAvailable {
+    clusterId
+    clusterName
+    tiers
+    autoEnroll
+  }
+}

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -12,12 +13,11 @@ import (
 	"frameworks/api_gateway/internal/handlers"
 	"frameworks/api_gateway/internal/middleware"
 	"frameworks/api_gateway/internal/resolvers"
-	qmapi "frameworks/pkg/api/quartermaster"
 	pkgauth "frameworks/pkg/auth"
-	qmclient "frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/config"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/monitoring"
+	pb "frameworks/pkg/proto"
 	"frameworks/pkg/server"
 	"frameworks/pkg/version"
 
@@ -38,35 +38,28 @@ func main() {
 
 	logger.Info("Starting Bridge GraphQL Gateway")
 
-	// Initialize service clients
+	// Initialize service clients (all gRPC-based)
 	serviceToken := config.RequireEnv("SERVICE_TOKEN")
-	commodoreURL := config.RequireEnv("COMMODORE_URL")
-	quartermasterURL := config.RequireEnv("QUARTERMASTER_URL")
-	purserURL := config.RequireEnv("PURSER_URL")
-	periscopeQueryURL := config.RequireEnv("PERISCOPE_QUERY_URL")
-	signalmanWSURL := config.RequireEnv("SIGNALMAN_WS_URL")
 	jwtSecret := config.RequireEnv("JWT_SECRET")
-	serviceClients := clients.NewServiceClients(clients.Config{
+	serviceClients, err := clients.NewServiceClients(clients.Config{
 		ServiceToken: serviceToken,
 		Logger:       logger,
 	})
+	if err != nil {
+		logger.WithError(err).Fatal("Failed to initialize service clients")
+	}
 
-	// Initialize auth proxy
-	authProxy := handlers.NewAuthProxy(commodoreURL, logger)
+	// Initialize auth handlers (gRPC-based)
+	authHandlers := handlers.NewAuthHandlers(serviceClients.Commodore, logger)
 
 	// Setup monitoring
 	healthChecker := monitoring.NewHealthChecker("bridge", version.Version)
 	metricsCollector := monitoring.NewMetricsCollector("bridge", version.Version, version.GitCommit)
 
-	// Add health checks
+	// Add health checks (all internal services are now gRPC)
 	healthChecker.AddCheck("config", monitoring.ConfigurationHealthCheck(map[string]string{
-		"JWT_SECRET":          jwtSecret,
-		"SERVICE_TOKEN":       serviceToken,
-		"COMMODORE_URL":       commodoreURL,
-		"PERISCOPE_QUERY_URL": periscopeQueryURL,
-		"PURSER_URL":          purserURL,
-		"QUARTERMASTER_URL":   quartermasterURL,
-		"SIGNALMAN_WS_URL":    signalmanWSURL,
+		"JWT_SECRET":    jwtSecret,
+		"SERVICE_TOKEN": serviceToken,
 	}))
 
 	// Create custom GraphQL metrics
@@ -79,13 +72,20 @@ func main() {
 	}
 
 	// Initialize GraphQL resolver and server
-	resolver := graph.NewResolver(serviceClients, logger, graphqlMetrics)
+	resolver := graph.NewResolver(serviceClients, logger, graphqlMetrics, serviceToken)
 
 	// Create GraphQL server with WebSocket support for subscriptions
 	gqlHandler := handler.New(generated.NewExecutableSchema(generated.Config{Resolvers: resolver}))
 
 	// Enable introspection for developer API explorer
 	gqlHandler.Use(extension.Introspection{})
+
+	// Add query complexity limit to prevent expensive queries
+	complexityLimit := config.GetEnvInt("GRAPHQL_COMPLEXITY_LIMIT", 200)
+	if complexityLimit > 0 {
+		gqlHandler.Use(extension.FixedComplexityLimit(complexityLimit))
+		logger.WithField("limit", complexityLimit).Info("GraphQL complexity limit enabled")
+	}
 
 	// Add transport options
 	gqlHandler.AddTransport(transport.POST{})
@@ -99,37 +99,62 @@ func main() {
 			},
 		},
 		InitFunc: func(ctx context.Context, initPayload transport.InitPayload) (context.Context, *transport.InitPayload, error) {
-			// Get authorization from WebSocket connection params using built-in method
-			authHeader := initPayload.Authorization()
+			// Try to get token from connectionParams first, then fall back to cookie in context
+			var token string
 
+			// 1. Try connectionParams.Authorization (for clients that can pass tokens)
+			authHeader := initPayload.Authorization()
 			if authHeader != "" {
-				// Parse JWT token from Authorization header
 				parts := strings.Split(authHeader, " ")
 				if len(parts) == 2 && parts[0] == "Bearer" {
-					token := parts[1]
+					token = parts[1]
+				}
+			}
 
-					claims, err := pkgauth.ValidateJWT(token, []byte(jwtSecret))
-					if err == nil {
-						// Add user context to WebSocket connection
-						ctx = context.WithValue(ctx, "user_id", claims.UserID)
-						ctx = context.WithValue(ctx, "tenant_id", claims.TenantID)
-						ctx = context.WithValue(ctx, "email", claims.Email)
-						ctx = context.WithValue(ctx, "role", claims.Role)
-						ctx = context.WithValue(ctx, "jwt_token", token)
+			// 2. Fall back to cookie token passed via Gin context
+			if token == "" {
+				if cookieToken, ok := ctx.Value("ws_cookie_token").(string); ok && cookieToken != "" {
+					token = cookieToken
+				}
+			}
 
-						// Create user context
+			if token != "" {
+				// Try JWT validation
+				claims, err := pkgauth.ValidateJWT(token, []byte(jwtSecret))
+				if err == nil {
+					ctx = context.WithValue(ctx, "user_id", claims.UserID)
+					ctx = context.WithValue(ctx, "tenant_id", claims.TenantID)
+					ctx = context.WithValue(ctx, "email", claims.Email)
+					ctx = context.WithValue(ctx, "role", claims.Role)
+					ctx = context.WithValue(ctx, "jwt_token", token)
+
+					user := &middleware.UserContext{
+						UserID:   claims.UserID,
+						TenantID: claims.TenantID,
+						Email:    claims.Email,
+						Role:     claims.Role,
+					}
+					ctx = context.WithValue(ctx, "user", user)
+				} else {
+					// Try API Token via Commodore
+					resp, err := serviceClients.Commodore.ValidateAPIToken(ctx, token)
+					if err == nil && resp.Valid {
+						ctx = context.WithValue(ctx, "user_id", resp.UserId)
+						ctx = context.WithValue(ctx, "tenant_id", resp.TenantId)
+						ctx = context.WithValue(ctx, "email", resp.Email)
+						ctx = context.WithValue(ctx, "role", resp.Role)
+
 						user := &middleware.UserContext{
-							UserID:   claims.UserID,
-							TenantID: claims.TenantID,
-							Email:    claims.Email,
-							Role:     claims.Role,
+							UserID:   resp.UserId,
+							TenantID: resp.TenantId,
+							Email:    resp.Email,
+							Role:     resp.Role,
 						}
 						ctx = context.WithValue(ctx, "user", user)
 					}
 				}
 			}
 
-			// Return the context and initPayload (can be modified if needed)
 			return ctx, &initPayload, nil
 		},
 	})
@@ -148,40 +173,93 @@ func main() {
 		})
 	}
 
-	// Auth endpoints (proxied to Commodore)
+	// Auth endpoints (gRPC to Commodore)
 	auth := app.Group("/auth")
 	{
-		auth.POST("/login", authProxy.ProxyToCommodore("/login"))
-		auth.POST("/register", authProxy.ProxyToCommodore("/register"))
-		auth.POST("/logout", authProxy.ProxyToCommodore("/logout"))
-		auth.GET("/me", authProxy.ProxyToCommodore("/me"))
-		auth.GET("/verify/:token", authProxy.ProxyToCommodore("/verify/:token"))
-		auth.POST("/refresh", authProxy.ProxyToCommodore("/refresh"))
-		auth.POST("/forgot-password", authProxy.ProxyToCommodore("/forgot-password"))
-		auth.POST("/reset-password", authProxy.ProxyToCommodore("/reset-password"))
+		// Public auth endpoints (no auth required)
+		auth.POST("/login", authHandlers.Login())
+		auth.POST("/register", authHandlers.Register())
+		auth.GET("/verify/:token", authHandlers.VerifyEmail())
+		auth.POST("/resend-verification", authHandlers.ResendVerification())
+		auth.POST("/refresh", authHandlers.RefreshToken())
+		auth.POST("/forgot-password", authHandlers.ForgotPassword())
+		auth.POST("/reset-password", authHandlers.ResetPassword())
+
+		// Protected auth endpoints (require JWT from cookie or header)
+		authProtected := auth.Group("", middleware.RequireJWTAuth([]byte(jwtSecret)))
+		authProtected.POST("/logout", authHandlers.Logout())
+		authProtected.GET("/me", authHandlers.GetMe())
+		authProtected.PATCH("/me", authHandlers.UpdateMe())
+		authProtected.POST("/me/newsletter", authHandlers.UpdateNewsletter())
+	}
+
+	// Token validator for API tokens (calls Commodore)
+	tokenValidator := func(token string) (*middleware.UserContext, error) {
+		resp, err := serviceClients.Commodore.ValidateAPIToken(context.Background(), token)
+		if err != nil || !resp.Valid {
+			return nil, err
+		}
+		return &middleware.UserContext{
+			UserID:   resp.UserId,
+			TenantID: resp.TenantId,
+			Email:    resp.Email,
+			Role:     resp.Role,
+		}, nil
 	}
 
 	// GraphQL endpoint (single route group)
 	graphqlGroup := app.Group("/graphql")
-	graphqlGroup.Use(middleware.DemoMode(logger))                   // Demo mode detection (must be before auth)
-	graphqlGroup.Use(middleware.PublicOrJWTAuth([]byte(jwtSecret))) // Allowlist public queries or require auth
-	graphqlGroup.Use(middleware.GraphQLContextMiddleware())         // Bridge user context to GraphQL
+	graphqlGroup.Use(middleware.DemoMode(logger))                                   // Demo mode detection (must be before auth)
+	graphqlGroup.Use(middleware.PublicOrJWTAuth([]byte(jwtSecret), tokenValidator)) // Allowlist public queries or require auth
+	graphqlGroup.Use(middleware.GraphQLContextMiddleware())                         // Bridge user context to GraphQL
 	graphqlGroup.Use(middleware.GraphQLAttachLoaders(serviceClients))
 	{
 		graphqlGroup.POST("/", gin.WrapH(gqlHandler))
-		if config.GetEnv("GIN_MODE", "debug") != "release" {
+		// Enable playground based on explicit config or GIN_MODE (default: enabled in non-release mode)
+		playgroundEnabled := config.GetEnvBool("GRAPHQL_PLAYGROUND_ENABLED", config.GetEnv("GIN_MODE", "debug") != "release")
+		if playgroundEnabled {
 			app.GET("/graphql/playground", gin.WrapH(playground.Handler("GraphQL Playground", "/graphql/")))
+			logger.Info("GraphQL Playground enabled at /graphql/playground")
 		}
 	}
 
 	// No separate public route; PublicOrJWTAuth handles allowlisted unauthenticated queries
 
-	// Dedicated WebSocket endpoint for GraphQL subscriptions (no auth middleware)
-	// Authentication is handled in the WebSocket InitFunc via connection params
-	app.GET("/graphql/ws", gin.WrapH(gqlHandler))
+	// Dedicated WebSocket endpoint for GraphQL subscriptions
+	// Authentication is handled in the WebSocket InitFunc via connection params,
+	// but we also pass the cookie token via context for browser clients
+	app.GET("/graphql/ws", func(c *gin.Context) {
+		// Read access_token cookie and pass it to the WebSocket InitFunc via context
+		if cookieToken, err := c.Cookie("access_token"); err == nil && cookieToken != "" {
+			ctx := context.WithValue(c.Request.Context(), "ws_cookie_token", cookieToken)
+			c.Request = c.Request.WithContext(ctx)
+		}
+		gqlHandler.ServeHTTP(c.Writer, c.Request)
+	})
 
 	// Use standard server startup with graceful shutdown
 	serverConfig := server.DefaultConfig("bridge", "18000")
+
+	// Best-effort service registration in Quartermaster (gRPC, before server starts)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		port, _ := strconv.Atoi(serverConfig.Port)
+		healthEndpoint := "/health"
+		advertiseHost := config.GetEnv("BRIDGE_HOST", "bridge")
+		if _, err := serviceClients.Quartermaster.BootstrapService(ctx, &pb.BootstrapServiceRequest{
+			Type:           "gateway",
+			Version:        version.Version,
+			Protocol:       "http",
+			HealthEndpoint: &healthEndpoint,
+			Port:           int32(port),
+			AdvertiseHost:  &advertiseHost,
+		}); err != nil {
+			logger.WithError(err).Warn("Quartermaster bootstrap (gateway) failed")
+		} else {
+			logger.Info("Quartermaster bootstrap (gateway) ok")
+		}
+	}()
 
 	// Start server with standard graceful shutdown handling
 	if err := server.Start(serverConfig, app, logger); err != nil {
@@ -192,16 +270,4 @@ func main() {
 	if err := resolver.Shutdown(); err != nil {
 		logger.Error("Error shutting down resolver: " + err.Error())
 	}
-
-	// Best-effort service registration in Quartermaster
-	go func() {
-		qc := qmclient.NewClient(qmclient.Config{BaseURL: quartermasterURL, ServiceToken: serviceToken, Logger: logger})
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if _, err := qc.BootstrapService(ctx, &qmapi.BootstrapServiceRequest{Type: "gateway", Version: version.Version, Protocol: "http", HealthEndpoint: func() *string { s := "/health"; return &s }(), Port: 18000}); err != nil {
-			logger.WithError(err).Warn("Quartermaster bootstrap (gateway) failed")
-		} else {
-			logger.Info("Quartermaster bootstrap (gateway) ok")
-		}
-	}()
 }

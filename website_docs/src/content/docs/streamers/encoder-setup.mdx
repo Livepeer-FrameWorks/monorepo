@@ -1,0 +1,146 @@
+---
+title: "Encoder Setup"
+description: "Configure OBS, FFmpeg, or any RTMP encoder for FrameWorks."
+sidebar:
+  order: 2
+---
+
+Getting your stream from your device to FrameWorks involves configuring your encoder. This guide provides detailed instructions for popular encoding software like OBS Studio and FFmpeg, along with advanced protocols such as SRT and WHIP. We'll help you optimize your settings for the best possible stream quality.
+
+## OBS Studio
+
+OBS is free and works on Windows, Mac, and Linux. [Download it here](https://obsproject.com/).
+
+### Stream Settings
+
+1. In OBS Studio, navigate to **Settings**, then select the **Stream** tab.
+2. Configure the following:
+   - **Service:** Custom
+   - **Server:** `%RTMP_URL%`
+   - **Stream Key:** From your stream's **Stream Key** card in the dashboard
+
+### Recommended Output Settings
+
+For optimal performance and quality on FrameWorks, we recommend the following output settings. These are general guidelines; feel free to adjust based on your system's capabilities and internet connection.
+
+Go to **Settings → Output** and select **Advanced** mode.
+
+**Streaming tab:**
+| Setting | Value |
+|---------|-------|
+| Encoder | NVIDIA NVENC (if available) or x264 |
+| Rate Control | CBR |
+| Bitrate | 4500 kbps (for 1080p30) |
+| Keyframe Interval | 2 seconds |
+| Preset | Quality (GPU) or veryfast (CPU) |
+| Profile | high |
+
+**Video tab:**
+These video settings are crucial for determining the final resolution and frame rate of your stream.
+| Setting | Value |
+|---------|-------|
+| Base Resolution | Your monitor resolution |
+| Output Resolution | 1920x1080 |
+| Downscale Filter | Lanczos |
+| FPS | 30 or 60 |
+
+### Audio Settings
+
+To ensure high-quality audio, adjust these settings:
+
+**Settings → Audio:**
+- **Sample Rate:** `48 kHz`
+- **Channels:** `Stereo`
+
+**Settings → Output → Audio:**
+- **Audio Bitrate:** `160 kbps` (per track, suitable for most streams) or `320 kbps` (for high-fidelity audio, especially music)
+
+## FFmpeg
+
+FFmpeg is a powerful, open-source command-line tool ideal for automated or headless streaming setups. Here are common commands for streaming with FrameWorks:
+
+```bash
+ffmpeg -re -i input.mp4 \
+  -c:v libx264 -preset veryfast -b:v 4500k -maxrate 4500k -bufsize 9000k \
+  -g 60 -keyint_min 60 \
+  -c:a aac -b:a 160k -ar 48000 \
+  -f flv "%RTMP_URL%/{stream-key}"
+```
+
+From a webcam:
+```bash
+ffmpeg -f v4l2 -i /dev/video0 -f alsa -i default \
+  -c:v libx264 -preset ultrafast -b:v 2500k \
+  -c:a aac -b:a 128k \
+  -f flv "%RTMP_URL%/{stream-key}"
+```
+
+## SRT (Alternative Protocol)
+
+SRT (Secure Reliable Transport) offers improved performance over RTMP, especially on unstable or high-latency networks, by ensuring secure and reliable stream delivery. Use this URL format:
+
+```
+srt://%INGEST_HOSTNAME%:%SRT_PORT%?streamid={stream-key}&latency=200&mode=caller
+```
+
+In OBS: **Settings → Stream → Service → Custom**, then paste the SRT URL in Server.
+
+**FFmpeg with SRT:**
+```bash
+ffmpeg -re -i input.mp4 \
+  -c:v libx264 -preset veryfast -b:v 4500k \
+  -c:a aac -b:a 160k \
+  -f mpegts "srt://%INGEST_HOSTNAME%:%SRT_PORT%?streamid={stream-key}&latency=200&mode=caller"
+```
+
+## WHIP (WebRTC)
+
+WHIP (WebRTC-HTTP Ingestion Protocol) provides a modern approach for browser-based ingestion, enabling real-time streaming with sub-second latency directly from your web browser or compatible software. The dashboard shows your specific WHIP URL on the stream details page.
+
+```
+%WHIP_URL%/{stream-key}
+```
+
+## Choosing the Right Bitrate
+
+Selecting the correct bitrate is key to stream stability. A higher bitrate improves quality but requires a stronger internet connection. Use these targets as a starting point:
+
+| Quality | Resolution | FPS | Bitrate |
+|---------|-----------|-----|---------|
+| Low | 720p | 30 | 2,500 kbps |
+| Medium | 1080p | 30 | 4,500 kbps |
+| High | 1080p | 60 | 6,000 kbps |
+| Very High | 1440p | 60 | 9,000 kbps |
+
+**Rule of thumb:** Your upload speed should be at least 2x your stream bitrate.
+
+Run a speed test to [speedtest.net](https://speedtest.net) and check your upload.
+
+## Selecting an Encoder
+
+Hardware encoders reduce the load on your CPU, leaving more resources for your game or application. We recommend utilizing them whenever possible.
+
+- **NVIDIA NVENC:** Offers the best quality-to-performance ratio. Highly recommended if you have an NVIDIA GPU.
+- **AMD AMF:** A solid choice for users with AMD graphics cards.
+- **Intel QuickSync:** efficient and widely available on most Intel CPUs with integrated graphics.
+- **x264:** Software-based encoding. It ensures compatibility everywhere but consumes significant CPU resources. Use this only if hardware encoding isn't an option.
+
+In OBS Studio, you can select your encoder under **Settings → Output → Encoder**.
+
+## Avoid Common Pitfalls
+
+**Ensure Your Bitrate Matches Your Upload Speed**
+If you experience dropped frames or instability, your bitrate might be too high for your internet connection. Try lowering it to stabilize the stream.
+
+**Stick to a 2-Second Keyframe Interval**
+Always set your keyframe interval to `2` seconds. Longer intervals can cause playback buffering or failures for viewers joining mid-stream.
+
+**Verify Your Audio Source**
+Silence is a common issue. Double-check that your microphone or desktop audio is selected and unmuted in the OBS audio mixer.
+
+**Use Constant Bitrate (CBR)**
+Variable Bitrate (VBR) is excellent for recording but problematic for live streaming due to fluctuating bandwidth usage. Always use **CBR** for a consistent stream.
+
+## Troubleshooting
+
+See [Troubleshooting](/streamers/troubleshooting) for common issues like connection failures and encoding overload.

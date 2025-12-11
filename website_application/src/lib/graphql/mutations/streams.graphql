@@ -1,63 +1,153 @@
 # Stream management mutations
+# Uses shared fragments from fragments/shared.graphql
+
 mutation CreateStream($input: CreateStreamInput!) {
   createStream(input: $input) {
-    id
-    name
-    description
-    streamKey
-    playbackId
-    status
-    record
-    createdAt
-    updatedAt
+    ... on Stream {
+      id
+      name
+      description
+      streamKey
+      playbackId
+      record
+      createdAt
+      updatedAt
+      metrics {
+        status
+        isLive
+        currentViewers
+        peakViewers
+        totalViews
+        startedAt
+        endedAt
+        duration
+        lastEventAt
+        lastEventType
+      }
+    }
+    ... on ValidationError {
+      ...ValidationErrorFields
+    }
+    ... on AuthError {
+      ...AuthErrorFields
+    }
   }
 }
 
 mutation UpdateStream($id: ID!, $input: UpdateStreamInput!) {
   updateStream(id: $id, input: $input) {
-    id
-    name
-    description
-    streamKey
-    playbackId
-    status
-    record
-    createdAt
-    updatedAt
+    ... on Stream {
+      id
+      name
+      description
+      streamKey
+      playbackId
+      record
+      createdAt
+      updatedAt
+      metrics {
+        status
+        isLive
+        currentViewers
+        peakViewers
+        totalViews
+        startedAt
+        endedAt
+        duration
+        lastEventAt
+        lastEventType
+      }
+    }
+    ... on ValidationError {
+      ...ValidationErrorFields
+    }
+    ... on NotFoundError {
+      ...NotFoundErrorFields
+    }
+    ... on AuthError {
+      ...AuthErrorFields
+    }
   }
 }
 
 mutation DeleteStream($id: ID!) {
-  deleteStream(id: $id)
+  deleteStream(id: $id) {
+    ... on DeleteSuccess {
+      ...DeleteSuccessFields
+    }
+    ... on NotFoundError {
+      ...NotFoundErrorFields
+    }
+    ... on AuthError {
+      ...AuthErrorFields
+    }
+  }
 }
 
 mutation RefreshStreamKey($id: ID!) {
   refreshStreamKey(id: $id) {
-    id
-    name
-    description
-    streamKey
-    playbackId
-    status
-    record
-    createdAt
-    updatedAt
+    ... on Stream {
+      id
+      name
+      description
+      streamKey
+      playbackId
+      record
+      createdAt
+      updatedAt
+      metrics {
+        status
+        isLive
+        currentViewers
+        peakViewers
+        totalViews
+        startedAt
+        endedAt
+        duration
+        lastEventAt
+        lastEventType
+      }
+    }
+    ... on ValidationError {
+      ...ValidationErrorFields
+    }
+    ... on NotFoundError {
+      ...NotFoundErrorFields
+    }
+    ... on AuthError {
+      ...AuthErrorFields
+    }
   }
 }
 
 # Stream key management mutations
 mutation CreateStreamKey($streamId: ID!, $input: CreateStreamKeyInput!) {
   createStreamKey(streamId: $streamId, input: $input) {
-    id
-    streamId
-    keyValue
-    keyName
-    isActive
-    lastUsedAt
-    createdAt
+    ... on StreamKey {
+      ...CoreStreamKey
+    }
+    ... on ValidationError {
+      ...ValidationErrorFields
+    }
+    ... on NotFoundError {
+      ...NotFoundErrorFields
+    }
+    ... on AuthError {
+      ...AuthErrorFields
+    }
   }
 }
 
 mutation DeleteStreamKey($streamId: ID!, $keyId: ID!) {
-  deleteStreamKey(streamId: $streamId, keyId: $keyId)
+  deleteStreamKey(streamId: $streamId, keyId: $keyId) {
+    ... on DeleteSuccess {
+      ...DeleteSuccessFields
+    }
+    ... on NotFoundError {
+      ...NotFoundErrorFields
+    }
+    ... on AuthError {
+      ...AuthErrorFields
+    }
+  }
 }

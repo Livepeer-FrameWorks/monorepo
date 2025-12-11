@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"frameworks/pkg/logging"
+	"frameworks/pkg/middleware"
 
 	"github.com/prometheus/client_golang/prometheus"
 
@@ -102,13 +103,16 @@ func generateEventID() string {
 // Note: We publish only the inner payload to Kafka Data to avoid consumer confusion.
 func (s *DecklogServer) unwrapMistTrigger(trigger *pb.MistTrigger) (proto.Message, string, string) {
 	tenantID := ""
+	if trigger.TenantId != nil {
+		tenantID = *trigger.TenantId
+	}
 	var eventType string
 
 	switch payload := trigger.GetTriggerPayload().(type) {
 	case *pb.MistTrigger_PushRewrite:
 		eventType = "push_rewrite"
-	case *pb.MistTrigger_ViewerResolve:
-		eventType = "viewer_resolve"
+	case *pb.MistTrigger_PlayRewrite:
+		eventType = "play_rewrite"
 	case *pb.MistTrigger_StreamSource:
 		eventType = "stream_source"
 	case *pb.MistTrigger_PushOutStart:
@@ -228,25 +232,46 @@ func (s *DecklogServer) SendEvent(ctx context.Context, trigger *pb.MistTrigger) 
 	return &emptypb.Empty{}, nil
 }
 
+// GRPCServerConfig contains configuration for creating a Decklog gRPC server
+type GRPCServerConfig struct {
+	Producer      kafka.ProducerInterface
+	Logger        logging.Logger
+	Metrics       *DecklogMetrics
+	CertFile      string
+	KeyFile       string
+	AllowInsecure bool
+	ServiceToken  string
+}
+
 // NewGRPCServer creates a new gRPC server with proper TLS configuration
-func NewGRPCServer(producer kafka.ProducerInterface, logger logging.Logger, metrics *DecklogMetrics, certFile, keyFile string, allowInsecure bool) (*grpc.Server, error) {
+func NewGRPCServer(cfg GRPCServerConfig) (*grpc.Server, error) {
 	var opts []grpc.ServerOption
 
-	if !allowInsecure {
+	if !cfg.AllowInsecure {
 		// Load TLS credentials
-		creds, err := credentials.NewServerTLSFromFile(certFile, keyFile)
+		creds, err := credentials.NewServerTLSFromFile(cfg.CertFile, cfg.KeyFile)
 		if err != nil {
 			return nil, err
 		}
 		opts = append(opts, grpc.Creds(creds))
 	}
 
+	// Chain auth interceptor with logging interceptor
+	authInterceptor := middleware.GRPCAuthInterceptor(middleware.GRPCAuthConfig{
+		ServiceToken: cfg.ServiceToken,
+		Logger:       cfg.Logger,
+		SkipMethods: []string{
+			"/grpc.health.v1.Health/Check",
+			"/grpc.health.v1.Health/Watch",
+		},
+	})
+
 	// Add interceptors for logging, metrics, etc.
-	opts = append(opts, grpc.UnaryInterceptor(unaryInterceptor(logger)))
-	opts = append(opts, grpc.StreamInterceptor(streamInterceptor(logger)))
+	opts = append(opts, grpc.ChainUnaryInterceptor(authInterceptor, unaryInterceptor(cfg.Logger)))
+	opts = append(opts, grpc.StreamInterceptor(streamInterceptor(cfg.Logger)))
 
 	server := grpc.NewServer(opts...)
-	pb.RegisterDecklogServiceServer(server, NewDecklogServer(producer, logger, metrics))
+	pb.RegisterDecklogServiceServer(server, NewDecklogServer(cfg.Producer, cfg.Logger, cfg.Metrics))
 	// Register gRPC health checking service
 	hs := health.NewServer()
 	grpc_health_v1.RegisterHealthServer(server, hs)

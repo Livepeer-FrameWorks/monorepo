@@ -139,7 +139,8 @@ func (lb *LoadBalancer) GetNodeIDByHost(host string) string {
 
 // GetBestNode finds the best node using EXACT C++ rate() algorithm
 func (lb *LoadBalancer) GetBestNode(ctx context.Context, streamName string, lat, lon float64, tagAdjust map[string]int) (string, error) {
-	host, _, _, _, _, err := lb.GetBestNodeWithScore(ctx, streamName, lat, lon, tagAdjust, "")
+	// Default to source selection (true) for backward compatibility/internal use
+	host, _, _, _, _, err := lb.GetBestNodeWithScore(ctx, streamName, lat, lon, tagAdjust, "", true)
 	return host, err
 }
 
@@ -154,8 +155,8 @@ type NodeWithScore struct {
 }
 
 // GetBestNodeWithScore finds the best node and returns both node and score
-func (lb *LoadBalancer) GetBestNodeWithScore(ctx context.Context, streamName string, lat, lon float64, tagAdjust map[string]int, clientIP string) (string, uint64, float64, float64, string, error) {
-	nodes, err := lb.GetTopNodesWithScores(ctx, streamName, lat, lon, tagAdjust, clientIP, 1)
+func (lb *LoadBalancer) GetBestNodeWithScore(ctx context.Context, streamName string, lat, lon float64, tagAdjust map[string]int, clientIP string, isSourceSelection bool) (string, uint64, float64, float64, string, error) {
+	nodes, err := lb.GetTopNodesWithScores(ctx, streamName, lat, lon, tagAdjust, clientIP, 1, isSourceSelection)
 	if err != nil {
 		return "", 0, 0, 0, "", err
 	}
@@ -169,7 +170,7 @@ func (lb *LoadBalancer) GetBestNodeWithScore(ctx context.Context, streamName str
 	return best.Host, best.Score, best.GeoLatitude, best.GeoLongitude, best.LocationName, nil
 }
 
-func (lb *LoadBalancer) GetTopNodesWithScores(ctx context.Context, streamName string, lat, lon float64, tagAdjust map[string]int, clientIP string, maxNodes int) ([]NodeWithScore, error) {
+func (lb *LoadBalancer) GetTopNodesWithScores(ctx context.Context, streamName string, lat, lon float64, tagAdjust map[string]int, clientIP string, maxNodes int, isSourceSelection bool) ([]NodeWithScore, error) {
 	snapshot := state.DefaultManager().GetBalancerSnapshotAtomic()
 	if snapshot == nil || len(snapshot.Nodes) == 0 {
 		return nil, fmt.Errorf("no nodes available in unified state")
@@ -244,7 +245,7 @@ func (lb *LoadBalancer) GetTopNodesWithScores(ctx context.Context, streamName st
 			continue
 		}
 
-		score := lb.rateNode(snap, streamName, lat, lon, tagAdjust)
+		score := lb.rateNode(snap, streamName, lat, lon, tagAdjust, isSourceSelection)
 		if score == 0 {
 			continue
 		}
@@ -289,7 +290,7 @@ func (lb *LoadBalancer) GetTopNodesWithScores(ctx context.Context, streamName st
 	return result, nil
 }
 
-func (lb *LoadBalancer) rateNode(snap state.EnhancedBalancerNodeSnapshot, streamName string, lat, lon float64, tagAdjust map[string]int) uint64 {
+func (lb *LoadBalancer) rateNode(snap state.EnhancedBalancerNodeSnapshot, streamName string, lat, lon float64, tagAdjust map[string]int, isSourceSelection bool) uint64 {
 	// Check if host is valid
 	if snap.RAMMax == 0 || snap.BWLimit == 0 {
 		lb.logger.WithFields(logging.Fields{
@@ -310,7 +311,7 @@ func (lb *LoadBalancer) rateNode(snap state.EnhancedBalancerNodeSnapshot, stream
 	// Check stream exists, has inputs, not replicated
 	if streamName != "" {
 		stream, exists := snap.Streams[streamName]
-		if !exists || stream.Inputs == 0 || stream.Replicated {
+		if !exists || stream.Inputs == 0 {
 			lb.logger.WithFields(logging.Fields{
 				"stream": streamName, "host": snap.Host, "exists": exists,
 				"inputs": func() uint32 {
@@ -319,13 +320,15 @@ func (lb *LoadBalancer) rateNode(snap state.EnhancedBalancerNodeSnapshot, stream
 					}
 					return 0
 				}(),
-				"replicated": func() bool {
-					if exists {
-						return stream.Replicated
-					}
-					return false
-				}(),
-			}).Debug("Stream not suitable for source: missing, no inputs, or replicated")
+			}).Debug("Stream not suitable for source: missing or no inputs")
+			return 0
+		}
+
+		// If selecting a source (Mist pulling), prevent pulling from a replicated stream
+		if isSourceSelection && stream.Replicated {
+			lb.logger.WithFields(logging.Fields{
+				"stream": streamName, "host": snap.Host, "replicated": true,
+			}).Debug("Stream excluded: replicated node cannot serve as source")
 			return 0
 		}
 	}

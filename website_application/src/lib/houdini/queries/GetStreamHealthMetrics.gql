@@ -1,0 +1,50 @@
+query GetStreamHealthMetrics(
+  $stream: String!
+  $timeRange: TimeRangeInput
+  $first: Int = 100
+  $after: String
+  $noCache: Boolean = false
+) {
+  streamHealthMetricsConnection(
+    stream: $stream
+    timeRange: $timeRange
+    first: $first
+    after: $after
+    noCache: $noCache
+  ) @paginate {
+    edges {
+      cursor
+      node {
+        timestamp
+        stream
+        nodeId
+        issuesDescription
+        hasIssues
+        bitrate
+        fps
+        width
+        height
+        codec
+        profile
+        qualityTier
+        gopSize
+        packetsSent
+        packetsLost
+        packetLossPercentage
+        bufferState
+        bufferHealth
+        bufferSize
+        bufferUsed
+        audioChannels
+        audioSampleRate
+        audioCodec
+        audioBitrate
+      }
+    }
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+    totalCount
+  }
+}

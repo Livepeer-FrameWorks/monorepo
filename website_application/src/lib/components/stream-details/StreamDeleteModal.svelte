@@ -1,4 +1,4 @@
-<script>
+<script lang="ts">
   import { Button } from "$lib/components/ui/button";
   import {
     Dialog,
@@ -21,17 +21,17 @@
 <Dialog {open} onOpenChange={(value) => (open = value)}>
   <DialogContent class="max-w-md backdrop-blur-sm">
     <DialogHeader>
-      <DialogTitle class="text-tokyo-night-red">Delete Stream</DialogTitle>
+      <DialogTitle class="text-destructive">Delete Stream</DialogTitle>
       <DialogDescription>
         This action cannot be undone. All associated keys and recordings will
         also be removed.
       </DialogDescription>
     </DialogHeader>
 
-    <div class="p-4 rounded-lg bg-tokyo-night-red/10 border border-tokyo-night-red/30">
-      <p class="text-sm text-tokyo-night-fg">
+    <div class="p-4 bg-destructive/10 border border-destructive/30">
+      <p class="text-sm text-foreground">
         Are you sure you want to delete
-        <strong class="text-tokyo-night-red">{streamName}</strong>?
+        <strong class="text-destructive">{streamName}</strong>?
       </p>
     </div>
 
@@ -41,7 +41,7 @@
       </Button>
       <Button
         variant="destructive"
-        class="gap-2 transition-all hover:shadow-lg hover:shadow-tokyo-night-red/50"
+        class="gap-2 transition-all hover:shadow-lg hover:shadow-destructive/50"
         onclick={onConfirm}
         disabled={loading}
       >

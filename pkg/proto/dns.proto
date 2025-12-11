@@ -1,0 +1,41 @@
+syntax = "proto3";
+
+package navigator;
+
+option go_package = "frameworks/pkg/proto";
+
+// NavigatorService manages public DNS records and certificates.
+service NavigatorService {
+  // SyncDNS requests Navigator to synchronize DNS records for a given service type.
+  rpc SyncDNS(SyncDNSRequest) returns (SyncDNSResponse);
+  // IssueCertificate requests Navigator to issue or renew a certificate for a domain.
+  rpc IssueCertificate(IssueCertificateRequest) returns (IssueCertificateResponse);
+}
+
+// SyncDNSRequest is sent by Quartermaster to trigger DNS synchronization.
+message SyncDNSRequest {
+  string service_type = 1; // e.g., "edge", "gateway", "app"
+  string root_domain = 2;  // e.g., "frameworks.network"
+}
+
+// SyncDNSResponse is returned by Navigator after attempting DNS synchronization.
+message SyncDNSResponse {
+  bool success = 1;
+  string message = 2; // Details of the operation, e.g., "Updated 3 records"
+  map<string, string> errors = 3; // Map of FQDN to error message
+}
+
+// IssueCertificateRequest is sent to request a certificate.
+message IssueCertificateRequest {
+  string domain = 1; // The domain to issue the certificate for, e.g., "api.example.com" or "*.example.com"
+  string email = 2;  // Email for ACME registration
+}
+
+// IssueCertificateResponse is returned after attempting certificate issuance.
+message IssueCertificateResponse {
+  bool success = 1;
+  string message = 2; // Details of the operation
+  string cert_pem = 3; // The issued certificate in PEM format
+  string key_pem = 4;  // The private key in PEM format
+  string error = 5;    // Error message if issuance failed
+}

@@ -1,0 +1,54 @@
+query GetBillingTiers {
+  billingTiers {
+    id
+    name
+    description
+    basePrice
+    currency
+    billingPeriod
+    features {
+      recording
+      analytics
+      customBranding
+      apiAccess
+      supportLevel
+      sla
+    }
+    bandwidthAllocation {
+      limit
+      unitPrice
+      unit
+    }
+    storageAllocation {
+      limit
+      unitPrice
+      unit
+    }
+    computeAllocation {
+      limit
+      unitPrice
+      unit
+    }
+    overageRates {
+      bandwidth {
+        limit
+        unitPrice
+        unit
+      }
+      storage {
+        limit
+        unitPrice
+        unit
+      }
+      compute {
+        limit
+        unitPrice
+        unit
+      }
+    }
+    supportLevel
+    slaLevel
+    meteringEnabled
+    isEnterprise
+  }
+}

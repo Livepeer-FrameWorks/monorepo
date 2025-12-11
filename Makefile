@@ -1,6 +1,6 @@
 .PHONY: build build-images build-bin-commodore build-bin-quartermaster build-bin-purser build-bin-decklog build-bin-foghorn build-bin-helmsman build-bin-periscope-ingest build-bin-periscope-query build-bin-signalman build-bin-bridge \
 	build-image-commodore build-image-quartermaster build-image-purser build-image-decklog build-image-foghorn build-image-helmsman build-image-periscope-ingest build-image-periscope-query build-image-signalman build-image-bridge \
-	proto graphql clean version install-tools verify test coverage env
+	proto graphql clean version install-tools verify test coverage env tidy fmt
 
 # Version information
 # Prefer annotated git tags like v1.2.3; fallback to describe or dev
@@ -14,7 +14,7 @@ LDFLAGS = -ldflags "-X frameworks/pkg/version.Version=$(VERSION) \
 					-X frameworks/pkg/version.BuildDate=$(BUILD_DATE)"
 
 # All microservices (only services with actual binaries)
-SERVICES = commodore quartermaster purser decklog foghorn helmsman periscope-ingest periscope-query signalman bridge
+SERVICES = commodore quartermaster purser decklog foghorn helmsman periscope-ingest periscope-query signalman bridge navigator privateer
 
 # All Go modules (including pkg for testing)
 GO_SERVICES = $(shell find . -name "go.mod" -exec dirname {} \;)
@@ -139,6 +139,18 @@ build-image-bridge: proto
 		--build-arg BUILD_DATE=$(BUILD_DATE) \
 		-f api_gateway/Dockerfile .
 
+build-image-docs:
+	docker build -t frameworks-website-docs:$(VERSION) \
+		--build-arg BUILD_ENV=production \
+		-f website_docs/Dockerfile .
+
+build-image-navigator: proto
+	docker build -t frameworks-navigator:$(VERSION) \
+		--build-arg VERSION=$(VERSION) \
+		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
+		--build-arg BUILD_DATE=$(BUILD_DATE) \
+		-f api_dns/Dockerfile .
+
 # Individual service bin builds (explicit)
 build-bin-commodore: proto
 	cd api_control && go build $(LDFLAGS) -o ../bin/commodore cmd/commodore/main.go
@@ -170,6 +182,12 @@ build-bin-signalman: proto
 build-bin-bridge: proto
 	cd api_gateway && go build $(LDFLAGS) -o ../bin/bridge cmd/bridge/main.go
 
+build-bin-navigator: proto
+	cd api_dns && go build $(LDFLAGS) -o ../bin/navigator cmd/navigator/main.go
+
+build-bin-privateer: proto
+	cd api_mesh && go build $(LDFLAGS) -o ../bin/privateer cmd/privateer/main.go
+
 # Clean build artifacts
 clean:
 	rm -rf bin/
@@ -180,12 +198,6 @@ version:
 	@echo "Version: $(VERSION)"
 	@echo "Git Commit: $(GIT_COMMIT)"
 	@echo "Build Date: $(BUILD_DATE)"
-
-# Generate a Release Manifest (releases/$(VERSION).yaml)
-# Optionally provide DIGEST_<SERVICE>=sha256:... to include digests per service.
-manifest:
-	@mkdir -p releases
-	@./scripts/gen_release_manifest.sh "$(VERSION)" "$(GIT_COMMIT)" "$(BUILD_DATE)" "$(SERVICES)"
 
 # Install required development tools
 install-tools:
@@ -240,3 +252,23 @@ coverage: proto graphql
 env:
 	@echo "Generating .env from config/env/*.env..."
 	@cd scripts/env && GOCACHE=$$(pwd)/.gocache go run .
+
+# Tidy all Go modules
+tidy:
+	@echo "Running go mod tidy for all Go modules..."
+	@for service_dir in $(GO_SERVICES); do \
+		service_name=$$(basename $$service_dir); \
+		echo "==> $$service_name"; \
+		(cd $$service_dir && go mod tidy); \
+	done
+	@echo "✓ All modules tidied"
+
+# Format all Go code
+fmt:
+	@echo "Running go fmt for all Go modules..."
+	@for service_dir in $(GO_SERVICES); do \
+		service_name=$$(basename $$service_dir); \
+		echo "==> $$service_name"; \
+		(cd $$service_dir && go fmt ./...); \
+	done
+	@echo "✓ All modules formatted"

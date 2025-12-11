@@ -1,0 +1,19 @@
+mutation CreatePayment($input: CreatePaymentInput!) {
+  createPayment(input: $input) {
+    __typename
+    ... on Payment {
+      id
+      amount
+      currency
+      method
+      status
+      createdAt
+    }
+    ... on ValidationError {
+      ...ValidationErrorFields @mask_disable
+    }
+    ... on AuthError {
+      ...AuthErrorFields @mask_disable
+    }
+  }
+}

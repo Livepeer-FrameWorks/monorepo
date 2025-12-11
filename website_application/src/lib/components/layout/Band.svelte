@@ -12,6 +12,8 @@
     container?: boolean;
     /** Container width variant (only when container=true) */
     containerWidth?: "narrow" | "default" | "wide" | "full";
+    /** Flush mode - zero inner padding, content touches edges */
+    flush?: boolean;
     /** Additional CSS classes */
     class?: string;
   }
@@ -22,18 +24,20 @@
     spacing = "default",
     container = false,
     containerWidth = "default",
+    flush = false,
     class: className = "",
   }: Props = $props();
 
-  const bandClass = $derived(() => {
+  const bandClass = $derived.by(() => {
     const classes = ["band"];
     if (spacing === "compact") classes.push("band--compact");
     if (spacing === "spacious") classes.push("band--spacious");
+    if (flush) classes.push("band--flush");
     if (className) classes.push(className);
     return classes.join(" ");
   });
 
-  const containerClass = $derived(() => {
+  const containerClass = $derived.by(() => {
     if (!container) return "";
     const classes = ["app-container"];
     if (containerWidth === "narrow") classes.push("app-container--narrow");
@@ -45,9 +49,9 @@
   const surfaceAttr = $derived(surface !== "default" ? surface : undefined);
 </script>
 
-<section class={bandClass()} data-surface={surfaceAttr}>
+<section class={bandClass} data-surface={surfaceAttr}>
   {#if container}
-    <div class={containerClass()}>
+    <div class={containerClass}>
       {@render children()}
     </div>
   {:else}

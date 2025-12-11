@@ -1,35 +1,49 @@
-<script>
+<script lang="ts">
   import { onMount } from 'svelte';
   import { page } from '$app/state';
   import Player from '$lib/components/Player.svelte';
   import LoadingSpinner from '$lib/components/LoadingSpinner.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
 
-  let contentType = $state('');
-  let contentId = $state('');
+  interface PlayerConfig {
+    contentType: "live" | "clip" | "dvr";
+    contentId: string;
+    thumbnailUrl?: string | null;
+    options: {
+      autoplay: boolean;
+      muted: boolean;
+      controls: boolean;
+      debug: boolean;
+    };
+  }
+
+  let contentType = $state<"live" | "clip" | "dvr" | "">("");
+  let contentId = $state("");
   let loading = $state(true);
-  let error = $state('');
-  let playerConfig = $state(null);
+  let error = $state("");
+  let playerConfig = $state<PlayerConfig | null>(null);
 
   onMount(async () => {
     // Parse URL parameters
     const params = page.url.searchParams;
-    contentType = params.get('type') || '';
-    contentId = params.get('id') || '';
+    const typeParam = params.get("type") || "";
+    contentId = params.get("id") || "";
 
     // Validate required parameters
-    if (!contentType || !contentId) {
-      error = 'Missing required parameters: type and id';
+    if (!typeParam || !contentId) {
+      error = "Missing required parameters: type and id";
       loading = false;
       return;
     }
 
     // Validate content type
-    if (!['live', 'clip', 'dvr'].includes(contentType)) {
-      error = 'Invalid content type. Must be live, clip, or dvr';
+    if (!["live", "clip", "dvr"].includes(typeParam)) {
+      error = "Invalid content type. Must be live, clip, or dvr";
       loading = false;
       return;
     }
+
+    contentType = typeParam as "live" | "clip" | "dvr";
 
     try {
       // Configure player based on content type
@@ -40,14 +54,8 @@
           autoplay: true,
           muted: true,
           controls: true,
-          preferredProtocol: 'auto',
-          analytics: {
-            enabled: true,
-            sessionTracking: true
-          },
           debug: false,
-          verboseLogging: false
-        }
+        },
       };
 
       // Add thumbnails for clips/dvr
@@ -73,7 +81,7 @@
   <meta name="description" content="FrameWorks streaming viewer" />
 </svelte:head>
 
-<div class="min-h-screen bg-gray-900">
+<div class="min-h-screen bg-background">
   {#if loading}
     <div class="flex items-center justify-center min-h-screen">
       <LoadingSpinner />
@@ -82,8 +90,8 @@
     <div class="flex items-center justify-center min-h-screen">
       <EmptyState 
         title="Error" 
-        message={error}
-        actionLabel="Go Back"
+        description={error}
+        actionText="Go Back"
         onAction={goBack}
       />
     </div>
@@ -95,7 +103,7 @@
         <div class="flex items-center justify-between">
           <button 
             onclick={goBack}
-            class="text-white hover:text-gray-300 flex items-center"
+            class="text-foreground hover:text-muted-foreground flex items-center"
           >
             <svg class="w-6 h-6 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path>

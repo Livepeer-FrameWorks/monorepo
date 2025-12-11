@@ -1,0 +1,168 @@
+syntax = "proto3";
+
+package signalman;
+
+option go_package = "frameworks/pkg/proto";
+
+import "google/protobuf/timestamp.proto";
+import "ipc.proto";  // For MistTrigger payloads
+
+// ============================================================================
+// Channel and Event Types
+// ============================================================================
+
+enum Channel {
+  CHANNEL_UNSPECIFIED = 0;
+  CHANNEL_STREAMS = 1;
+  CHANNEL_ANALYTICS = 2;
+  CHANNEL_SYSTEM = 3;
+  CHANNEL_ALL = 4;
+}
+
+enum EventType {
+  EVENT_TYPE_UNSPECIFIED = 0;
+
+  // Subscription management
+  EVENT_TYPE_SUBSCRIPTION_CONFIRMED = 1;
+  EVENT_TYPE_UNSUBSCRIPTION_CONFIRMED = 2;
+
+  // Stream events (channel: streams)
+  EVENT_TYPE_STREAM_LIFECYCLE_UPDATE = 10;
+  EVENT_TYPE_STREAM_TRACK_LIST = 11;
+  EVENT_TYPE_STREAM_BUFFER = 12;
+  EVENT_TYPE_STREAM_END = 13;
+  EVENT_TYPE_STREAM_SOURCE = 14;
+  EVENT_TYPE_PLAY_REWRITE = 15;
+
+  // System events (channel: system)
+  EVENT_TYPE_NODE_LIFECYCLE_UPDATE = 20;
+  EVENT_TYPE_LOAD_BALANCING = 21;
+
+  // Analytics events (channel: analytics)
+  EVENT_TYPE_VIEWER_CONNECT = 30;
+  EVENT_TYPE_VIEWER_DISCONNECT = 31;
+  EVENT_TYPE_CLIENT_LIFECYCLE_UPDATE = 32;
+  EVENT_TYPE_CLIP_LIFECYCLE = 33;
+  EVENT_TYPE_DVR_LIFECYCLE = 34;
+  EVENT_TYPE_PUSH_REWRITE = 35;
+  EVENT_TYPE_PUSH_OUT_START = 36;
+  EVENT_TYPE_PUSH_END = 37;
+  EVENT_TYPE_STREAM_BANDWIDTH = 38;
+  EVENT_TYPE_RECORDING_COMPLETE = 39;
+}
+
+// ============================================================================
+// Subscription Messages
+// ============================================================================
+
+message SubscribeRequest {
+  repeated Channel channels = 1;
+  optional string user_id = 2;
+  optional string tenant_id = 3;
+}
+
+message UnsubscribeRequest {
+  repeated Channel channels = 1;
+}
+
+message SubscriptionConfirmation {
+  repeated Channel subscribed_channels = 1;
+}
+
+// ============================================================================
+// Event Data - Typed payloads from MistTrigger
+// ============================================================================
+
+message EventData {
+  oneof payload {
+    helmsmancontrol.ClientLifecycleUpdate client_lifecycle = 1;
+    helmsmancontrol.NodeLifecycleUpdate node_lifecycle = 2;
+    helmsmancontrol.StreamTrackListTrigger track_list = 3;
+    helmsmancontrol.ClipLifecycleData clip_lifecycle = 4;
+    helmsmancontrol.DVRLifecycleData dvr_lifecycle = 5;
+    helmsmancontrol.LoadBalancingData load_balancing = 6;
+    helmsmancontrol.PushRewriteTrigger push_rewrite = 7;
+    helmsmancontrol.PushOutStartTrigger push_out_start = 8;
+    helmsmancontrol.PushEndTrigger push_end = 9;
+    helmsmancontrol.ViewerConnectTrigger viewer_connect = 10;
+    helmsmancontrol.ViewerDisconnectTrigger viewer_disconnect = 11;
+    helmsmancontrol.StreamEndTrigger stream_end = 12;
+    helmsmancontrol.StreamBandwidthTrigger stream_bandwidth = 13;
+    helmsmancontrol.RecordingCompleteTrigger recording = 14;
+  }
+}
+
+// ============================================================================
+// Realtime Event Message
+// ============================================================================
+
+message SignalmanEvent {
+  EventType event_type = 1;
+  Channel channel = 2;
+  EventData data = 3;
+  google.protobuf.Timestamp timestamp = 4;
+  optional string tenant_id = 5;
+}
+
+// ============================================================================
+// Client-to-Server Stream Messages
+// ============================================================================
+
+message ClientMessage {
+  oneof message {
+    SubscribeRequest subscribe = 1;
+    UnsubscribeRequest unsubscribe = 2;
+    Ping ping = 3;
+  }
+}
+
+message Ping {
+  int64 timestamp_ms = 1;
+}
+
+// ============================================================================
+// Server-to-Client Stream Messages
+// ============================================================================
+
+message ServerMessage {
+  oneof message {
+    SubscriptionConfirmation subscription_confirmed = 1;
+    SignalmanEvent event = 2;
+    Pong pong = 3;
+    SignalmanError error = 4;
+  }
+}
+
+message Pong {
+  int64 timestamp_ms = 1;
+}
+
+message SignalmanError {
+  string code = 1;
+  string message = 2;
+}
+
+// ============================================================================
+// Hub Statistics
+// ============================================================================
+
+message GetHubStatsRequest {}
+
+message HubStats {
+  int32 total_connections = 1;
+  int32 total_clients = 2;
+  map<string, int32> channel_subscriptions = 3;
+}
+
+// ============================================================================
+// Service Definition
+// ============================================================================
+
+service SignalmanService {
+  // Bidirectional streaming for realtime events
+  // Client sends subscribe/unsubscribe requests, server streams events
+  rpc Subscribe(stream ClientMessage) returns (stream ServerMessage);
+
+  // Get hub statistics (admin/monitoring)
+  rpc GetHubStats(GetHubStatsRequest) returns (HubStats);
+}

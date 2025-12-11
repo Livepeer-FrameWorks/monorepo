@@ -1,8 +1,61 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+
+/* ========================================
+   TOKYO NIGHT COLOR PALETTE
+   ======================================== */
 
 :root {
+  /* Core backgrounds */
+  --tn-bg: 235 19% 13%;           /* #1a1b26 - Main background */
+  --tn-bg-dark: 240 15% 10%;      /* #16161e - Darker variant */
+  --tn-bg-highlight: 229 24% 19%; /* #24283b - Elevated surfaces */
+  --tn-bg-visual: 229 24% 24%;    /* #292e42 - Visual selection */
+
+  /* Foreground colors */
+  --tn-fg: 229 73% 86%;           /* #c0caf5 - Primary text */
+  --tn-fg-dark: 229 35% 75%;      /* #a9b1d6 - Secondary text */
+  --tn-fg-gutter: 229 24% 31%;    /* #3b4261 - Gutters, borders */
+
+  /* Terminal colors */
+  --tn-comment: 229 23% 44%;      /* #565f89 - Comments */
+  --tn-terminal: 229 23% 33%;     /* #414868 - Terminal bg */
+
+  /* Accent colors */
+  --tn-blue: 225 86% 70%;         /* #7aa2f7 - Primary accent */
+  --tn-cyan: 197 95% 74%;         /* #7dcfff - Info */
+  --tn-teal: 167 67% 63%;         /* #73daca - Success alt */
+  --tn-green: 89 51% 61%;         /* #9ece6a - Success */
+  --tn-yellow: 36 66% 64%;        /* #e0af68 - Warning */
+  --tn-orange: 22 100% 70%;       /* #ff9e64 - Warning alt */
+  --tn-red: 349 89% 72%;          /* #f7768e - Error */
+  --tn-magenta: 325 78% 73%;      /* #ff007c - Highlight */
+  --tn-purple: 264 85% 74%;       /* #bb9af7 - Accent */
+
+  /* Semantic tokens (shadcn/ui compatible) */
+  --background: var(--tn-bg);
+  --foreground: var(--tn-fg);
+  --card: var(--tn-bg-highlight);
+  --card-foreground: var(--tn-fg);
+  --popover: var(--tn-bg-highlight);
+  --popover-foreground: var(--tn-fg);
+  --primary: var(--tn-blue);
+  --primary-foreground: var(--tn-bg);
+  --secondary: var(--tn-terminal);
+  --secondary-foreground: var(--tn-fg-dark);
+  --muted: var(--tn-bg-visual);
+  --muted-foreground: var(--tn-fg-dark);
+  --accent: var(--tn-blue);
+  --accent-foreground: var(--tn-bg);
+  --destructive: var(--tn-red);
+  --destructive-foreground: var(--tn-bg);
+  --border: var(--tn-fg-gutter);
+  --input: var(--tn-fg-gutter);
+  --ring: var(--tn-blue);
+  --radius: 0.75rem;
+}
+
+/* Light mode overrides (optional - playground is dark-first) */
+.light {
   --background: 210 20% 98%;
   --foreground: 222.2 47.4% 11.2%;
   --card: 0 0% 100%;
@@ -22,31 +75,309 @@
   --border: 214.3 31.8% 91.4%;
   --input: 214.3 31.8% 91.4%;
   --ring: 221.2 83.2% 53.3%;
-  --radius: 0.75rem;
 }
 
-.dark {
-  --background: 224 71% 4%;
-  --foreground: 213 31% 91%;
-  --card: 224 71% 4%;
-  --card-foreground: 213 31% 91%;
-  --popover: 224 71% 4%;
-  --popover-foreground: 213 31% 91%;
-  --primary: 210 40% 98%;
-  --primary-foreground: 222.2 47.4% 11.2%;
-  --secondary: 222.2 47.4% 11.2%;
-  --secondary-foreground: 210 40% 98%;
-  --muted: 223 47% 11%;
-  --muted-foreground: 215 20.2% 65.1%;
-  --accent: 216 34% 17%;
-  --accent-foreground: 210 40% 98%;
-  --destructive: 0 62.8% 30.6%;
-  --destructive-foreground: 210 40% 98%;
-  --border: 216 34% 17%;
-  --input: 216 34% 17%;
-  --ring: 210 40% 98%;
+/* ========================================
+   TAILWIND 4 THEME CONFIGURATION
+   ======================================== */
+
+@theme {
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+
+  /* Tokyo Night direct colors */
+  --color-success: hsl(var(--tn-green));
+  --color-warning: hsl(var(--tn-yellow));
+  --color-info: hsl(var(--tn-cyan));
+  --color-error: hsl(var(--tn-red));
+
+  /* Border radius */
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
+
+  /* Shadows */
+  --shadow-brand: 0 24px 48px rgba(6, 15, 65, 0.45);
+  --shadow-brand-soft: 0 20px 40px rgba(6, 15, 65, 0.25);
+
+  /* Animations */
+  --animate-accordion-down: accordion-down 0.2s ease-out;
+  --animate-accordion-up: accordion-up 0.2s ease-out;
+}
+
+@keyframes accordion-down {
+  from { height: 0; }
+  to { height: var(--radix-accordion-content-height); }
+}
+
+@keyframes accordion-up {
+  from { height: var(--radix-accordion-content-height); }
+  to { height: 0; }
+}
+
+/* ========================================
+   BASE STYLES
+   ======================================== */
+
+* {
+  border-color: hsl(var(--border));
 }
 
 body {
+  background-color: hsl(var(--background));
+  color: hsl(var(--foreground));
   font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+/* ========================================
+   SLAB SYSTEM (FrameWorks Design System)
+   ======================================== */
+
+/* Slab container - solid block, no floating */
+.slab {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: linear-gradient(
+    175deg,
+    hsl(var(--tn-bg-highlight) / 0.4) 0%,
+    hsl(var(--tn-bg-dark)) 25%,
+    hsl(var(--tn-bg-dark)) 100%
+  );
+  border: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
+  border-radius: 0;
+}
+
+/* Compact variant - for standalone slabs that need rounding */
+.slab--compact {
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+/* Slab header - uppercase title with accent line */
+.slab-header {
+  position: relative;
+  padding: 1rem 1.5rem;
+  border-bottom: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
+  background: linear-gradient(
+    90deg,
+    hsl(var(--tn-blue) / 0.06) 0%,
+    transparent 50%
+  );
+}
+
+/* Accent line on left edge */
+.slab-header::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: linear-gradient(
+    to bottom,
+    hsl(var(--tn-blue) / 0.6),
+    hsl(var(--tn-purple) / 0.3)
+  );
+}
+
+.slab-header h3,
+.slab-title {
+  font-size: 0.875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: hsl(var(--tn-fg-dark));
+  margin: 0;
+}
+
+.slab-description {
+  font-size: 0.875rem;
+  color: hsl(var(--muted-foreground));
+  margin-top: 0.25rem;
+}
+
+/* Slab body variants */
+.slab-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.slab-body--padded {
+  flex: 1;
+  padding: 1.5rem;
+}
+
+.slab-body--flush {
+  flex: 1;
+  padding: 0;
+}
+
+/* Slab actions - flush buttons with seams */
+.slab-actions {
+  display: flex;
+  flex-direction: column;
+  margin-top: auto;
+  background: linear-gradient(
+    to bottom,
+    hsl(var(--tn-bg-highlight) / 0.5) 0%,
+    hsl(var(--tn-bg-highlight) / 0.35) 100%
+  );
+  border-top: 1px solid hsl(var(--tn-fg-gutter) / 0.4);
+}
+
+.slab-actions > * {
+  border-radius: 0 !important;
+  flex: 1;
+  justify-content: center;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.slab-actions > *:hover {
+  background: hsl(var(--tn-blue) / 0.12);
+  color: hsl(var(--tn-blue));
+}
+
+/* Horizontal action row */
+.slab-actions--row {
+  flex-direction: row;
+}
+
+/* Seams between action buttons */
+.slab-actions > * + * {
+  border-top: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
+}
+
+.slab-actions--row > * + * {
+  border-top: none;
+  border-left: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
+}
+
+/* ========================================
+   SEAMED GRID LAYOUTS
+   ======================================== */
+
+/* Sidebar + main seamed layout */
+.workspace-layout {
+  display: grid;
+  grid-template-columns: 1fr;
+  border: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+@media (min-width: 1280px) {
+  .workspace-layout {
+    grid-template-columns: 380px 1fr;
+  }
+
+  .workspace-layout > *:first-child {
+    border-right: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
+  }
+}
+
+/* Stacked slabs with seams (no gap) */
+.slab-stack {
+  display: flex;
+  flex-direction: column;
+}
+
+.slab-stack > .slab {
+  border-radius: 0;
+  border-left: 0;
+  border-right: 0;
+  border-bottom: 0;
+}
+
+.slab-stack > .slab:first-child {
+  border-top: 0;
+}
+
+/* Seamed section divider */
+.seam {
+  height: 1px;
+  background: hsl(var(--tn-fg-gutter) / 0.3);
+  margin: 0;
+  border: none;
+}
+
+/* ========================================
+   ENDPOINT ROW (slab-style)
+   ======================================== */
+
+.endpoint-row {
+  padding: 1rem 1.5rem;
+  border-bottom: 1px solid hsl(var(--tn-fg-gutter) / 0.2);
+  transition: background-color 0.15s ease;
+}
+
+.endpoint-row:last-child {
+  border-bottom: none;
+}
+
+.endpoint-row:hover {
+  background: hsl(var(--tn-bg-highlight) / 0.3);
+}
+
+/* ========================================
+   FORM ELEMENTS IN SLABS
+   ======================================== */
+
+/* Slab-style form group */
+.slab-form-group {
+  padding: 1rem 1.5rem;
+  border-bottom: 1px solid hsl(var(--tn-fg-gutter) / 0.2);
+}
+
+.slab-form-group:last-child {
+  border-bottom: none;
+}
+
+/* ========================================
+   HEADER BAR (slab-style)
+   ======================================== */
+
+.header-bar {
+  background: linear-gradient(
+    to bottom,
+    hsl(var(--tn-bg-highlight) / 0.5),
+    hsl(var(--tn-bg-dark))
+  );
+  border-bottom: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
+}
+
+/* ========================================
+   UTILITY OVERRIDES
+   ======================================== */
+
+/* Force square corners for buttons in slab-actions */
+.slab-actions .btn,
+.slab-actions button,
+.slab-actions [class*="button"] {
+  border-radius: 0 !important;
 }

@@ -1,0 +1,35 @@
+query GetStreamConnectionEvents(
+  $stream: String!
+  $timeRange: TimeRangeInput
+  $first: Int = 100
+  $after: String
+  $noCache: Boolean = false
+) {
+  connectionEventsConnection(
+    stream: $stream
+    timeRange: $timeRange
+    first: $first
+    after: $after
+    noCache: $noCache
+  ) @paginate {
+    edges {
+      cursor
+      node {
+        timestamp
+        sessionId
+        connectionAddr
+        nodeId
+        countryCode
+        city
+        latitude
+        longitude
+        eventType
+      }
+    }
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+    totalCount
+  }
+}

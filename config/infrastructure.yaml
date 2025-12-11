@@ -63,3 +63,11 @@ infrastructure:
     dev_version: "1.29.3 (alpine)"
     prod_version: "1.29.1"
     notes: "Alpine variant for smaller footprint in dev/docker environments"
+
+  - name: listmonk
+    tested_version: "v4.0.1"
+    minimum_version: "v3.0.0"
+    image: listmonk/listmonk:v4.0.1
+    dev_version: "v4.0.1"
+    prod_version: "v4.0.1"
+    notes: "Self-hosted newsletter manager. Requires PostgreSQL."

@@ -1,0 +1,7 @@
+query ValidateStreamKey($streamKey: String!) {
+  validateStreamKey(streamKey: $streamKey) {
+    status
+    streamKey
+    error
+  }
+}

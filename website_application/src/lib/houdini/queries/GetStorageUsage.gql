@@ -1,0 +1,34 @@
+query GetStorageUsage(
+  $nodeId: String
+  $timeRange: TimeRangeInput
+  $first: Int = 100
+  $after: String
+) {
+  storageUsageConnection(
+    nodeId: $nodeId
+    timeRange: $timeRange
+    first: $first
+    after: $after
+  ) {
+    edges {
+      cursor
+      node {
+        id
+        timestamp
+        nodeId
+        dvrBytes
+        clipBytes
+        recordingBytes
+        totalBytes
+        fileCount
+      }
+    }
+    pageInfo {
+      hasNextPage
+      hasPreviousPage
+      startCursor
+      endCursor
+    }
+    totalCount
+  }
+}

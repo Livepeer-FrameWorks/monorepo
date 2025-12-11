@@ -1,0 +1,18 @@
+# DVR lifecycle subscriptions
+
+# Subscribe to DVR lifecycle events for a stream
+# Return type is now DVREvent!
+subscription DvrLifecycle($stream: String!) {
+  dvrLifecycle(stream: $stream) {
+    dvrHash
+    internalName
+    status
+    startedAt
+    endedAt
+    segmentCount
+    manifestPath
+    sizeBytes
+    error
+    nodeId
+  }
+}

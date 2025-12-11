@@ -9,27 +9,35 @@ Current solution:
 
 Rationale: The Prometheus/Grafana stack meets current requirements; Lookout can be revisited when needs outgrow the existing setup.
 
+However, multiple teams (telemetry, developer API, Signalman consumers) are already expecting a unified incident/alert feed. This service will eventually mediate between Periscope/raw metrics and downstream consumers so the bridge no longer infers alerts ad hoc.
+
 ## Overview
 
-Lookout provides intelligent incident management by aggregating alerts from monitoring systems, deduplicating related issues, and orchestrating response workflows.
+Lookout (a.k.a. `api_incidents`) will become the single source of truth for active incidents and alert streams. It will:
 
-## Core Features
+- Ingest raw alerts/telemetry from Periscope, infrastructure services, billing, etc.
+- Run deduplication & correlation so a flood of metric samples becomes a single incident record.
+- Expose those incidents via REST/GraphQL as well as publish updates to Signalman, so dashboards, the webapp, and third-party clients get a consistent feed.
+- Orchestrate notification/escalation workflows and feed other internal tooling (Deckhand, Privateer, etc.).
 
-- **Alert Aggregation** - Collect from Prometheus, Grafana, and custom sources
-- **Smart Deduplication** - Group related alerts into single incidents
-- **Escalation Policies** - Automatic escalation based on severity and time
-- **Multi-Channel Notifications** - Slack, Discord, Email, SMS, PagerDuty
-- **Status Page** - Public incident status and history
+## Core Features (planned)
 
-## Architecture
+- **Alert Aggregation** - Collect from Prometheus/VictoriaMetrics, Periscope health metrics, Purser billing anomalies, etc.
+- **Smart Deduplication** - Group related alerts/metric spikes into a single incident entity.
+- **Incident Bus** - Publish incident lifecycle events over Signalman (and potentially webhooks) so bridge/webapp/developer API consumers can subscribe without reimplementing alert logic.
+- **Escalation Policies** - Automatic escalation based on severity and time.
+- **Multi-Channel Notifications** - Slack, Discord, Email, SMS, PagerDuty.
+- **Status Page** - Public incident status and history.
+
+## Architecture (future)
 
 ```
-Prometheus ─┐
-            ├→ Alert Ingestion → Deduplication → Incident Creation
-Grafana ────┤                            ↓
-            │                    Notification Engine
-Custom ─────┘                            ↓
-                              [Slack, Email, SMS, Status Page]
+Periscope Metrics ─┐
+Infra Signals  ────┼─> Ingestion ➜ Correlation/Dedup ➜ Incident Store ➜
+Billing Events  ───┘                                        ↓
+                                           Notification & Signalman Publisher
+                                                            ↓
+                                [Bridge GraphQL, Webapp, CLI, third-party consumers]
 ```
 
 ## Configuration
@@ -59,10 +67,12 @@ rules:
 
 ## Integration Points
 
-- **Prometheus/VictoriaMetrics** - Pull alerts via API
-- **Deckhand** - Create support tickets for customer-facing incidents
-- **Privateer** - Monitor mesh connectivity
-- **Signalman** - Push incident updates to dashboards
+- **Periscope / ClickHouse** - Long-term source for telemetry-derived incidents (replacing ad-hoc heuristics in the bridge).
+- **Prometheus/VictoriaMetrics** - Pull infrastructure alerts via API.
+- **Deckhand** - Create support tickets for customer-facing incidents.
+- **Privateer** - Monitor mesh connectivity.
+- **Signalman** - Push incident updates to dashboards and developer clients (authoritative alert feed).
+- **GraphQL Gateway** - Eventually `streamHealthAlerts` should proxy this service instead of computing alerts inline.
 
 ## Database Schema
 

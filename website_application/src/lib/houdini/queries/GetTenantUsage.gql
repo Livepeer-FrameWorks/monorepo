@@ -1,0 +1,15 @@
+query GetTenantUsage($timeRange: TimeRangeInput) {
+  tenantUsage(timeRange: $timeRange) {
+    billingPeriod
+    usage {
+      resourceType
+      amount
+    }
+    costs {
+      resourceType
+      cost
+    }
+    totalCost
+    currency
+  }
+}

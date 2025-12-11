@@ -46,50 +46,50 @@
 </script>
 
 {#if formattedMetrics && metrics}
-  <div class="bg-tokyo-night-surface rounded-lg p-4">
-    <h3 class="text-lg font-semibold text-tokyo-night-cyan mb-4">Quality Metrics</h3>
-    
+  <div class="bg-muted p-4">
+    <h3 class="text-lg font-semibold text-info mb-4">Quality Metrics</h3>
+
     <div class={compact ? "grid grid-cols-2 gap-3" : "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"}>
       <!-- Video Quality -->
       <div class="space-y-2">
-        <h4 class="text-sm font-medium text-tokyo-night-comment">Video Quality</h4>
+        <h4 class="text-sm font-medium text-muted-foreground">Video Quality</h4>
         <div class="space-y-1">
           <div class="flex justify-between">
-            <span class="text-sm text-tokyo-night-fg">Resolution:</span>
-            <span class="text-sm font-mono text-tokyo-night-blue">{formattedMetrics.resolution}</span>
+            <span class="text-sm text-foreground">Resolution:</span>
+            <span class="text-sm font-mono text-primary">{formattedMetrics.resolution}</span>
           </div>
           <div class="flex justify-between">
-            <span class="text-sm text-tokyo-night-fg">Codec:</span>
-            <span class="text-sm font-mono text-tokyo-night-purple">{formattedMetrics.codec}</span>
+            <span class="text-sm text-foreground">Codec:</span>
+            <span class="text-sm font-mono text-accent-purple">{formattedMetrics.codec}</span>
           </div>
           <div class="flex justify-between">
-            <span class="text-sm text-tokyo-night-fg">Bitrate:</span>
-            <span class="text-sm font-mono text-tokyo-night-green">{formattedMetrics.bitrate}</span>
+            <span class="text-sm text-foreground">Bitrate:</span>
+            <span class="text-sm font-mono text-success">{formattedMetrics.bitrate}</span>
           </div>
           <div class="flex justify-between">
-            <span class="text-sm text-tokyo-night-fg">Frame Rate:</span>
-            <span class="text-sm font-mono text-tokyo-night-orange">{formattedMetrics.fps}</span>
+            <span class="text-sm text-foreground">Frame Rate:</span>
+            <span class="text-sm font-mono text-warning-alt">{formattedMetrics.fps}</span>
           </div>
         </div>
       </div>
 
       <!-- Performance Metrics -->
       <div class="space-y-2">
-        <h4 class="text-sm font-medium text-tokyo-night-comment">Performance</h4>
+        <h4 class="text-sm font-medium text-muted-foreground">Performance</h4>
         <div class="space-y-1">
           <div class="flex justify-between">
-            <span class="text-sm text-tokyo-night-fg">Quality Tier:</span>
-            <span class="text-sm font-mono text-tokyo-night-cyan">{formattedMetrics.qualityTier}</span>
+            <span class="text-sm text-foreground">Quality Tier:</span>
+            <span class="text-sm font-mono text-info">{formattedMetrics.qualityTier}</span>
           </div>
           <div class="flex justify-between">
-            <span class="text-sm text-tokyo-night-fg">Frame Jitter:</span>
-            <span class="text-sm font-mono {metrics.frameJitterMs > 30 ? 'text-red-400' : 'text-green-400'}">
+            <span class="text-sm text-foreground">Frame Jitter:</span>
+            <span class="text-sm font-mono {(metrics.frameJitterMs || 0) > 30 ? 'text-error' : 'text-success'}">
               {formattedMetrics.frameJitter}
             </span>
           </div>
           <div class="flex justify-between">
-            <span class="text-sm text-tokyo-night-fg">Packet Loss:</span>
-            <span class="text-sm font-mono {metrics.packetLossPercentage > 2 ? 'text-red-400' : 'text-green-400'}">
+            <span class="text-sm text-foreground">Packet Loss:</span>
+            <span class="text-sm font-mono {(metrics.packetLossPercentage || 0) > 2 ? 'text-error' : 'text-success'}">
               {formattedMetrics.packetLoss}
             </span>
           </div>
@@ -99,28 +99,28 @@
       {#if !compact && metrics.audioCodec}
         <!-- Audio Quality -->
         <div class="space-y-2">
-          <h4 class="text-sm font-medium text-tokyo-night-comment">Audio Quality</h4>
+          <h4 class="text-sm font-medium text-muted-foreground">Audio Quality</h4>
           <div class="space-y-1">
             <div class="flex justify-between">
-              <span class="text-sm text-tokyo-night-fg">Codec:</span>
-              <span class="text-sm font-mono text-tokyo-night-purple">{metrics.audioCodec}</span>
+              <span class="text-sm text-foreground">Codec:</span>
+              <span class="text-sm font-mono text-accent-purple">{metrics.audioCodec}</span>
             </div>
             {#if metrics.audioSampleRate}
               <div class="flex justify-between">
-                <span class="text-sm text-tokyo-night-fg">Sample Rate:</span>
-                <span class="text-sm font-mono text-tokyo-night-blue">{metrics.audioSampleRate}Hz</span>
+                <span class="text-sm text-foreground">Sample Rate:</span>
+                <span class="text-sm font-mono text-primary">{metrics.audioSampleRate}Hz</span>
               </div>
             {/if}
             {#if metrics.audioBitrate}
               <div class="flex justify-between">
-                <span class="text-sm text-tokyo-night-fg">Bitrate:</span>
-                <span class="text-sm font-mono text-tokyo-night-green">{metrics.audioBitrate}k</span>
+                <span class="text-sm text-foreground">Bitrate:</span>
+                <span class="text-sm font-mono text-success">{metrics.audioBitrate}k</span>
               </div>
             {/if}
             {#if metrics.audioChannels}
               <div class="flex justify-between">
-                <span class="text-sm text-tokyo-night-fg">Channels:</span>
-                <span class="text-sm font-mono text-tokyo-night-orange">{metrics.audioChannels}</span>
+                <span class="text-sm text-foreground">Channels:</span>
+                <span class="text-sm font-mono text-warning-alt">{metrics.audioChannels}</span>
               </div>
             {/if}
           </div>
@@ -129,8 +129,8 @@
     </div>
   </div>
 {:else}
-  <div class="bg-tokyo-night-surface rounded-lg p-4">
-    <h3 class="text-lg font-semibold text-tokyo-night-cyan mb-4">Quality Metrics</h3>
-    <p class="text-tokyo-night-comment">No quality metrics available</p>
+  <div class="bg-muted p-4">
+    <h3 class="text-lg font-semibold text-info mb-4">Quality Metrics</h3>
+    <p class="text-muted-foreground">No quality metrics available</p>
   </div>
 {/if}

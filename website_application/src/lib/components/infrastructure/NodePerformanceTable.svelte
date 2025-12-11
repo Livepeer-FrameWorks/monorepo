@@ -6,9 +6,7 @@
     nodeId: string;
     avgCpuUsage?: number;
     avgMemoryUsage?: number;
-    avgHealthScore?: number;
-    peakActiveStreams?: number;
-    avgStreamLoad?: number;
+    avgDiskUsage?: number;
   }
 
   interface Props {
@@ -21,7 +19,7 @@
 {#if nodePerformanceMetrics.length > 0}
   <div class="space-y-4">
     <div class="flex flex-wrap items-center justify-between gap-2">
-      <h3 class="text-lg font-medium text-tokyo-night-fg">
+      <h3 class="text-lg font-medium text-foreground">
         Node Performance Details
       </h3>
       <Badge variant="outline" class="uppercase tracking-wide text-[0.65rem]">
@@ -29,19 +27,17 @@
       </Badge>
     </div>
     <div
-      class="overflow-x-auto rounded-lg border border-border/40 bg-card/40"
+      class="overflow-x-auto border border-border/50"
     >
       <table class="w-full text-sm">
         <thead>
           <tr
-            class="border-b border-border/50 bg-background/40 text-left text-tokyo-night-comment"
+            class="border-b border-border/50 bg-background/40 text-left text-muted-foreground"
           >
             <th class="py-3 px-4">Node</th>
             <th class="py-3 px-4">CPU</th>
             <th class="py-3 px-4">Memory</th>
-            <th class="py-3 px-4">Health Score</th>
-            <th class="py-3 px-4">Peak Streams</th>
-            <th class="py-3 px-4">Avg Load</th>
+            <th class="py-3 px-4">Disk</th>
           </tr>
         </thead>
         <tbody>
@@ -53,10 +49,10 @@
               <td class="py-3 px-4">
                 <span
                   class={metric.avgCpuUsage && metric.avgCpuUsage > 80
-                    ? "text-red-400"
+                    ? "text-error"
                     : metric.avgCpuUsage && metric.avgCpuUsage > 60
-                      ? "text-yellow-400"
-                      : "text-green-400"}
+                      ? "text-warning"
+                      : "text-success"}
                 >
                   {metric.avgCpuUsage?.toFixed(1) || 0}%
                 </span>
@@ -64,30 +60,24 @@
               <td class="py-3 px-4">
                 <span
                   class={metric.avgMemoryUsage && metric.avgMemoryUsage > 80
-                    ? "text-red-400"
+                    ? "text-error"
                     : metric.avgMemoryUsage && metric.avgMemoryUsage > 60
-                      ? "text-yellow-400"
-                      : "text-green-400"}
+                      ? "text-warning"
+                      : "text-success"}
                 >
                   {metric.avgMemoryUsage?.toFixed(1) || 0}%
                 </span>
               </td>
               <td class="py-3 px-4">
                 <span
-                  class={metric.avgHealthScore && metric.avgHealthScore > 0.8
-                    ? "text-green-400"
-                    : metric.avgHealthScore && metric.avgHealthScore > 0.6
-                      ? "text-yellow-400"
-                      : "text-red-400"}
+                  class={metric.avgDiskUsage && metric.avgDiskUsage > 80
+                    ? "text-error"
+                    : metric.avgDiskUsage && metric.avgDiskUsage > 60
+                      ? "text-warning"
+                      : "text-success"}
                 >
-                  {Math.round((metric.avgHealthScore ?? 0) * 100) || 0}%
+                  {metric.avgDiskUsage?.toFixed(1) || 0}%
                 </span>
-              </td>
-              <td class="py-3 px-4 font-semibold"
-                >{metric.peakActiveStreams || 0}</td
-              >
-              <td class="py-3 px-4 text-tokyo-night-comment">
-                {metric.avgStreamLoad?.toFixed(2) || "0.00"}
               </td>
             </tr>
           {/each}
@@ -98,7 +88,7 @@
 {:else}
   {@const BarChartIcon = getIconComponent("BarChart")}
   <div class="text-center py-8">
-    <BarChartIcon class="w-12 h-12 text-tokyo-night-comment mx-auto mb-4" />
-    <p class="text-tokyo-night-comment">No performance data available</p>
+    <BarChartIcon class="w-12 h-12 text-muted-foreground mx-auto mb-4" />
+    <p class="text-muted-foreground">No performance data available</p>
   </div>
 {/if}

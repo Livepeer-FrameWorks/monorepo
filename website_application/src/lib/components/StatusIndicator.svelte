@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { cn } from "$lib/utils";
   import { getIconComponent, type IconName } from "$lib/iconUtils";
   import type { ComponentType } from "svelte";
 
@@ -10,6 +11,7 @@
     size?: StatusSize;
     showLabel?: boolean;
     pulse?: boolean;
+    class?: string;
   }
 
   interface StatusConfig {
@@ -18,7 +20,11 @@
     icon: ComponentType | null;
   }
 
-  const makeConfig = (color: StatusColor, label: string, icon: IconName) => ({
+  const makeConfig = (
+    color: StatusColor,
+    label: string,
+    icon: IconName
+  ): StatusConfig => ({
     color,
     label,
     icon: getIconComponent(icon),
@@ -34,18 +40,18 @@
     processing: makeConfig("blue", "Processing", "RefreshCw"),
     pending: makeConfig("blue", "Pending", "Clock"),
     buffering: makeConfig("yellow", "Buffering", "Clock"),
-    paused: makeConfig("yellow", "Paused", "PauseCircle"),
+    paused: makeConfig("yellow", "Paused", "PauseCircle" as IconName),
     warning: makeConfig("yellow", "Warning", "AlertTriangle"),
     degraded: makeConfig("yellow", "Degraded", "AlertTriangle"),
-    offline: makeConfig("red", "Offline", "CircleX"),
+    offline: makeConfig("red", "Offline", "CircleX" as IconName),
     error: makeConfig("red", "Error", "XCircle"),
     failed: makeConfig("red", "Failed", "XCircle"),
-    disconnected: makeConfig("red", "Disconnected", "WifiOff"),
+    disconnected: makeConfig("red", "Disconnected", "WifiOff" as IconName),
     unhealthy: makeConfig("red", "Unhealthy", "XCircle"),
-    stopped: makeConfig("gray", "Stopped", "StopCircle"),
+    stopped: makeConfig("gray", "Stopped", "StopCircle" as IconName),
     inactive: makeConfig("gray", "Inactive", "Circle"),
-    disabled: makeConfig("gray", "Disabled", "CircleSlash"),
-    maintenance: makeConfig("gray", "Maintenance", "Wrench"),
+    disabled: makeConfig("gray", "Disabled", "CircleSlash" as IconName),
+    maintenance: makeConfig("gray", "Maintenance", "Wrench" as IconName),
     unknown: makeConfig("gray", "Unknown", "HelpCircle"),
   };
 
@@ -54,29 +60,29 @@
     { bg: string; text: string; border: string }
   > = {
     green: {
-      bg: "bg-tokyo-night-green/20",
-      text: "text-tokyo-night-green",
-      border: "border-tokyo-night-green/30",
+      bg: "bg-success/20",
+      text: "text-success",
+      border: "border-success/30",
     },
     blue: {
-      bg: "bg-tokyo-night-blue/20",
-      text: "text-tokyo-night-blue",
-      border: "border-tokyo-night-blue/30",
+      bg: "bg-accent/20",
+      text: "text-accent",
+      border: "border-accent/30",
     },
     yellow: {
-      bg: "bg-tokyo-night-yellow/20",
-      text: "text-tokyo-night-yellow",
-      border: "border-tokyo-night-yellow/30",
+      bg: "bg-warning/20",
+      text: "text-warning",
+      border: "border-warning/30",
     },
     red: {
-      bg: "bg-tokyo-night-red/20",
-      text: "text-tokyo-night-red",
-      border: "border-tokyo-night-red/30",
+      bg: "bg-error/20",
+      text: "text-error",
+      border: "border-error/30",
     },
     gray: {
-      bg: "bg-tokyo-night-comment/20",
-      text: "text-tokyo-night-comment",
-      border: "border-tokyo-night-comment/30",
+      bg: "bg-muted/50",
+      text: "text-muted-foreground",
+      border: "border-muted-foreground/30",
     },
   };
 
@@ -106,28 +112,34 @@
     size = "normal",
     showLabel = true,
     pulse = false,
+    class: className,
   }: Props = $props();
 
-  const normalizedStatus = $derived(
-    () => status?.toString().toLowerCase() ?? "unknown",
-  );
+  const normalizedStatus = $derived(status?.toString().toLowerCase() ?? "unknown");
   const statusConfig = $derived(
-    () => statusConfigs[normalizedStatus()] ?? statusConfigs.unknown,
+    statusConfigs[normalizedStatus] ?? statusConfigs.unknown
   );
-  const IconComponent = $derived(() => statusConfig().icon);
-  const color = $derived(() => colorClasses[statusConfig().color]);
-  const sizeClasses = $derived(() => sizeMap[size] ?? sizeMap.normal);
+  const IconComponent = $derived(statusConfig.icon);
+  const color = $derived(colorClasses[statusConfig.color]);
+  const sizeClasses = $derived(sizeMap[size] ?? sizeMap.normal);
 </script>
 
 <span
-  class="inline-flex items-center {sizeClasses.container} rounded-full font-medium {color.bg} {color.text} border {color.border}"
+  class={cn(
+    "inline-flex items-center rounded-full font-medium border",
+    sizeClasses.container,
+    color.bg,
+    color.text,
+    color.border,
+    className
+  )}
 >
   {#if IconComponent}
     <IconComponent
-      class="{sizeClasses.icon} {sizeClasses.spacing} {pulse ? 'animate-pulse' : ''}"
+      class={cn(sizeClasses.icon, sizeClasses.spacing, pulse && "animate-pulse")}
     />
   {/if}
   {#if showLabel}
-    {statusConfig().label}
+    {statusConfig.label}
   {/if}
 </span>

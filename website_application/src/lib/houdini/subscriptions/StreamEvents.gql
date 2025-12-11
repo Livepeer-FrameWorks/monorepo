@@ -1,0 +1,9 @@
+subscription StreamEvents($stream: String) {
+  streamEvents(stream: $stream) {
+    type
+    stream
+    status
+    timestamp
+    details
+  }
+}

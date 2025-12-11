@@ -1,0 +1,34 @@
+query GetGeographicDistribution(
+  $stream: String
+  $timeRange: TimeRangeInput
+  $topN: Int = 10
+) {
+  geographicDistribution(stream: $stream, timeRange: $timeRange, topN: $topN) {
+    timeRange {
+      start
+      end
+    }
+    stream
+    topCountries {
+      countryCode
+      viewerCount
+      percentage
+    }
+    topCities {
+      city
+      countryCode
+      viewerCount
+      percentage
+      latitude
+      longitude
+    }
+    uniqueCountries
+    uniqueCities
+    totalViewers
+    viewersByCountry {
+      timestamp
+      countryCode
+      viewerCount
+    }
+  }
+}

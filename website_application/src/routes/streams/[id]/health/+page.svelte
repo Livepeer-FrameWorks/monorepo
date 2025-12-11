@@ -1,46 +1,142 @@
-<script>
-  import { onMount, onDestroy } from "svelte";
+<script lang="ts">
+  import { onMount, onDestroy, untrack } from "svelte";
   import { page } from "$app/state";
   import { goto } from "$app/navigation";
   import { resolve } from "$app/paths";
-  import { healthService } from "$lib/graphql/services/health.js";
-  import { streamsService } from "$lib/graphql/services/streams.js";
-  import HealthScoreIndicator from "$lib/components/health/HealthScoreIndicator.svelte";
+  import {
+    GetStreamStore,
+    GetCurrentStreamHealthStore,
+    GetStreamHealthMetricsStore,
+    GetTrackListEventsStore,
+    GetRebufferingEventsStore,
+    TrackListUpdatesStore,
+  } from "$houdini";
+  import type { TrackListUpdates$result } from "$houdini";
+  import { toast } from "$lib/stores/toast.js";
   import BufferStateIndicator from "$lib/components/health/BufferStateIndicator.svelte";
+  import HealthTrendChart from "$lib/components/charts/HealthTrendChart.svelte";
+  import BufferHealthHistogram from "$lib/components/charts/BufferHealthHistogram.svelte";
   import LoadingCard from "$lib/components/LoadingCard.svelte";
   import { getIconComponent } from "$lib/iconUtils";
+  import { GridSeam } from "$lib/components/layout";
+  import { Button } from "$lib/components/ui/button";
 
-  let streamId = page.params.id;
-  let stream = $state(null);
-  let currentHealth = $state(null);
-  let healthMetrics = $state([]);
-  let healthAlerts = $state([]);
-  let trackListEvents = $state([]);
-  let rebufferingEvents = $state([]);
-  let comprehensiveAnalysis = $state(null);
-  let loading = $state(true);
-  let error = $state(null);
+  // Houdini stores
+  const streamStore = new GetStreamStore();
+  const currentHealthStore = new GetCurrentStreamHealthStore();
+  const healthMetricsStore = new GetStreamHealthMetricsStore();
+  const trackListEventsStore = new GetTrackListEventsStore();
+  const rebufferingEventsStore = new GetRebufferingEventsStore();
+  const trackListSub = new TrackListUpdatesStore();
+
+  // Types from Houdini
+  type StreamType = NonNullable<NonNullable<typeof $streamStore.data>["stream"]>;
+  type HealthMetricType = NonNullable<NonNullable<typeof $currentHealthStore.data>["currentStreamHealth"]>;
+  type TrackListEventType = NonNullable<NonNullable<NonNullable<typeof $trackListEventsStore.data>["trackListEventsConnection"]>["edges"]>[0]["node"];
+  type RebufferingEventType = NonNullable<NonNullable<NonNullable<typeof $rebufferingEventsStore.data>["rebufferingEvents"]>[0]>;
+
+  // page is a store; derive the current param value so it updates on navigation
+  let streamId = $derived(page?.params?.id as string ?? "");
+
+  // Derived state from Houdini stores
+  let stream = $derived($streamStore.data?.stream ?? null);
+  let currentHealth = $derived($currentHealthStore.data?.currentStreamHealth ?? null);
+  let healthMetrics = $derived(
+    $healthMetricsStore.data?.streamHealthMetricsConnection?.edges
+      ?.map(e => e?.node)
+      .filter((n): n is HealthMetricType => n !== null && n !== undefined) ?? []
+  );
+  
+  // Extract buffer health values for histogram (convert 0-1 ratio to 0-100 percentage)
+  let bufferHealthValues = $derived(
+    healthMetrics
+      .map(m => m.bufferHealth)
+      .filter(val => val !== null && val !== undefined)
+      .map(val => (val as number) * 100)
+  );
+
+  let trackListEvents = $state<TrackListEventType[]>([]);
+  let rebufferingEvents = $derived($rebufferingEventsStore.data?.rebufferingEvents ?? []);
+  let loading = $derived($streamStore.fetching || $currentHealthStore.fetching);
+  let error = $state<string | null>(null);
+
+  // Pagination state
+  let healthMetricsDisplayCount = $state(10);
+  let trackListDisplayCount = $state(10);
+  let hasMoreHealthMetrics = $derived(healthMetrics.length > healthMetricsDisplayCount);
+  let hasMoreTrackListEvents = $derived(trackListEvents.length > trackListDisplayCount);
+  let loadingMoreHealthMetrics = $state(false);
+  let loadingMoreTrackListEvents = $state(false);
+
+  // Check if there are more pages to load from server
+  let healthMetricsHasNextPage = $derived(
+    $healthMetricsStore.data?.streamHealthMetricsConnection?.pageInfo?.hasNextPage ?? false
+  );
+  let trackListEventsHasNextPage = $derived(
+    $trackListEventsStore.data?.trackListEventsConnection?.pageInfo?.hasNextPage ?? false
+  );
 
   // Time range for historical data (last 24 hours)
-  const timeRange = {
+  const getTimeRange = () => ({
     start: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
-    end: new Date().toISOString()
-  };
+    end: new Date().toISOString(),
+  });
 
   // Auto-refresh interval
-  let refreshInterval = null;
+  let refreshInterval: ReturnType<typeof setInterval> | null = null;
+
+  // Effect to handle track list subscription errors
+  $effect(() => {
+    const errors = $trackListSub.errors;
+    if (errors?.length) {
+      console.warn("Track list subscription error:", errors);
+      // Non-fatal: page still works, just without real-time updates
+    }
+  });
+
+  // Effect to handle track list subscription updates
+  $effect(() => {
+    const update = $trackListSub.data?.trackListUpdates;
+    if (update) {
+      untrack(() => handleTrackListUpdate(update));
+    }
+  });
+
+  // Effect to sync track list events from store
+  // IMPORTANT: The length check must be INSIDE untrack() to avoid creating a reactive dependency
+  // on trackListEvents, which would cause an effect loop
+  $effect(() => {
+    const edges = $trackListEventsStore.data?.trackListEventsConnection?.edges;
+    if (edges) {
+      untrack(() => {
+        // Only sync if we haven't populated yet (check inside untrack to avoid dependency)
+        if (trackListEvents.length === 0) {
+          trackListEvents = edges
+            .map(e => e?.node)
+            .filter((n): n is TrackListEventType => n !== null && n !== undefined);
+        }
+      });
+    }
+  });
 
   onMount(async () => {
+    if (!streamId) {
+      error = "Invalid stream ID";
+      return;
+    }
     await loadStreamData();
     await loadHealthData();
-    await loadComprehensiveAnalysis();
-    
+    startTrackListSubscription();
     // Set up auto-refresh every 30 seconds for current health
     refreshInterval = setInterval(async () => {
       try {
-        currentHealth = await healthService.getCurrentStreamHealth(streamId);
+        // Use stream.id (internal UUID) for analytics queries - this is the canonical identifier
+        const streamUUID = $streamStore.data?.stream?.id;
+        if (streamUUID) {
+          await currentHealthStore.fetch({ variables: { stream: streamUUID } });
+        }
       } catch (err) {
-        console.error('Failed to refresh health data:', err);
+        console.error("Failed to refresh health data:", err);
       }
     }, 30000);
   });
@@ -49,354 +145,554 @@
     if (refreshInterval) {
       clearInterval(refreshInterval);
     }
+    trackListSub.unlisten();
   });
 
+  function startTrackListSubscription() {
+    const streamData = $streamStore.data?.stream;
+    if (!streamData) return;
+    // Use stream.id (internal UUID) for subscriptions - this is the canonical identifier
+    trackListSub.listen({ stream: streamData.id });
+  }
+
+
+  // Utility functions for color formatting
+  function getBufferStateColor(state: string | null | undefined): string {
+    if (!state) return "text-muted-foreground";
+    switch (state.toLowerCase()) {
+      case "good": return "text-success";
+      case "warning": return "text-warning";
+      case "critical": return "text-destructive";
+      default: return "text-muted-foreground";
+    }
+  }
+
+  function getPacketLossColor(loss: number | null | undefined): string {
+    if (loss == null) return "text-muted-foreground";
+    if (loss > 0.05) return "text-destructive";
+    if (loss > 0.02) return "text-warning";
+    return "text-success";
+  }
+
   async function loadStreamData() {
+    if (!streamId) return;
     try {
-      const streams = await streamsService.getStreams();
-      stream = streams.find(s => s.id === streamId);
-      
-      if (!stream) {
+      const result = await streamStore.fetch({ variables: { id: streamId } });
+
+      if (!result.data?.stream) {
         error = "Stream not found";
-        loading = false;
         return;
       }
-    } catch (err) {
-      console.error('Failed to load stream:', err);
+    } catch (err: any) {
+      // Ignore AbortErrors which happen on navigation/cancellation
+      if (err.name === 'AbortError' || err.message === 'aborted' || err.message === 'Aborted') {
+        return;
+      }
+      console.error("Failed to load stream:", err);
       error = "Failed to load stream data";
-      loading = false;
     }
   }
 
   async function loadHealthData() {
+    if (!streamId) return;
     try {
-      loading = true;
-      
+      const streamIdParam = $streamStore.data?.stream?.id;
+      if (!streamIdParam) return;
+
       // Load all health data in parallel
-      const [healthData, alertsData, trackData, rebufferData, currentData] = await Promise.all([
-        healthService.getStreamHealthMetrics(streamId, timeRange),
-        healthService.getStreamHealthAlerts(streamId, timeRange),
-        healthService.getTrackListEvents(streamId, timeRange),
-        healthService.getRebufferingEvents(streamId, timeRange),
-        healthService.getCurrentStreamHealth(streamId)
+      await Promise.all([
+        currentHealthStore.fetch({ variables: { stream: streamIdParam } }),
+        healthMetricsStore.fetch({
+          variables: { stream: streamIdParam, first: 100, timeRange: getTimeRange(), noCache: true },
+        }),
+        trackListEventsStore.fetch({
+          variables: { stream: streamIdParam, first: 100, timeRange: getTimeRange(), noCache: true },
+        }),
+        rebufferingEventsStore.fetch({ variables: { stream: streamIdParam, timeRange: getTimeRange() } }),
       ]);
-
-      healthMetrics = healthData || [];
-      healthAlerts = alertsData || [];
-      trackListEvents = trackData || [];
-      rebufferingEvents = rebufferData || [];
-      currentHealth = currentData;
-
-    } catch (err) {
-      console.error('Failed to load health data:', err);
+    } catch (err: any) {
+      // Ignore AbortErrors which happen on navigation/cancellation
+      if (err.name === 'AbortError' || err.message === 'aborted' || err.message === 'Aborted') {
+        return;
+      }
+      console.error("Failed to load health data:", err);
       error = "Failed to load health monitoring data";
-    } finally {
-      loading = false;
     }
   }
 
-  async function loadComprehensiveAnalysis() {
-    try {
-      comprehensiveAnalysis = await healthService.getComprehensiveHealthAnalysis(streamId, timeRange);
-    } catch (err) {
-      console.error('Failed to load comprehensive analysis:', err);
+  function handleTrackListUpdate(event: NonNullable<TrackListUpdates$result["trackListUpdates"]>) {
+    // Add the new track list event to the list
+    const newEvent: TrackListEventType = {
+      timestamp: new Date().toISOString(),
+      stream: event.streamName ?? "",
+      trackList: (event.tracks ?? []).map(t => t?.trackName).filter(Boolean).join(", "),
+      trackCount: event.totalTracks || 0,
+      tracks: event.tracks ?? [],
+      nodeId: null,
+    };
+
+    trackListEvents = [newEvent, ...trackListEvents].slice(0, 100);
+
+    // Show toast for significant track changes
+    if (trackListEvents.length > 1 && event.totalTracks !== trackListEvents[1]?.trackCount) {
+      toast.success(`Track list updated: ${event.totalTracks} track(s) active`);
     }
   }
 
-  function formatTimestamp(timestamp) {
+  function formatTimestamp(timestamp: string) {
     return new Date(timestamp).toLocaleString();
   }
 
-  function getAlertTypeIcon(alertType) {
-    switch (alertType) {
-      case 'HIGH_JITTER': return 'Zap';
-      case 'KEYFRAME_INSTABILITY': return 'Film';
-      case 'PACKET_LOSS': return 'Wifi';
-      case 'REBUFFERING': return 'Pause';
-      case 'QUALITY_DEGRADATION': return 'TrendingDown';
-      default: return 'AlertTriangle';
+  // Parse tracks from trackList JSON string if tracks array is empty/malformed
+  function getTracksForEvent(event: TrackListEventType) {
+    // If tracks array has valid data, use it
+    if (event.tracks && event.tracks.length > 0 && event.tracks[0]?.trackName) {
+      return event.tracks;
     }
+    // Otherwise try to parse from trackList JSON string
+    if (event.trackList) {
+      try {
+        const parsed = JSON.parse(event.trackList);
+        if (Array.isArray(parsed)) {
+          return parsed;
+        }
+      } catch {
+        // Not valid JSON, ignore
+      }
+    }
+    return [];
   }
 
   function navigateBack() {
-    goto(resolve("/streams"));
+    goto(resolve(`/streams/${streamId}`));
   }
 
-  function getTrendColor(trend) {
-    switch (trend) {
-      case 'improving': return 'text-green-400';
-      case 'degrading': return 'text-red-400';
-      default: return 'text-tokyo-night-fg';
+  async function loadMoreHealthMetrics() {
+    // First, show more from already loaded data
+    if (healthMetrics.length > healthMetricsDisplayCount) {
+      healthMetricsDisplayCount = Math.min(healthMetricsDisplayCount + 10, healthMetrics.length);
+      return;
+    }
+    // If we've shown all loaded data and there's more on server, fetch next page
+    if (healthMetricsHasNextPage) {
+      loadingMoreHealthMetrics = true;
+      try {
+        await healthMetricsStore.loadNextPage();
+        healthMetricsDisplayCount += 10;
+      } catch (err) {
+        console.error("Failed to load more health metrics:", err);
+      } finally {
+        loadingMoreHealthMetrics = false;
+      }
     }
   }
 
-  function getTrendIcon(trend) {
-    switch (trend) {
-      case 'improving': return 'TrendingUp';
-      case 'degrading': return 'TrendingDown';
-      default: return 'Minus';
+  async function loadMoreTrackListEvents() {
+    // First, show more from already loaded data
+    if (trackListEvents.length > trackListDisplayCount) {
+      trackListDisplayCount = Math.min(trackListDisplayCount + 10, trackListEvents.length);
+      return;
+    }
+    // If we've shown all loaded data and there's more on server, fetch next page
+    if (trackListEventsHasNextPage) {
+      loadingMoreTrackListEvents = true;
+      try {
+        await trackListEventsStore.loadNextPage();
+        // After loading more, sync from store
+        const edges = $trackListEventsStore.data?.trackListEventsConnection?.edges;
+        if (edges) {
+          trackListEvents = edges
+            .map(e => e?.node)
+            .filter((n): n is TrackListEventType => n !== null && n !== undefined);
+        }
+        trackListDisplayCount += 10;
+      } catch (err) {
+        console.error("Failed to load more track list events:", err);
+      } finally {
+        loadingMoreTrackListEvents = false;
+      }
     }
   }
 
-  function getTrackActivityColor(activity) {
-    switch (activity) {
-      case 'stable': return 'text-green-400';
-      case 'minor-changes': return 'text-yellow-400';
-      case 'unstable': return 'text-red-400';
-      default: return 'text-tokyo-night-fg';
-    }
-  }
-
-  function getImpactColor(impact) {
-    switch (impact) {
-      case 'none': return 'text-green-400';
-      case 'low': return 'text-yellow-400';
-      case 'medium': return 'text-orange-400';
-      case 'high': return 'text-red-400';
-      default: return 'text-tokyo-night-fg';
-    }
-  }
-
-  const SvelteComponent = $derived(getIconComponent('ArrowLeft'));
+  const ArrowLeftIcon = getIconComponent("ArrowLeft");
+  const AlertTriangleIcon = getIconComponent("AlertTriangle");
+  const PauseIcon = getIconComponent("Pause");
 </script>
 
 <svelte:head>
   <title>Stream Health - {stream?.name || 'Loading...'} - FrameWorks</title>
 </svelte:head>
 
-<div class="min-h-screen bg-tokyo-night-bg text-tokyo-night-fg">
-  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-    <!-- Header -->
-    <div class="mb-8">
-      <div class="flex items-center space-x-4 mb-4">
-        <button
-          onclick={navigateBack}
-          class="p-2 rounded-lg bg-tokyo-night-surface hover:bg-tokyo-night-selection transition-colors"
-        >
-          <SvelteComponent class="w-5 h-5" />
-        </button>
-        
-        <div>
-          <h1 class="text-3xl font-bold text-tokyo-night-blue">
-            Stream Health Monitoring
-          </h1>
-          {#if stream}
-            <p class="text-tokyo-night-comment">
-              {stream.name} • Last 24 hours
-            </p>
-          {/if}
-        </div>
+<div class="h-full flex flex-col">
+  <!-- Fixed Page Header -->
+  <div class="px-4 sm:px-6 lg:px-8 py-4 border-b border-border shrink-0">
+    <div class="flex items-center gap-4">
+      <button
+        onclick={navigateBack}
+        class="p-2 border border-border/50 hover:bg-muted/50 transition-colors"
+      >
+        <ArrowLeftIcon class="w-5 h-5" />
+      </button>
+      <div>
+        <h1 class="text-xl font-bold text-foreground">Stream Health</h1>
+        <p class="text-sm text-muted-foreground">
+          {#if stream}{stream.name} • {/if}Last 24 hours
+        </p>
       </div>
     </div>
+  </div>
 
+  <!-- Content -->
+  <div class="flex-1 overflow-y-auto">
     {#if loading}
-      <div class="space-y-6">
+      <div class="p-4 space-y-4">
         <LoadingCard variant="analytics" />
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
           <LoadingCard variant="analytics" />
           <LoadingCard variant="analytics" />
         </div>
       </div>
     {:else if error}
-      {@const SvelteComponent_1 = getIconComponent('AlertTriangle')}
-      <div class="bg-red-900/20 border border-red-500/30 rounded-lg p-6 text-center">
-        <SvelteComponent_1 class="w-12 h-12 text-red-400 mx-auto mb-4" />
-        <h3 class="text-lg font-semibold text-red-400 mb-2">Error Loading Health Data</h3>
-        <p class="text-red-300">{error}</p>
-        <button
-          onclick={loadHealthData}
-          class="mt-4 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors"
-        >
-          Retry
-        </button>
+      <div class="slab">
+        <div class="slab-body--padded text-center">
+          <AlertTriangleIcon class="w-8 h-8 text-error mx-auto mb-4" />
+          <h3 class="text-lg font-semibold text-error mb-2">Error Loading Health Data</h3>
+          <p class="text-muted-foreground mb-4">{error}</p>
+          <Button variant="destructive" onclick={loadHealthData}>Retry</Button>
+        </div>
       </div>
     {:else}
       <!-- Current Health Status -->
       {#if currentHealth}
-        <div class="bg-tokyo-night-surface rounded-lg p-6 mb-8">
-          <h2 class="text-xl font-semibold text-tokyo-night-cyan mb-6">Current Health Status</h2>
-          
-          <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <!-- Health Score -->
-            <div class="flex items-center justify-center">
-              <HealthScoreIndicator 
-                healthScore={currentHealth.healthScore} 
-                size="lg" 
-              />
-            </div>
-
-            <!-- Buffer State -->
-            <div class="flex items-center justify-center">
-              <BufferStateIndicator 
-                bufferState={currentHealth.bufferState}
-                bufferHealth={currentHealth.bufferHealth}
-                size="lg" 
-              />
-            </div>
-
-            <!-- Key Metrics -->
-            <div class="space-y-3">
-              <div class="flex justify-between">
-                <span class="text-tokyo-night-fg">Quality Tier:</span>
-                <span class="font-mono text-tokyo-night-cyan">{currentHealth.qualityTier || 'Unknown'}</span>
-              </div>
-              <div class="flex justify-between">
-                <span class="text-tokyo-night-fg">Frame Jitter:</span>
-                <span class="font-mono {currentHealth.frameJitterMs > 30 ? 'text-red-400' : 'text-green-400'}">
-                  {currentHealth.frameJitterMs ? `${currentHealth.frameJitterMs.toFixed(1)}ms` : 'N/A'}
-                </span>
-              </div>
-              <div class="flex justify-between">
-                <span class="text-tokyo-night-fg">Packet Loss:</span>
-                <span class="font-mono {currentHealth.packetLossPercentage > 2 ? 'text-red-400' : 'text-green-400'}">
-                  {currentHealth.packetLossPercentage ? `${currentHealth.packetLossPercentage.toFixed(2)}%` : 'N/A'}
-                </span>
-              </div>
-              {#if currentHealth.issuesDescription}
-                <div class="mt-4">
-                  <span class="text-tokyo-night-fg">Issues:</span>
-                  <p class="text-sm text-red-400 mt-1">{currentHealth.issuesDescription}</p>
-                </div>
-              {/if}
-            </div>
+        <div class="slab">
+          <div class="slab-header">
+            <h2>Current Health Status</h2>
           </div>
-        </div>
-      {/if}
+          <div class="slab-body--padded">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <!-- Buffer State -->
+              <div class="flex items-center justify-center py-4">
+                <BufferStateIndicator
+                  bufferState={currentHealth.bufferState}
+                  bufferHealth={currentHealth.bufferHealth}
+                  size="lg"
+                />
+              </div>
 
-      <!-- Comprehensive Health Analysis -->
-      {#if comprehensiveAnalysis?.analysis}
-        {@const SvelteComponent_2 = getIconComponent(getTrendIcon(comprehensiveAnalysis.analysis.healthTrend))}
-        {@const SvelteComponent_3 = getIconComponent('Activity')}
-        {@const SvelteComponent_4 = getIconComponent('Pause')}
-        <div class="bg-tokyo-night-surface rounded-lg p-6 mb-8">
-          <h2 class="text-xl font-semibold text-tokyo-night-cyan mb-6">Health Analysis Summary</h2>
-          
-          <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-            <!-- Overall Health Score -->
-            <div class="text-center">
-              <div class="relative inline-flex items-center justify-center">
-                <div class="w-20 h-20 rounded-full border-4 {comprehensiveAnalysis.analysis.overallScore >= 80 ? 'border-green-400' : comprehensiveAnalysis.analysis.overallScore >= 60 ? 'border-yellow-400' : 'border-red-400'} flex items-center justify-center">
-                  <span class="text-2xl font-bold {comprehensiveAnalysis.analysis.overallScore >= 80 ? 'text-green-400' : comprehensiveAnalysis.analysis.overallScore >= 60 ? 'text-yellow-400' : 'text-red-400'}">
-                    {comprehensiveAnalysis.analysis.overallScore}
+              <!-- Key Metrics -->
+              <div class="space-y-3">
+                <div class="flex justify-between border-b border-border/30 pb-2">
+                  <span class="text-muted-foreground">Quality Tier</span>
+                  <span class="font-mono text-info">{currentHealth.qualityTier || 'Unknown'}</span>
+                </div>
+                <div class="flex justify-between border-b border-border/30 pb-2">
+                  <span class="text-muted-foreground">Bitrate</span>
+                  <span class="font-mono text-success">
+                    {currentHealth.bitrate ? `${(currentHealth.bitrate / 1000000).toFixed(2)} Mbps` : 'N/A'}
                   </span>
                 </div>
+                <div class="flex justify-between border-b border-border/30 pb-2">
+                  <span class="text-muted-foreground">Packet Loss</span>
+                  <span class="font-mono {(currentHealth.packetLossPercentage ?? 0) > 0.02 ? 'text-destructive' : 'text-success'}">
+                    {currentHealth.packetLossPercentage ? `${(currentHealth.packetLossPercentage * 100).toFixed(2)}%` : 'N/A'}
+                  </span>
+                </div>
+                <div class="flex justify-between">
+                  <span class="text-muted-foreground">Buffer Health</span>
+                  <span class="font-mono {(currentHealth.bufferHealth ?? 0) < 0.5 ? 'text-warning' : 'text-success'}">
+                    {currentHealth.bufferHealth ? `${(currentHealth.bufferHealth * 100).toFixed(0)}%` : 'N/A'}
+                  </span>
+                </div>
+                {#if currentHealth.issuesDescription}
+                  <div class="mt-4 p-3 bg-warning/10 border border-warning/30">
+                    <span class="text-sm text-warning">{currentHealth.issuesDescription}</span>
+                  </div>
+                {/if}
               </div>
-              <p class="text-sm text-tokyo-night-comment mt-2">Overall Score</p>
-            </div>
-
-            <!-- Health Trend -->
-            <div class="text-center">
-              <div class="flex items-center justify-center space-x-2 mb-2">
-                <SvelteComponent_2 
-                  class="w-6 h-6 {getTrendColor(comprehensiveAnalysis.analysis.healthTrend)}" 
-                />
-                <span class={getTrendColor(comprehensiveAnalysis.analysis.healthTrend)}>
-                  {comprehensiveAnalysis.analysis.healthTrend}
-                </span>
-              </div>
-              <p class="text-sm text-tokyo-night-comment">Health Trend</p>
-            </div>
-
-            <!-- Track Activity -->
-            <div class="text-center">
-              <div class="flex items-center justify-center space-x-2 mb-2">
-                <SvelteComponent_3 
-                  class="w-6 h-6 {getTrackActivityColor(comprehensiveAnalysis.analysis.trackListActivity)}" 
-                />
-                <span class={getTrackActivityColor(comprehensiveAnalysis.analysis.trackListActivity)}>
-                  {comprehensiveAnalysis.analysis.trackListActivity.replace('-', ' ')}
-                </span>
-              </div>
-              <p class="text-sm text-tokyo-night-comment">Track Activity</p>
-            </div>
-
-            <!-- Rebuffer Impact -->
-            <div class="text-center">
-              <div class="flex items-center justify-center space-x-2 mb-2">
-                <SvelteComponent_4 
-                  class="w-6 h-6 {getImpactColor(comprehensiveAnalysis.analysis.rebufferImpact)}" 
-                />
-                <span class={getImpactColor(comprehensiveAnalysis.analysis.rebufferImpact)}>
-                  {comprehensiveAnalysis.analysis.rebufferImpact} impact
-                </span>
-              </div>
-              <p class="text-sm text-tokyo-night-comment">Rebuffer Impact</p>
             </div>
           </div>
         </div>
+
+        <!-- Encoding Details -->
+        {#if currentHealth.profile || currentHealth.gopSize || currentHealth.codec || currentHealth.fps}
+          <div class="slab border-t-0">
+            <div class="slab-header">
+              <h3>Encoding Details</h3>
+            </div>
+            <GridSeam cols={4} stack="2x2" surface="panel" flush={true}>
+              {#if currentHealth.codec}
+                <div class="p-4">
+                  <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Codec</p>
+                  <p class="font-mono text-lg text-accent-purple">{currentHealth.codec}</p>
+                </div>
+              {/if}
+              {#if currentHealth.profile}
+                <div class="p-4">
+                  <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Profile</p>
+                  <p class="font-mono text-lg text-info">{currentHealth.profile}</p>
+                </div>
+              {/if}
+              {#if currentHealth.gopSize}
+                <div class="p-4">
+                  <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">GOP Size</p>
+                  <p class="font-mono text-lg text-primary">{currentHealth.gopSize} frames</p>
+                </div>
+              {/if}
+              {#if currentHealth.fps}
+                <div class="p-4">
+                  <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Frame Rate</p>
+                  <p class="font-mono text-lg text-warning-alt">{currentHealth.fps.toFixed(1)} fps</p>
+                </div>
+              {/if}
+              {#if currentHealth.width && currentHealth.height}
+                <div class="p-4">
+                  <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Resolution</p>
+                  <p class="font-mono text-lg text-success">{currentHealth.width}x{currentHealth.height}</p>
+                </div>
+              {/if}
+              {#if currentHealth.bitrate}
+                <div class="p-4">
+                  <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Bitrate</p>
+                  <p class="font-mono text-lg text-primary">{(currentHealth.bitrate / 1000000).toFixed(2)} Mbps</p>
+                </div>
+              {/if}
+            </GridSeam>
+          </div>
+        {/if}
+
+        <!-- Buffer Details -->
+        {#if currentHealth.bufferSize || currentHealth.bufferUsed}
+          <div class="slab border-t-0">
+            <div class="slab-header">
+              <h3>Buffer Details</h3>
+            </div>
+            <GridSeam cols={3} stack="2x2" surface="panel" flush={true}>
+              {#if currentHealth.bufferSize}
+                <div class="p-4">
+                  <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Buffer Size</p>
+                  <p class="font-mono text-lg text-primary">{(currentHealth.bufferSize / 1024).toFixed(1)} KB</p>
+                </div>
+              {/if}
+              {#if currentHealth.bufferUsed}
+                <div class="p-4">
+                  <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Buffer Used</p>
+                  <p class="font-mono text-lg text-warning">{(currentHealth.bufferUsed / 1024).toFixed(1)} KB</p>
+                </div>
+              {/if}
+              {#if currentHealth.bufferSize && currentHealth.bufferUsed}
+                {@const bufferPercentage = (currentHealth.bufferUsed / currentHealth.bufferSize) * 100}
+                <div class="p-4">
+                  <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Utilization</p>
+                  <div class="flex items-center gap-2">
+                    <div class="flex-1 bg-muted h-2">
+                      <div
+                        class="h-2 {bufferPercentage > 90 ? 'bg-destructive' : bufferPercentage > 70 ? 'bg-warning' : 'bg-success'}"
+                        style="width: {Math.min(bufferPercentage, 100)}%"
+                      ></div>
+                    </div>
+                    <span class="font-mono text-sm {bufferPercentage > 90 ? 'text-destructive' : bufferPercentage > 70 ? 'text-warning' : 'text-success'}">
+                      {bufferPercentage.toFixed(0)}%
+                    </span>
+                  </div>
+                </div>
+              {/if}
+            </GridSeam>
+          </div>
+        {/if}
+
+        <!-- Audio Details -->
+        {#if currentHealth.audioCodec || currentHealth.audioChannels || currentHealth.audioSampleRate}
+          <div class="slab border-t-0">
+            <div class="slab-header">
+              <h3>Audio Details</h3>
+            </div>
+            <GridSeam cols={4} stack="2x2" surface="panel" flush={true}>
+              {#if currentHealth.audioCodec}
+                <div class="p-4">
+                  <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Audio Codec</p>
+                  <p class="font-mono text-lg text-accent-purple">{currentHealth.audioCodec}</p>
+                </div>
+              {/if}
+              {#if currentHealth.audioChannels}
+                <div class="p-4">
+                  <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Channels</p>
+                  <p class="font-mono text-lg text-info">{currentHealth.audioChannels}</p>
+                </div>
+              {/if}
+              {#if currentHealth.audioSampleRate}
+                <div class="p-4">
+                  <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Sample Rate</p>
+                  <p class="font-mono text-lg text-primary">{(currentHealth.audioSampleRate / 1000).toFixed(1)} kHz</p>
+                </div>
+              {/if}
+              {#if currentHealth.audioBitrate}
+                <div class="p-4">
+                  <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Audio Bitrate</p>
+                  <p class="font-mono text-lg text-warning-alt">{currentHealth.audioBitrate} kbps</p>
+                </div>
+              {/if}
+            </GridSeam>
+          </div>
+        {/if}
       {/if}
 
-      <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
-        <!-- Health Alerts -->
-        <div class="bg-tokyo-night-surface rounded-lg p-6">
-          <h3 class="text-lg font-semibold text-tokyo-night-cyan mb-4">Recent Health Alerts</h3>
-          
-          {#if healthAlerts.length > 0}
-            <div class="space-y-3 max-h-96 overflow-y-auto">
-              {#each healthAlerts.slice(0, 10) as alert (alert.id ?? alert.timestamp)}
-                {@const SvelteComponent_5 = getIconComponent(getAlertTypeIcon(alert.alertType))}
-                <div class="border border-tokyo-night-selection rounded-lg p-3">
-                  <div class="flex items-start space-x-3">
-                    <SvelteComponent_5 
-                      class="w-5 h-5 {healthService.getAlertSeverityColor(alert.severity)} mt-0.5" 
-                    />
-                    <div class="flex-1">
-                      <div class="flex justify-between items-start">
-                        <h4 class="font-medium text-tokyo-night-fg">{alert.alertType.replace('_', ' ')}</h4>
-                        <span class="text-xs text-tokyo-night-comment">{formatTimestamp(alert.timestamp)}</span>
-                      </div>
-                      <p class="text-sm text-tokyo-night-comment mt-1">
-                        Severity: <span class={healthService.getAlertSeverityColor(alert.severity)}>{alert.severity}</span>
+      <!-- Two-column grid: Health Metrics + Track List -->
+      <div class="dashboard-grid">
+        <!-- Recent Health Metrics -->
+        <div class="slab">
+          <div class="slab-header flex items-center justify-between">
+            <h3>Recent Health Metrics</h3>
+            {#if healthMetrics.length > 0}
+              <span class="text-xs text-muted-foreground font-normal normal-case">
+                {Math.min(healthMetricsDisplayCount, healthMetrics.length)} of {healthMetrics.length}{#if healthMetricsHasNextPage}+{/if}
+              </span>
+            {/if}
+          </div>
+          {#if healthMetrics.length > 0}
+            <div class="slab-body--flush max-h-96 overflow-y-auto">
+              {#each healthMetrics.slice(0, healthMetricsDisplayCount) as metric (metric.timestamp)}
+                <div class="p-3 border-b border-border/30 last:border-b-0">
+                  <div class="flex justify-between items-start mb-2">
+                    <span class="text-xs text-muted-foreground">{formatTimestamp(metric.timestamp)}</span>
+                    <span class="text-xs {getBufferStateColor(metric.bufferState)}">
+                      {metric.bufferState || 'Unknown'}
+                    </span>
+                  </div>
+                  <div class="grid grid-cols-3 gap-2 text-sm">
+                    <div>
+                      <span class="text-muted-foreground text-xs">Bitrate</span>
+                      <p class="font-mono text-info">
+                        {metric.bitrate ? `${(metric.bitrate / 1000000).toFixed(2)} Mbps` : 'N/A'}
                       </p>
-                      {#if alert.issuesDescription}
-                        <p class="text-sm text-tokyo-night-fg mt-1">{alert.issuesDescription}</p>
-                      {/if}
+                    </div>
+                    <div>
+                      <span class="text-muted-foreground text-xs">Loss</span>
+                      <p class="font-mono {getPacketLossColor(metric.packetLossPercentage)}">
+                        {metric.packetLossPercentage ? `${(metric.packetLossPercentage * 100).toFixed(2)}%` : 'N/A'}
+                      </p>
+                    </div>
+                    <div>
+                      <span class="text-muted-foreground text-xs">Quality</span>
+                      <p class="font-mono text-info">{metric.qualityTier || 'N/A'}</p>
                     </div>
                   </div>
+                  {#if metric.issuesDescription}
+                    <div class="mt-2 p-2 bg-warning/10 border border-warning/30 flex items-start gap-2">
+                      <AlertTriangleIcon class="w-4 h-4 text-warning mt-0.5 shrink-0" />
+                      <p class="text-sm text-warning">{metric.issuesDescription}</p>
+                    </div>
+                  {/if}
                 </div>
               {/each}
             </div>
+            {#if hasMoreHealthMetrics || healthMetricsHasNextPage}
+              <div class="slab-actions">
+                <Button
+                  variant="ghost"
+                  class="w-full"
+                  onclick={loadMoreHealthMetrics}
+                  disabled={loadingMoreHealthMetrics}
+                >
+                  {loadingMoreHealthMetrics ? 'Loading...' : 'Load More Metrics'}
+                </Button>
+              </div>
+            {/if}
           {:else}
-            <p class="text-tokyo-night-comment text-center py-8">No health alerts in the last 24 hours</p>
+            <div class="slab-body--padded text-center">
+              <p class="text-muted-foreground py-8">No health data in the last 24 hours</p>
+            </div>
           {/if}
         </div>
 
         <!-- Track List Updates -->
-        <div class="bg-tokyo-night-surface rounded-lg p-6">
-          <h3 class="text-lg font-semibold text-tokyo-night-cyan mb-4">Track List Updates</h3>
-          
+        <div class="slab">
+          <div class="slab-header flex items-center justify-between">
+            <h3>Track List Updates</h3>
+            {#if trackListEvents.length > 0}
+              <span class="text-xs text-muted-foreground font-normal normal-case">
+                {Math.min(trackListDisplayCount, trackListEvents.length)} of {trackListEvents.length}{#if trackListEventsHasNextPage}+{/if}
+              </span>
+            {/if}
+          </div>
           {#if trackListEvents.length > 0}
-            <div class="space-y-3 max-h-96 overflow-y-auto">
-              {#each trackListEvents.slice(0, 10) as event (event.timestamp ?? event.stream)}
-                <div class="border border-tokyo-night-selection rounded-lg p-3">
+            <div class="slab-body--flush max-h-96 overflow-y-auto">
+              {#each trackListEvents.slice(0, trackListDisplayCount) as event, i (i)}
+                {@const tracks = getTracksForEvent(event)}
+                <div class="p-3 border-b border-border/30 last:border-b-0">
                   <div class="flex justify-between items-start mb-2">
                     <div>
-                      <h4 class="font-medium text-tokyo-night-fg">{event.trackCount} tracks active</h4>
+                      <span class="font-medium text-foreground">{event.trackCount} tracks active</span>
                       {#if event.nodeId}
-                        <p class="text-xs text-tokyo-night-comment">Node: {event.nodeId}</p>
+                        <p class="text-xs text-muted-foreground">Node: {event.nodeId}</p>
                       {/if}
                     </div>
-                    <span class="text-xs text-tokyo-night-comment">{formatTimestamp(event.timestamp)}</span>
+                    <span class="text-xs text-muted-foreground">{formatTimestamp(event.timestamp || "")}</span>
                   </div>
 
-                  {#if event.trackList}
-                    <p class="text-sm text-tokyo-night-fg whitespace-pre-line">{event.trackList}</p>
-                  {/if}
-
-                  {#if event.tracks && event.tracks.length > 0}
-                    <div class="mt-2 text-xs text-tokyo-night-comment space-y-1">
-                      {#each event.tracks.slice(0, 3) as track}
-                        <div>
-                          <span class="text-tokyo-night-fg font-medium">{track.trackName}</span>
-                          {#if track.codec}
-                            <span>· {track.codec}</span>
-                          {/if}
-                          {#if track.width && track.height}
-                            <span>· {track.width}x{track.height}</span>
-                          {/if}
-                          {#if track.bitrateKbps}
-                            <span>· {track.bitrateKbps} kbps</span>
-                          {/if}
+                  {#if tracks.length > 0}
+                    <div class="space-y-2">
+                      {#each tracks as track}
+                        <div class="p-2 bg-muted/30 border border-border/30">
+                          <div class="flex items-center justify-between mb-2">
+                            <div class="flex items-center gap-2">
+                              <span class="text-foreground font-medium text-sm">{track?.trackName || 'Unknown'}</span>
+                              <span class="text-xs px-1.5 py-0.5 bg-accent-purple/20 text-accent-purple">
+                                {track?.trackType || 'N/A'}
+                              </span>
+                              {#if track?.codec}
+                                <span class="text-xs px-1.5 py-0.5 bg-info/20 text-info">
+                                  {track.codec}
+                                </span>
+                              {/if}
+                            </div>
+                            {#if track?.bitrateKbps}
+                              <span class="text-xs font-mono text-success">{track.bitrateKbps} kbps</span>
+                            {/if}
+                          </div>
+                          <div class="grid grid-cols-4 gap-2 text-xs">
+                            {#if track?.width && track?.height}
+                              <div>
+                                <span class="text-muted-foreground">Resolution</span>
+                                <p class="font-mono text-foreground">{track.width}x{track.height}</p>
+                              </div>
+                            {/if}
+                            {#if track?.fps}
+                              <div>
+                                <span class="text-muted-foreground">FPS</span>
+                                <p class="font-mono text-foreground">{track.fps.toFixed(1)}</p>
+                              </div>
+                            {/if}
+                            {#if track?.buffer !== undefined && track?.buffer !== null}
+                              <div>
+                                <span class="text-muted-foreground">Buffer</span>
+                                <p class="font-mono {track.buffer < 100 ? 'text-warning' : 'text-success'}">{track.buffer}ms</p>
+                              </div>
+                            {/if}
+                            {#if track?.jitter !== undefined && track?.jitter !== null}
+                              <div>
+                                <span class="text-muted-foreground">Jitter</span>
+                                <p class="font-mono {(track.jitter || 0) > 50 ? 'text-warning' : 'text-success'}">{track.jitter}ms</p>
+                              </div>
+                            {/if}
+                            {#if track?.channels}
+                              <div>
+                                <span class="text-muted-foreground">Channels</span>
+                                <p class="font-mono text-foreground">{track.channels}</p>
+                              </div>
+                            {/if}
+                            {#if track?.sampleRate}
+                              <div>
+                                <span class="text-muted-foreground">Sample Rate</span>
+                                <p class="font-mono text-foreground">{(track.sampleRate / 1000).toFixed(1)} kHz</p>
+                              </div>
+                            {/if}
+                            {#if track?.hasBFrames !== undefined && track?.hasBFrames !== null}
+                              <div>
+                                <span class="text-muted-foreground">B-Frames</span>
+                                <p class="font-mono {track.hasBFrames ? 'text-success' : 'text-muted-foreground'}">{track.hasBFrames ? 'Yes' : 'No'}</p>
+                              </div>
+                            {/if}
+                          </div>
                         </div>
                       {/each}
                     </div>
@@ -404,47 +700,54 @@
                 </div>
               {/each}
             </div>
+            {#if hasMoreTrackListEvents || trackListEventsHasNextPage}
+              <div class="slab-actions">
+                <Button
+                  variant="ghost"
+                  class="w-full"
+                  onclick={loadMoreTrackListEvents}
+                  disabled={loadingMoreTrackListEvents}
+                >
+                  {loadingMoreTrackListEvents ? 'Loading...' : 'Load More Events'}
+                </Button>
+              </div>
+            {/if}
           {:else}
-            <p class="text-tokyo-night-comment text-center py-8">No track list updates recorded</p>
+            <div class="slab-body--padded text-center">
+              <p class="text-muted-foreground py-8">No track list updates recorded</p>
+            </div>
           {/if}
         </div>
       </div>
 
       <!-- Rebuffering Events -->
       {#if rebufferingEvents.length > 0}
-        <div class="bg-tokyo-night-surface rounded-lg p-6 mt-8">
-          <h3 class="text-lg font-semibold text-tokyo-night-cyan mb-4">Rebuffering Events</h3>
-          
-          <div class="space-y-3 max-h-64 overflow-y-auto">
-            {#each rebufferingEvents.slice(0, 10) as event (event.timestamp ?? event.id)}
-              {@const SvelteComponent_6 = getIconComponent('Pause')}
-              <div class="border border-tokyo-night-selection rounded-lg p-3">
+        <div class="slab">
+          <div class="slab-header">
+            <h3>Rebuffering Events</h3>
+          </div>
+          <div class="slab-body--flush max-h-64 overflow-y-auto">
+            {#each rebufferingEvents.slice(0, 10) as event (event.timestamp)}
+              <div class="p-3 border-b border-border/30 last:border-b-0">
                 <div class="flex justify-between items-start">
-                  <div class="flex items-center space-x-2">
-                    <SvelteComponent_6 class="w-4 h-4 text-orange-400" />
-                    <span class="font-medium text-tokyo-night-fg">
+                  <div class="flex items-center gap-2">
+                    <PauseIcon class="w-4 h-4 text-warning-alt" />
+                    <span class="font-medium text-foreground">
                       {event.rebufferStart ? 'Rebuffer Started' : 'Rebuffer Ended'}
                     </span>
                   </div>
-                  <span class="text-xs text-tokyo-night-comment">{formatTimestamp(event.timestamp)}</span>
+                  <span class="text-xs text-muted-foreground">{formatTimestamp(event.timestamp)}</span>
                 </div>
-                
-                <div class="mt-2 grid grid-cols-3 gap-4 text-sm">
+                <div class="mt-2 grid grid-cols-2 gap-4 text-sm">
                   <div>
-                    <span class="text-tokyo-night-comment">Buffer State:</span>
-                    <span class={healthService.getBufferStateColor(event.bufferState)}>{event.bufferState}</span>
+                    <span class="text-muted-foreground text-xs">Buffer State</span>
+                    <p class={getBufferStateColor(event.bufferState)}>{event.bufferState}</p>
                   </div>
                   <div>
-                    <span class="text-tokyo-night-comment">Health Score:</span>
-                    <span class={healthService.getHealthScoreColor(event.healthScore)}>
-                      {Math.round(event.healthScore * 100)}%
-                    </span>
-                  </div>
-                  <div>
-                    <span class="text-tokyo-night-comment">Packet Loss:</span>
-                    <span class={event.packetLossPercentage > 2 ? 'text-red-400' : 'text-green-400'}>
-                      {event.packetLossPercentage ? `${event.packetLossPercentage.toFixed(2)}%` : 'N/A'}
-                    </span>
+                    <span class="text-muted-foreground text-xs">Packet Loss</span>
+                    <p class={(event.packetLossPercentage || 0) > 0.02 ? 'text-destructive' : 'text-success'}>
+                      {event.packetLossPercentage ? `${(event.packetLossPercentage * 100).toFixed(2)}%` : 'N/A'}
+                    </p>
                   </div>
                 </div>
               </div>
@@ -453,21 +756,50 @@
         </div>
       {/if}
 
-      <!-- Historical Health Metrics Chart Placeholder -->
-      <div class="bg-tokyo-night-surface rounded-lg p-6 mt-8">
-        <h3 class="text-lg font-semibold text-tokyo-night-cyan mb-4">Historical Health Trends</h3>
-        
+      <!-- Buffer Health Histogram -->
+      {#if bufferHealthValues.length > 0}
+        <div class="slab">
+          <div class="slab-header">
+            <h3>Buffer Health Distribution</h3>
+          </div>
+          <div class="slab-body--padded">
+            <BufferHealthHistogram 
+              data={bufferHealthValues} 
+              height={250} 
+            />
+          </div>
+        </div>
+      {/if}
+
+      <!-- Historical Health Trends Chart -->
+      <div class="slab">
+        <div class="slab-header flex items-center justify-between">
+          <h3>Historical Health Trends</h3>
+          {#if healthMetrics.length > 0}
+            <span class="text-xs text-muted-foreground font-normal normal-case">
+              {healthMetrics.length} data points
+            </span>
+          {/if}
+        </div>
         {#if healthMetrics.length > 0}
-          {@const SvelteComponent_7 = getIconComponent('TrendingUp')}
-          <div class="text-center py-8">
-            <SvelteComponent_7 class="w-12 h-12 text-tokyo-night-comment mx-auto mb-4" />
-            <p class="text-tokyo-night-comment">
-              Chart visualization coming soon<br>
-              <span class="text-sm">Collected {healthMetrics.length} data points over the last 24 hours</span>
-            </p>
+          <div class="slab-body--padded">
+            <HealthTrendChart
+              data={healthMetrics.map(m => ({
+                timestamp: m.timestamp,
+                packetLossPercentage: m.packetLossPercentage,
+                bufferHealth: m.bufferHealth,
+                bitrate: m.bitrate,
+              }))}
+              height={350}
+              showPacketLoss={true}
+              showBufferHealth={true}
+              showBitrate={true}
+            />
           </div>
         {:else}
-          <p class="text-tokyo-night-comment text-center py-8">No historical health data available</p>
+          <div class="slab-body--padded text-center">
+            <p class="text-muted-foreground py-8">No historical health data available</p>
+          </div>
         {/if}
       </div>
     {/if}

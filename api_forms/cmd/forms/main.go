@@ -2,6 +2,7 @@ package main
 
 import (
 	"frameworks/api_forms/internal/handlers"
+	"frameworks/pkg/clients/listmonk"
 	"frameworks/pkg/config"
 	"frameworks/pkg/email"
 	"frameworks/pkg/logging"
@@ -9,6 +10,7 @@ import (
 	"frameworks/pkg/server"
 	"frameworks/pkg/turnstile"
 	"frameworks/pkg/version"
+	"strconv"
 )
 
 func main() {
@@ -49,6 +51,17 @@ func main() {
 	)
 
 	app.POST("/api/contact", contactHandler.Handle)
+
+	// Listmonk Integration
+	listmonkURL := config.GetEnv("LISTMONK_URL", "http://listmonk:9000")
+	listmonkUser := config.GetEnv("LISTMONK_USERNAME", "admin")
+	listmonkPass := config.GetEnv("LISTMONK_PASSWORD", "admin")
+	listIDStr := config.GetEnv("DEFAULT_MAILING_LIST_ID", "1")
+	listID, _ := strconv.Atoi(listIDStr)
+
+	lmClient := listmonk.NewClient(listmonkURL, listmonkUser, listmonkPass)
+	subHandler := handlers.NewSubscribeHandler(lmClient, turnstileValidator, listID, turnstileEnabled, logger)
+	app.POST("/api/subscribe", subHandler.Handle)
 
 	serverConfig := server.DefaultConfig("forms", port)
 	if err := server.Start(serverConfig, app, logger); err != nil {

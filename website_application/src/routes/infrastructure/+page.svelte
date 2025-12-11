@@ -1,8 +1,8 @@
-<script>
-  import { onMount, onDestroy } from "svelte";
+<script lang="ts">
+  import { onMount, onDestroy, untrack } from "svelte";
   import { auth } from "$lib/stores/auth";
-  import { infrastructureService } from "$lib/graphql/services/infrastructure.js";
-  import { performanceService } from "$lib/graphql/services/performance.js";
+  import { GetInfrastructureOverviewStore, SystemHealthStore, GetServiceInstancesConnectionStore } from "$houdini";
+  import type { SystemHealth$result } from "$houdini";
   import { toast } from "$lib/stores/toast.js";
   import LoadingCard from "$lib/components/LoadingCard.svelte";
   import SkeletonLoader from "$lib/components/SkeletonLoader.svelte";
@@ -11,59 +11,155 @@
   import NodePerformanceTable from "$lib/components/infrastructure/NodePerformanceTable.svelte";
   import ClusterCard from "$lib/components/infrastructure/ClusterCard.svelte";
   import NodeCard from "$lib/components/infrastructure/NodeCard.svelte";
-  import {
-    Card,
-    CardContent,
-    CardDescription,
-    CardHeader,
-    CardTitle,
-  } from "$lib/components/ui/card";
   import { Badge } from "$lib/components/ui/badge";
   import { Band } from "$lib/components/layout";
   import { getIconComponent } from "$lib/iconUtils";
-  /** @typedef { import('$lib/graphql/generated/apollo-helpers').Tenant } Tenant */
-  /** @typedef { import('$lib/graphql/generated/apollo-helpers').Cluster } Cluster */
-  /** @typedef { import('$lib/graphql/generated/apollo-helpers').Node } GqlNode */
-  /** @typedef { import('$lib/graphql/generated/apollo-helpers').SystemHealthEvent } SystemHealthEvent */
-  /** @typedef { import('zen-observable-ts').Subscription } ObservableSubscription */
+  import { EventLog, type StreamEvent } from "$lib/components/stream-details";
+
+  // Icons
+  const ServerIcon = getIconComponent("Server");
+  const HardDriveIcon = getIconComponent("HardDrive");
+  const ActivityIcon = getIconComponent("Activity");
+  const NetworkIcon = getIconComponent("Globe");
+  const BuildingIcon = getIconComponent("Building2");
+  const PackageIcon = getIconComponent("Package");
+
+  // Houdini stores
+  const infrastructureStore = new GetInfrastructureOverviewStore();
+  const systemHealthSub = new SystemHealthStore();
+  const serviceInstancesStore = new GetServiceInstancesConnectionStore();
+
+  // Pagination state
+  let loadingMoreInstances = $state(false);
 
   let isAuthenticated = false;
-  let loading = $state(true);
 
-  // Infrastructure data
-  /** @type {Tenant | null} */
-  let tenant = $state(null);
-  /** @type {Cluster[]} */
-  let clusters = $state([]);
-  /** @type {GqlNode[]} */
-  let nodes = $state([]);
-  /** @type {ObservableSubscription | null} */
-  let systemHealthSubscription = null;
+  // Derived state from Houdini stores
+  let loading = $derived($infrastructureStore.fetching);
+  let tenant = $derived($infrastructureStore.data?.tenant ?? null);
+  let clusters = $derived($infrastructureStore.data?.clusters ?? []);
+  let nodes = $derived($infrastructureStore.data?.nodes ?? []);
+  let serviceInstances = $derived(
+    $serviceInstancesStore.data?.serviceInstancesConnection?.edges?.map(e => e.node) ?? []
+  );
+  let hasMoreInstances = $derived(
+    $serviceInstancesStore.data?.serviceInstancesConnection?.pageInfo?.hasNextPage ?? false
+  );
+  let totalInstanceCount = $derived(
+    $serviceInstancesStore.data?.serviceInstancesConnection?.totalCount ?? 0
+  );
 
   // Real-time system health data
-  /** @type {Record<string, { event: SystemHealthEvent, ts: Date }>} */
-  let systemHealth = $state({});
+  type SystemHealthEvent = NonNullable<SystemHealth$result["systemHealth"]>;
+  let systemHealth = $state<Record<string, { event: SystemHealthEvent; ts: Date }>>({});
 
-  // Performance analytics
-  /** @type {Array<Record<string, unknown>>} */
-  let nodePerformanceMetrics = $state([]);
-  let platformMetrics = $state({
-    totalActiveNodes: 0,
-    avgCpuUsage: 0,
-    avgMemoryUsage: 0,
-    avgHealthScore: 0,
+  // Recent system health events (for the live feed)
+  let recentHealthEvents = $state<{ event: SystemHealthEvent; ts: Date }[]>([]);
+
+  // Infrastructure events for EventLog
+  let infrastructureEvents = $state<StreamEvent[]>([]);
+  let eventLogCollapsed = $state(false);
+
+  // Helper to add infrastructure events
+  function addInfraEvent(
+    type: StreamEvent["type"],
+    message: string,
+    details?: string,
+    nodeName?: string
+  ) {
+    const event: StreamEvent = {
+      id: `infra-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      timestamp: new Date().toISOString(),
+      type,
+      message,
+      details,
+      nodeName,
+    };
+    infrastructureEvents = [event, ...infrastructureEvents].slice(0, 100);
+  }
+
+  // Performance analytics types
+  interface NodePerformanceMetric {
+    nodeId: string;
+    avgCpuUsage: number;
+    avgMemoryUsage: number;
+    avgDiskUsage: number;
+  }
+
+  interface NetworkIOMetric {
+    nodeId: string;
+    totalBandwidthIn: number;
+    totalBandwidthOut: number;
+  }
+
+  // Derived performance metrics from the store data
+  let nodePerformanceMetrics = $derived.by(() => {
+    const nodeMetricsData = ($infrastructureStore.data?.nodeMetrics1hConnection?.edges || []).filter(
+      (edge) => edge?.node
+    );
+    if (nodeMetricsData.length === 0) return [] as NodePerformanceMetric[];
+
+    // Group by nodeId and calculate averages
+    const nodeMetricsByNode = new Map<string, typeof nodeMetricsData>();
+    for (const edge of nodeMetricsData) {
+      const nodeId = edge.node!.nodeId;
+      if (!nodeMetricsByNode.has(nodeId)) {
+        nodeMetricsByNode.set(nodeId, []);
+      }
+      nodeMetricsByNode.get(nodeId)!.push(edge);
+    }
+
+    const metrics: NodePerformanceMetric[] = [];
+    for (const [nodeId, nodeEdges] of nodeMetricsByNode) {
+      const avgCpu = nodeEdges.reduce((sum, e) => sum + (e.node!.avgCpu || 0), 0) / nodeEdges.length;
+      const avgMemory = nodeEdges.reduce((sum, e) => sum + (e.node!.avgMemory || 0), 0) / nodeEdges.length;
+      const avgDisk = nodeEdges.reduce((sum, e) => sum + (e.node!.avgDisk || 0), 0) / nodeEdges.length;
+      metrics.push({
+        nodeId,
+        avgCpuUsage: avgCpu,
+        avgMemoryUsage: avgMemory,
+        avgDiskUsage: avgDisk,
+      });
+    }
+    return metrics;
   });
-  let platformSummary = $state({
-    totalViewers: 0,
-    avgViewers: 0,
-    totalStreams: 0,
-    avgConnectionQuality: 0,
-    avgBufferHealth: 0,
-    uniqueCountries: 0,
-    uniqueCities: 0,
-    nodesHealthy: 0,
-    nodesDegraded: 0,
-    nodesUnhealthy: 0,
+
+  let networkIOMetrics = $derived.by(() => {
+    const nodeMetricsData = ($infrastructureStore.data?.nodeMetrics1hConnection?.edges || []).filter(
+      (edge) => edge?.node
+    );
+    if (nodeMetricsData.length === 0) return [] as NetworkIOMetric[];
+
+    const nodeMetricsByNode = new Map<string, typeof nodeMetricsData>();
+    for (const edge of nodeMetricsData) {
+      const nodeId = edge.node!.nodeId;
+      if (!nodeMetricsByNode.has(nodeId)) {
+        nodeMetricsByNode.set(nodeId, []);
+      }
+      nodeMetricsByNode.get(nodeId)!.push(edge);
+    }
+
+    const networkMetrics: NetworkIOMetric[] = [];
+    for (const [nodeId, nodeEdges] of nodeMetricsByNode) {
+      const totalIn = nodeEdges.reduce((sum, e) => sum + (e.node!.totalBandwidthIn || 0), 0);
+      const totalOut = nodeEdges.reduce((sum, e) => sum + (e.node!.totalBandwidthOut || 0), 0);
+      networkMetrics.push({
+        nodeId,
+        totalBandwidthIn: totalIn,
+        totalBandwidthOut: totalOut,
+      });
+    }
+    return networkMetrics;
+  });
+
+  let platformMetrics = $derived.by(() => {
+    const totalNodes = nodePerformanceMetrics.length;
+    if (totalNodes === 0) return { totalActiveNodes: 0, avgCpuUsage: 0, avgMemoryUsage: 0 };
+    return {
+      totalActiveNodes: totalNodes,
+      avgCpuUsage: nodePerformanceMetrics.reduce((sum, n) => sum + n.avgCpuUsage, 0) / totalNodes,
+      avgMemoryUsage: nodePerformanceMetrics.reduce((sum, n) => sum + n.avgMemoryUsage, 0) / totalNodes,
+    };
   });
 
   // Time range for performance metrics (last 24 hours)
@@ -82,182 +178,249 @@
       await auth.checkAuth();
     }
     await loadInfrastructureData();
-    await loadPerformanceData();
     startSystemHealthSubscription();
   });
 
   // Cleanup on unmount
   onDestroy(() => {
-    if (systemHealthSubscription) {
-      systemHealthSubscription.unsubscribe();
-    }
+    systemHealthSub.unlisten();
   });
 
   async function loadInfrastructureData() {
     try {
-      loading = true;
-
-      // Load infrastructure data in parallel
-      const [tenantData, clustersData, nodesData] = await Promise.all([
-        infrastructureService.getTenant().catch(() => null),
-        infrastructureService.getClusters().catch(() => []),
-        infrastructureService.getNodes().catch(() => []),
+      // Fetch infrastructure overview and service instances in parallel
+      await Promise.all([
+        infrastructureStore.fetch({
+          variables: { timeRange, first: 100, noCache: false }
+        }),
+        serviceInstancesStore.fetch()
       ]);
 
-      tenant = tenantData;
-      clusters = clustersData || [];
-      nodes = nodesData || [];
-    } catch (error) {
-      console.error("Failed to load infrastructure data:", error);
-      toast.error(
-        "Failed to load infrastructure data. Please refresh the page.",
-      );
-    } finally {
-      loading = false;
-    }
-  }
+      if ($infrastructureStore.errors?.length) {
+        console.error("Failed to load infrastructure data:", $infrastructureStore.errors);
+        toast.error("Failed to load infrastructure data. Please refresh the page.");
+        return;
+      }
 
-  async function loadPerformanceData() {
-    try {
-      const [metrics, summary] = await Promise.all([
-        performanceService.getNodePerformanceMetrics(null, timeRange),
-        performanceService.getPlatformSummary(timeRange),
-      ]);
+      // Initialize systemHealth from historical metrics so we don't wait for real-time events
+      const metricsData = $infrastructureStore.data?.nodeMetrics1hConnection?.edges ?? [];
+      if (metricsData.length > 0) {
+        // Get most recent metric for each node
+        const latestByNode = new Map<string, (typeof metricsData)[0]>();
+        for (const edge of metricsData) {
+          if (!edge?.node) continue;
+          const nodeId = edge.node.nodeId;
+          const existing = latestByNode.get(nodeId);
+          if (!existing || new Date(edge.node.timestamp) > new Date(existing.node!.timestamp)) {
+            latestByNode.set(nodeId, edge);
+          }
+        }
 
-      nodePerformanceMetrics = metrics || [];
-      platformSummary = summary || platformSummary;
+        // Initialize systemHealth with historical data (converted to real-time format)
+        const initialHealth: Record<string, { event: SystemHealthEvent; ts: Date }> = {};
+        for (const [nodeId, edge] of latestByNode) {
+          const metric = edge.node!;
+          // Convert historical percentages to real-time format
+          // avgCpu is already 0-100, cpuTenths is 0-1000
+          const cpuTenths = Math.round((metric.avgCpu ?? 0) * 10);
+          // Memory: convert percentage to fake absolute values (use 100GB as reference)
+          const ramMax = 100 * 1024 * 1024 * 1024; // 100GB in bytes as reference
+          const ramCurrent = Math.round((metric.avgMemory ?? 0) / 100 * ramMax);
+          // Disk: similar approach
+          const diskTotalBytes = 500 * 1024 * 1024 * 1024; // 500GB reference
+          const diskUsedBytes = Math.round((metric.avgDisk ?? 0) / 100 * diskTotalBytes);
 
-      // Calculate platform metrics from node performance data
-      if (nodePerformanceMetrics.length > 0) {
-        const totalNodes = nodePerformanceMetrics.length;
-        const avgCpu =
-          nodePerformanceMetrics.reduce(
-            (sum, node) => sum + (node.avgCpuUsage || 0),
-            0,
-          ) / totalNodes;
-        const avgMem =
-          nodePerformanceMetrics.reduce(
-            (sum, node) => sum + (node.avgMemoryUsage || 0),
-            0,
-          ) / totalNodes;
-        const avgHealth =
-          nodePerformanceMetrics.reduce(
-            (sum, node) => sum + (node.avgHealthScore || 0),
-            0,
-          ) / totalNodes;
+          initialHealth[nodeId] = {
+            event: {
+              node: nodeId,
+              location: '', // Not available in historical
+              status: (metric.wasHealthy ?? true) ? 'HEALTHY' : 'UNHEALTHY',
+              cpuTenths,
+              isHealthy: metric.wasHealthy ?? true,
+              ramMax,
+              ramCurrent,
+              diskTotalBytes,
+              diskUsedBytes,
+              shmTotalBytes: null,
+              shmUsedBytes: null,
+              timestamp: metric.timestamp,
+            } as SystemHealthEvent,
+            ts: new Date(metric.timestamp),
+          };
+        }
 
-        platformMetrics = {
-          totalActiveNodes: totalNodes,
-          avgCpuUsage: avgCpu,
-          avgMemoryUsage: avgMem,
-          avgHealthScore: avgHealth,
-        };
-      } else {
-        // Use platform summary node counts if no metrics available
-        platformMetrics = {
-          totalActiveNodes:
-            (platformSummary.nodesHealthy || 0) +
-            (platformSummary.nodesDegraded || 0) +
-            (platformSummary.nodesUnhealthy || 0),
-          avgCpuUsage: 0,
-          avgMemoryUsage: 0,
-          avgHealthScore: 0,
-        };
+        // Initialize state (use untrack to avoid reactive loops)
+        untrack(() => {
+          if (Object.keys(systemHealth).length === 0) {
+            systemHealth = initialHealth;
+          }
+        });
       }
     } catch (error) {
-      console.error("Failed to load performance data:", error);
+      console.error("Failed to load infrastructure data:", error);
+      toast.error("Failed to load infrastructure data. Please refresh the page.");
     }
   }
 
   function startSystemHealthSubscription() {
-    systemHealthSubscription = infrastructureService.subscribeToSystemHealth({
-      /**
-       * @param {SystemHealthEvent & { nodeId?: string, clusterId?: string }} healthData
-       */
-      onSystemHealth: (healthData) => {
-        // Normalize node/cluster keys to match codegen types
-        const nodeKey = healthData.node ?? healthData.nodeId ?? "";
-        const eventNormalized = /** @type {SystemHealthEvent} */ ({
-          ...healthData,
-          node: healthData.node ?? healthData.nodeId ?? "",
-          cluster: healthData.cluster ?? healthData.clusterId ?? "",
-        });
-        // Update system health data
-        systemHealth[nodeKey] = {
-          event: eventNormalized,
+    systemHealthSub.listen();
+  }
+
+  async function loadMoreInstances() {
+    if (!hasMoreInstances || loadingMoreInstances) return;
+
+    loadingMoreInstances = true;
+    try {
+      await serviceInstancesStore.loadNextPage();
+    } catch (err) {
+      console.error("Failed to load more service instances:", err);
+      toast.error("Failed to load more service instances");
+    } finally {
+      loadingMoreInstances = false;
+    }
+  }
+
+  // Effect to handle system health subscription errors
+  $effect(() => {
+    const errors = $systemHealthSub.errors;
+    if (errors?.length) {
+      console.warn("System health subscription error:", errors);
+      // Non-fatal: page still works, just without real-time updates
+    }
+  });
+
+  // Effect to handle system health subscription updates
+  // Use untrack to prevent effect loops when mutating state
+  $effect(() => {
+    const healthData = $systemHealthSub.data?.systemHealth;
+    if (healthData) {
+      // Untrack the state mutations to prevent effect loops
+      untrack(() => {
+        const nodeKey = healthData.node || "";
+        const eventEntry = {
+          event: healthData,
           ts: new Date(healthData.timestamp),
         };
 
-        // Trigger reactivity
-        systemHealth = { ...systemHealth };
-      },
-      /**
-       * @param {unknown} error
-       */
-      onError: (error) => {
-        console.error("System health subscription failed:", error);
-        toast.warning(
-          "Real-time health monitoring disconnected. Data may be outdated.",
-        );
-      },
-    });
-  }
+        // Check for status changes and log events
+        const prevHealth = systemHealth[nodeKey];
+        if (prevHealth && prevHealth.event.status !== healthData.status) {
+          // Status changed
+          if (healthData.status === "HEALTHY") {
+            addInfraEvent("node_health", `Node recovered`, `Status: ${healthData.status}`, nodeKey);
+          } else if (healthData.status === "UNHEALTHY" || healthData.status === "DEGRADED") {
+            addInfraEvent("warning", `Node health degraded`, `Status: ${healthData.status}`, nodeKey);
+          }
+        }
 
-  /**
-   * @param {string} nodeId
-   * @returns {string}
-   */
-  function getNodeStatus(nodeId) {
+        // Update system health data
+        if (nodeKey) {
+          systemHealth[nodeKey] = eventEntry;
+          // Trigger reactivity
+          systemHealth = { ...systemHealth };
+        }
+
+        // Add to recent events feed (keep last 20)
+        recentHealthEvents = [eventEntry, ...recentHealthEvents.slice(0, 19)];
+      });
+    }
+  });
+
+  function getNodeStatus(nodeId: string) {
     const health = systemHealth[nodeId];
     if (!health) return "UNKNOWN";
     return health.event.status;
   }
 
-  /**
-   * @param {string} nodeId
-   * @returns {number}
-   */
-  function getNodeHealthScore(nodeId) {
+  function getNodeHealthScore(nodeId: string) {
     const health = systemHealth[nodeId];
     if (!health) return 0;
-    return Math.round((health.event.healthScore || 0) * 100);
+
+    const event = health.event;
+
+    // Calculate resource usage percentages
+    const cpuPercent = event.cpuTenths / 10;
+    const memPercent = event.ramMax ? (event.ramCurrent! / event.ramMax) * 100 : 0;
+    const shmPercent = event.shmTotalBytes ? (event.shmUsedBytes! / event.shmTotalBytes) * 100 : 0;
+
+    // MistUtilHealth considers node degraded if any metric > 90%
+    // Health score = average of inverted usage (100 - usage)
+    const cpuScore = Math.max(0, 100 - cpuPercent);
+    const memScore = Math.max(0, 100 - memPercent);
+    const shmScore = Math.max(0, 100 - shmPercent);
+
+    // Average the scores (weight equally like MistUtilHealth does)
+    return Math.round((cpuScore + memScore + shmScore) / 3);
   }
 
-  /**
-   * @param {string} nodeId
-   * @returns {string}
-   */
-  function formatCpuUsage(nodeId) {
+  function formatCpuUsage(nodeId: string) {
     const health = systemHealth[nodeId];
     if (!health) return "0%";
-    return `${Math.round(health.event.cpuUsage)}%`;
+    return `${(health.event.cpuTenths / 10).toFixed(1)}%`;
   }
 
-  /**
-   * @param {string} nodeId
-   * @returns {string}
-   */
-  function formatMemoryUsage(nodeId) {
+  function formatMemoryUsage(nodeId: string) {
     const health = systemHealth[nodeId];
-    if (!health) return "0%";
-    return `${Math.round(health.event.memoryUsage)}%`;
+    if (!health || !health.event.ramMax) return "0%";
+    const percent = (health.event.ramCurrent! / health.event.ramMax) * 100;
+    return `${Math.round(percent)}%`;
   }
 
-  /**
-   * @param {string | null | undefined} status
-   * @returns {string}
-   */
-  function getStatusBadgeClass(status) {
+  function getStatusBadgeClass(status: string | null | undefined) {
     switch (status?.toLowerCase()) {
       case "healthy":
-        return "border-emerald-500/40 bg-emerald-500/10 text-emerald-300";
+        return "border-success/40 bg-success/10 text-success";
       case "degraded":
-        return "border-amber-400/40 bg-amber-500/10 text-amber-200";
+        return "border-warning/40 bg-warning/10 text-warning";
       case "unhealthy":
         return "border-rose-500/40 bg-rose-500/10 text-rose-300";
       default:
-        return "border-slate-500/40 bg-slate-500/10 text-slate-200";
+        return "border-muted-foreground/40 bg-muted-foreground/10 text-muted-foreground";
     }
+  }
+
+  function getHealthBadgeClass(healthStatus: string | null | undefined) {
+    switch (healthStatus?.toLowerCase()) {
+      case "healthy":
+        return "border-success/40 bg-success/10 text-success";
+      case "unhealthy":
+        return "border-rose-500/40 bg-rose-500/10 text-rose-300";
+      default:
+        return "border-muted-foreground/40 bg-muted-foreground/10 text-muted-foreground";
+    }
+  }
+
+  function formatServiceName(serviceId: string) {
+    // Map service IDs to friendly names
+    const serviceNames: Record<string, string> = {
+      api_gateway: "Bridge",
+      api_control: "Commodore",
+      api_tenants: "Quartermaster",
+      api_billing: "Purser",
+      api_analytics_ingest: "Periscope Ingest",
+      api_analytics_query: "Periscope Query",
+      api_firehose: "Decklog",
+      api_balancing: "Foghorn",
+      api_sidecar: "Helmsman",
+      api_realtime: "Signalman",
+      api_forms: "Forms",
+      api_dns: "Navigator",
+      api_mesh: "Privateer",
+    };
+    return serviceNames[serviceId] || serviceId;
+  }
+
+  function formatTimeAgo(dateStr: string | null | undefined) {
+    if (!dateStr) return "Never";
+    const date = new Date(dateStr);
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffSec = Math.floor(diffMs / 1000);
+
+    if (diffSec < 60) return `${diffSec}s ago`;
+    if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
+    if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
+    return `${Math.floor(diffSec / 86400)}d ago`;
   }
 
   const platformPerformanceCards = $derived([
@@ -265,141 +428,119 @@
       key: "activeNodes",
       label: "Active Nodes",
       value: platformMetrics.totalActiveNodes ?? 0,
-      tone: "text-tokyo-night-green",
+      tone: "text-success",
     },
     {
       key: "avgCpu",
       label: "Avg CPU Usage",
       value: `${(platformMetrics.avgCpuUsage ?? 0).toFixed(1)}%`,
-      tone: "text-tokyo-night-blue",
+      tone: "text-primary",
     },
     {
       key: "avgMemory",
       label: "Avg Memory Usage",
       value: `${(platformMetrics.avgMemoryUsage ?? 0).toFixed(1)}%`,
-      tone: "text-tokyo-night-purple",
-    },
-    {
-      key: "avgHealth",
-      label: "Avg Health Score",
-      value: `${Math.round(platformMetrics.avgHealthScore ?? 0)}%`,
-      tone: "text-tokyo-night-orange",
+      tone: "text-accent-purple",
     },
   ]);
 
-  const viewerSummaryCards = $derived([
-    {
-      key: "totalViewers",
-      label: "Total Viewers",
-      value: platformSummary.totalViewers ?? 0,
-      tone: "text-tokyo-night-blue",
-    },
-    {
-      key: "totalStreams",
-      label: "Active Streams",
-      value: platformSummary.totalStreams ?? 0,
-      tone: "text-tokyo-night-purple",
-    },
-    {
-      key: "connectionQuality",
-      label: "Connection Quality",
-      value: `${Math.round(platformSummary.avgConnectionQuality ?? 0)}%`,
-      tone: "text-tokyo-night-green",
-    },
-    {
-      key: "countries",
-      label: "Countries Reached",
-      value: platformSummary.uniqueCountries ?? 0,
-      tone: "text-tokyo-night-orange",
-    },
-  ]);
 </script>
 
 <svelte:head>
   <title>Infrastructure Dashboard - FrameWorks</title>
 </svelte:head>
 
-<div class="min-h-screen bg-tokyo-night-bg text-tokyo-night-fg">
-  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-    <div class="mb-8">
-      <h1 class="text-3xl font-bold text-tokyo-night-blue mb-2">
-        Infrastructure Dashboard
-      </h1>
-      <p class="text-tokyo-night-comment">
-        Monitor your clusters, nodes, and system health in real-time
-      </p>
+<div class="h-full flex flex-col">
+  <!-- Fixed Page Header -->
+  <div class="px-4 sm:px-6 lg:px-8 py-4 border-b border-border shrink-0">
+    <div class="flex items-center gap-3">
+      <ServerIcon class="w-5 h-5 text-primary" />
+      <div>
+        <h1 class="text-xl font-bold text-foreground">Infrastructure</h1>
+        <p class="text-sm text-muted-foreground">
+          Monitor your clusters, nodes, and system health in real-time
+        </p>
+      </div>
     </div>
+  </div>
 
-    {#if loading}
-      <!-- Tenant Information Skeleton -->
-      <div class="bg-tokyo-night-surface rounded-lg p-6 mb-8">
-        <SkeletonLoader type="text-lg" className="w-40 mb-4" />
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {#each Array(3) as _, index (index)}
-            <div>
-              <SkeletonLoader type="text-sm" className="w-20 mb-1" />
-              <SkeletonLoader type="text" className="w-32" />
-            </div>
-          {/each}
+  <!-- Scrollable Content -->
+  <div class="flex-1 overflow-y-auto">
+  {#if loading}
+    <!-- Loading Skeletons -->
+    <div class="dashboard-grid">
+      <div class="slab col-span-full">
+        <div class="slab-header">
+          <SkeletonLoader type="text-lg" class="w-40" />
+        </div>
+        <div class="slab-body--padded">
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {#each Array(3) as _, index (index)}
+              <div>
+                <SkeletonLoader type="text-sm" class="w-20 mb-1" />
+                <SkeletonLoader type="text" class="w-32" />
+              </div>
+            {/each}
+          </div>
         </div>
       </div>
 
-      <!-- Clusters Skeleton -->
-      <div class="bg-tokyo-night-surface rounded-lg p-6 mb-8">
-        <SkeletonLoader type="text-lg" className="w-24 mb-4" />
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {#each Array(3) as _, index (index)}
-            <LoadingCard variant="infrastructure" />
-          {/each}
+      <div class="slab col-span-full">
+        <div class="slab-header">
+          <SkeletonLoader type="text-lg" class="w-24" />
+        </div>
+        <div class="slab-body--padded">
+          <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {#each Array(3) as _, index (index)}
+              <LoadingCard variant="infrastructure" />
+            {/each}
+          </div>
         </div>
       </div>
 
-      <!-- Nodes Skeleton -->
-      <div class="bg-tokyo-night-surface rounded-lg p-6">
-        <SkeletonLoader type="text-lg" className="w-20 mb-4" />
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {#each Array(6) as _, index (index)}
-            <LoadingCard variant="infrastructure" />
-          {/each}
+      <div class="slab col-span-full">
+        <div class="slab-header">
+          <SkeletonLoader type="text-lg" class="w-20" />
+        </div>
+        <div class="slab-body--padded">
+          <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {#each Array(6) as _, index (index)}
+              <LoadingCard variant="infrastructure" />
+            {/each}
+          </div>
         </div>
       </div>
-    {:else}
+    </div>
+  {:else}
+    <div class="dashboard-grid">
       <!-- Tenant Information -->
       {#if tenant}
-        <Card class="mb-8">
-          <CardHeader>
-            <CardTitle class="text-tokyo-night-cyan"
-              >Tenant Information</CardTitle
-            >
-            <CardDescription>
-              Key identifiers for your organization’s infrastructure.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
+        <div class="slab col-span-full">
+          <div class="slab-header">
+            <div class="flex items-center gap-2">
+              <BuildingIcon class="w-4 h-4 text-info" />
+              <h3>Tenant Information</h3>
+            </div>
+            <p class="text-sm text-muted-foreground mt-1">
+              Key identifiers for your organization's infrastructure.
+            </p>
+          </div>
+          <div class="slab-body--padded">
             <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div class="space-y-2">
-                <Badge
-                  variant="outline"
-                  class="uppercase tracking-wide text-[0.65rem]"
-                >
+                <Badge variant="outline" class="uppercase tracking-wide text-[0.65rem]">
                   Tenant Name
                 </Badge>
                 <p class="text-lg font-semibold">{tenant.name}</p>
               </div>
               <div class="space-y-2">
-                <Badge
-                  variant="outline"
-                  class="uppercase tracking-wide text-[0.65rem]"
-                >
+                <Badge variant="outline" class="uppercase tracking-wide text-[0.65rem]">
                   Tenant ID
                 </Badge>
                 <p class="font-mono text-sm">{tenant.id}</p>
               </div>
               <div class="space-y-2">
-                <Badge
-                  variant="outline"
-                  class="uppercase tracking-wide text-[0.65rem]"
-                >
+                <Badge variant="outline" class="uppercase tracking-wide text-[0.65rem]">
                   Created
                 </Badge>
                 <p class="text-sm">
@@ -407,22 +548,23 @@
                 </p>
               </div>
             </div>
-          </CardContent>
-        </Card>
+          </div>
+        </div>
       {/if}
 
       <!-- Platform Performance Overview -->
-      <Card class="mb-8">
-        <CardHeader>
-          <CardTitle class="text-tokyo-night-cyan">
-            Platform Performance (Last 24 Hours)
-          </CardTitle>
-          <CardDescription>
+      <div class="slab col-span-full">
+        <div class="slab-header">
+          <div class="flex items-center gap-2">
+            <ActivityIcon class="w-4 h-4 text-info" />
+            <h3>Platform Performance (Last 24 Hours)</h3>
+          </div>
+          <p class="text-sm text-muted-foreground mt-1">
             Snapshot of capacity and health across your deployed nodes.
-          </CardDescription>
-        </CardHeader>
-        <CardContent class="space-y-6">
-          <Band emphasis="high" class="p-4">
+          </p>
+        </div>
+        <div class="slab-body--padded">
+          <Band surface="elevated" class="p-4 mb-4">
             <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
               {#each platformPerformanceCards as stat (stat.key)}
                 <InfrastructureMetricCard
@@ -435,89 +577,260 @@
           </Band>
 
           <NodePerformanceTable {nodePerformanceMetrics} />
-        </CardContent>
-      </Card>
+        </div>
+      </div>
 
-      <!-- Viewer & Stream Metrics -->
-      <Card class="mb-8">
-        <CardHeader>
-          <CardTitle class="text-tokyo-night-cyan">
-            Viewer & Stream Metrics (Last 24 Hours)
-          </CardTitle>
-          <CardDescription>
-            Engagement insights aggregated from your live and on-demand streams.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Band emphasis="medium" class="p-4">
-            <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-              {#each viewerSummaryCards as stat (stat.key)}
-                <InfrastructureMetricCard
-                  label={stat.label}
-                  value={stat.value}
-                  tone={stat.tone}
-                />
+      <!-- Network I/O Metrics -->
+      {#if networkIOMetrics.length > 0 && networkIOMetrics.some(m => m.totalBandwidthIn > 0 || m.totalBandwidthOut > 0)}
+        <div class="slab col-span-full">
+          <div class="slab-header">
+            <div class="flex items-center gap-2">
+              <NetworkIcon class="w-4 h-4 text-info" />
+              <h3>Network I/O (Last 24 Hours)</h3>
+            </div>
+            <p class="text-sm text-muted-foreground mt-1">
+              Total bandwidth usage per node - ingest and egress traffic
+            </p>
+          </div>
+          <div class="slab-body--padded">
+            <div class="space-y-3">
+              {#each networkIOMetrics.filter(m => m.totalBandwidthIn > 0 || m.totalBandwidthOut > 0) as metric (metric.nodeId)}
+                {@const node = nodes?.find(n => n.id === metric.nodeId || n.nodeName === metric.nodeId)}
+                {@const inGB = (metric.totalBandwidthIn / (1024 * 1024 * 1024)).toFixed(2)}
+                {@const outGB = (metric.totalBandwidthOut / (1024 * 1024 * 1024)).toFixed(2)}
+                {@const totalGB = ((metric.totalBandwidthIn + metric.totalBandwidthOut) / (1024 * 1024 * 1024)).toFixed(2)}
+                <div class="p-4 border border-border/50">
+                  <div class="flex items-center justify-between mb-3">
+                    <div>
+                      <h4 class="font-medium text-foreground">{node?.nodeName || metric.nodeId}</h4>
+                      <p class="text-xs text-muted-foreground">{node?.region || 'Unknown region'}</p>
+                    </div>
+                    <span class="text-sm font-mono text-primary">{totalGB} GB total</span>
+                  </div>
+                  <div class="grid grid-cols-2 gap-4">
+                    <div class="flex items-center gap-3">
+                      <div class="w-2 h-8 bg-info"></div>
+                      <div>
+                        <p class="text-xs text-muted-foreground">Ingest (RX)</p>
+                        <p class="font-mono text-info">{inGB} GB</p>
+                      </div>
+                    </div>
+                    <div class="flex items-center gap-3">
+                      <div class="w-2 h-8 bg-warning"></div>
+                      <div>
+                        <p class="text-xs text-muted-foreground">Egress (TX)</p>
+                        <p class="font-mono text-warning">{outGB} GB</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
               {/each}
             </div>
-          </Band>
-        </CardContent>
-      </Card>
+          </div>
+        </div>
+      {/if}
+
+      <!-- Live System Health Events -->
+      {#if recentHealthEvents.length > 0}
+        <div class="slab col-span-full">
+          <div class="slab-header">
+            <div class="flex items-center justify-between w-full">
+              <div class="flex items-center gap-2">
+                <ActivityIcon class="w-4 h-4 text-info" />
+                <h3 class="flex items-center gap-2">
+                  Live System Health
+                  <span class="w-2 h-2 bg-success animate-pulse"></span>
+                </h3>
+              </div>
+              <Badge variant="outline" class="text-muted-foreground">
+                {recentHealthEvents.length} recent events
+              </Badge>
+            </div>
+            <p class="text-sm text-muted-foreground mt-1">
+              Real-time health events from your infrastructure nodes
+            </p>
+          </div>
+          <div class="slab-body--padded">
+            <div class="space-y-2 max-h-64 overflow-y-auto">
+              {#each recentHealthEvents as { event, ts }, index (`${event.node}-${ts.getTime()}-${index}`)}
+                {@const isHealthy = event.isHealthy}
+                {@const cpuPercent = (event.cpuTenths / 10).toFixed(1)}
+                {@const memPercent = event.ramMax ? ((event.ramCurrent || 0) / event.ramMax * 100).toFixed(0) : '0'}
+                <div class="flex items-center justify-between p-3 border border-border/50">
+                  <div class="flex items-center gap-3">
+                    <div class={`w-2 h-2 ${isHealthy ? 'bg-success' : 'bg-destructive'}`}></div>
+                    <div>
+                      <p class="text-sm font-medium text-foreground">{event.node}</p>
+                      <p class="text-xs text-muted-foreground">{event.location}</p>
+                    </div>
+                  </div>
+                  <div class="flex items-center gap-4 text-xs">
+                    <div class="text-right">
+                      <span class="text-muted-foreground">CPU</span>
+                      <span class={`ml-1 font-mono ${Number(cpuPercent) > 80 ? 'text-warning' : 'text-success'}`}>{cpuPercent}%</span>
+                    </div>
+                    <div class="text-right">
+                      <span class="text-muted-foreground">RAM</span>
+                      <span class={`ml-1 font-mono ${Number(memPercent) > 80 ? 'text-warning' : 'text-success'}`}>{memPercent}%</span>
+                    </div>
+                    <Badge variant="outline" class={getStatusBadgeClass(event.status)}>
+                      {event.status}
+                    </Badge>
+                    <span class="text-muted-foreground font-mono min-w-[70px] text-right">
+                      {ts.toLocaleTimeString()}
+                    </span>
+                  </div>
+                </div>
+              {/each}
+            </div>
+          </div>
+        </div>
+      {/if}
 
       <!-- Clusters Overview -->
-      <Card class="mb-8">
-        <CardHeader>
-          <CardTitle class="text-tokyo-night-cyan">Clusters</CardTitle>
-          <CardDescription>
+      <div class="slab col-span-full">
+        <div class="slab-header">
+          <div class="flex items-center gap-2">
+            <ServerIcon class="w-4 h-4 text-info" />
+            <h3>Clusters</h3>
+          </div>
+          <p class="text-sm text-muted-foreground mt-1">
             Track cluster health, capacity, and deployment regions.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {#if clusters.length === 0}
+          </p>
+        </div>
+        <div class="slab-body--padded">
+          {#if !clusters || clusters.length === 0}
             <EmptyState
               title="No clusters found"
               description="Infrastructure clusters will appear here when configured"
               size="sm"
               showAction={false}
             >
-              {@const SvelteComponent_1 = getIconComponent("Server")}
-              <SvelteComponent_1
-                class="w-8 h-8 text-tokyo-night-fg-dark mx-auto mb-2"
-              />
+              <ServerIcon class="w-6 h-6 text-muted-foreground mx-auto mb-2" />
             </EmptyState>
           {:else}
             <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {#each clusters as cluster (cluster.id ?? cluster.name)}
+              {#each clusters as cluster, index (`${cluster.id}-${index}`)}
                 <ClusterCard {cluster} {getStatusBadgeClass} />
               {/each}
             </div>
           {/if}
-        </CardContent>
-      </Card>
+        </div>
+      </div>
+
+      <!-- Service Instances -->
+      <div class="slab col-span-full">
+        <div class="slab-header">
+          <div class="flex items-center justify-between w-full">
+            <div class="flex items-center gap-2">
+              <PackageIcon class="w-4 h-4 text-info" />
+              <h3>Service Instances</h3>
+            </div>
+            {#if serviceInstances.length > 0}
+              <Badge variant="outline" class="text-muted-foreground">
+                {serviceInstances.length}{#if hasMoreInstances}+{/if} instances
+              </Badge>
+            {/if}
+          </div>
+          <p class="text-sm text-muted-foreground mt-1">
+            Control-plane services and their health status from periodic health checks.
+          </p>
+        </div>
+        <div class="slab-body--padded">
+          {#if !serviceInstances || serviceInstances.length === 0}
+            <EmptyState
+              title="No service instances found"
+              description="Service instances will appear here when the control plane is running"
+              size="sm"
+              showAction={false}
+            >
+              <PackageIcon class="w-6 h-6 text-muted-foreground mx-auto mb-2" />
+            </EmptyState>
+          {:else}
+            <div class="space-y-2">
+              {#each serviceInstances as instance, index (`${instance.id}-${index}`)}
+                {@const node = nodes?.find(n => n.id === instance.nodeId)}
+                <div class="flex items-center justify-between p-3 border border-border/50">
+                  <div class="flex items-center gap-3">
+                    <div class={`w-2 h-2 ${instance.healthStatus?.toLowerCase() === 'healthy' ? 'bg-success' : instance.healthStatus?.toLowerCase() === 'unhealthy' ? 'bg-destructive' : 'bg-muted-foreground'}`}></div>
+                    <div>
+                      <p class="text-sm font-medium text-foreground">
+                        {formatServiceName(instance.serviceId)}
+                      </p>
+                      <p class="text-xs text-muted-foreground">
+                        {instance.instanceId}
+                        {#if instance.version}
+                          <span class="text-muted-foreground/60"> • v{instance.version}</span>
+                        {/if}
+                        {#if node}
+                          <span class="text-muted-foreground/60"> • {node.nodeName || node.id}</span>
+                        {/if}
+                      </p>
+                    </div>
+                  </div>
+                  <div class="flex items-center gap-4 text-xs">
+                    {#if instance.port}
+                      <div class="text-right">
+                        <span class="text-muted-foreground">Port</span>
+                        <span class="ml-1 font-mono text-foreground">{instance.port}</span>
+                      </div>
+                    {/if}
+                    <div class="text-right min-w-[60px]">
+                      <span class="text-muted-foreground">Checked</span>
+                      <span class="ml-1 font-mono text-foreground">{formatTimeAgo(instance.lastHealthCheck)}</span>
+                    </div>
+                    <Badge variant="outline" class={getHealthBadgeClass(instance.healthStatus)}>
+                      {instance.healthStatus || 'Unknown'}
+                    </Badge>
+                  </div>
+                </div>
+              {/each}
+            </div>
+
+            <!-- Load More Service Instances -->
+            {#if hasMoreInstances}
+              <div class="flex justify-center pt-4">
+                <button
+                  onclick={loadMoreInstances}
+                  disabled={loadingMoreInstances}
+                  class="px-4 py-2 text-sm text-muted-foreground hover:text-foreground border border-border/50 hover:border-border transition-colors disabled:opacity-50"
+                >
+                  {#if loadingMoreInstances}
+                    Loading...
+                  {:else}
+                    Load More Instances
+                  {/if}
+                </button>
+              </div>
+            {/if}
+          {/if}
+        </div>
+      </div>
 
       <!-- Nodes Grid -->
-      <Card>
-        <CardHeader>
-          <CardTitle class="text-tokyo-night-cyan">Nodes</CardTitle>
-          <CardDescription>
+      <div class="slab col-span-full">
+        <div class="slab-header">
+          <div class="flex items-center gap-2">
+            <HardDriveIcon class="w-4 h-4 text-info" />
+            <h3>Nodes</h3>
+          </div>
+          <p class="text-sm text-muted-foreground mt-1">
             Inspect resource usage and recent health updates for each node.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {#if nodes.length === 0}
+          </p>
+        </div>
+        <div class="slab-body--padded">
+          {#if !nodes || nodes.length === 0}
             <EmptyState
               title="No nodes found"
               description="Infrastructure nodes will appear here when deployed"
               size="sm"
               showAction={false}
             >
-              {@const SvelteComponent_2 = getIconComponent("HardDrive")}
-              <SvelteComponent_2
-                class="w-8 h-8 text-tokyo-night-fg-dark mx-auto mb-2"
-              />
+              <HardDriveIcon class="w-6 h-6 text-muted-foreground mx-auto mb-2" />
             </EmptyState>
           {:else}
             <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              {#each nodes as node (node.id ?? node.nodeId ?? node.name)}
+              {#each nodes as node, index (`${node.id}-${index}`)}
                 <NodeCard
                   {node}
                   {systemHealth}
@@ -530,12 +843,22 @@
               {/each}
             </div>
           {/if}
-        </CardContent>
-      </Card>
-    {/if}
+        </div>
+      </div>
+
+      <!-- Infrastructure Event Log -->
+      <div class="slab col-span-full">
+        <EventLog
+          events={infrastructureEvents}
+          title="Infrastructure Events"
+          maxVisible={10}
+          collapsed={eventLogCollapsed}
+          onToggle={() => (eventLogCollapsed = !eventLogCollapsed)}
+          showStreamName={false}
+          emptyMessage="No infrastructure events. Status changes will appear here as nodes report health updates."
+        />
+      </div>
+    </div>
+  {/if}
   </div>
 </div>
-
-<style>
-  /* Tokyo Night theme colors already defined globally */
-</style>

@@ -3,13 +3,16 @@ package resolvers
 import (
 	"context"
 	"fmt"
+	"time"
+
 	"frameworks/api_gateway/internal/clients"
+	"frameworks/api_gateway/internal/datafetcher"
 	"frameworks/api_gateway/internal/demo"
 	"frameworks/api_gateway/internal/middleware"
-	commodore "frameworks/pkg/api/commodore"
+	"frameworks/pkg/cache"
 	"frameworks/pkg/config"
 	"frameworks/pkg/logging"
-	"time"
+	pb "frameworks/pkg/proto"
 
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -25,31 +28,46 @@ type GraphQLMetrics struct {
 
 // Resolver represents the GraphQL resolver
 type Resolver struct {
-	Clients   *clients.ServiceClients
-	Logger    logging.Logger
-	WSManager *WebSocketManager
-	Metrics   *GraphQLMetrics
+	Clients    *clients.ServiceClients
+	Logger     logging.Logger
+	SubManager *SubscriptionManager
+	Metrics    *GraphQLMetrics
+	Fetcher    *datafetcher.DataFetcher
 }
 
 // NewResolver creates a new GraphQL resolver
-func NewResolver(serviceClients *clients.ServiceClients, logger logging.Logger, metrics *GraphQLMetrics) *Resolver {
-	// Initialize WebSocket manager
-	signalmanURL := config.RequireEnv("SIGNALMAN_WS_URL")
-	maxWSConnections := config.GetEnvInt("WS_MAX_CONNECTIONS_PER_TENANT", 5)
-	wsManager := NewWebSocketManager(signalmanURL, logger, metrics, maxWSConnections)
+func NewResolver(serviceClients *clients.ServiceClients, logger logging.Logger, metrics *GraphQLMetrics, serviceToken string) *Resolver {
+	// Initialize gRPC subscription manager
+	signalmanAddr := config.RequireEnv("SIGNALMAN_GRPC_ADDR")
+	maxConnections := config.GetEnvInt("WS_MAX_CONNECTIONS_PER_TENANT", 5)
+	subManager := NewSubscriptionManager(signalmanAddr, serviceToken, logger, metrics, maxConnections)
+
+	periscopeTTL := time.Duration(config.GetEnvInt("PERISCOPE_CACHE_TTL_SECONDS", 30)) * time.Second
+	periscopeSWR := time.Duration(config.GetEnvInt("PERISCOPE_CACHE_SWR_SECONDS", 15)) * time.Second
+	periscopeNeg := time.Duration(config.GetEnvInt("PERISCOPE_CACHE_NEG_TTL_SECONDS", 5)) * time.Second
+	periscopeMax := config.GetEnvInt("PERISCOPE_CACHE_MAX", 5000)
+	periscopeCache := cache.New(cache.Options{TTL: periscopeTTL, StaleWhileRevalidate: periscopeSWR, NegativeTTL: periscopeNeg, MaxEntries: periscopeMax}, cache.MetricsHooks{})
+
+	fetcher := datafetcher.New(datafetcher.Config{
+		Logger: logger,
+		Caches: map[datafetcher.Service]*cache.Cache{
+			datafetcher.ServicePeriscope: periscopeCache,
+		},
+	})
 
 	return &Resolver{
-		Clients:   serviceClients,
-		Logger:    logger,
-		WSManager: wsManager,
-		Metrics:   metrics,
+		Clients:    serviceClients,
+		Logger:     logger,
+		SubManager: subManager,
+		Metrics:    metrics,
+		Fetcher:    fetcher,
 	}
 }
 
 // Shutdown gracefully shuts down the resolver and its resources
 func (r *Resolver) Shutdown() error {
-	if r.WSManager != nil {
-		return r.WSManager.Shutdown()
+	if r.SubManager != nil {
+		return r.SubManager.Shutdown()
 	}
 	return nil
 }
@@ -107,14 +125,24 @@ func (r *Resolver) normalizeTimeRange(p TimeRangeParams) (start *time.Time, end 
 }
 
 // DoResolveViewerEndpoint calls Commodore to resolve viewer endpoints (which then calls Foghorn)
-func (r *Resolver) DoResolveViewerEndpoint(ctx context.Context, contentType, contentID string, viewerIP *string) (*commodore.ViewerEndpointResponse, error) {
+func (r *Resolver) DoResolveViewerEndpoint(ctx context.Context, contentType, contentID string, viewerIP *string) (*pb.ViewerEndpointResponse, error) {
 	if middleware.IsDemoMode(ctx) {
 		return demo.GenerateViewerEndpointResponse(contentType, contentID), nil
 	}
 	// Call Commodore's viewer endpoint resolution (Commodore will handle tenant resolution internally)
-	resp, err := r.Clients.Commodore.ResolveViewerEndpoint(ctx, contentType, contentID, viewerIP)
+	// gRPC client expects string (not *string) for viewerIP
+	ip := ""
+	if viewerIP != nil {
+		ip = *viewerIP
+	}
+	resp, err := r.Clients.Commodore.ResolveViewerEndpoint(ctx, contentType, contentID, ip)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve viewer endpoints: %v", err)
 	}
 	return resp, nil
+}
+
+// strPtr returns a pointer to the given string (helper for model fields)
+func strPtr(s string) *string {
+	return &s
 }

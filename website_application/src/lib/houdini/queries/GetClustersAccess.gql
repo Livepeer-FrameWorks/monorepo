@@ -1,0 +1,8 @@
+query GetClustersAccess {
+  clustersAccess {
+    clusterId
+    clusterName
+    accessLevel
+    resourceLimits
+  }
+}

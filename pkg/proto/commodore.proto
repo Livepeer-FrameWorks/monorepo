@@ -1,0 +1,565 @@
+syntax = "proto3";
+
+package commodore;
+
+option go_package = "frameworks/pkg/proto";
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
+import "common.proto";
+import "shared.proto";
+
+// ============================================================================
+// COMMODORE CONTROL PLANE - INTERNAL SERVICE APIs
+//
+// These are internal service-to-service APIs called by:
+// - Foghorn (ValidateStreamKey during PUSH_REWRITE)
+// - Decklog (ResolveInternalName for event enrichment)
+// - Gateway (user operations proxied through)
+//
+// Field sources documented inline for verification.
+// ============================================================================
+
+// InternalService handles service-to-service lookups (Foghorn, Decklog, etc.)
+service InternalService {
+  // Called by Foghorn on PUSH_REWRITE to validate stream key
+  // Source: pkg/api/commodore/types.go:ValidateStreamKeyResponse
+  rpc ValidateStreamKey(ValidateStreamKeyRequest) returns (ValidateStreamKeyResponse);
+
+  // Called by edge nodes to resolve playback ID to internal name
+  // Source: pkg/api/commodore/types.go:ResolvePlaybackIDResponse
+  rpc ResolvePlaybackID(ResolvePlaybackIDRequest) returns (ResolvePlaybackIDResponse);
+
+  // Called by Decklog/Foghorn to enrich events with tenant context
+  // Source: pkg/api/commodore/types.go:InternalNameResponse
+  rpc ResolveInternalName(ResolveInternalNameRequest) returns (ResolveInternalNameResponse);
+
+  // Called by Gateway to validate developer API tokens
+  // Source: pkg/api/commodore/types.go:ValidateAPITokenResponse
+  rpc ValidateAPIToken(ValidateAPITokenRequest) returns (ValidateAPITokenResponse);
+
+  // Called by Foghorn to initiate DVR recording for a stream
+  rpc StartDVR(shared.StartDVRRequest) returns (shared.StartDVRResponse);
+}
+
+// ============================================================================
+// STREAM KEY VALIDATION (Foghorn → Commodore)
+// Source: pkg/api/commodore/types.go lines 12-19
+// ============================================================================
+
+message ValidateStreamKeyRequest {
+  string stream_key = 1;
+}
+
+// Matches pkg/api/commodore/types.go:ValidateStreamKeyResponse exactly
+message ValidateStreamKeyResponse {
+  bool valid = 1;                       // json:"valid"
+  string user_id = 2;                   // json:"user_id,omitempty"
+  string tenant_id = 3;                 // json:"tenant_id,omitempty"
+  string internal_name = 4;             // json:"internal_name,omitempty"
+  string error = 5;                     // json:"error,omitempty"
+  bool is_recording_enabled = 6;        // json:"is_recording_enabled,omitempty"
+}
+
+// ============================================================================
+// PLAYBACK ID RESOLUTION (Edge → Commodore)
+// Source: pkg/api/commodore/types.go lines 22-27
+// ============================================================================
+
+message ResolvePlaybackIDRequest {
+  string playback_id = 1;
+}
+
+// Matches pkg/api/commodore/types.go:ResolvePlaybackIDResponse exactly
+message ResolvePlaybackIDResponse {
+  string internal_name = 1;             // json:"internal_name"
+  string tenant_id = 2;                 // json:"tenant_id"
+  string status = 3;                    // json:"status"
+  string playback_id = 4;               // json:"playbook_id" (note: typo in original)
+}
+
+// ============================================================================
+// INTERNAL NAME RESOLUTION (Decklog → Commodore)
+// Source: pkg/api/commodore/types.go lines 249-255
+// ============================================================================
+
+message ResolveInternalNameRequest {
+  string internal_name = 1;
+}
+
+// Matches pkg/api/commodore/types.go:InternalNameResponse exactly
+message ResolveInternalNameResponse {
+  string internal_name = 1;             // json:"internal_name"
+  string tenant_id = 2;                 // json:"tenant_id"
+  string user_id = 3;                   // json:"user_id"
+  bool is_recording_enabled = 4;        // json:"is_recording_enabled,omitempty"
+}
+
+// ============================================================================
+// API TOKEN VALIDATION (Gateway middleware → Commodore)
+// Source: pkg/api/commodore/types.go lines 310-318
+// ============================================================================
+
+message ValidateAPITokenRequest {
+  string token = 1;
+}
+
+// Matches pkg/api/commodore/types.go:ValidateAPITokenResponse exactly
+message ValidateAPITokenResponse {
+  bool valid = 1;                       // json:"valid"
+  string user_id = 2;                   // json:"user_id,omitempty"
+  string tenant_id = 3;                 // json:"tenant_id,omitempty"
+  string email = 4;                     // json:"email,omitempty"
+  string role = 5;                      // json:"role,omitempty"
+  repeated string permissions = 6;      // json:"permissions,omitempty"
+}
+
+// ============================================================================
+// USER SERVICE (Gateway → Commodore for auth flows)
+// ============================================================================
+
+service UserService {
+  // Authentication
+  rpc Login(LoginRequest) returns (AuthResponse);
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+  rpc Logout(LogoutRequest) returns (LogoutResponse);
+  rpc RefreshToken(RefreshTokenRequest) returns (AuthResponse);
+
+  // Email verification
+  rpc VerifyEmail(VerifyEmailRequest) returns (VerifyEmailResponse);
+  rpc ResendVerification(ResendVerificationRequest) returns (ResendVerificationResponse);
+
+  // Password reset
+  rpc ForgotPassword(ForgotPasswordRequest) returns (ForgotPasswordResponse);
+  rpc ResetPassword(ResetPasswordRequest) returns (ResetPasswordResponse);
+
+  // Profile
+  rpc GetMe(GetMeRequest) returns (User);
+  rpc UpdateMe(UpdateMeRequest) returns (User);
+  rpc UpdateNewsletter(UpdateNewsletterRequest) returns (UpdateNewsletterResponse);
+}
+
+// Matches pkg/api/commodore/types.go:LoginRequest (lines 85-88)
+message LoginRequest {
+  string email = 1;                     // json:"email"
+  string password = 2;                  // json:"password"
+  string turnstile_token = 3;           // json:"turnstile_token,omitempty" - Cloudflare Turnstile token
+  string phone_number = 4;              // json:"phone_number,omitempty" - Honeypot field (should be empty)
+  string human_check = 5;               // json:"human_check,omitempty" - Should be "human" if checkbox clicked
+  BehaviorData behavior = 6;            // json:"behavior,omitempty" - Client-side behavioral signals
+}
+
+// BehaviorData captures client-side behavioral signals for bot detection
+message BehaviorData {
+  int64 form_shown_at = 1;              // Timestamp when form was displayed (ms)
+  int64 submitted_at = 2;               // Timestamp when form was submitted (ms)
+  bool mouse = 3;                       // Whether mouse movement was detected
+  bool typed = 4;                       // Whether keyboard input was detected
+}
+
+// Matches pkg/api/commodore/types.go:RegisterRequest (lines 90-99)
+message RegisterRequest {
+  string email = 1;                     // json:"email"
+  string password = 2;                  // json:"password"
+  string first_name = 3;                // json:"first_name"
+  string last_name = 4;                 // json:"last_name"
+  string phone_number = 5;              // json:"phone_number,omitempty" - Honeypot field (should be empty)
+  string turnstile_token = 6;           // json:"turnstile_token,omitempty" - Cloudflare Turnstile token
+  string human_check = 7;               // json:"human_check,omitempty" - Should be "human" if checkbox clicked
+  BehaviorData behavior = 8;            // json:"behavior,omitempty" - Client-side behavioral signals
+}
+
+// Matches pkg/api/commodore/types.go:AuthResponse (lines 101-105)
+message AuthResponse {
+  string token = 1;                     // json:"token" - JWT access token
+  User user = 2;                        // json:"user"
+  google.protobuf.Timestamp expires_at = 3; // json:"expires_at"
+  string refresh_token = 4;             // json:"refresh_token" - for session refresh
+}
+
+// Matches pkg/api/commodore/types.go:RegisterResponse (lines 108-111)
+message RegisterResponse {
+  bool success = 1;                     // json:"success"
+  string message = 2;                   // json:"message"
+}
+
+message GetMeRequest {
+  // User context extracted from JWT by middleware
+}
+
+message LogoutRequest {
+  // Token to invalidate (optional - extracted from Authorization header)
+  string token = 1;
+}
+
+message LogoutResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message RefreshTokenRequest {
+  string refresh_token = 1;
+}
+
+message VerifyEmailRequest {
+  string token = 1;
+}
+
+message VerifyEmailResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message ResendVerificationRequest {
+  string email = 1;                     // User's email address
+  string turnstile_token = 2;           // Optional bot protection
+}
+
+message ResendVerificationResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message ForgotPasswordRequest {
+  string email = 1;
+}
+
+message ForgotPasswordResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message ResetPasswordRequest {
+  string token = 1;
+  string password = 2;
+}
+
+message ResetPasswordResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message UpdateMeRequest {
+  optional string first_name = 1;
+  optional string last_name = 2;
+  optional string phone_number = 3;
+}
+
+message UpdateNewsletterRequest {
+  bool subscribed = 1;
+}
+
+message UpdateNewsletterResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+// Matches pkg/models/users.go:User (lines 8-23)
+message User {
+  string id = 1;                        // json:"id"
+  string tenant_id = 2;                 // json:"tenant_id"
+  string email = 3;                     // json:"email"
+  // password and password_hash never serialized
+  string first_name = 4;                // json:"first_name"
+  string last_name = 5;                 // json:"last_name"
+  string role = 6;                      // json:"role"
+  repeated string permissions = 7;      // json:"permissions"
+  bool is_active = 8;                   // json:"is_active"
+  bool is_verified = 9;                 // json:"is_verified"
+  optional google.protobuf.Timestamp last_login_at = 10; // json:"last_login_at,omitempty"
+  google.protobuf.Timestamp created_at = 11; // json:"created_at"
+  google.protobuf.Timestamp updated_at = 12; // json:"updated_at"
+}
+
+// ============================================================================
+// STREAM SERVICE (Gateway → Commodore for stream CRUD)
+// ============================================================================
+
+service StreamService {
+  rpc CreateStream(CreateStreamRequest) returns (CreateStreamResponse);
+  rpc GetStream(GetStreamRequest) returns (Stream);
+  rpc ListStreams(ListStreamsRequest) returns (ListStreamsResponse);
+  rpc UpdateStream(UpdateStreamRequest) returns (Stream);
+  rpc DeleteStream(DeleteStreamRequest) returns (DeleteStreamResponse);
+  rpc RefreshStreamKey(RefreshStreamKeyRequest) returns (RefreshStreamKeyResponse);
+}
+
+// Matches pkg/api/commodore/types.go:CreateStreamRequest (lines 114-119)
+message CreateStreamRequest {
+  string title = 1;                     // json:"title"
+  string description = 2;               // json:"description"
+  bool is_public = 3;                   // json:"is_public"
+  bool is_recording = 4;                // json:"is_recording"
+}
+
+// Matches pkg/api/commodore/types.go:CreateStreamResponse (lines 178-185)
+message CreateStreamResponse {
+  string id = 1;                        // json:"id"
+  string stream_key = 2;                // json:"stream_key"
+  string playback_id = 3;               // json:"playback_id"
+  string title = 4;                     // json:"title"
+  string description = 5;               // json:"description"
+  string status = 6;                    // json:"status"
+}
+
+message GetStreamRequest {
+  string stream_id = 1;                 // internal_name used as public ID
+}
+
+// Matches pkg/models/streams.go:Stream (lines 117-139)
+message Stream {
+  // Note: Internal IDs (ID, TenantID, UserID) are json:"-" so not in proto
+  string title = 1;                     // json:"name" - maps to GraphQL 'name'
+  string description = 2;               // json:"description"
+  string internal_name = 3;             // json:"id" - this becomes public ID
+  string stream_key = 4;                // json:"streamKey"
+  string playback_id = 5;               // json:"playbackId"
+  bool is_live = 6;                     // json:"is_live"
+  bool is_recording = 7;                // json:"record"
+  bool is_recording_enabled = 8;        // json:"is_recording_enabled"
+  string status = 9;                    // json:"status" - enriched from Periscope
+  int32 current_viewers = 10;           // json:"current_viewers" - enriched from Periscope
+  int32 total_views = 11;               // json:"total_views" - enriched from Periscope
+  int32 duration = 12;                  // json:"duration" - enriched from Periscope
+  optional google.protobuf.Timestamp started_at = 13;  // json:"started_at,omitempty" - enriched from Periscope
+  optional google.protobuf.Timestamp ended_at = 14;    // json:"ended_at,omitempty" - enriched from Periscope
+  google.protobuf.Timestamp created_at = 15; // json:"createdAt"
+  google.protobuf.Timestamp updated_at = 16; // json:"updatedAt"
+  int32 peak_viewers = 17;              // json:"peak_viewers" - enriched from Periscope
+}
+
+message ListStreamsRequest {
+  common.CursorPaginationRequest pagination = 1;
+}
+
+// Matches pkg/api/commodore/types.go:StreamsResponse (lines 163-166)
+message ListStreamsResponse {
+  repeated Stream streams = 1;          // json:"streams"
+  common.CursorPaginationResponse pagination = 2;
+}
+
+// Matches pkg/api/commodore/types.go:UpdateStreamRequest (lines 121-125)
+message UpdateStreamRequest {
+  string stream_id = 1;                 // target stream (internal_name)
+  optional string name = 2;             // json:"name,omitempty"
+  optional string description = 3;      // json:"description,omitempty"
+  optional bool record = 4;             // json:"record,omitempty"
+}
+
+message DeleteStreamRequest {
+  string stream_id = 1;
+}
+
+// Matches pkg/api/commodore/types.go:StreamDeleteResponse (lines 219-224)
+message DeleteStreamResponse {
+  string message = 1;                   // json:"message"
+  string stream_id = 2;                 // json:"stream_id"
+  string stream_title = 3;              // json:"stream_title"
+  google.protobuf.Timestamp deleted_at = 4; // json:"deleted_at"
+}
+
+// ============================================================================
+// STREAM KEY SERVICE (Gateway → Commodore for multi-key management)
+// ============================================================================
+
+service StreamKeyService {
+  rpc CreateStreamKey(CreateStreamKeyRequest) returns (StreamKeyResponse);
+  rpc ListStreamKeys(ListStreamKeysRequest) returns (ListStreamKeysResponse);
+  rpc DeactivateStreamKey(DeactivateStreamKeyRequest) returns (google.protobuf.Empty);
+}
+
+// Matches pkg/api/commodore/types.go:CreateStreamKeyRequest (lines 337-339)
+message CreateStreamKeyRequest {
+  string stream_id = 1;                 // target stream
+  string key_name = 2;                  // json:"key_name"
+}
+
+// Matches pkg/api/commodore/types.go:StreamKey (lines 323-334)
+message StreamKey {
+  string id = 1;                        // json:"id"
+  string tenant_id = 2;                 // json:"tenant_id"
+  string user_id = 3;                   // json:"user_id"
+  string stream_id = 4;                 // json:"stream_id"
+  string key_value = 5;                 // json:"key_value"
+  string key_name = 6;                  // json:"key_name"
+  bool is_active = 7;                   // json:"is_active"
+  optional google.protobuf.Timestamp last_used_at = 8; // json:"last_used_at"
+  google.protobuf.Timestamp created_at = 9;  // json:"created_at"
+  google.protobuf.Timestamp updated_at = 10; // json:"updated_at"
+}
+
+// Matches pkg/api/commodore/types.go:StreamKeyResponse (lines 342-345)
+message StreamKeyResponse {
+  StreamKey stream_key = 1;             // json:"stream_key"
+  string message = 2;                   // json:"message"
+}
+
+message ListStreamKeysRequest {
+  string stream_id = 1;
+  common.CursorPaginationRequest pagination = 2;
+}
+
+// Matches pkg/api/commodore/types.go:StreamKeysResponse (lines 348-351)
+message ListStreamKeysResponse {
+  repeated StreamKey stream_keys = 1;   // json:"stream_keys"
+  common.CursorPaginationResponse pagination = 2;
+}
+
+message DeactivateStreamKeyRequest {
+  string stream_id = 1;
+  string key_id = 2;
+}
+
+// ============================================================================
+// DEVELOPER TOKEN SERVICE (Gateway → Commodore for API token management)
+// ============================================================================
+
+service DeveloperService {
+  rpc CreateAPIToken(CreateAPITokenRequest) returns (CreateAPITokenResponse);
+  rpc ListAPITokens(ListAPITokensRequest) returns (ListAPITokensResponse);
+  rpc RevokeAPIToken(RevokeAPITokenRequest) returns (RevokeAPITokenResponse);
+}
+
+// From pkg/models/users.go - CreateAPITokenRequest pattern
+message CreateAPITokenRequest {
+  string token_name = 1;
+  repeated string permissions = 2;
+  optional google.protobuf.Timestamp expires_at = 3;
+}
+
+// Matches pkg/api/commodore/types.go:CreateAPITokenResponse (lines 233-241)
+message CreateAPITokenResponse {
+  string id = 1;                        // json:"id"
+  string token_value = 2;               // json:"token_value"
+  string token_name = 3;                // json:"token_name"
+  repeated string permissions = 4;      // json:"permissions"
+  optional google.protobuf.Timestamp expires_at = 5; // json:"expires_at"
+  google.protobuf.Timestamp created_at = 6; // json:"created_at"
+  string message = 7;                   // json:"message"
+}
+
+message ListAPITokensRequest {
+  common.CursorPaginationRequest pagination = 1;
+}
+
+// Matches pkg/api/commodore/types.go:APITokenInfo (lines 292-300)
+// Also used for GraphQL DeveloperToken type
+message APITokenInfo {
+  string id = 1;                        // json:"id"
+  string token_name = 2;                // json:"token_name"
+  optional string token_value = 8;      // json:"token_value" - Only populated on creation, null otherwise
+  repeated string permissions = 3;      // json:"permissions"
+  string status = 4;                    // json:"status"
+  optional google.protobuf.Timestamp last_used_at = 5; // json:"last_used_at"
+  optional google.protobuf.Timestamp expires_at = 6;   // json:"expires_at"
+  google.protobuf.Timestamp created_at = 7;            // json:"created_at"
+}
+
+// Matches pkg/api/commodore/types.go:APITokenListResponse (lines 286-289)
+message ListAPITokensResponse {
+  repeated APITokenInfo tokens = 1;     // json:"tokens"
+  common.CursorPaginationResponse pagination = 2;
+}
+
+message RevokeAPITokenRequest {
+  string token_id = 1;
+}
+
+// Matches pkg/api/commodore/types.go:RevokeAPITokenResponse (lines 303-308)
+message RevokeAPITokenResponse {
+  string message = 1;                   // json:"message"
+  string token_id = 2;                  // json:"token_id"
+  string token_name = 3;                // json:"token_name"
+  google.protobuf.Timestamp revoked_at = 4; // json:"revoked_at"
+}
+
+// ============================================================================
+// STREAM KEY REFRESH (Gateway → Commodore)
+// ============================================================================
+
+// Add RefreshStreamKey to StreamService
+// Note: Added via extension to StreamService definition above
+
+message RefreshStreamKeyRequest {
+  string stream_id = 1;                 // internal_name of stream
+}
+
+// Matches pkg/api/commodore/types.go:RefreshKeyResponse (lines 207-213)
+message RefreshStreamKeyResponse {
+  string message = 1;                   // json:"message"
+  string stream_id = 2;                 // json:"stream_id"
+  string stream_key = 3;                // json:"stream_key"
+  string playback_id = 4;               // json:"playback_id"
+  bool old_key_invalidated = 5;         // json:"old_key_invalidated"
+}
+
+// ============================================================================
+// CLIP SERVICE (Gateway → Commodore → Foghorn proxy)
+// Uses shared types from shared.proto
+// ============================================================================
+
+service ClipService {
+  rpc CreateClip(shared.CreateClipRequest) returns (shared.CreateClipResponse);
+  rpc GetClips(shared.GetClipsRequest) returns (shared.GetClipsResponse);
+  rpc GetClip(shared.GetClipRequest) returns (shared.ClipInfo);
+  rpc GetClipURLs(shared.GetClipURLsRequest) returns (shared.ClipViewingURLs);
+  rpc DeleteClip(shared.DeleteClipRequest) returns (shared.DeleteClipResponse);
+}
+
+// ============================================================================
+// DVR SERVICE (Gateway → Commodore → Foghorn proxy)
+// Uses shared types from shared.proto
+// ============================================================================
+
+service DVRService {
+  // StartDVR is in InternalService (called by Foghorn)
+  // These are user-facing DVR management
+  rpc StopDVR(shared.StopDVRRequest) returns (shared.StopDVRResponse);
+  rpc ListDVRRequests(shared.ListDVRRecordingsRequest) returns (shared.ListDVRRecordingsResponse);
+  rpc GetDVRStatus(shared.GetDVRStatusRequest) returns (shared.DVRInfo);
+}
+
+// ============================================================================
+// RECORDING SERVICE (Gateway → Commodore)
+// Source: pkg/api/commodore/types.go
+// ============================================================================
+
+service RecordingService {
+  rpc ListRecordings(ListRecordingsRequest) returns (ListRecordingsResponse);
+}
+
+message ListRecordingsRequest {
+  string stream_id = 1;                 // optional filter by stream
+  common.CursorPaginationRequest pagination = 2;
+}
+
+// Matches pkg/api/commodore/types.go:RecordingsResponse (lines 370-374)
+message ListRecordingsResponse {
+  repeated Recording recordings = 1;    // json:"recordings"
+  common.CursorPaginationResponse pagination = 2;
+}
+
+// Matches pkg/api/commodore/types.go:Recording (lines 355-368)
+message Recording {
+  string id = 1;                        // json:"id"
+  string stream_id = 2;                 // json:"stream_id"
+  string filename = 3;                  // json:"filename"
+  optional int64 file_size = 4;         // json:"file_size"
+  optional int32 duration = 5;          // json:"duration"
+  string status = 6;                    // json:"status"
+  optional string playback_id = 7;      // json:"playback_id"
+  optional google.protobuf.Timestamp start_time = 8;  // json:"start_time"
+  optional google.protobuf.Timestamp end_time = 9;    // json:"end_time"
+  google.protobuf.Timestamp created_at = 10; // json:"created_at"
+  google.protobuf.Timestamp updated_at = 11; // json:"updated_at"
+}
+
+// ============================================================================
+// VIEWER ENDPOINT SERVICE (Gateway/Player → Commodore → Foghorn proxy)
+// Uses shared types from shared.proto
+// ============================================================================
+
+service ViewerService {
+  rpc ResolveViewerEndpoint(shared.ViewerEndpointRequest) returns (shared.ViewerEndpointResponse);
+  rpc GetStreamMeta(shared.StreamMetaRequest) returns (shared.StreamMetaResponse);
+}

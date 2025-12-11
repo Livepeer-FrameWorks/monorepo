@@ -1,0 +1,3 @@
+mutation UnsubscribeFromCluster($clusterId: ID!) {
+  unsubscribeFromCluster(clusterId: $clusterId)
+}

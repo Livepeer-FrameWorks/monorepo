@@ -1,0 +1,317 @@
+syntax = "proto3";
+
+package shared;
+
+option go_package = "frameworks/pkg/proto";
+
+import "google/protobuf/timestamp.proto";
+import "common.proto";
+
+// ============================================================================
+// SHARED MESSAGES FOR CLIPS AND DVR
+// Used by both Foghorn and Commodore services
+// ============================================================================
+
+// CreateClipRequest - request to create a clip from a stream
+// Source: pkg/api/foghorn/types.go:CreateClipRequest
+message CreateClipRequest {
+  string tenant_id = 1;
+  string internal_name = 2;
+  string format = 3;
+  string title = 4;
+  string description = 5;
+  optional int64 start_unix = 6;
+  optional int64 stop_unix = 7;
+  optional int64 start_ms = 8;
+  optional int64 stop_ms = 9;
+  optional int64 duration_sec = 10;
+}
+
+// CreateClipResponse - response from clip creation
+// Source: pkg/api/foghorn/types.go:CreateClipResponse
+message CreateClipResponse {
+  string status = 1;
+  string ingest_host = 2;
+  string storage_host = 3;
+  string node_id = 4;
+  string request_id = 5;
+  string clip_hash = 6;
+}
+
+// ClipInfo - full clip details
+// Source: pkg/api/commodore/types.go:ClipFullResponse
+message ClipInfo {
+  string id = 1;
+  string clip_hash = 2;
+  string stream_name = 3;
+  string title = 4;
+  string description = 5;
+  int64 start_time = 6;
+  int64 duration = 7;
+  string node_id = 8;
+  string storage_path = 9;
+  optional int64 size_bytes = 10;
+  string status = 11;
+  int32 access_count = 12;
+  google.protobuf.Timestamp created_at = 13;
+  google.protobuf.Timestamp updated_at = 14;
+}
+
+// GetClipsRequest - request to list clips
+message GetClipsRequest {
+  string tenant_id = 1;
+  optional string internal_name = 2;  // filter by stream
+  common.CursorPaginationRequest pagination = 3;
+}
+
+// GetClipsResponse - paginated list of clips
+message GetClipsResponse {
+  repeated ClipInfo clips = 1;
+  common.CursorPaginationResponse pagination = 2;
+}
+
+// GetClipRequest - request to get a single clip
+message GetClipRequest {
+  string clip_hash = 1;
+  string tenant_id = 2;  // Required for tenant isolation
+}
+
+// GetClipURLsRequest - request to get viewing URLs for a clip
+message GetClipURLsRequest {
+  string clip_hash = 1;
+  string tenant_id = 2;  // Required for tenant isolation
+}
+
+// ClipViewingURLs - URLs for viewing a clip
+// Source: pkg/api/foghorn/types.go:ClipViewingURLs
+message ClipViewingURLs {
+  map<string, string> urls = 1;
+  optional google.protobuf.Timestamp expires_at = 2;
+}
+
+// DeleteClipRequest - request to delete a clip
+message DeleteClipRequest {
+  string clip_hash = 1;
+  string tenant_id = 2;  // Required for tenant isolation
+}
+
+// DeleteClipResponse - response from clip deletion
+message DeleteClipResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+// ============================================================================
+// DVR MESSAGES
+// ============================================================================
+
+// StartDVRRequest - request to start DVR recording
+// Source: pkg/api/foghorn/types.go:StartDVRRequest
+message StartDVRRequest {
+  string tenant_id = 1;
+  string internal_name = 2;
+  optional string stream_id = 3;
+  optional string user_id = 4;
+}
+
+// StartDVRResponse - response from starting DVR
+// Source: pkg/api/foghorn/types.go:StartDVRResponse
+message StartDVRResponse {
+  string status = 1;
+  string dvr_hash = 2;
+  string ingest_host = 3;
+  string storage_host = 4;
+  string storage_node_id = 5;
+}
+
+// StopDVRRequest - request to stop DVR recording
+message StopDVRRequest {
+  string dvr_hash = 1;
+  string tenant_id = 2;  // Required for tenant isolation
+}
+
+// StopDVRResponse - response from stopping DVR
+message StopDVRResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+// GetDVRStatusRequest - request to get DVR status
+message GetDVRStatusRequest {
+  string dvr_hash = 1;
+  string tenant_id = 2;  // Required for tenant isolation
+}
+
+// DVRInfo - full DVR recording details
+// Source: pkg/api/foghorn/types.go:DVRInfo
+message DVRInfo {
+  string dvr_hash = 1;
+  string internal_name = 2;
+  string storage_node_id = 3;
+  string status = 4;
+  optional google.protobuf.Timestamp started_at = 5;
+  optional google.protobuf.Timestamp ended_at = 6;
+  optional int32 duration_seconds = 7;
+  optional int64 size_bytes = 8;
+  string manifest_path = 9;
+  string error_message = 10;
+  google.protobuf.Timestamp created_at = 11;
+  google.protobuf.Timestamp updated_at = 12;
+}
+
+// ListDVRRecordingsRequest - request to list DVR recordings
+message ListDVRRecordingsRequest {
+  string tenant_id = 1;
+  optional string internal_name = 2;
+  common.CursorPaginationRequest pagination = 3;
+}
+
+// ListDVRRecordingsResponse - paginated list of DVR recordings
+message ListDVRRecordingsResponse {
+  repeated DVRInfo dvr_recordings = 1;
+  common.CursorPaginationResponse pagination = 2;
+}
+
+// ============================================================================
+// VIEWER ENDPOINT MESSAGES
+// Used by both Foghorn and Commodore services
+// ============================================================================
+
+// ViewerEndpointRequest - request to resolve viewer endpoint
+message ViewerEndpointRequest {
+  string content_type = 1;  // live|dvr|clip
+  string content_id = 2;
+  optional string viewer_ip = 3;
+}
+
+// OutputCapability - capabilities of an output protocol
+message OutputCapability {
+  bool supports_seek = 1;
+  bool supports_quality_switch = 2;
+  int32 max_bitrate = 3;
+  bool has_audio = 4;
+  bool has_video = 5;
+  repeated string codecs = 6;
+}
+
+// OutputEndpoint - a single output endpoint with protocol info
+message OutputEndpoint {
+  string protocol = 1;
+  string url = 2;
+  OutputCapability capabilities = 3;
+}
+
+// ViewerEndpoint - resolved endpoint for a viewer
+message ViewerEndpoint {
+  string node_id = 1;
+  string base_url = 2;
+  string protocol = 3;
+  string url = 4;
+  double geo_distance = 5;
+  double load_score = 6;
+  // REMOVED: health_score = 7 (derived metric)
+  map<string, OutputEndpoint> outputs = 8;
+}
+
+// PlaybackTrack - track information for playback
+message PlaybackTrack {
+  string type = 1;
+  string codec = 2;
+  int32 bitrate_kbps = 3;
+  int32 width = 4;
+  int32 height = 5;
+  int32 channels = 6;
+  int32 sample_rate = 7;
+}
+
+// PlaybackInstance - per-node stats for a stream instance
+message PlaybackInstance {
+  string node_id = 1;
+  int32 viewers = 2;
+  string buffer_state = 3;
+  int64 bytes_up = 4;
+  int64 bytes_down = 5;
+  int32 total_connections = 6;
+  int32 inputs = 7;
+  google.protobuf.Timestamp last_update = 8;
+}
+
+// PlaybackMetadata - metadata for playback content
+message PlaybackMetadata {
+  string status = 1;
+  bool is_live = 2;
+  int32 viewers = 3;
+  string buffer_state = 4;
+  // REMOVED: health_score = 5 (derived metric)
+  repeated PlaybackTrack tracks = 6;
+  repeated string protocol_hints = 7;
+  repeated PlaybackInstance instances = 8;
+  string dvr_status = 9;
+  string dvr_source_uri = 10;
+  string tenant_id = 11;
+  string content_id = 12;
+  string content_type = 13;
+  optional string title = 14;
+  optional string description = 15;
+  optional int32 duration_seconds = 16;
+  optional int64 recording_size_bytes = 17;
+  optional string clip_source = 18;
+  optional google.protobuf.Timestamp created_at = 19;
+}
+
+// ViewerEndpointResponse - response with resolved endpoints
+message ViewerEndpointResponse {
+  ViewerEndpoint primary = 1;
+  repeated ViewerEndpoint fallbacks = 2;
+  optional PlaybackMetadata metadata = 3;
+}
+
+// ============================================================================
+// STREAM META MESSAGES
+// Used by both Foghorn and Commodore services
+// ============================================================================
+
+// StreamMetaRequest - request for stream metadata
+message StreamMetaRequest {
+  string internal_name = 1;
+  optional string content_type = 2;  // live|dvr|clip
+  bool include_raw = 3;
+  optional string target_node_id = 4;
+  optional string target_base_url = 5;
+}
+
+// TrackSummary - summary of a media track
+message TrackSummary {
+  string id = 1;
+  string type = 2;
+  string codec = 3;
+  optional int32 channels = 4;
+  optional int32 rate = 5;
+  optional int32 width = 6;
+  optional int32 height = 7;
+  optional int32 bitrate_bps = 8;
+  optional int64 now_ms = 9;
+  optional int64 last_ms = 10;
+  optional int64 first_ms = 11;
+}
+
+// MetaSummary - summary of stream metadata
+message MetaSummary {
+  bool is_live = 1;
+  int64 buffer_window_ms = 2;
+  int64 jitter_ms = 3;
+  int64 unix_offset_ms = 4;
+  optional int64 now_ms = 5;
+  optional int64 last_ms = 6;
+  optional int32 width = 7;
+  optional int32 height = 8;
+  optional int32 version = 9;
+  string type = 10;
+  repeated TrackSummary tracks = 11;
+}
+
+// StreamMetaResponse - response with stream metadata
+message StreamMetaResponse {
+  MetaSummary meta_summary = 1;
+  bytes raw = 2;  // Optional raw JSON from MistServer
+}

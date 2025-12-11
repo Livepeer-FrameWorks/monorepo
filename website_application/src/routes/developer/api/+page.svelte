@@ -1,8 +1,8 @@
-<script>
+<script lang="ts">
   import { onMount } from "svelte";
   import { resolve } from "$app/paths";
   import { auth } from "$lib/stores/auth";
-  import { developerService } from "$lib/graphql/services/developer.js";
+  import { GetAPITokensConnectionStore, CreateAPITokenStore, RevokeAPITokenStore } from "$houdini";
   import { toast } from "$lib/stores/toast.js";
   import SkeletonLoader from "$lib/components/SkeletonLoader.svelte";
   import GraphQLExplorer from "$lib/components/GraphQLExplorer.svelte";
@@ -10,13 +10,8 @@
     Code2,
     Key,
     LogIn,
-    Globe,
-    Zap,
-    Target,
     Copy,
     Plus,
-    Rocket,
-    BookOpen,
   } from "lucide-svelte";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
@@ -26,50 +21,66 @@
     SelectContent,
     SelectItem,
   } from "$lib/components/ui/select";
+  import { Alert, AlertDescription } from "$lib/components/ui/alert";
+  import { TokenCard } from "$lib/components/cards";
+
+  // Houdini stores - names must match the query/mutation names in .gql files
+  const tokensStore = new GetAPITokensConnectionStore();
+  const createTokenMutation = new CreateAPITokenStore();
+  const revokeTokenMutation = new RevokeAPITokenStore();
+
+  // Pagination state
+  let loadingMore = $state(false);
 
   let isAuthenticated = $state(false);
-  let loading = $state(true);
-  let authToken = $state(null);
+  // Placeholder for code examples - users should use their Developer API Token
+  let authToken = $state<string | null>("YOUR_API_TOKEN");
 
   // API Token Management
-  let apiTokens = $state([]);
   let showCreateTokenModal = $state(false);
-  let creatingToken = $state(false);
   let newTokenName = $state("");
   let newTokenExpiry = $state("0"); // "0" = never expires
-  const tokenExpiryLabels = {
+  const tokenExpiryLabels: Record<string, string> = {
     "0": "Never expires",
     "30": "30 days",
     "90": "90 days",
     "365": "1 year",
   };
-  let newlyCreatedToken = $state(null);
+
+  interface NewTokenDisplay {
+    token_name: string;
+    token_value: string;
+  }
+
+  let newlyCreatedToken = $state<NewTokenDisplay | null>(null);
+  let creatingToken = $state(false);
+
+  // Derived state from Houdini stores
+  let loading = $derived($tokensStore.fetching);
+  let apiTokens = $derived(
+    $tokensStore.data?.developerTokensConnection?.edges?.map(e => e.node) ?? []
+  );
+  let hasMoreTokens = $derived(
+    $tokensStore.data?.developerTokensConnection?.pageInfo?.hasNextPage ?? false
+  );
+  let totalTokenCount = $derived(
+    $tokensStore.data?.developerTokensConnection?.totalCount ?? 0
+  );
 
   // Subscribe to auth store
   auth.subscribe((authState) => {
     isAuthenticated = authState.isAuthenticated;
-    authToken = authState.token || null;
   });
 
   onMount(async () => {
     if (!isAuthenticated) {
       await auth.checkAuth();
     }
-    loading = false;
 
     if (isAuthenticated) {
-      await loadAPITokens();
+      await tokensStore.fetch();
     }
   });
-
-  async function loadAPITokens() {
-    try {
-      apiTokens = await developerService.getAPITokens();
-    } catch (error) {
-      console.error("Failed to load API tokens:", error);
-      toast.error("Failed to load API tokens. Please refresh the page.");
-    }
-  }
 
   async function createAPIToken() {
     if (!newTokenName.trim()) {
@@ -79,22 +90,30 @@
 
     try {
       creatingToken = true;
-      const result = await developerService.createAPIToken({
-        name: newTokenName.trim(),
-        permissions: "read,write",
-        expiresIn: Number(newTokenExpiry) || null,
+      const result = await createTokenMutation.mutate({
+        input: {
+          name: newTokenName.trim(),
+          permissions: "read,write",
+          expiresIn: Number(newTokenExpiry) || null,
+        },
       });
 
-      if (result) {
+      const data = result.data?.createDeveloperToken;
+      if (data && data.__typename === "DeveloperToken") {
         newlyCreatedToken = {
-          token_name: result.name,
-          token_value: result.token,
+          token_name: data.tokenName,
+          token_value: data.tokenValue || "", // Should be present on creation
         };
-        await loadAPITokens();
+        // Houdini's @list directive with @prepend automatically updates the cache
+        // No manual refetch needed - that causes duplicate entries
 
         // Reset form but keep modal open to show the token
         newTokenName = "";
         newTokenExpiry = "0";
+      } else if (data) {
+        // Handle error types
+        const errorResult = data as { message?: string };
+        toast.error(errorResult.message || "Failed to create token");
       }
     } catch (error) {
       console.error("Failed to create API token:", error);
@@ -104,7 +123,7 @@
     }
   }
 
-  async function revokeAPIToken(tokenId, tokenName) {
+  async function revokeAPIToken(tokenId: string, tokenName: string) {
     if (
       !confirm(
         `Are you sure you want to revoke the token "${tokenName}"? This action cannot be undone.`,
@@ -114,8 +133,9 @@
     }
 
     try {
-      await developerService.revokeAPIToken(tokenId);
-      await loadAPITokens();
+      await revokeTokenMutation.mutate({ id: tokenId });
+      // Refetch to update the list
+      await tokensStore.fetch({ policy: "NetworkOnly" });
       toast.success("API token revoked successfully");
     } catch (error) {
       console.error("Failed to revoke API token:", error);
@@ -123,360 +143,187 @@
     }
   }
 
-  function copyToClipboard(text) {
+  function copyToClipboard(text: string) {
     navigator.clipboard.writeText(text);
   }
 
-  function formatDate(dateString) {
-    if (!dateString) return "Never";
-    return new Date(dateString).toLocaleString();
-  }
+  async function loadMoreTokens() {
+    if (!hasMoreTokens || loadingMore) return;
 
-  function getTokenStatusColor(status) {
-    switch (status) {
-      case "active":
-        return "text-tokyo-night-green";
-      case "expired":
-        return "text-tokyo-night-yellow";
-      case "revoked":
-        return "text-tokyo-night-red";
-      default:
-        return "text-tokyo-night-comment";
+    loadingMore = true;
+    try {
+      await tokensStore.loadNextPage();
+    } catch (err) {
+      console.error("Failed to load more tokens:", err);
+      toast.error("Failed to load more tokens");
+    } finally {
+      loadingMore = false;
     }
   }
+
 </script>
 
 <svelte:head>
   <title>GraphQL API - FrameWorks</title>
 </svelte:head>
 
-<div class="space-y-8 page-transition">
-  <!-- Page Header -->
-  <div class="flex justify-between items-start">
-    <div>
-      <h1
-        class="text-3xl font-bold text-tokyo-night-fg mb-2 flex items-center gap-3"
-      >
-        <Code2 class="w-8 h-8" />
-        GraphQL API
-      </h1>
-      <p class="text-tokyo-night-fg-dark">
-        Interactive GraphQL explorer with schema introspection, query templates,
-        and code generation
-      </p>
-    </div>
+<div class="h-full flex flex-col">
+    <!-- Compact Page Header -->
+    <div class="px-4 sm:px-6 lg:px-8 py-3 border-b border-border shrink-0">
+      <div class="flex justify-between items-center gap-4">
+        <div class="flex items-center gap-3">
+          <Code2 class="w-5 h-5 text-primary" />
+          <h1 class="text-lg font-bold text-foreground">GraphQL API</h1>
+        </div>
 
-    <div class="flex space-x-3">
-      {#if isAuthenticated}
-        <Button
-          class="gap-2"
-          onclick={() => {
-            showCreateTokenModal = true;
-            newlyCreatedToken = null;
-          }}
-        >
-          <Key class="w-4 h-4" />
-          Create New Token
-        </Button>
-      {:else}
-        <Button href={resolve("/login")} class="gap-2">
-          <LogIn class="w-4 h-4" />
-          Login to Access
-        </Button>
-      {/if}
-    </div>
-  </div>
-
-  {#if loading}
-    <!-- API Tokens Skeleton -->
-    <div class="bg-tokyo-night-surface rounded-lg p-6 mb-8">
-      <SkeletonLoader type="text-lg" className="w-32 mb-4" />
-      <div class="space-y-3">
-        {#each Array(3) as _, index (index)}
-          <div
-            class="flex items-center justify-between p-4 bg-tokyo-night-bg rounded-lg border border-tokyo-night-selection"
-          >
-            <div class="flex-1">
-              <SkeletonLoader type="text" className="w-40 mb-2" />
-              <SkeletonLoader type="text-sm" className="w-32" />
+        <div class="flex items-center gap-4 text-xs">
+          <div class="hidden md:flex items-center gap-4">
+            <div class="flex items-center gap-1.5">
+              <span class="text-muted-foreground">HTTP</span>
+              <code class="font-mono text-foreground bg-muted px-1.5 py-0.5">{(import.meta as any).env.VITE_GRAPHQL_HTTP_URL || "http://localhost:18000/graphql/"}</code>
             </div>
-            <div class="flex space-x-2">
-              <SkeletonLoader type="custom" className="w-16 h-8 rounded" />
-              <SkeletonLoader type="custom" className="w-8 h-8 rounded" />
+            <div class="flex items-center gap-1.5">
+              <span class="text-muted-foreground">WS</span>
+              <code class="font-mono text-foreground bg-muted px-1.5 py-0.5">{(import.meta as any).env.VITE_GRAPHQL_WS_URL || "ws://localhost:18000/graphql/"}</code>
             </div>
           </div>
-        {/each}
-      </div>
-    </div>
-  {:else if !isAuthenticated}
-    <!-- Not Authenticated State -->
-    <div class="card text-center py-12">
-      <div class="flex justify-center mb-4">
-        <LogIn class="w-16 h-16 text-tokyo-night-blue" />
-      </div>
-      <h3 class="text-xl font-semibold text-tokyo-night-fg mb-2">
-        Authentication Required
-      </h3>
-      <p class="text-tokyo-night-fg-dark mb-6">
-        Please sign in to access the GraphQL API explorer and manage your API
-        keys.
-      </p>
-      <Button href={resolve("/login")}>Sign In</Button>
-    </div>
-  {:else}
-    <!-- GraphQL API Overview -->
-    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-      <div class="info-card">
-        <div class="flex items-start justify-between">
-          <div class="flex-1 min-w-0">
-            <p class="text-sm text-tokyo-night-comment mb-2">
-              GraphQL Endpoint
-            </p>
-            <p
-              class="text-sm font-mono text-tokyo-night-fg break-all leading-relaxed"
-            >
-              {import.meta.env.VITE_GRAPHQL_HTTP_URL ||
-                "http://localhost:18000/graphql/"}
-            </p>
-          </div>
-          <Globe class="w-6 h-6 ml-3 flex-shrink-0 text-tokyo-night-blue" />
-        </div>
-      </div>
-
-      <div class="info-card">
-        <div class="flex items-start justify-between">
-          <div class="flex-1 min-w-0">
-            <p class="text-sm text-tokyo-night-comment mb-2">WebSocket</p>
-            <p
-              class="text-sm font-mono text-tokyo-night-fg break-all leading-relaxed"
-            >
-              {import.meta.env.VITE_GRAPHQL_WS_URL ||
-                "ws://localhost:18000/graphql/"}
-            </p>
-          </div>
-          <Zap class="w-6 h-6 ml-3 flex-shrink-0 text-tokyo-night-yellow" />
-        </div>
-      </div>
-
-      <div class="info-card">
-        <div class="flex items-start justify-between">
-          <div class="flex-1 min-w-0">
-            <p class="text-sm text-tokyo-night-comment mb-2">Authentication</p>
-            <p class="text-lg font-semibold text-tokyo-night-fg">JWT Bearer</p>
-          </div>
-          <Key class="w-6 h-6 ml-3 flex-shrink-0 text-tokyo-night-green" />
-        </div>
-      </div>
-
-      <div class="info-card">
-        <div class="flex items-start justify-between">
-          <div class="flex-1 min-w-0">
-            <p class="text-sm text-tokyo-night-comment mb-2">Active Tokens</p>
-            <p class="text-lg font-semibold text-tokyo-night-fg">
-              {apiTokens.filter((t) => t.status === "active").length}
-            </p>
-          </div>
-          <Target class="w-6 h-6 ml-3 flex-shrink-0 text-tokyo-night-purple" />
+          {#if !isAuthenticated}
+            <Button href={resolve("/login")} size="sm" class="gap-2">
+              <LogIn class="w-4 h-4" />
+              Login
+            </Button>
+          {/if}
         </div>
       </div>
     </div>
 
-    <!-- API Token Management -->
-    <div class="card">
-      <div class="card-header">
-        <h2
-          class="text-xl font-semibold text-tokyo-night-fg mb-2 flex items-center gap-2"
-        >
-          <Key class="w-5 h-5" />
-          Your API Tokens
-        </h2>
-        <p class="text-tokyo-night-fg-dark">
-          Generate and manage API tokens for programmatic access to your streams
-        </p>
+    {#if loading}
+      <!-- Loading Skeleton -->
+      <div class="flex-1 flex items-center justify-center">
+        <div class="text-center">
+          <SkeletonLoader type="custom" class="w-8 h-8 rounded mx-auto mb-4" />
+          <SkeletonLoader type="text" class="w-32 mx-auto" />
+        </div>
       </div>
-
-      {#if apiTokens.length === 0}
-        <div class="text-center py-8">
-          <div class="flex justify-center mb-4">
-            <Key class="w-12 h-12 text-tokyo-night-blue" />
-          </div>
-          <h3 class="text-lg font-semibold text-tokyo-night-fg mb-2">
-            No API Tokens
-          </h3>
-          <p class="text-tokyo-night-comment mb-4">
-            Create your first API token to start using the FrameWorks GraphQL
-            API
+    {:else if !isAuthenticated}
+      <!-- Not Authenticated State -->
+      <div class="flex-1 flex items-center justify-center">
+        <div class="text-center">
+          <LogIn class="w-12 h-12 text-primary mx-auto mb-4" />
+          <h2 class="text-xl font-semibold text-foreground mb-2">Authentication Required</h2>
+          <p class="text-muted-foreground mb-6">
+            Sign in to access the GraphQL API explorer and manage your API tokens.
           </p>
-          <Button
-            class="gap-2"
-            onclick={() => {
-              showCreateTokenModal = true;
-              newlyCreatedToken = null;
-            }}
-          >
-            <Plus class="w-4 h-4" />
-            Create Your First Token
-          </Button>
+          <Button href={resolve("/login")}>Sign In</Button>
         </div>
-      {:else}
-        <div class="space-y-4">
-          {#each apiTokens as token (token.id ?? token.token_id)}
-            <div
-              class="bg-tokyo-night-bg-highlight p-4 rounded-lg border border-tokyo-night-fg-gutter"
+      </div>
+    {:else}
+      <!-- Main Content: Two Column Layout -->
+      <div class="flex-1 flex overflow-hidden">
+        <!-- Left Sidebar: Tokens -->
+        <div class="w-80 border-r border-border flex flex-col shrink-0">
+          <div class="px-4 py-3 border-b border-border flex items-center justify-between">
+            <div class="flex items-center gap-2">
+              <h3 class="font-semibold text-foreground text-sm">API Tokens</h3>
+              {#if totalTokenCount > 0}
+                <span class="text-xs text-muted-foreground">({apiTokens.length}{#if hasMoreTokens}+{/if})</span>
+              {/if}
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              class="gap-1 h-7 text-xs"
+              onclick={() => {
+                showCreateTokenModal = true;
+                newlyCreatedToken = null;
+              }}
             >
-              <div class="flex items-center justify-between">
-                <div class="flex-1">
-                  <div class="flex items-center space-x-3 mb-2">
-                    <h3 class="font-semibold text-tokyo-night-fg">
-                      {token.name}
-                    </h3>
-                    <span
-                      class="text-xs px-2 py-1 rounded {getTokenStatusColor(
-                        token.status,
-                      )} bg-tokyo-night-bg"
-                    >
-                      {token.status.toUpperCase()}
-                    </span>
-                  </div>
-                  <div class="grid grid-cols-2 gap-4 text-sm">
-                    <div>
-                      <p class="text-tokyo-night-comment">Permissions</p>
-                      <p class="text-tokyo-night-fg">{token.permissions}</p>
-                    </div>
-                    <div>
-                      <p class="text-tokyo-night-comment">Last Used</p>
-                      <p class="text-tokyo-night-fg">
-                        {formatDate(token.lastUsedAt)}
-                      </p>
-                    </div>
-                    <div>
-                      <p class="text-tokyo-night-comment">Expires</p>
-                      <p class="text-tokyo-night-fg">
-                        {token.expiresAt
-                          ? formatDate(token.expiresAt)
-                          : "Never"}
-                      </p>
-                    </div>
-                    <div>
-                      <p class="text-tokyo-night-comment">Created</p>
-                      <p class="text-tokyo-night-fg">
-                        {formatDate(token.createdAt)}
-                      </p>
-                    </div>
-                  </div>
-                </div>
-                <div class="flex space-x-2">
-                  {#if token.status === "active"}
-                    <Button
-                      variant="destructive"
-                      size="sm"
-                      class="px-3"
-                      onclick={() => revokeAPIToken(token.id, token.name)}
-                    >
-                      Revoke
-                    </Button>
-                  {/if}
-                </div>
+              <Plus class="w-3 h-3" />
+              New
+            </Button>
+          </div>
+          <div class="flex-1 overflow-y-auto">
+            {#if apiTokens.length === 0}
+              <div class="text-center py-8 px-4">
+                <Key class="w-6 h-6 text-muted-foreground mx-auto mb-3" />
+                <p class="text-sm text-muted-foreground mb-3">No API tokens yet</p>
+                <Button
+                  size="sm"
+                  class="gap-1"
+                  onclick={() => {
+                    showCreateTokenModal = true;
+                    newlyCreatedToken = null;
+                  }}
+                >
+                  <Plus class="w-3 h-3" />
+                  Create Token
+                </Button>
               </div>
-            </div>
-          {/each}
-        </div>
-      {/if}
-    </div>
-
-    <!-- GraphQL Explorer -->
-    <div class="card">
-      <div class="card-header">
-        <h2
-          class="text-xl font-semibold text-tokyo-night-fg mb-2 flex items-center gap-2"
-        >
-          <Rocket class="w-5 h-5" />
-          GraphQL API Explorer
-        </h2>
-        <p class="text-tokyo-night-fg-dark">
-          Interactive GraphQL query builder and tester with live schema
-          introspection
-        </p>
-      </div>
-
-      <GraphQLExplorer {authToken} />
-    </div>
-
-    <!-- GraphQL Guide -->
-    <div class="card">
-      <div class="card-header">
-        <h2
-          class="text-xl font-semibold text-tokyo-night-fg mb-2 flex items-center gap-2"
-        >
-          <BookOpen class="w-5 h-5" />
-          GraphQL API Guide
-        </h2>
-        <p class="text-tokyo-night-fg-dark">
-          Everything you need to know about our GraphQL API
-        </p>
-      </div>
-
-      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        <div class="text-center">
-          <div class="flex justify-center mb-3">
-            <Code2 class="w-8 h-8 text-tokyo-night-blue" />
+            {:else}
+              <div class="divide-y divide-border/50">
+                {#each apiTokens as token, index (`${token.id}-${index}`)}
+                  <TokenCard
+                    {token}
+                    onRevoke={() => revokeAPIToken(token.id, token.tokenName)}
+                  />
+                {/each}
+              </div>
+              {#if hasMoreTokens}
+                <div class="p-3 border-t border-border/50">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    class="w-full"
+                    onclick={loadMoreTokens}
+                    disabled={loadingMore}
+                  >
+                    {#if loadingMore}
+                      Loading...
+                    {:else}
+                      Load More Tokens
+                    {/if}
+                  </Button>
+                </div>
+              {/if}
+            {/if}
           </div>
-          <h3 class="font-semibold text-tokyo-night-fg mb-2">Schema First</h3>
-          <p class="text-sm text-tokyo-night-comment">
-            All operations use a single GraphQL endpoint. Query exactly the data
-            you need with strong typing.
-          </p>
         </div>
 
-        <div class="text-center">
-          <div class="flex justify-center mb-3">
-            <Zap class="w-8 h-8 text-tokyo-night-yellow" />
-          </div>
-          <h3 class="font-semibold text-tokyo-night-fg mb-2">Real-time</h3>
-          <p class="text-sm text-tokyo-night-comment">
-            Use GraphQL subscriptions over WebSocket for real-time stream events
-            and viewer metrics.
-          </p>
-        </div>
-
-        <div class="text-center">
-          <div class="flex justify-center mb-3">
-            <Key class="w-8 h-8 text-tokyo-night-green" />
-          </div>
-          <h3 class="font-semibold text-tokyo-night-fg mb-2">JWT Auth</h3>
-          <p class="text-sm text-tokyo-night-comment">
-            Include your JWT token in the Authorization header. The explorer
-            handles this automatically.
-          </p>
-        </div>
-
-        <div class="text-center">
-          <div class="flex justify-center mb-3">
-            <Target class="w-8 h-8 text-tokyo-night-purple" />
-          </div>
-          <h3 class="font-semibold text-tokyo-night-fg mb-2">Type Safe</h3>
-          <p class="text-sm text-tokyo-night-comment">
-            Generate TypeScript types from the schema for full type safety in
-            your applications.
-          </p>
+        <!-- Right: GraphQL Explorer (fills remaining space) -->
+        <div class="flex-1 overflow-hidden">
+          <GraphQLExplorer {authToken} />
         </div>
       </div>
-    </div>
-  {/if}
+    {/if}
 </div>
 
 <!-- Create Token Modal -->
 {#if showCreateTokenModal}
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <div
-    class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"
+    class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50"
+    onclick={(e) => {
+      // Close modal when clicking backdrop (not the modal content)
+      if (e.target === e.currentTarget && !newlyCreatedToken) {
+        showCreateTokenModal = false;
+      }
+    }}
+    onkeydown={(e) => {
+      if (e.key === "Escape" && !newlyCreatedToken) {
+        showCreateTokenModal = false;
+      }
+    }}
+    role="dialog"
+    tabindex="0"
+    aria-modal="true"
   >
     <div
-      class="bg-tokyo-night-bg-light p-6 rounded-lg border border-tokyo-night-fg-gutter max-w-md w-full mx-4"
+      class="bg-card p-6 border border-border max-w-md w-full mx-4 rounded-lg shadow-xl"
     >
       {#if newlyCreatedToken}
         <!-- Show newly created token -->
         <h3
-          class="text-xl font-semibold text-tokyo-night-green mb-4 flex items-center gap-2"
+          class="text-xl font-semibold text-success mb-4 flex items-center gap-2"
         >
           <Key class="w-6 h-6" />
           Token Created Successfully!
@@ -486,13 +333,13 @@
           <div>
             <label
               for="token-name-display"
-              class="block text-sm font-medium text-tokyo-night-fg-dark mb-2"
+              class="block text-sm font-medium text-muted-foreground mb-2"
             >
               Token Name
             </label>
             <p
               id="token-name-display"
-              class="text-tokyo-night-fg font-semibold"
+              class="text-foreground font-semibold"
             >
               {newlyCreatedToken.token_name}
             </p>
@@ -501,7 +348,7 @@
           <div>
             <label
               for="api-token-display"
-              class="block text-sm font-medium text-tokyo-night-fg-dark mb-2"
+              class="block text-sm font-medium text-muted-foreground mb-2"
             >
               API Token (Copy this now - it won't be shown again!)
             </label>
@@ -511,11 +358,11 @@
                 type="text"
                 value={newlyCreatedToken.token_value}
                 readonly
-                class="flex-1 font-mono text-sm bg-tokyo-night-bg-highlight"
+                class="flex-1 font-mono text-sm bg-muted"
               />
               <Button
                 class="gap-2"
-                onclick={() => copyToClipboard(newlyCreatedToken.token_value)}
+                onclick={() => copyToClipboard(newlyCreatedToken!.token_value)}
               >
                 <Copy class="w-4 h-4" />
                 Copy
@@ -523,14 +370,12 @@
             </div>
           </div>
 
-          <div
-            class="bg-tokyo-night-bg-highlight p-3 rounded border border-tokyo-night-yellow"
-          >
-            <p class="text-sm text-tokyo-night-yellow">
+          <Alert variant="warning">
+            <AlertDescription>
               <strong>Important:</strong> Store this token securely. You won't be
               able to see it again after closing this dialog.
-            </p>
-          </div>
+            </AlertDescription>
+          </Alert>
         </div>
 
         <div class="flex justify-end space-x-3 mt-6">
@@ -545,7 +390,7 @@
         </div>
       {:else}
         <!-- Create token form -->
-        <h3 class="text-xl font-semibold text-tokyo-night-fg mb-4">
+        <h3 class="text-xl font-semibold text-foreground mb-4">
           Create New API Token
         </h3>
 
@@ -553,7 +398,7 @@
           <div>
             <label
               for="token-name"
-              class="block text-sm font-medium text-tokyo-night-fg-dark mb-2"
+              class="block text-sm font-medium text-muted-foreground mb-2"
             >
               Token Name *
             </label>
@@ -570,11 +415,11 @@
           <div>
             <label
               for="token-expiry"
-              class="block text-sm font-medium text-tokyo-night-fg-dark mb-2"
+              class="block text-sm font-medium text-muted-foreground mb-2"
             >
               Expires In
             </label>
-            <Select bind:value={newTokenExpiry}>
+            <Select bind:value={newTokenExpiry} type="single">
               <SelectTrigger
                 id="token-expiry"
                 class="w-full"
@@ -591,14 +436,12 @@
             </Select>
           </div>
 
-          <div
-            class="bg-tokyo-night-bg-highlight p-3 rounded border border-tokyo-night-fg-gutter"
-          >
-            <p class="text-sm text-tokyo-night-comment">
+          <Alert variant="info">
+            <AlertDescription>
               <strong>Tip:</strong> Create separate tokens for different applications
               or environments (development, staging, production).
-            </p>
-          </div>
+            </AlertDescription>
+          </Alert>
         </div>
 
         <div class="flex justify-end space-x-3 mt-6">

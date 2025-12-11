@@ -17,11 +17,10 @@ type Tenant struct {
 	SecondaryColor string  `json:"secondary_color" db:"secondary_color"`
 
 	// Deployment routing
-	DeploymentTier         string   `json:"deployment_tier" db:"deployment_tier"`
-	DeploymentModel        string   `json:"deployment_model" db:"deployment_model"`
-	PrimaryDeploymentTier  string   `json:"primary_deployment_tier" db:"primary_deployment_tier"`
-	AllowedDeploymentTiers []string `json:"allowed_deployment_tiers" db:"allowed_deployment_tiers"`
-	PrimaryClusterID       *string  `json:"primary_cluster_id,omitempty" db:"primary_cluster_id"`
+	DeploymentTier        string  `json:"deployment_tier" db:"deployment_tier"`
+	DeploymentModel       string  `json:"deployment_model" db:"deployment_model"`
+	PrimaryDeploymentTier string  `json:"primary_deployment_tier" db:"primary_deployment_tier"`
+	PrimaryClusterID      *string `json:"primary_cluster_id,omitempty" db:"primary_cluster_id"`
 	KafkaTopicPrefix       *string  `json:"kafka_topic_prefix,omitempty" db:"kafka_topic_prefix"`
 	KafkaBrokers           []string `json:"kafka_brokers,omitempty" db:"kafka_brokers"`
 	DatabaseURL            *string  `json:"database_url,omitempty" db:"database_url"`
@@ -32,6 +31,9 @@ type Tenant struct {
 	CreatedAt time.Time `json:"created_at" db:"created_at"`
 	UpdatedAt time.Time `json:"updated_at" db:"updated_at"`
 }
+
+// GraphQL union type marker method for Tenant
+func (Tenant) IsUpdateTenantResult() {}
 
 // TenantClusterAccess represents a tenant's access to a specific cluster
 type TenantClusterAccess struct {

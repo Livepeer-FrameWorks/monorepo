@@ -3,6 +3,7 @@ import { motion } from 'framer-motion'
 import { Link } from 'react-router-dom'
 import config from '../../config'
 import InfoTooltip from '../shared/InfoTooltip'
+import StatusTag from '../shared/StatusTag'
 import SavingsCalculator from '../shared/SavingsCalculator'
 import { Section, SectionContainer } from '@/components/ui/section'
 import {
@@ -123,7 +124,7 @@ const enterpriseTier = {
   name: 'Enterprise',
   price: 'Custom pricing',
   headline: 'For high-bandwidth projects and fully custom deployments.',
-  description: "Ready to be the next Netflix, Twitch, or YouTube when you're building at massive scale.",
+  description: "For teams building at massive scale with custom requirements.",
   bullets: [
     'Custom feature development and white-label solutions',
     'Private deployments or co-managed operations with our engineers',
@@ -147,6 +148,8 @@ const gpuFeatureMatrix = [
   {
     feature: 'AI processing',
     description: 'Advanced video analysis, clipping, and inference workloads.',
+    status: 'pipeline',
+    statusNote: 'Pipeline: AI assist is in development; limited to internal and pilot workloads.',
     tiers: {
       free: 'Only self-hosting',
       supporter: 'Only self-hosting',
@@ -183,7 +186,7 @@ const deploymentOptions = [
     summary: 'Operate ingest, control plane, and delivery on your hardware with FrameWorks automation.',
     modal: {
       description:
-        'Keep everything sovereign by running Mist ingest, delivery, and the FrameWorks control plane inside your footprint. We provide the automation, observability, and guardrails—you keep the keys.',
+        'Keep everything sovereign by running Mist ingest, delivery, and the FrameWorks control plane inside your footprint. We provide the automation, observability, and guardrails. You keep the keys.',
       bullets: [
         'Declarative configs for bare metal, VMs, or Kubernetes with drift detection and safe rollbacks.',
         'Joint dashboards, runbooks, and on-call assistance without surrendering shell access.',
@@ -217,7 +220,7 @@ const deploymentOptions = [
     summary: 'Hand ingest, load balancing, delivery, and observability to our SRE crews.',
     modal: {
       description:
-        'Let FrameWorks SREs run ingest, delivery, observability, and GPU orchestration while your team focuses on product velocity—you keep full visibility and control.',
+        'Let FrameWorks SREs run ingest, delivery, observability, and GPU orchestration while your team focuses on shipping. You keep full visibility and control.',
       bullets: [
         'SLO-backed operations with shared runbooks, paging rotations, and direct-to-engineer escalation.',
         'Managed load balancers, CDN federation, GPU scheduling, and AI pipelines with per-tier usage breakdowns.',
@@ -234,7 +237,7 @@ const deploymentOptions = [
     summary: 'Reserved clusters, private consoles, and compliance workflows tailored to regulated industries.',
     modal: {
       description:
-        'Design bespoke deployments alongside our engineers when you need dedicated capacity, deep compliance, and co-managed operations across regulated environments.',
+        'Design custom deployments alongside our engineers when you need dedicated capacity, compliance, and co-managed operations across regulated environments.',
       bullets: [
         'Security and compliance reviews aligned to your policies with artifact-ready evidence packs.',
         'Custom SLAs, reserved GPU/edge pools, and direct engineer-to-engineer escalation.',
@@ -333,7 +336,7 @@ const pricingHeroHighlights = [
   },
   {
     title: 'Transparent overages',
-    description: 'Published beta rates for GPU minutes and delivered bandwidth—no hidden multipliers.',
+    description: 'Published rates for GPU minutes and delivered bandwidth. No hidden multipliers.',
     tone: 'yellow',
     icon: BanknotesIcon,
   },
@@ -413,6 +416,9 @@ const Pricing = () => {
         <div className="pricing-gpu-feature">
           <span className="pricing-gpu-feature__title">{entry.feature}</span>
           <p className="pricing-gpu-feature__copy">{entry.description}</p>
+          {entry.status ? (
+            <StatusTag status={entry.status} note={entry.statusNote} className="mt-1" />
+          ) : null}
         </div>
       ),
       ...tierCells,
@@ -596,7 +602,7 @@ const Pricing = () => {
               <HeadlineStack
                 eyebrow="GPU-powered features"
                 title="Advanced processing across every tier"
-                subtitle="FrameWorks infrastructure and the Livepeer network unlock GPU workflows. Compare what each tier includes."
+                subtitle="FrameWorks infrastructure and the Livepeer network enable GPU workflows. Compare what each tier includes."
                 align="left"
                 underlineAlign="start"
                 actionsPlacement="inline"

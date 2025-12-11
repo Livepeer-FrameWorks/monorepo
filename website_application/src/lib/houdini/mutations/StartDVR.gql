@@ -1,0 +1,28 @@
+mutation StartDVR($internalName: String!, $streamId: ID) {
+  startDVR(internalName: $internalName, streamId: $streamId) {
+    __typename
+    ... on DVRRequest {
+      dvrHash
+      internalName
+      storageNodeId
+      status
+      startedAt
+      endedAt
+      durationSeconds
+      sizeBytes
+      manifestPath
+      errorMessage
+      createdAt
+      updatedAt
+    }
+    ... on ValidationError {
+      ...ValidationErrorFields @mask_disable
+    }
+    ... on NotFoundError {
+      ...NotFoundErrorFields @mask_disable
+    }
+    ... on AuthError {
+      ...AuthErrorFields @mask_disable
+    }
+  }
+}

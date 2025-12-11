@@ -1,8 +1,8 @@
 # Build stage
-FROM golang:1.23.8-alpine AS builder
+FROM golang:1.24-alpine AS builder
 
 # Install build dependencies
-RUN apk add --no-cache git ca-certificates tzdata
+RUN apk add --no-cache git ca-certificates tzdata build-base
 
 # Install grpcurl
 RUN go install github.com/fullstorydev/grpcurl/cmd/grpcurl@latest
@@ -19,6 +19,11 @@ COPY pkg/ ../pkg/
 # Copy api_firehose for proto dependencies (maintain relative path for replace directive)
 COPY api_firehose/ ../api_firehose/
 
+# Download dependencies
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    go mod download
+
 # Copy service source code
 COPY api_balancing/ ./
 
@@ -29,14 +34,15 @@ ARG BUILD_DATE
 ARG COMPONENT_NAME=foghorn
 ARG COMPONENT_VERSION=0.0.0
 
-RUN go mod download
-RUN CGO_ENABLED=0 GOOS=linux go build \
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=1 GOOS=linux go build \
     -ldflags "-X frameworks/pkg/version.Version=${VERSION} \
               -X frameworks/pkg/version.GitCommit=${GIT_COMMIT} \
               -X frameworks/pkg/version.BuildDate=${BUILD_DATE} \
               -X frameworks/pkg/version.ComponentName=${COMPONENT_NAME} \
               -X frameworks/pkg/version.ComponentVersion=${COMPONENT_VERSION}" \
-    -a -installsuffix cgo -o foghorn ./cmd/foghorn
+    -o foghorn ./cmd/foghorn
 
 # Runtime stage
 FROM alpine:3.19

@@ -21,6 +21,13 @@ Environment variables (see `env.example`):
 - `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` - Email configuration
 - `FROM_EMAIL` - Sender email address
 - `TO_EMAIL` - Recipient for contact form submissions
+- `LISTMONK_URL`, `LISTMONK_USERNAME`, `LISTMONK_PASSWORD` - Connection to Listmonk (Newsletter)
+- `DEFAULT_MAILING_LIST_ID` - ID of the Listmonk list to subscribe users to (default: 1)
+
+## Endpoints
+
+- `POST /api/contact`: Send contact email.
+- `POST /api/subscribe`: Subscribe email to newsletter (Listmonk).
 
 ## Build
 

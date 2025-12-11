@@ -1,18 +1,37 @@
-<script>
+<script lang="ts">
   import { onMount } from "svelte";
+  import { resolve } from "$app/paths";
   import { auth } from "$lib/stores/auth";
-  import { billingService } from "$lib/graphql/services/billing.js";
+  import { GetBillingStatusStore, GetBillingTiersStore, GetUsageRecordsStore, GetInvoicesStore, CreatePaymentStore } from "$houdini";
   import { toast } from "$lib/stores/toast.js";
   import SkeletonLoader from "$lib/components/SkeletonLoader.svelte";
   import { Button } from "$lib/components/ui/button";
+  import { GridSeam } from "$lib/components/layout";
+  import DashboardMetricCard from "$lib/components/shared/DashboardMetricCard.svelte";
+  import { getIconComponent } from "$lib/iconUtils";
+  import { PaymentMethod, type PaymentMethod$options } from "$houdini";
+
+  // Houdini stores
+  const billingStatusStore = new GetBillingStatusStore();
+  const billingTiersStore = new GetBillingTiersStore();
+  const usageRecordsStore = new GetUsageRecordsStore();
+  const invoicesStore = new GetInvoicesStore();
+  const createPaymentMutation = new CreatePaymentStore();
 
   let isAuthenticated = false;
-  let loading = $state(true);
-  let billingStatus = $state(null);
-  let availableTiers = $state([]);
-  let usageRecords = $state([]);
-  let invoices = $state([]);
-  let error = $state(null);
+  let error = $state<string | null>(null);
+
+  // Derived state from Houdini stores
+  let loading = $derived(
+    $billingStatusStore.fetching ||
+    $billingTiersStore.fetching ||
+    $usageRecordsStore.fetching ||
+    $invoicesStore.fetching
+  );
+  let billingStatus = $derived($billingStatusStore.data?.billingStatus ?? null);
+  let availableTiers = $derived($billingTiersStore.data?.billingTiers ?? []);
+  let usageRecords = $derived($usageRecordsStore.data?.usageRecords ?? []);
+  let invoices = $derived($invoicesStore.data?.invoices ?? []);
 
   // Subscribe to auth store
   auth.subscribe((authState) => {
@@ -24,23 +43,25 @@
       await auth.checkAuth();
     }
     await loadBillingData();
-    loading = false;
   });
 
   async function loadBillingData() {
     try {
+      // Default time range for usage records (last 30 days)
+      const now = new Date();
+      const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+      const timeRange = {
+        start: thirtyDaysAgo.toISOString(),
+        end: now.toISOString()
+      };
+
       // Load all billing data in parallel
-      const [statusData, tiersData, usageData, invoicesData] = await Promise.all([
-        billingService.getBillingStatus().catch(() => null),
-        billingService.getBillingTiers().catch(() => []),
-        billingService.getUsageRecords().catch(() => []),
-        billingService.getInvoices().catch(() => [])
+      await Promise.all([
+        billingStatusStore.fetch().catch(() => null),
+        billingTiersStore.fetch().catch(() => null),
+        usageRecordsStore.fetch({ variables: { timeRange } }).catch(() => null),
+        invoicesStore.fetch().catch(() => null)
       ]);
-      
-      billingStatus = statusData;
-      availableTiers = tiersData || [];
-      usageRecords = usageData || [];
-      invoices = invoicesData || [];
 
     } catch (err) {
       console.error('Failed to load billing data:', err);
@@ -49,12 +70,21 @@
     }
   }
 
-  async function createPayment(amount, method = 'CARD') {
+  async function createPayment(amount: number, invoiceId?: string, method: PaymentMethod$options = PaymentMethod.CARD) {
     try {
-      await billingService.createPayment({
-        amount,
-        currency: 'USD',
-        method
+      // Find the most recent unpaid invoice if not provided
+      const targetInvoiceId = invoiceId || invoices.find(inv => inv.status === 'PENDING')?.id;
+      if (!targetInvoiceId) {
+        toast.error('No pending invoice found');
+        return;
+      }
+      await createPaymentMutation.mutate({
+        input: {
+          amount,
+          currency: 'USD',
+          method,
+          invoiceId: targetInvoiceId
+        }
       });
       await loadBillingData(); // Refresh data
       toast.success('Payment processed successfully!');
@@ -64,24 +94,94 @@
     }
   }
 
-  function formatCurrency(amount, currency = 'USD') {
+  function formatCurrency(amount: number, currency = 'USD') {
     return new Intl.NumberFormat('en-US', {
       style: 'currency',
       currency: currency
     }).format(amount);
   }
 
-  function formatDate(dateString) {
+  function formatDate(dateString: string | null | undefined) {
+    if (!dateString) return 'N/A';
     return new Date(dateString).toLocaleDateString();
   }
 
-  function getStatusColor(status) {
+  function getStatusColor(status: string | null | undefined) {
     switch (status?.toLowerCase()) {
-      case 'active': return 'text-green-500';
-      case 'past_due': return 'text-yellow-500';
-      case 'cancelled': return 'text-red-500';
-      default: return 'text-gray-500';
+      case 'active': return 'text-success';
+      case 'past_due': return 'text-warning';
+      case 'cancelled': return 'text-error';
+      default: return 'text-muted-foreground';
     }
+  }
+
+  function formatAllocation(allocation: { limit?: number | null; unit?: string | null; unitPrice?: number | null } | null | undefined) {
+    if (!allocation?.limit) return null;
+    const limit = allocation.limit >= 1000
+      ? `${(allocation.limit / 1000).toFixed(0)}k`
+      : allocation.limit.toString();
+    return `${limit} ${allocation.unit || ''}`;
+  }
+
+  function formatOverageRate(rate: { unitPrice?: number | null; unit?: string | null } | null | undefined) {
+    if (!rate?.unitPrice) return null;
+    return `${formatCurrency(rate.unitPrice)}/${rate.unit || 'unit'}`;
+  }
+
+  // Track which invoice is expanded
+  let expandedInvoiceId = $state<string | null>(null);
+
+  function toggleInvoiceExpand(invoiceId: string) {
+    expandedInvoiceId = expandedInvoiceId === invoiceId ? null : invoiceId;
+  }
+
+  // Trial days remaining
+  const trialDaysRemaining = $derived.by(() => {
+    if (!billingStatus?.trialEndsAt) return null;
+    const trialEnd = new Date(billingStatus.trialEndsAt);
+    const now = new Date();
+    const diffMs = trialEnd.getTime() - now.getTime();
+    if (diffMs <= 0) return 0;
+    return Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+  });
+
+  // Icons
+  const CreditCardIcon = getIconComponent('CreditCard');
+  const CalendarIcon = getIconComponent('Calendar');
+  const CheckCircleIcon = getIconComponent('CheckCircle');
+  const ShieldIcon = getIconComponent('Shield');
+  const SettingsIcon = getIconComponent('Settings');
+  const ReceiptIcon = getIconComponent('Receipt');
+  const BarChart3Icon = getIconComponent('BarChart3');
+  const SparklesIcon = getIconComponent('Sparkles');
+  const GlobeIcon = getIconComponent('Globe');
+
+  // Country code to name mapping for display
+  const countryNames: Record<string, string> = {
+    US: 'United States',
+    GB: 'United Kingdom',
+    DE: 'Germany',
+    FR: 'France',
+    JP: 'Japan',
+    CA: 'Canada',
+    AU: 'Australia',
+    BR: 'Brazil',
+    IN: 'India',
+    KR: 'South Korea',
+    NL: 'Netherlands',
+    ES: 'Spain',
+    IT: 'Italy',
+    SE: 'Sweden',
+    MX: 'Mexico',
+  };
+
+  function getCountryName(code: string): string {
+    return countryNames[code] || code;
+  }
+
+  function formatViewerHours(hours: number): string {
+    if (hours >= 1000) return `${(hours / 1000).toFixed(1)}k`;
+    return hours.toFixed(1);
   }
 </script>
 
@@ -89,183 +189,369 @@
   <title>Billing - FrameWorks</title>
 </svelte:head>
 
-<div class="min-h-screen bg-tokyo-night-bg text-tokyo-night-fg">
-  <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-    <div class="mb-8">
-      <h1 class="text-3xl font-bold text-tokyo-night-blue mb-2">
-        Billing & Subscription
-      </h1>
-      <p class="text-tokyo-night-comment">
-        Manage your subscription, usage, and payment information
-      </p>
+<div class="h-full flex flex-col">
+  <!-- Fixed Page Header -->
+  <div class="px-4 sm:px-6 lg:px-8 py-4 border-b border-border shrink-0">
+    <div class="flex items-center gap-3">
+      <CreditCardIcon class="w-5 h-5 text-primary" />
+      <div>
+        <h1 class="text-xl font-bold text-foreground">Billing</h1>
+        <p class="text-sm text-muted-foreground">
+          Manage your subscription, usage, and payment information
+        </p>
+      </div>
     </div>
+  </div>
 
-    {#if loading}
-      <!-- Billing Status Skeleton -->
-      <div class="bg-tokyo-night-surface rounded-lg p-6 mb-8">
-        <SkeletonLoader type="text-lg" className="w-48 mb-4" />
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {#each Array(3) as _, index (index)}
-            <div>
-              <SkeletonLoader type="text-sm" className="w-24 mb-1" />
-              <SkeletonLoader type="text" className="w-20" />
-            </div>
-          {/each}
-        </div>
+  <!-- Scrollable Content -->
+  <div class="flex-1 overflow-y-auto">
+  {#if loading}
+    <div class="px-4 sm:px-6 lg:px-8 py-6">
+      <div class="flex items-center justify-center min-h-64">
+        <div class="loading-spinner w-8 h-8"></div>
       </div>
+    </div>
+  {:else if error}
+    <div class="px-4 sm:px-6 lg:px-8 py-6">
+      <div class="bg-destructive/20 border border-destructive p-4">
+        <p class="text-destructive">{error}</p>
+      </div>
+    </div>
+  {:else}
+    <div class="page-transition">
 
-      <!-- Available Tiers Skeleton -->
-      <div class="bg-tokyo-night-surface rounded-lg p-6 mb-8">
-        <SkeletonLoader type="text-lg" className="w-32 mb-4" />
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {#each Array(3) as _, index (index)}
-            <div class="bg-tokyo-night-bg rounded-lg p-4 border border-tokyo-night-selection">
-              <SkeletonLoader type="text" className="w-16 mb-2" />
-              <SkeletonLoader type="text-lg" className="w-12 mb-3" />
-              <SkeletonLoader type="text-sm" className="w-full mb-2" />
-              <SkeletonLoader type="text-sm" className="w-3/4 mb-4" />
-              <SkeletonLoader type="custom" className="w-full h-10 rounded" />
-            </div>
-          {/each}
-        </div>
-      </div>
-    {:else if error}
-      <div class="bg-red-500 bg-opacity-20 border border-red-500 rounded-lg p-4 mb-8">
-        <p class="text-red-300">{error}</p>
-      </div>
-    {:else}
-      <!-- Current Subscription Status -->
-      {#if billingStatus}
-        <div class="bg-tokyo-night-surface rounded-lg p-6 mb-8">
-          <h2 class="text-xl font-semibold mb-4 text-tokyo-night-cyan">Current Subscription</h2>
-          <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <!-- Trial Countdown Banner (full-bleed) -->
+      {#if trialDaysRemaining !== null && trialDaysRemaining > 0}
+        <div class="bg-accent-purple/20 border-y border-accent-purple/50 px-4 sm:px-6 lg:px-8 py-4 mb-0">
+          <div class="flex items-center justify-between">
             <div>
-              <p class="text-sm text-tokyo-night-comment">Current Plan</p>
-              <p class="text-lg font-semibold">{billingStatus.currentTier?.name || 'Free'}</p>
+              <p class="text-accent-purple font-semibold">Trial Period Active</p>
+              <p class="text-sm text-muted-foreground">
+                Your trial ends on {formatDate(billingStatus?.trialEndsAt)} ({trialDaysRemaining} days remaining)
+              </p>
             </div>
-            <div>
-              <p class="text-sm text-tokyo-night-comment">Status</p>
-              <p class="text-lg font-semibold {getStatusColor(billingStatus.status)}">{billingStatus.status || 'Active'}</p>
-            </div>
-            <div>
-              <p class="text-sm text-tokyo-night-comment">Next Billing Date</p>
-              <p class="text-lg font-semibold">{formatDate(billingStatus.nextBillingDate)}</p>
+            <div class="text-2xl font-bold text-accent-purple">
+              {trialDaysRemaining} days
             </div>
           </div>
-          
-          {#if billingStatus.outstandingAmount > 0}
-            <div class="mt-4 p-4 bg-yellow-500 bg-opacity-20 border border-yellow-500 rounded-lg">
-              <p class="text-yellow-300">
-                Outstanding Balance: {formatCurrency(billingStatus.outstandingAmount)}
-              </p>
-              <button
-                onclick={() => createPayment(billingStatus.outstandingAmount)}
-                class="mt-2 bg-yellow-600 text-white px-4 py-2 rounded hover:bg-yellow-700 transition-colors"
-              >
-                Pay Now
-              </button>
+        </div>
+      {:else if trialDaysRemaining === 0}
+        <div class="bg-warning/20 border-y border-warning/50 px-4 sm:px-6 lg:px-8 py-4 mb-0">
+          <p class="text-warning font-semibold">Trial Expired</p>
+          <p class="text-sm text-muted-foreground">
+            Your trial has ended. Please upgrade to continue using premium features.
+          </p>
+        </div>
+      {/if}
+
+      <!-- Current Subscription Status - GridSeam metrics -->
+      {#if billingStatus}
+        <GridSeam cols={4} stack="2x2" surface="panel" flush={true} class="mb-0">
+          <div>
+            <DashboardMetricCard
+              icon={CreditCardIcon}
+              iconColor="text-primary"
+              value={billingStatus.currentTier?.name || 'Free'}
+              valueColor="text-foreground"
+              label="Current Plan"
+            />
+          </div>
+          <div>
+            <DashboardMetricCard
+              icon={CheckCircleIcon}
+              iconColor={billingStatus.billingStatus === 'active' ? 'text-success' : 'text-warning'}
+              value={billingStatus.billingStatus || 'Active'}
+              valueColor={getStatusColor(billingStatus.billingStatus)}
+              label="Status"
+            />
+          </div>
+          <div>
+            <DashboardMetricCard
+              icon={CalendarIcon}
+              iconColor="text-info"
+              value={formatDate(billingStatus.nextBillingDate)}
+              valueColor="text-foreground"
+              label="Next Billing"
+            />
+          </div>
+          {#if billingStatus.currentTier?.slaLevel}
+            <div>
+              <DashboardMetricCard
+                icon={ShieldIcon}
+                iconColor="text-success"
+                value={billingStatus.currentTier.slaLevel}
+                valueColor="text-success"
+                label="SLA Level"
+              />
+            </div>
+          {:else}
+            <div>
+              <DashboardMetricCard
+                icon={CreditCardIcon}
+                iconColor="text-muted-foreground"
+                value={formatCurrency(billingStatus.currentTier?.basePrice || 0)}
+                valueColor="text-foreground"
+                label="Monthly Cost"
+              />
             </div>
           {/if}
-        </div>
-      {/if}
+        </GridSeam>
 
-      <!-- Available Tiers -->
-      {#if availableTiers.length > 0}
-        <div class="bg-tokyo-night-surface rounded-lg p-6 mb-8">
-          <h2 class="text-xl font-semibold mb-4 text-tokyo-night-cyan">Available Plans</h2>
-          <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {#each availableTiers as tier (tier.id ?? tier.name)}
-              <div class="bg-tokyo-night-bg rounded-lg p-4 border border-tokyo-night-selection">
-                <h3 class="text-lg font-semibold mb-2">{tier.name}</h3>
-                <div class="text-2xl font-bold text-tokyo-night-blue mb-2">
-                  {formatCurrency(tier.price, tier.currency)}
-                  <span class="text-sm text-tokyo-night-comment">/month</span>
-                </div>
-                
-                {#if tier.description}
-                  <p class="text-sm text-tokyo-night-comment mb-4">{tier.description}</p>
-                {/if}
-                
-                {#if tier.features && tier.features.length > 0}
-                  <ul class="space-y-1 mb-4">
-                    {#each tier.features as feature, index (index)}
-                      <li class="text-sm flex items-center">
-                        <span class="text-green-500 mr-2">✓</span>
-                        {feature}
-                      </li>
-                    {/each}
-                  </ul>
-                {/if}
-                
-                <Button
-                  variant="outline"
-                  class="w-full"
-                  disabled
-                  title="Tier changes will be available once billing launches"
-                >
-                  {billingStatus?.currentTier?.id === tier.id ? 'Current Plan' : 'Coming Soon'}
-                </Button>
-              </div>
-            {/each}
+        <!-- Outstanding Balance Alert -->
+        {#if billingStatus.outstandingAmount > 0}
+          <div class="bg-warning/20 border-y border-warning px-4 sm:px-6 lg:px-8 py-4">
+            <div class="flex items-center justify-between">
+              <p class="text-warning font-semibold">
+                Outstanding Balance: {formatCurrency(billingStatus.outstandingAmount)}
+              </p>
+              <Button
+                variant="default"
+                onclick={() => billingStatus && createPayment(billingStatus.outstandingAmount)}
+                class="bg-warning text-background hover:bg-warning/90"
+              >
+                Pay Now
+              </Button>
+            </div>
           </div>
-        </div>
+        {/if}
       {/if}
 
-      <!-- Recent Invoices -->
-      {#if invoices.length > 0}
-        <div class="bg-tokyo-night-surface rounded-lg p-6 mb-8">
-          <h2 class="text-xl font-semibold mb-4 text-tokyo-night-cyan">Recent Invoices</h2>
-          <div class="overflow-x-auto">
-            <table class="w-full">
-              <thead>
-                <tr class="border-b border-tokyo-night-selection">
-                  <th class="text-left py-2">Invoice ID</th>
-                  <th class="text-left py-2">Amount</th>
-                  <th class="text-left py-2">Status</th>
-                  <th class="text-left py-2">Due Date</th>
-                  <th class="text-left py-2">Created</th>
-                </tr>
-              </thead>
-              <tbody>
-                {#each invoices.slice(0, 5) as invoice (invoice.id)}
-                  <tr class="border-b border-tokyo-night-selection">
-                    <td class="py-2 font-mono text-sm">{invoice.id}</td>
-                    <td class="py-2">{formatCurrency(invoice.amount, invoice.currency)}</td>
-                    <td class="py-2">
-                      <span class="px-2 py-1 text-xs rounded-full {getStatusColor(invoice.status)} bg-opacity-20">
-                        {invoice.status}
-                      </span>
-                    </td>
-                    <td class="py-2">{formatDate(invoice.dueDate)}</td>
-                    <td class="py-2">{formatDate(invoice.createdAt)}</td>
-                  </tr>
+      <!-- Main Content Grid -->
+      <div class="dashboard-grid">
+        <!-- Available Plans Slab -->
+        {#if availableTiers.length > 0}
+          <div class="slab col-span-full">
+            <div class="slab-header">
+              <div class="flex items-center gap-2">
+                <SparklesIcon class="w-4 h-4 text-accent-purple" />
+                <h3>Available Plans</h3>
+              </div>
+            </div>
+            <div class="slab-body--padded">
+              <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {#each availableTiers as tier (tier.id ?? tier.name)}
+                  <div class="p-4 border border-border/50 bg-muted/10 {billingStatus?.currentTier?.id === tier.id ? 'ring-2 ring-primary' : ''}">
+                    <h4 class="text-lg font-semibold mb-2">{tier.name}</h4>
+                    <div class="text-2xl font-bold text-primary mb-2">
+                      {#if tier.isEnterprise}
+                        <span class="text-lg">Contact us</span>
+                      {:else}
+                        {formatCurrency(tier.basePrice, tier.currency)}
+                        <span class="text-sm text-muted-foreground font-normal">/{tier.billingPeriod || 'month'}</span>
+                      {/if}
+                    </div>
+
+                    {#if tier.description}
+                      <p class="text-sm text-muted-foreground mb-4">{tier.description}</p>
+                    {/if}
+
+                    {#if tier.features}
+                      <ul class="space-y-1 mb-4 text-sm">
+                        {#if tier.features.recording}
+                          <li class="flex items-center"><span class="text-success mr-2">✓</span> DVR Recording</li>
+                        {/if}
+                        {#if tier.features.analytics}
+                          <li class="flex items-center"><span class="text-success mr-2">✓</span> Analytics</li>
+                        {/if}
+                        {#if tier.features.apiAccess}
+                          <li class="flex items-center"><span class="text-success mr-2">✓</span> API Access</li>
+                        {/if}
+                        {#if tier.features.customBranding}
+                          <li class="flex items-center"><span class="text-success mr-2">✓</span> Custom Branding</li>
+                        {/if}
+                        {#if tier.features.sla}
+                          <li class="flex items-center"><span class="text-success mr-2">✓</span> SLA Guarantee</li>
+                        {/if}
+                        {#if tier.supportLevel}
+                          <li class="flex items-center"><span class="text-info mr-2">●</span> {tier.supportLevel} Support</li>
+                        {/if}
+                      </ul>
+                    {/if}
+
+                    {#if billingStatus?.currentTier?.id === tier.id}
+                      <div class="w-full text-center py-2 text-sm text-muted-foreground border-t border-border/30 mt-4">
+                        Current Plan
+                      </div>
+                    {/if}
+                  </div>
                 {/each}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      {/if}
-
-      <!-- Usage Records -->
-      {#if usageRecords.length > 0}
-        <div class="bg-tokyo-night-surface rounded-lg p-6">
-          <h2 class="text-xl font-semibold mb-4 text-tokyo-night-cyan">Current Usage</h2>
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {#each usageRecords.slice(0, 4) as record, index (record.id ?? `${record.resourceType}-${index}`)}
-              <div class="bg-tokyo-night-bg rounded-lg p-4">
-                <div class="text-sm text-tokyo-night-comment">{record.resourceType}</div>
-                <div class="text-lg font-semibold">{record.quantity} {record.unit}</div>
-                <div class="text-sm text-tokyo-night-comment">{formatCurrency(record.cost)}</div>
               </div>
-            {/each}
+            </div>
+          </div>
+        {/if}
+
+        <!-- Recent Invoices Slab -->
+        {#if invoices.length > 0}
+          <div class="slab col-span-full">
+            <div class="slab-header">
+              <div class="flex items-center gap-2">
+                <ReceiptIcon class="w-4 h-4 text-info" />
+                <h3>Recent Invoices</h3>
+              </div>
+            </div>
+            <div class="slab-body--flush overflow-x-auto">
+              <table class="w-full text-sm">
+                <thead>
+                  <tr class="border-b border-border/50 text-muted-foreground">
+                    <th class="text-left py-3 px-4 w-8"></th>
+                    <th class="text-left py-3 px-4">Invoice ID</th>
+                    <th class="text-left py-3 px-4">Amount</th>
+                    <th class="text-left py-3 px-4">Status</th>
+                    <th class="text-left py-3 px-4">Due Date</th>
+                    <th class="text-left py-3 px-4">Created</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {#each invoices.slice(0, 5) as invoice (invoice.id)}
+                    <tr
+                      class="border-b border-border/30 cursor-pointer hover:bg-muted/20 transition-colors"
+                      onclick={() => toggleInvoiceExpand(invoice.id)}
+                    >
+                      <td class="py-3 px-4 text-center">
+                        <span class="text-muted-foreground text-xs transition-transform inline-block {expandedInvoiceId === invoice.id ? 'rotate-90' : ''}">▶</span>
+                      </td>
+                      <td class="py-3 px-4 font-mono">{invoice.id}</td>
+                      <td class="py-3 px-4">{formatCurrency(invoice.amount, invoice.currency)}</td>
+                      <td class="py-3 px-4">
+                        <span class="px-2 py-1 text-xs {getStatusColor(invoice.status)}">{invoice.status}</span>
+                      </td>
+                      <td class="py-3 px-4">{formatDate(invoice.dueDate)}</td>
+                      <td class="py-3 px-4">{formatDate(invoice.createdAt)}</td>
+                    </tr>
+                    {#if expandedInvoiceId === invoice.id && invoice.lineItems?.length}
+                      <tr class="bg-muted/10">
+                        <td colspan="6" class="py-4 px-8">
+                          <p class="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">Line Items</p>
+                          <table class="w-full text-sm">
+                            <thead>
+                              <tr class="text-xs text-muted-foreground">
+                                <th class="text-left py-1">Description</th>
+                                <th class="text-right py-1">Qty</th>
+                                <th class="text-right py-1">Unit Price</th>
+                                <th class="text-right py-1">Total</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {#each invoice.lineItems as item, idx (`${invoice.id}-${idx}`)}
+                                <tr class="border-t border-border/20">
+                                  <td class="py-2">{item.description}</td>
+                                  <td class="py-2 text-right font-mono">{item.quantity}</td>
+                                  <td class="py-2 text-right font-mono">{formatCurrency(item.unitPrice, invoice.currency)}</td>
+                                  <td class="py-2 text-right font-mono font-semibold">{formatCurrency(item.total, invoice.currency)}</td>
+                                </tr>
+                              {/each}
+                            </tbody>
+                          </table>
+                        </td>
+                      </tr>
+                    {/if}
+                  {/each}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        {/if}
+
+        <!-- Usage Records Slab -->
+        <div class="slab col-span-full">
+          <div class="slab-header">
+            <div class="flex items-center gap-2">
+              <BarChart3Icon class="w-4 h-4 text-primary" />
+              <h3>Current Usage</h3>
+            </div>
+          </div>
+          {#if usageRecords.length > 0}
+            <div class="slab-body--padded">
+              <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                {#each usageRecords.slice(0, 4) as record, index (record.id ?? `${record.usageType}-${index}`)}
+                  <div class="text-center p-4 border border-border/30">
+                    <div class="text-2xl font-bold text-primary">{record.usageValue.toLocaleString()}</div>
+                    <div class="text-sm text-muted-foreground capitalize">{record.usageType.replace(/_/g, ' ')}</div>
+                    {#if record.clusterName}
+                      <div class="text-xs text-muted-foreground mt-1">{record.clusterName}</div>
+                    {/if}
+                  </div>
+                {/each}
+              </div>
+            </div>
+          {:else}
+            <div class="slab-body--padded">
+              <p class="text-muted-foreground">No usage data available for this period.</p>
+            </div>
+          {/if}
+          <div class="slab-actions">
+            <Button href={resolve("/settings")} variant="ghost" class="gap-2">
+              <SettingsIcon class="w-4 h-4" />
+              Account Settings
+            </Button>
           </div>
         </div>
-      {:else}
-        <div class="bg-tokyo-night-surface rounded-lg p-6">
-          <h2 class="text-xl font-semibold mb-4 text-tokyo-night-cyan">Usage</h2>
-          <p class="text-tokyo-night-comment">No usage data available for this period.</p>
-        </div>
-      {/if}
-    {/if}
+
+        <!-- Geographic Distribution Slab -->
+        {#if billingStatus?.usageSummary?.geoBreakdown && billingStatus.usageSummary.geoBreakdown.length > 0}
+          <div class="slab col-span-full">
+            <div class="slab-header">
+              <div class="flex items-center gap-2">
+                <GlobeIcon class="w-4 h-4 text-tokyo-night-cyan" />
+                <h3>Top Regions</h3>
+              </div>
+              <span class="text-xs text-muted-foreground">
+                {billingStatus.usageSummary.uniqueCountries} countries, {billingStatus.usageSummary.uniqueCities} cities
+              </span>
+            </div>
+            <div class="slab-body--flush">
+              <table class="w-full text-sm">
+                <thead>
+                  <tr class="border-b border-border/50 text-muted-foreground text-xs uppercase tracking-wide">
+                    <th class="text-left py-3 px-4">Country</th>
+                    <th class="text-right py-3 px-4">Viewers</th>
+                    <th class="text-right py-3 px-4">Watch Time</th>
+                    <th class="text-right py-3 px-4">Bandwidth</th>
+                    <th class="text-right py-3 px-4">Share</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {#each billingStatus.usageSummary.geoBreakdown as country (country.countryCode)}
+                    <tr class="border-b border-border/30 hover:bg-muted/10">
+                      <td class="py-3 px-4">
+                        <span class="font-medium">{getCountryName(country.countryCode)}</span>
+                        <span class="text-muted-foreground ml-1">({country.countryCode})</span>
+                      </td>
+                      <td class="py-3 px-4 text-right font-mono">
+                        {country.viewerCount.toLocaleString()}
+                      </td>
+                      <td class="py-3 px-4 text-right font-mono">
+                        {formatViewerHours(country.viewerHours)}h
+                      </td>
+                      <td class="py-3 px-4 text-right font-mono">
+                        {country.egressGb.toFixed(1)} GB
+                      </td>
+                      <td class="py-3 px-4 text-right">
+                        <div class="flex items-center justify-end gap-2">
+                          <div class="w-16 h-1.5 bg-muted overflow-hidden">
+                            <div
+                              class="h-full bg-tokyo-night-cyan"
+                              style="width: {Math.min(country.percentage, 100)}%"
+                            ></div>
+                          </div>
+                          <span class="font-mono text-xs w-12 text-right">{country.percentage.toFixed(1)}%</span>
+                        </div>
+                      </td>
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+            </div>
+            <div class="slab-actions">
+              <Button href={resolve("/analytics/geographic")} variant="ghost" class="gap-2">
+                <GlobeIcon class="w-4 h-4" />
+                View Full Geographic Analytics
+              </Button>
+            </div>
+          </div>
+        {/if}
+      </div>
+    </div>
+  {/if}
   </div>
 </div>

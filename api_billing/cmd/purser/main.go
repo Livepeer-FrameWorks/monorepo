@@ -2,18 +2,21 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"net"
+	"strconv"
+	"time"
 
+	pursergrpc "frameworks/api_billing/internal/grpc"
 	"frameworks/api_billing/internal/handlers"
-	qmapi "frameworks/pkg/api/quartermaster"
-	"frameworks/pkg/auth"
 	qmclient "frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/config"
 	"frameworks/pkg/database"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/monitoring"
+	pb "frameworks/pkg/proto"
 	"frameworks/pkg/server"
 	"frameworks/pkg/version"
-	"time"
 )
 
 func main() {
@@ -28,7 +31,7 @@ func main() {
 	dbURL := config.RequireEnv("DATABASE_URL")
 	jwtSecret := config.RequireEnv("JWT_SECRET")
 	serviceToken := config.RequireEnv("SERVICE_TOKEN")
-	quartermasterURL := config.RequireEnv("QUARTERMASTER_URL")
+	quartermasterGRPCAddr := config.GetEnv("QUARTERMASTER_GRPC_ADDR", "quartermaster:19002")
 
 	// Connect to database
 	dbConfig := database.DefaultConfig()
@@ -47,18 +50,40 @@ func main() {
 		"JWT_SECRET":   jwtSecret,
 	}))
 
-	// Create custom billing metrics
-	metrics := &handlers.PurserMetrics{
+	// Create custom billing metrics for HTTP handlers
+	handlerMetrics := &handlers.PurserMetrics{
 		BillingCalculations: metricsCollector.NewCounter("billing_calculations_total", "Billing calculations performed", []string{"tenant_id", "status"}),
 		UsageRecords:        metricsCollector.NewCounter("usage_records_processed_total", "Usage records processed", []string{"usage_type"}),
 		InvoiceOperations:   metricsCollector.NewCounter("invoice_operations_total", "Invoice operations", []string{"operation", "status"}),
 	}
 
 	// Create database metrics
-	metrics.DBQueries, metrics.DBDuration, metrics.DBConnections = metricsCollector.CreateDatabaseMetrics()
+	handlerMetrics.DBQueries, handlerMetrics.DBDuration, handlerMetrics.DBConnections = metricsCollector.CreateDatabaseMetrics()
+
+	// Create gRPC server metrics
+	serverMetrics := &pursergrpc.ServerMetrics{
+		BillingOperations:      metricsCollector.NewCounter("grpc_billing_operations_total", "gRPC billing operations", []string{"operation", "status"}),
+		UsageOperations:        metricsCollector.NewCounter("grpc_usage_operations_total", "gRPC usage operations", []string{"operation", "status"}),
+		SubscriptionOperations: metricsCollector.NewCounter("grpc_subscription_operations_total", "gRPC subscription operations", []string{"operation", "status"}),
+		InvoiceOperations:      metricsCollector.NewCounter("grpc_invoice_operations_total", "gRPC invoice operations", []string{"operation", "status"}),
+		GRPCRequests:           metricsCollector.NewCounter("grpc_requests_total", "Total gRPC requests", []string{"method", "status"}),
+		GRPCDuration:           metricsCollector.NewHistogram("grpc_request_duration_seconds", "gRPC request duration", []string{"method"}, nil),
+	}
+
+	// Create Quartermaster gRPC client for tenant lookups (used by webhooks)
+	qmGRPCClient, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
+		GRPCAddr:     quartermasterGRPCAddr,
+		Timeout:      10 * time.Second,
+		Logger:       logger,
+		ServiceToken: serviceToken,
+	})
+	if err != nil {
+		logger.WithError(err).Fatal("Failed to create Quartermaster gRPC client")
+	}
+	defer qmGRPCClient.Close()
 
 	// Initialize handlers
-	handlers.Init(db, logger, metrics)
+	handlers.Init(db, logger, handlerMetrics, qmGRPCClient)
 
 	// Initialize and start JobManager for background billing tasks
 	jobManager := handlers.NewJobManager(db, logger)
@@ -70,51 +95,77 @@ func main() {
 
 	logger.Info("JobManager started - background billing jobs active")
 
-	// Setup router with unified monitoring
+	// Setup router with unified monitoring (health/metrics only)
+	// NOTE: All billing/usage API routes removed - now handled via gRPC only.
+	// Gateway -> Purser gRPC for billing, tiers, invoices, payments, usage queries.
+	// Usage ingestion is via Kafka (Periscope -> billing.usage_reports -> JobManager)
 	router := server.SetupServiceRouter(logger, "purser", healthChecker, metricsCollector)
 
-	// API routes (root level - nginx adds /api/billing/ prefix)
-	{
-		// Authentication required endpoints
-		protected := router.Group("")
-		protected.Use(auth.JWTAuthMiddleware([]byte(jwtSecret)))
-		{
-			// Billing endpoints
-			protected.GET("/billing/plans", handlers.GetPlans)
-			protected.GET("/billing/invoices", handlers.GetInvoices)
-			protected.POST("/billing/pay", handlers.CreatePayment)
-			protected.GET("/billing/status", handlers.GetBillingStatus)
-		}
+	// Webhook endpoints for external payment providers (no auth - signature validation in handler)
+	// These MUST remain as HTTP endpoints since Stripe/Mollie send webhooks to URLs.
+	router.POST("/webhooks/mollie", handlers.HandleMollieWebhook)
+	router.POST("/webhooks/stripe", handlers.HandleStripeWebhook)
 
-		// Webhook endpoints (no auth required)
-		router.POST("/webhooks/mollie", handlers.HandleMollieWebhook)
-		router.POST("/webhooks/stripe", handlers.HandleStripeWebhook)
-
-		// Usage ingestion endpoints (service-to-service)
-		serviceAPI := router.Group("")
-		serviceAPI.Use(auth.ServiceAuthMiddleware(serviceToken))
-		{
-			serviceAPI.POST("/usage/ingest", handlers.IngestUsageData)
-			serviceAPI.GET("/usage/ledger/:tenant_id", handlers.GetUsageRecords) // Legacy endpoint name
-			serviceAPI.GET("/usage/records", handlers.GetUsageRecords)           // New endpoint
-		}
-	}
-
-	// Start server with graceful shutdown
-	serverConfig := server.DefaultConfig("purser", "18003")
-	if err := server.Start(serverConfig, router, logger); err != nil {
-		logger.WithError(err).Fatal("Server startup failed")
-	}
-
-	// Best-effort service registration in Quartermaster
+	// Start gRPC server in a goroutine
+	grpcPort := config.GetEnv("GRPC_PORT", "19003")
 	go func() {
-		qc := qmclient.NewClient(qmclient.Config{BaseURL: quartermasterURL, ServiceToken: serviceToken, Logger: logger})
+		grpcAddr := fmt.Sprintf(":%s", grpcPort)
+		lis, err := net.Listen("tcp", grpcAddr)
+		if err != nil {
+			logger.WithError(err).Fatal("Failed to listen on gRPC port")
+		}
+
+		grpcServer := pursergrpc.NewGRPCServer(pursergrpc.GRPCServerConfig{
+			DB:           db,
+			Logger:       logger,
+			ServiceToken: serviceToken,
+			JWTSecret:    []byte(jwtSecret),
+			Metrics:      serverMetrics,
+		})
+		logger.WithField("addr", grpcAddr).Info("Starting gRPC server")
+
+		if err := grpcServer.Serve(lis); err != nil {
+			logger.WithError(err).Fatal("gRPC server failed")
+		}
+	}()
+
+	// Start HTTP server with graceful shutdown
+	serverConfig := server.DefaultConfig("purser", "18003")
+
+	// Best-effort service registration in Quartermaster (using gRPC)
+	// Must be launched BEFORE server.Start() which blocks
+	go func() {
+		qc, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
+			GRPCAddr:     quartermasterGRPCAddr,
+			Timeout:      10 * time.Second,
+			Logger:       logger,
+			ServiceToken: serviceToken,
+		})
+		if err != nil {
+			logger.WithError(err).Warn("Failed to create Quartermaster gRPC client")
+			return
+		}
+		defer qc.Close()
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if _, err := qc.BootstrapService(ctx, &qmapi.BootstrapServiceRequest{Type: "purser", Version: version.Version, Protocol: "http", HealthEndpoint: func() *string { s := "/health"; return &s }(), Port: 18003}); err != nil {
+		healthEndpoint := "/health"
+		httpPort, _ := strconv.Atoi(serverConfig.Port)
+		advertiseHost := config.GetEnv("PURSER_HOST", "purser")
+		if _, err := qc.BootstrapService(ctx, &pb.BootstrapServiceRequest{
+			Type:           "purser",
+			Version:        version.Version,
+			Protocol:       "http",
+			HealthEndpoint: &healthEndpoint,
+			Port:           int32(httpPort),
+			AdvertiseHost:  &advertiseHost,
+		}); err != nil {
 			logger.WithError(err).Warn("Quartermaster bootstrap (purser) failed")
 		} else {
 			logger.Info("Quartermaster bootstrap (purser) ok")
 		}
 	}()
+
+	if err := server.Start(serverConfig, router, logger); err != nil {
+		logger.WithError(err).Fatal("Server startup failed")
+	}
 }

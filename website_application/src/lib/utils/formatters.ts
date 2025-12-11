@@ -95,7 +95,11 @@ export function formatNumber(num: number): string {
   return new Intl.NumberFormat("en-US").format(num);
 }
 
-export function formatPercentage(value: number, total: number, decimals: number = 1): string {
+export function formatPercentage(
+  value: number,
+  total: number,
+  decimals: number = 1,
+): string {
   if (!value || !total || total === 0) return "0%";
 
   const percentage = (value / total) * 100;
@@ -129,7 +133,10 @@ export function formatResolution(resolution: string): string {
   return resolutionMap[resolution] || resolution;
 }
 
-export function formatCurrency(amount: number, currency: string = "USD"): string {
+export function formatCurrency(
+  amount: number,
+  currency: string = "USD",
+): string {
   if (amount === null || amount === undefined || isNaN(amount)) return "N/A";
 
   return new Intl.NumberFormat("en-US", {

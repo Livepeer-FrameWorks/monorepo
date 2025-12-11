@@ -1,6 +1,7 @@
 <script lang="ts">
   import { Button } from "$lib/components/ui/button";
   import { Switch } from "$lib/components/ui/switch";
+  import { BookOpen } from "lucide-svelte";
 
   interface Props {
     showQueryEditor: boolean;
@@ -8,7 +9,7 @@
     hasHistory: boolean;
     demoMode: boolean;
     loading: boolean;
-    onOpenOverlay: (type: "schema" | "templates") => void;
+    onOpenLibrary: () => void;
     onToggleQuery: () => void;
     onToggleCode: () => void;
     onClearHistory: () => void;
@@ -22,7 +23,7 @@
     hasHistory,
     demoMode,
     loading,
-    onOpenOverlay,
+    onOpenLibrary,
     onToggleQuery,
     onToggleCode,
     onClearHistory,
@@ -33,37 +34,32 @@
 
 <!-- Header with controls -->
 <div
-  class="flex items-center justify-between border-b border-tokyo-night-fg-gutter bg-tokyo-night-bg-light p-4"
+  class="flex items-center justify-between border-b border-border bg-card p-4"
 >
   <div class="flex space-x-4">
-    <!-- Overlay triggers -->
+    <!-- Query Library trigger -->
     <button
-      class="flex items-center space-x-2 px-3 py-1 rounded text-sm transition-colors text-tokyo-night-fg hover:bg-tokyo-night-bg-highlight"
-      onclick={() => onOpenOverlay("templates")}
+      class="flex items-center gap-2 px-3 py-1 text-sm transition-colors text-foreground hover:bg-muted/50"
+      onclick={onOpenLibrary}
     >
-      <span>Templates</span>
-    </button>
-    <button
-      class="flex items-center space-x-2 px-3 py-1 rounded text-sm transition-colors text-tokyo-night-fg hover:bg-tokyo-night-bg-highlight"
-      onclick={() => onOpenOverlay("schema")}
-    >
-      <span>Schema</span>
+      <BookOpen class="w-4 h-4" />
+      <span>Library</span>
     </button>
 
     <!-- Query/Code toggle -->
-    <div class="flex border border-tokyo-night-fg-gutter rounded overflow-hidden">
+    <div class="flex border border-border/50 overflow-hidden">
       <button
         class="px-3 py-1 text-sm transition-colors {showQueryEditor
-          ? 'bg-tokyo-night-blue text-white'
-          : 'text-tokyo-night-fg hover:bg-tokyo-night-bg-highlight'}"
+          ? 'bg-primary text-primary-foreground'
+          : 'text-foreground hover:bg-muted/50'}"
         onclick={onToggleQuery}
       >
         Query
       </button>
       <button
         class="px-3 py-1 text-sm transition-colors {showCodeExamples
-          ? 'bg-tokyo-night-blue text-white'
-          : 'text-tokyo-night-fg hover:bg-tokyo-night-bg-highlight'}"
+          ? 'bg-primary text-primary-foreground'
+          : 'text-foreground hover:bg-muted/50'}"
         onclick={onToggleCode}
       >
         Code
@@ -72,7 +68,7 @@
 
     {#if hasHistory}
       <button
-        class="flex items-center space-x-2 px-3 py-1 rounded text-sm text-tokyo-night-fg hover:bg-tokyo-night-bg-highlight transition-colors"
+        class="flex items-center space-x-2 px-3 py-1 text-sm text-foreground hover:bg-muted/50 transition-colors"
         onclick={onClearHistory}
       >
         <span>Clear History</span>
@@ -87,7 +83,7 @@
         onCheckedChange={onDemoModeChange}
         id="demo-mode-toggle"
       />
-      <label for="demo-mode-toggle" class="text-xs text-tokyo-night-fg">
+      <label for="demo-mode-toggle" class="text-xs text-foreground">
         {demoMode ? "Demo Mode" : "Demo"}
       </label>
     </div>

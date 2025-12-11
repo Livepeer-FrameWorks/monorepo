@@ -6,20 +6,20 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"frameworks/api_firehose/internal/grpc"
-	qmapi "frameworks/pkg/api/quartermaster"
 	qmclient "frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/config"
 	"frameworks/pkg/kafka"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/monitoring"
+	pb "frameworks/pkg/proto"
 	"frameworks/pkg/server"
 	"frameworks/pkg/version"
-	"strconv"
 )
 
 func main() {
@@ -39,9 +39,10 @@ func main() {
 	brokers := strings.Split(config.RequireEnv("KAFKA_BROKERS"), ",")
 	clusterID := config.RequireEnv("KAFKA_CLUSTER_ID")
 	serviceToken := config.RequireEnv("SERVICE_TOKEN")
-	quartermasterURL := config.RequireEnv("QUARTERMASTER_URL")
+	quartermasterGRPCAddr := config.GetEnv("QUARTERMASTER_GRPC_ADDR", "quartermaster:19002")
+	analyticsTopic := config.GetEnv("ANALYTICS_KAFKA_TOPIC", "analytics_events")
 
-	producer, err := kafka.NewKafkaProducer(brokers, clusterID, logger)
+	producer, err := kafka.NewKafkaProducer(brokers, analyticsTopic, clusterID, logger)
 	if err != nil {
 		logger.WithError(err).Fatal("Failed to create Kafka producer")
 	}
@@ -74,7 +75,15 @@ func main() {
 	allowInsecure := config.GetEnvBool("DECKLOG_ALLOW_INSECURE", false)
 
 	// Create gRPC server
-	grpcServer, err := grpc.NewGRPCServer(producer, logger, metrics, certFile, keyFile, allowInsecure)
+	grpcServer, err := grpc.NewGRPCServer(grpc.GRPCServerConfig{
+		Producer:      producer,
+		Logger:        logger,
+		Metrics:       metrics,
+		CertFile:      certFile,
+		KeyFile:       keyFile,
+		AllowInsecure: allowInsecure,
+		ServiceToken:  serviceToken,
+	})
 	if err != nil {
 		logger.WithError(err).Fatal("Failed to create gRPC server")
 	}
@@ -94,13 +103,32 @@ func main() {
 
 	logger.WithFields(logging.Fields{"grpc_port": port, "http_port": metricsPort}).Info("Starting Decklog servers")
 
-	// Best-effort service registration in Quartermaster
+	// Best-effort service registration in Quartermaster (using gRPC)
 	go func() {
-		qc := qmclient.NewClient(qmclient.Config{BaseURL: quartermasterURL, ServiceToken: serviceToken, Logger: logger})
+		qc, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
+			GRPCAddr:     quartermasterGRPCAddr,
+			Timeout:      10 * time.Second,
+			Logger:       logger,
+			ServiceToken: serviceToken,
+		})
+		if err != nil {
+			logger.WithError(err).Warn("Failed to create Quartermaster gRPC client")
+			return
+		}
+		defer qc.Close()
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		pi, _ := strconv.Atoi(port)
-		if _, err := qc.BootstrapService(ctx, &qmapi.BootstrapServiceRequest{Type: "decklog", Version: version.Version, Protocol: "grpc", Port: pi}); err != nil {
+		advertiseHost := config.GetEnv("DECKLOG_HOST", "decklog")
+		healthEndpoint := "/health"
+		if _, err := qc.BootstrapService(ctx, &pb.BootstrapServiceRequest{
+			Type:           "decklog",
+			Version:        version.Version,
+			Protocol:       "grpc",
+			Port:           int32(pi),
+			AdvertiseHost:  &advertiseHost,
+			HealthEndpoint: &healthEndpoint,
+		}); err != nil {
 			logger.WithError(err).Warn("Quartermaster bootstrap (decklog) failed")
 		} else {
 			logger.Info("Quartermaster bootstrap (decklog) ok")

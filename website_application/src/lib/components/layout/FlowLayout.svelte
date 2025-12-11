@@ -19,7 +19,7 @@
     class: className = "",
   }: Props = $props();
 
-  const flowClass = $derived(() => {
+  const flowClass = $derived.by(() => {
     const classes = ["flow-layout"];
     if (minWidth === "sm") classes.push("flow-layout--sm");
     if (minWidth === "lg") classes.push("flow-layout--lg");
@@ -30,6 +30,6 @@
   });
 </script>
 
-<div class={flowClass()}>
+<div class={flowClass}>
   {@render children()}
 </div>

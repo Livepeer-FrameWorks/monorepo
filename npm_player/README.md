@@ -6,10 +6,56 @@ A player component library for **FrameWorks** with Gateway integration and intel
 
 The `Player` component resolves optimal endpoints via the FrameWorks Gateway, while raw components accept URIs directly for custom implementations.
 
+## Vite playground
+
+We ship a local Vite + React playground (`npm_player/playground`) that mirrors the ShadCN/Tailwind styling used on the marketing site. It renders the published player package via a file link, provides safe mock fixtures, and only talks to real infrastructure when you explicitly opt in.
+
+```bash
+cd npm_player/playground
+npm install
+npm run dev
+```
+
+- Networking is disabled by default; toggle it on inside the UI before connecting to a Mist/Gateway endpoint.
+- Use the “Safe presets” tab to exercise vetted public demo streams that stay off the FrameWorks balancers.
+- Switch to the “Mist workspace” tab to derive RTMP/SRT/WHIP ingest URLs and WHEP/HLS/DASH playback endpoints from a single Mist base URL. Profiles, copy-to-clipboard helpers, and quick reachability checks are built in.
+
+### Build notes
+
+- The ESM build now ships chunked transport bundles under `dist/esm/chunks/player-*.js`. `PlayerManager` only requests the chunk that matches the selected transport (`player-hls`, `player-dash`, `player-video`, etc.), so apps avoid downloading every playback stack up front.
+- The published bundle keeps heavy runtime players (`video.js`, `dashjs`, `hls.js`) and their helper utilities external. Each transport loads its vendor dependency with `import()` the moment it is actually needed, preventing double-bundling.
+- The ShadCN/Tailwind surface compiles to `dist/player.css`. Publishing automatically runs `pnpm run build:css`, but if you are consuming straight from the repo run it once locally and then import the stylesheet:
+
+```ts
+import '@livepeer-frameworks/player/player.css';
+```
+
+- If you prefer to tree-shake the utilities directly, add `node_modules/@livepeer-frameworks/player/src/**/*.{ts,tsx}` to your Tailwind content array and skip the prebuilt CSS instead.
+
 ## Installation
 
 ```bash
 npm install --save @livepeer-frameworks/player
+```
+
+### Local development
+
+Run the dedicated playground (with live rebuilds of the library and CSS) via:
+
+```bash
+pnpm start
+# equivalent: pnpm run dev
+```
+
+This concurrently watches the Rollup build, Tailwind stylesheet, and Vite playground so changes in `src/` hot-reload immediately.
+
+### Styles
+
+The player ships with a precompiled stylesheet. In most setups the CSS is auto-injected when you import the library. If you prefer to manage styles manually, add:
+
+```ts
+import '@livepeer-frameworks/player/player.css';
+// optional: ensurePlayerStyles() forces injection when running in micro-frontends.
 ```
 
 ## Usage
@@ -46,6 +92,78 @@ function App() {
 Notes:
 - Endpoint resolution (`resolveViewerEndpoint`) is public in the Gateway; no JWT or tenant header is required when using playback IDs.
 - For private or non‑public operations, pass `authToken` to authorize Gateway queries.
+
+### Lazy loading & prefetching
+
+The player pulls in heavy transport stacks (`hls.js`, `dashjs`, `video.js`) on demand, so it’s best to lazy‑load the component in your app and start the import while your UI animation or skeleton plays.
+
+#### React example
+
+```tsx
+// preload once per module
+const heroPlayerLoader = () => import('@livepeer-frameworks/player');
+const HeroPlayer = React.lazy(heroPlayerLoader);
+
+useEffect(() => {
+  heroPlayerLoader(); // begin downloading while the hero animation runs
+}, []);
+
+return (
+  <React.Suspense fallback={<Spinner />}>
+    <HeroPlayer contentId="live+demo" contentType="live" />
+  </React.Suspense>
+);
+```
+
+#### Svelte example
+
+```svelte
+<script lang="ts">
+  import { onMount } from 'svelte';
+
+  let container: HTMLDivElement;
+  let playerModulePromise: Promise<typeof import('@livepeer-frameworks/player')> | null =
+    typeof window !== 'undefined' ? import('@livepeer-frameworks/player') : null;
+
+  onMount(async () => {
+    if (!playerModulePromise) {
+      playerModulePromise = import('@livepeer-frameworks/player');
+    }
+    const { Player } = await playerModulePromise;
+    const instance = new Player(container, { contentId: 'live+demo', contentType: 'live' });
+    return () => instance.destroy?.();
+  });
+</script>
+
+<div bind:this={container}></div>
+```
+
+This pattern keeps the main bundle lean, while ensuring the video libraries are already in flight when the user expects playback.
+
+### Manual PlayerManager usage
+
+When you work with the registry yourself (e.g. for headless controls or server-driven embeds), make sure transports are loaded once per manager:
+
+```ts
+import {
+  createPlayerManager,
+  ensurePlayersRegistered,
+  type StreamInfo,
+  type PlayerOptions,
+} from '@livepeer-frameworks/player';
+
+const manager = createPlayerManager({ debug: true });
+
+await ensurePlayersRegistered(manager); // idempotent, downloads transport chunks as needed
+
+const container = document.getElementById('player-root')!;
+const streamInfo: StreamInfo = { /* Gateway-derived sources */ };
+const options: PlayerOptions = { autoplay: true, controls: true };
+
+const videoElement = await manager.initializePlayer(container, streamInfo, options);
+```
+
+`ensurePlayersRegistered` caches the asynchronous imports per manager, so subsequent calls are free and any lazily fetched chunks stay warm in the browser cache.
 
 ### Thumbnail Support
 

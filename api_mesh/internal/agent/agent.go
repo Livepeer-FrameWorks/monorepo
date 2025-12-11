@@ -1,0 +1,301 @@
+package agent
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"os/signal"
+	"strings"
+	"sync/atomic"
+	"syscall"
+	"time"
+
+	"frameworks/api_mesh/internal/dns"
+	"frameworks/api_mesh/internal/wireguard"
+	qmclient "frameworks/pkg/clients/quartermaster"
+	"frameworks/pkg/logging"
+	pb "frameworks/pkg/proto"
+
+	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus"
+)
+
+// Metrics holds Prometheus metrics for the agent
+type Metrics struct {
+	SyncOperations   *prometheus.CounterVec
+	PeersConnected   *prometheus.GaugeVec
+	DNSQueries       *prometheus.CounterVec
+	WireGuardResyncs *prometheus.CounterVec
+}
+
+type Agent struct {
+	logger           logging.Logger
+	client           *qmclient.GRPCClient
+	wgManager        wireguard.Manager
+	dnsServer        *dns.Server
+	nodeID           string
+	interfaceName    string
+	stopChan         chan struct{}
+	metrics          *Metrics
+	healthy          atomic.Bool
+	lastSyncSuccess  atomic.Int64 // Unix timestamp of last successful sync
+	consecutiveFails atomic.Int32
+}
+
+type Config struct {
+	QuartermasterGRPCAddr string
+	ServiceToken          string // Or EnrollmentToken
+	NodeIDPath            string
+	InterfaceName         string
+	SyncInterval          time.Duration
+	DNSPort               int
+	Logger                logging.Logger
+	Metrics               *Metrics
+}
+
+func New(cfg Config) (*Agent, error) {
+	if cfg.SyncInterval == 0 {
+		cfg.SyncInterval = 30 * time.Second
+	}
+	if cfg.InterfaceName == "" {
+		cfg.InterfaceName = "wg0"
+	}
+	if cfg.NodeIDPath == "" {
+		cfg.NodeIDPath = "/etc/privateer/node_id"
+	}
+
+	// Initialize WireGuard Manager
+	wg, err := wireguard.NewManager(cfg.InterfaceName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create wireguard manager: %w", err)
+	}
+
+	// Initialize gRPC API Client
+	client, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
+		GRPCAddr:     cfg.QuartermasterGRPCAddr,
+		ServiceToken: cfg.ServiceToken,
+		Logger:       cfg.Logger,
+		Timeout:      10 * time.Second,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create quartermaster gRPC client: %w", err)
+	}
+
+	// Initialize DNS Server
+	dnsSrv := dns.NewServer(cfg.Logger, cfg.DNSPort)
+
+	return &Agent{
+		logger:        cfg.Logger,
+		client:        client,
+		wgManager:     wg,
+		dnsServer:     dnsSrv,
+		interfaceName: cfg.InterfaceName,
+		stopChan:      make(chan struct{}),
+		nodeID:        loadOrGenerateNodeID(cfg.NodeIDPath, cfg.Logger),
+		metrics:       cfg.Metrics,
+	}, nil
+}
+
+func (a *Agent) Start() error {
+	a.logger.Info("Starting Privateer Agent")
+
+	// 1. Init WireGuard Interface
+	if err := a.wgManager.Init(); err != nil {
+		return fmt.Errorf("failed to init wireguard: %w", err)
+	}
+
+	// 2. Start DNS Server
+	go a.dnsServer.Start()
+
+	// 3. Start Polling Loop
+	go a.runLoop()
+
+	// Mark agent as healthy after successful initialization
+	a.healthy.Store(true)
+
+	// Wait for termination signal
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	<-sigChan
+
+	a.Stop()
+	return nil
+}
+
+// IsHealthy returns whether the agent is healthy
+// Unhealthy if: not started, >3 consecutive sync failures, or no sync in 5 minutes
+func (a *Agent) IsHealthy() bool {
+	if !a.healthy.Load() {
+		return false
+	}
+	// Too many consecutive failures
+	if a.consecutiveFails.Load() > 3 {
+		return false
+	}
+	// No successful sync in 5 minutes
+	lastSync := a.lastSyncSuccess.Load()
+	if lastSync > 0 && time.Now().Unix()-lastSync > 300 {
+		return false
+	}
+	return true
+}
+
+func (a *Agent) Stop() {
+	close(a.stopChan)
+	a.logger.Info("Stopping Privateer Agent")
+	a.dnsServer.Stop()
+	// Clean up if necessary
+}
+
+func (a *Agent) runLoop() {
+	ticker := time.NewTicker(30 * time.Second) // Configurable?
+	defer ticker.Stop()
+
+	// Initial sync
+	a.sync()
+
+	for {
+		select {
+		case <-ticker.C:
+			a.sync()
+		case <-a.stopChan:
+			return
+		}
+	}
+}
+
+func (a *Agent) syncFailed() {
+	a.consecutiveFails.Add(1)
+	if a.metrics != nil && a.metrics.SyncOperations != nil {
+		a.metrics.SyncOperations.WithLabelValues("failed").Inc()
+	}
+}
+
+func (a *Agent) syncSucceeded() {
+	a.consecutiveFails.Store(0)
+	a.lastSyncSuccess.Store(time.Now().Unix())
+	if a.metrics != nil && a.metrics.SyncOperations != nil {
+		a.metrics.SyncOperations.WithLabelValues("success").Inc()
+	}
+}
+
+func (a *Agent) sync() {
+	// 1. Get Public Key
+	pubKey, err := a.wgManager.GetPublicKey()
+	if err != nil {
+		a.logger.WithError(err).Error("Failed to get public key")
+		a.syncFailed()
+		return
+	}
+
+	// 2. Call Quartermaster via gRPC
+	req := &pb.InfrastructureSyncRequest{
+		NodeId:    a.nodeID,
+		PublicKey: pubKey,
+	}
+
+	resp, err := a.client.SyncMesh(context.Background(), req)
+	if err != nil {
+		a.logger.WithError(err).Error("Failed to sync infrastructure")
+		a.syncFailed()
+		return
+	}
+
+	// Get Private Key
+	privKey, err := a.wgManager.GetPrivateKey()
+	if err != nil {
+		a.logger.WithError(err).Error("Failed to get private key")
+		a.syncFailed()
+		return
+	}
+
+	// 3. Convert to WireGuard Config
+	peers := make([]wireguard.Peer, len(resp.Peers))
+	// DNS Records map: hostname -> [WireGuard IPs]
+	dnsRecords := make(map[string][]string)
+
+	for i, p := range resp.Peers {
+		peers[i] = wireguard.Peer{
+			PublicKey:  p.PublicKey,
+			Endpoint:   p.Endpoint,
+			AllowedIPs: p.AllowedIps,
+			KeepAlive:  int(p.KeepAlive),
+		}
+
+		// Assuming AllowedIPs contains the /32 IP at index 0
+		if p.NodeName != "" && len(p.AllowedIps) > 0 {
+			// Strip CIDR mask if present
+			ip := strings.Split(p.AllowedIps[0], "/")[0]
+			dnsRecords[p.NodeName] = []string{ip}
+		}
+	}
+
+	// Add Service Endpoints (Aliases)
+	for sName, sEndpoints := range resp.ServiceEndpoints {
+		dnsRecords[sName] = append(dnsRecords[sName], sEndpoints.Ips...)
+	}
+
+	cfg := wireguard.Config{
+		PrivateKey: privKey,
+		Address:    fmt.Sprintf("%s/32", resp.WireguardIp),
+		ListenPort: int(resp.WireguardPort),
+		Peers:      peers,
+	}
+
+	// 4. Apply WireGuard Config
+	if err := a.wgManager.Apply(cfg); err != nil {
+		a.logger.WithError(err).Error("Failed to apply wireguard config")
+		a.syncFailed()
+		return
+	}
+
+	// 5. Update DNS Records
+	a.dnsServer.UpdateRecords(dnsRecords)
+
+	// Update metrics
+	if a.metrics != nil && a.metrics.PeersConnected != nil {
+		a.metrics.PeersConnected.WithLabelValues().Set(float64(len(peers)))
+	}
+
+	a.syncSucceeded()
+	a.logger.Info("Successfully applied wireguard config")
+}
+
+func loadOrGenerateNodeID(path string, logger logging.Logger) string {
+	// Try to read file
+	data, err := os.ReadFile(path)
+	if err == nil {
+		id := strings.TrimSpace(string(data))
+		if id != "" {
+			logger.WithField("node_id", id).Info("Loaded Node ID")
+			return id
+		}
+	}
+
+	// Generate new ID
+	// Use hostname-uuid combination to be safe and informative
+	hostname, _ := os.Hostname()
+	if hostname == "" {
+		hostname = "node"
+	}
+
+	// If we can't write to the file (e.g. permissions), we just log a warning and return ephemeral ID
+	// But in production, this should be fatal or we should ensure we have permissions.
+
+	newID := fmt.Sprintf("%s-%s", hostname, uuid.New().String())
+
+	// Ensure directory exists
+	if err := os.MkdirAll("/etc/privateer", 0755); err != nil {
+		// If we can't write to /etc (dev mode?), try /tmp or local dir
+		logger.WithError(err).Warn("Failed to create /etc/privateer, trying local .privateer directory")
+		path = ".privateer_node_id"
+	}
+
+	if err := os.WriteFile(path, []byte(newID), 0644); err != nil {
+		logger.WithError(err).Warn("Failed to persist Node ID. Agent identity will change on restart!")
+	} else {
+		logger.WithField("node_id", newID).Info("Generated and persisted new Node ID")
+	}
+
+	return newID
+}

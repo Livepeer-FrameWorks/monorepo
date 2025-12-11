@@ -50,6 +50,9 @@ func CORSMiddleware() gin.HandlerFunc {
 			c.Header("Access-Control-Allow-Origin", "*")
 		}
 
+		// Allow credentials (cookies/auth headers)
+		c.Header("Access-Control-Allow-Credentials", "true")
+
 		// Methods: reflect requested method or provide sane defaults
 		if m := c.GetHeader("Access-Control-Request-Method"); m != "" {
 			c.Header("Access-Control-Allow-Methods", m)

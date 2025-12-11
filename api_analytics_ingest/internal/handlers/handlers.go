@@ -10,6 +10,7 @@ import (
 	"frameworks/pkg/database"
 	"frameworks/pkg/kafka"
 	"frameworks/pkg/logging"
+	"frameworks/pkg/mist"
 	pb "frameworks/pkg/proto"
 	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -58,8 +59,8 @@ func (h *AnalyticsHandler) parseProtobufData(event kafka.AnalyticsEvent, target 
 	return unmarshaler.Unmarshal(jsonData, target)
 }
 
-// HandleAnalyticsEvent processes analytics events and writes to appropriate databases
-func (h *AnalyticsHandler) HandleAnalyticsEvent(ydb database.PostgresConn, event kafka.AnalyticsEvent) error {
+// HandleAnalyticsEvent processes analytics events and writes to ClickHouse
+func (h *AnalyticsHandler) HandleAnalyticsEvent(event kafka.AnalyticsEvent) error {
 	start := time.Now()
 	ctx := context.Background()
 
@@ -73,17 +74,17 @@ func (h *AnalyticsHandler) HandleAnalyticsEvent(ydb database.PostgresConn, event
 	switch event.EventType {
 	// Unified naming (no legacy)
 	case "viewer_connect":
-		err = h.processViewerConnection(ctx, ydb, event, true)
+		err = h.processViewerConnection(ctx, event, true)
 	case "viewer_disconnect":
-		err = h.processViewerConnection(ctx, ydb, event, false)
+		err = h.processViewerConnection(ctx, event, false)
 	case "stream_buffer":
 		err = h.processStreamBuffer(ctx, event)
 	case "stream_end":
-		err = h.processStreamEnd(ctx, ydb, event)
+		err = h.processStreamEnd(ctx, event)
 	case "push_rewrite":
 		err = h.processPushRewrite(ctx, event)
-	case "viewer_resolve":
-		err = h.processStreamIngest(ctx, event)
+	case "play_rewrite":
+		err = h.processPlayRewrite(ctx, event)
 	case "stream_source":
 		err = h.processStreamView(ctx, event)
 	case "push_end":
@@ -97,7 +98,7 @@ func (h *AnalyticsHandler) HandleAnalyticsEvent(ydb database.PostgresConn, event
 	case "recording_complete":
 		err = h.processRecordingLifecycle(ctx, event)
 	case "stream_lifecycle_update":
-		err = h.processStreamLifecycle(ctx, ydb, event)
+		err = h.processStreamLifecycle(ctx, event)
 	case "node_lifecycle_update":
 		err = h.processNodeLifecycle(ctx, event)
 	case "client_lifecycle_update":
@@ -108,6 +109,8 @@ func (h *AnalyticsHandler) HandleAnalyticsEvent(ydb database.PostgresConn, event
 		err = h.processClipLifecycle(ctx, event)
 	case "dvr_lifecycle":
 		err = h.processDVRLifecycle(ctx, event)
+	case "storage_snapshot":
+		err = h.processStorageSnapshot(ctx, event)
 	default:
 		h.logger.WithFields(logging.Fields{
 			"event_type": event.EventType,
@@ -139,8 +142,59 @@ func (h *AnalyticsHandler) HandleAnalyticsEvent(ydb database.PostgresConn, event
 	return nil
 }
 
+// processStorageSnapshot handles StorageSnapshot events
+func (h *AnalyticsHandler) processStorageSnapshot(ctx context.Context, event kafka.AnalyticsEvent) error {
+	h.logger.Infof("Processing storage snapshot event: %s", event.EventID)
+
+	// Parse MistTrigger envelope -> StorageSnapshot
+	var mt pb.MistTrigger
+	if err := h.parseProtobufData(event, &mt); err != nil {
+		return fmt.Errorf("failed to parse MistTrigger: %w", err)
+	}
+	tp, ok := mt.GetTriggerPayload().(*pb.MistTrigger_StorageSnapshot)
+	if !ok || tp == nil {
+		return fmt.Errorf("unexpected payload for storage_snapshot")
+	}
+	storageSnapshot := tp.StorageSnapshot
+
+	// Write to ClickHouse for each tenant's usage in the snapshot
+	batch, err := h.clickhouse.PrepareBatch(ctx, `
+		INSERT INTO storage_snapshots (
+			timestamp, node_id, tenant_id,
+			total_bytes, file_count, dvr_bytes, clip_bytes, recording_bytes
+		)`)
+	if err != nil {
+		h.logger.Errorf("Failed to prepare ClickHouse batch for storage_snapshots: %v", err)
+		return err
+	}
+
+	for _, usage := range storageSnapshot.GetUsage() {
+		if err := batch.Append(
+			event.Timestamp,
+			storageSnapshot.GetNodeId(),
+			usage.GetTenantId(),
+			usage.GetTotalBytes(),
+			usage.GetFileCount(),
+			usage.GetDvrBytes(),
+			usage.GetClipBytes(),
+			usage.GetRecordingBytes(),
+		); err != nil {
+			h.logger.Errorf("Failed to append to storage_snapshots batch: %v", err)
+			return err
+		}
+	}
+
+	if err := batch.Send(); err != nil {
+		h.logger.Errorf("Failed to send storage_snapshots batch: %v", err)
+		return err
+	}
+
+	return nil
+}
+
 // processStreamLifecycle handles stream lifecycle events
-func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, ydb database.PostgresConn, event kafka.AnalyticsEvent) error {
+// Dual-writes to: live_streams (current state) + stream_events (historical log)
+func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, event kafka.AnalyticsEvent) error {
 	h.logger.Infof("Processing stream lifecycle event: %s", event.EventID)
 
 	// Parse MistTrigger envelope -> StreamLifecycleUpdate
@@ -153,29 +207,104 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, ydb datab
 		return fmt.Errorf("unexpected payload for stream_lifecycle_update")
 	}
 	streamLifecycle := tp.StreamLifecycleUpdate
-	internalName := streamLifecycle.GetInternalName()
+	// Normalize internal name by stripping live+/vod+ prefix for consistent analytics keys
+	internalName := mist.ExtractInternalName(streamLifecycle.GetInternalName())
 
-	// Write ONLY to ClickHouse - no PostgreSQL writes for events
 	if h.metrics != nil {
+		h.metrics.ClickHouseInserts.WithLabelValues("live_streams", "attempt").Inc()
+	}
+
+	// 1. Write to live_streams (current state - ReplacingMergeTree)
+	// This is the primary source of truth for stream status
+	stateBatch, err := h.clickhouse.PrepareBatch(ctx, `
+		INSERT INTO live_streams (
+			tenant_id, internal_name, node_id, status, buffer_state,
+			current_viewers, total_inputs, uploaded_bytes, downloaded_bytes,
+			viewer_seconds, has_issues, issues_description,
+			track_count, quality_tier, primary_width, primary_height,
+			primary_fps, primary_codec, primary_bitrate,
+			started_at, updated_at
+		)`)
+	if err != nil {
+		h.logger.Errorf("Failed to prepare live_streams batch: %v", err)
+		if h.metrics != nil {
+			h.metrics.ClickHouseInserts.WithLabelValues("live_streams", "error").Inc()
+		}
+		return err
+	}
+
+	// Derive status from buffer state
+	status := "live"
+	if streamLifecycle.GetStatus() != "" {
+		status = streamLifecycle.GetStatus()
+	}
+
+	// Convert started_at unix timestamp to time.Time if present
+	var startedAt interface{}
+	if streamLifecycle.StartedAt != nil && *streamLifecycle.StartedAt > 0 {
+		startedAt = time.Unix(*streamLifecycle.StartedAt, 0)
+	}
+
+	if err := stateBatch.Append(
+		event.TenantID,
+		internalName,
+		mt.GetNodeId(),
+		status,
+		streamLifecycle.GetBufferState(),
+		streamLifecycle.GetTotalViewers(),
+		uint16(streamLifecycle.GetTotalInputs()),
+		streamLifecycle.GetUploadedBytes(),
+		streamLifecycle.GetDownloadedBytes(),
+		streamLifecycle.GetViewerSeconds(),
+		nilIfZeroBool(streamLifecycle.GetHasIssues()),
+		nilIfEmptyString(streamLifecycle.GetIssuesDescription()),
+		nilIfZeroUint16(streamLifecycle.GetTrackCount()),
+		nilIfEmptyString(streamLifecycle.GetQualityTier()),
+		nilIfZeroUint16(streamLifecycle.GetPrimaryWidth()),
+		nilIfZeroUint16(streamLifecycle.GetPrimaryHeight()),
+		nilIfZeroFloat32(streamLifecycle.GetPrimaryFps()),
+		nilIfEmptyString(streamLifecycle.GetPrimaryCodec()),
+		nilIfZeroInt32(streamLifecycle.GetPrimaryBitrate()),
+		startedAt,
+		event.Timestamp,
+	); err != nil {
+		h.logger.Errorf("Failed to append to live_streams batch: %v", err)
+		if h.metrics != nil {
+			h.metrics.ClickHouseInserts.WithLabelValues("live_streams", "error").Inc()
+		}
+		return err
+	}
+
+	if err := stateBatch.Send(); err != nil {
+		h.logger.Errorf("Failed to send live_streams batch: %v", err)
+		if h.metrics != nil {
+			h.metrics.ClickHouseInserts.WithLabelValues("live_streams", "error").Inc()
+		}
+		return err
+	}
+
+	if h.metrics != nil {
+		h.metrics.ClickHouseInserts.WithLabelValues("live_streams", "success").Inc()
 		h.metrics.ClickHouseInserts.WithLabelValues("stream_events", "attempt").Inc()
 	}
 
-	batch, err := h.clickhouse.PrepareBatch(ctx, `
+	// 2. Write to stream_events (historical log - MergeTree)
+	eventBatch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO stream_events (
 			timestamp, event_id, tenant_id, internal_name, node_id, event_type,
-			buffer_state, downloaded_bytes, uploaded_bytes, total_viewers, total_inputs, 
-			total_outputs, viewer_seconds, health_score, has_issues, issues_description,
+			buffer_state, downloaded_bytes, uploaded_bytes, total_viewers, total_inputs,
+			total_outputs, viewer_seconds, has_issues, issues_description,
 			track_count, quality_tier, primary_width, primary_height, primary_fps, event_data
 		)`)
 	if err != nil {
-		h.logger.Errorf("Failed to prepare ClickHouse batch: %v", err)
+		h.logger.Errorf("Failed to prepare stream_events batch: %v", err)
 		if h.metrics != nil {
 			h.metrics.ClickHouseInserts.WithLabelValues("stream_events", "error").Inc()
 		}
 		return err
 	}
 
-	if err := batch.Append(
+	if err := eventBatch.Append(
 		event.Timestamp,
 		event.EventID,
 		event.TenantID,
@@ -189,25 +318,24 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, ydb datab
 		streamLifecycle.GetTotalInputs(),
 		0, // total_outputs not in StreamLifecycleUpdate
 		streamLifecycle.GetViewerSeconds(),
-		streamLifecycle.GetHealthScore(),
-		streamLifecycle.GetHasIssues(),
-		streamLifecycle.GetIssuesDescription(),
-		streamLifecycle.GetTrackCount(),
-		streamLifecycle.GetQualityTier(),
-		streamLifecycle.GetPrimaryWidth(),
-		streamLifecycle.GetPrimaryHeight(),
-		streamLifecycle.GetPrimaryFps(),
+		nilIfZeroBool(streamLifecycle.GetHasIssues()),
+		nilIfEmptyString(streamLifecycle.GetIssuesDescription()),
+		nilIfZeroInt32(streamLifecycle.GetTrackCount()),
+		nilIfEmptyString(streamLifecycle.GetQualityTier()),
+		nilIfZeroInt32(streamLifecycle.GetPrimaryWidth()),
+		nilIfZeroInt32(streamLifecycle.GetPrimaryHeight()),
+		nilIfZeroFloat32(streamLifecycle.GetPrimaryFps()),
 		marshalTypedEventData(&streamLifecycle),
 	); err != nil {
-		h.logger.Errorf("Failed to append to ClickHouse batch: %v", err)
+		h.logger.Errorf("Failed to append to stream_events batch: %v", err)
 		if h.metrics != nil {
 			h.metrics.ClickHouseInserts.WithLabelValues("stream_events", "error").Inc()
 		}
 		return err
 	}
 
-	if err := batch.Send(); err != nil {
-		h.logger.Errorf("Failed to send ClickHouse batch: %v", err)
+	if err := eventBatch.Send(); err != nil {
+		h.logger.Errorf("Failed to send stream_events batch: %v", err)
 		if h.metrics != nil {
 			h.metrics.ClickHouseInserts.WithLabelValues("stream_events", "error").Inc()
 		}
@@ -218,33 +346,39 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, ydb datab
 		h.metrics.ClickHouseInserts.WithLabelValues("stream_events", "success").Inc()
 	}
 
-	if err := h.reduceStreamLifecycle(ctx, ydb, event, streamLifecycle); err != nil {
-		h.logger.Errorf("Failed to reduce stream lifecycle: %v", err)
-	}
-
 	return nil
 }
 
-// processStreamIngest handles stream ingest events
-func (h *AnalyticsHandler) processStreamIngest(ctx context.Context, event kafka.AnalyticsEvent) error {
-	h.logger.Infof("Processing stream ingest event: %s", event.EventID)
+// processPlayRewrite handles play rewrite events (formerly stream ingest/viewer resolve)
+func (h *AnalyticsHandler) processPlayRewrite(ctx context.Context, event kafka.AnalyticsEvent) error {
+	h.logger.Infof("Processing play rewrite event: %s", event.EventID)
 
-	// Parse ViewerResolveTrigger from protobuf (viewer-side resolve)
+	// Parse PlayRewriteTrigger from protobuf (viewer-side resolve)
 	var vr pb.MistTrigger
 	if err := h.parseProtobufData(event, &vr); err != nil {
 		return fmt.Errorf("failed to parse MistTrigger envelope: %w", err)
 	}
-	payload, ok := vr.GetTriggerPayload().(*pb.MistTrigger_ViewerResolve)
+	payload, ok := vr.GetTriggerPayload().(*pb.MistTrigger_PlayRewrite)
 	if !ok || payload == nil {
-		return fmt.Errorf("event is not ViewerResolveTrigger")
+		return fmt.Errorf("event is not PlayRewrite")
 	}
-	streamIngest := payload.ViewerResolve
+	streamIngest := payload.PlayRewrite
 
-	// Write to ClickHouse for time-series analysis - ONLY fields that exist in ingest events
+	// Use resolved internal name if available (enriched by Foghorn), fallback to requested_stream.
+	// Then normalize by stripping any live+/vod+ prefix.
+	internalName := streamIngest.GetResolvedInternalName()
+	if internalName == "" {
+		internalName = streamIngest.GetRequestedStream() // fallback for old events
+	}
+	internalName = mist.ExtractInternalName(internalName)
+
+	// Write to ClickHouse for time-series analysis
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
         INSERT INTO stream_events (
             timestamp, event_id, tenant_id, internal_name, node_id, event_type,
-            stream_key, user_id, hostname, push_url, protocol, latitude, longitude, location, event_data
+            stream_key, user_id, hostname, push_url, protocol,
+            latitude, longitude, location, country_code, city,
+            event_data
         )`)
 	if err != nil {
 		h.logger.Errorf("Failed to prepare ClickHouse batch: %v", err)
@@ -261,9 +395,9 @@ func (h *AnalyticsHandler) processStreamIngest(ctx context.Context, event kafka.
 		event.Timestamp,
 		event.EventID,
 		event.TenantID,
-		streamIngest.GetRequestedStream(),
+		internalName,
 		nodeID,
-		"stream_view",
+		"play_rewrite",
 		nil, // stream_key N/A
 		nil, // user_id N/A
 		streamIngest.GetViewerHost(),
@@ -271,7 +405,9 @@ func (h *AnalyticsHandler) processStreamIngest(ctx context.Context, event kafka.
 		nil, // protocol N/A
 		nilIfZeroFloat64(streamIngest.GetLatitude()),
 		nilIfZeroFloat64(streamIngest.GetLongitude()),
-		streamIngest.GetCity(),
+		nil, // location N/A for viewer events (node location only)
+		nilIfEmptyString(streamIngest.GetCountryCode()),
+		nilIfEmptyString(streamIngest.GetCity()),
 		marshalTypedEventData(&streamIngest),
 	); err != nil {
 		h.logger.Errorf("Failed to append to ClickHouse batch: %v", err)
@@ -286,123 +422,8 @@ func (h *AnalyticsHandler) processStreamIngest(ctx context.Context, event kafka.
 	return nil
 }
 
-// processUserConnection handles user connection events
-func (h *AnalyticsHandler) processUserConnection(ctx context.Context, ydb database.PostgresConn, event kafka.AnalyticsEvent) error {
-	h.logger.Infof("Processing user connection event: %s", event.EventID)
-
-	// Parse UserNewTrigger or UserEndTrigger from protobuf
-	var tp pb.MistTrigger
-	var userNew pb.ViewerConnectTrigger
-	var userEnd pb.ViewerDisconnectTrigger
-	var isNewUser bool
-
-	// Try parsing as UserNewTrigger first
-	if err := h.parseProtobufData(event, &tp); err == nil {
-		tp, ok := tp.GetTriggerPayload().(*pb.MistTrigger_ViewerConnect)
-		if !ok || tp == nil {
-			return fmt.Errorf("unexpected payload for user_new")
-		}
-		userNew = *tp.ViewerConnect
-		isNewUser = true
-	} else {
-		// Try parsing as UserEndTrigger
-		if err := h.parseProtobufData(event, &tp); err != nil {
-			tp, ok := tp.GetTriggerPayload().(*pb.MistTrigger_ViewerDisconnect)
-			if !ok || tp == nil {
-				return fmt.Errorf("unexpected payload for user_end")
-			}
-			userEnd = *tp.ViewerDisconnect
-			return fmt.Errorf("failed to parse UserTrigger: %w", err)
-		}
-		isNewUser = false
-	}
-
-	// Extract data based on trigger type
-	var streamName, sessionID, connector, nodeID, host, requestURL string
-	var countryCode, city interface{}
-	var latitude, longitude interface{}
-	var duration, upBytes, downBytes int64
-
-	if isNewUser {
-		streamName = userNew.GetStreamName()
-		sessionID = userNew.GetSessionId()
-		connector = userNew.GetConnector()
-		host = userNew.GetHost()
-		requestURL = userNew.GetRequestUrl()
-	} else {
-		streamName = userEnd.GetStreamName()
-		sessionID = userEnd.GetSessionId()
-		connector = userEnd.GetConnector()
-		host = userEnd.GetHost()
-		nodeID = userEnd.GetNodeId()
-		duration = userEnd.GetDuration()
-		upBytes = userEnd.GetUpBytes()
-		downBytes = userEnd.GetDownBytes()
-
-		if userEnd.GetCountryCode() != "" {
-			countryCode = userEnd.GetCountryCode()
-		}
-		if userEnd.GetCity() != "" {
-			city = userEnd.GetCity()
-		}
-		if userEnd.GetLatitude() != 0 {
-			latitude = userEnd.GetLatitude()
-		}
-		if userEnd.GetLongitude() != 0 {
-			longitude = userEnd.GetLongitude()
-		}
-	}
-
-	// Write to ClickHouse for time-series analysis
-	batch, err := h.clickhouse.PrepareBatch(ctx, `
-		INSERT INTO connection_events (
-			event_id, timestamp, tenant_id, internal_name,
-			session_id, connection_addr, connector, node_id, request_url,
-			country_code, city, latitude, longitude,
-			event_type, session_duration, bytes_transferred
-		)`)
-	if err != nil {
-		h.logger.Errorf("Failed to prepare ClickHouse batch: %v", err)
-		return err
-	}
-
-	if err := batch.Append(
-		event.EventID,
-		event.Timestamp,
-		event.TenantID,
-		streamName,
-		sessionID,
-		host, // connection_addr -> host
-		connector,
-		nodeID,
-		requestURL,
-		// Geographic data from typed payload
-		countryCode,
-		city,
-		latitude,
-		longitude,
-		map[bool]string{true: "connect", false: "disconnect"}[isNewUser],
-		int(duration),
-		upBytes+downBytes,
-	); err != nil {
-		h.logger.Errorf("Failed to append to ClickHouse batch: %v", err)
-		return err
-	}
-
-	if err := batch.Send(); err != nil {
-		h.logger.Errorf("Failed to send ClickHouse batch: %v", err)
-		return err
-	}
-
-	if err := h.reduceUserConnection(ctx, ydb, event, streamName, sessionID, connector, nodeID, host, requestURL, countryCode, city, latitude, longitude, duration, upBytes, downBytes, isNewUser); err != nil {
-		h.logger.Errorf("Failed to reduce user connection: %v", err)
-	}
-
-	return nil
-}
-
-// processViewerConnection writes connection_events (connect/disconnect) and reduces state
-func (h *AnalyticsHandler) processViewerConnection(ctx context.Context, ydb database.PostgresConn, event kafka.AnalyticsEvent, isConnect bool) error {
+// processViewerConnection writes connection_events (connect/disconnect) to ClickHouse
+func (h *AnalyticsHandler) processViewerConnection(ctx context.Context, event kafka.AnalyticsEvent, isConnect bool) error {
 	var mt pb.MistTrigger
 	if err := h.parseProtobufData(event, &mt); err != nil {
 		return fmt.Errorf("failed to parse MistTrigger: %w", err)
@@ -412,6 +433,10 @@ func (h *AnalyticsHandler) processViewerConnection(ctx context.Context, ydb data
 	var duration, upBytes, downBytes int64
 	var countryCode, city interface{}
 	var latitude, longitude interface{}
+	var clientBucketH3 interface{}
+	var clientBucketRes interface{}
+	var nodeBucketH3 interface{}
+	var nodeBucketRes interface{}
 
 	switch p := mt.GetTriggerPayload().(type) {
 	case *pb.MistTrigger_ViewerConnect:
@@ -422,6 +447,26 @@ func (h *AnalyticsHandler) processViewerConnection(ctx context.Context, ydb data
 		host = vc.GetHost()
 		requestURL = vc.GetRequestUrl()
 		nodeID = mt.GetNodeId()
+		if vc.GetClientCountry() != "" {
+			countryCode = vc.GetClientCountry()
+		}
+		if vc.GetClientCity() != "" {
+			city = vc.GetClientCity()
+		}
+		if vc.GetClientLatitude() != 0 {
+			latitude = vc.GetClientLatitude()
+		}
+		if vc.GetClientLongitude() != 0 {
+			longitude = vc.GetClientLongitude()
+		}
+		if bucket := vc.GetClientBucket(); bucket != nil && bucket.H3Index != 0 {
+			clientBucketH3 = bucket.H3Index
+			clientBucketRes = uint8(bucket.Resolution)
+		}
+		if bucket := vc.GetNodeBucket(); bucket != nil && bucket.H3Index != 0 {
+			nodeBucketH3 = bucket.H3Index
+			nodeBucketRes = uint8(bucket.Resolution)
+		}
 	case *pb.MistTrigger_ViewerDisconnect:
 		vd := p.ViewerDisconnect
 		streamName = vd.GetStreamName()
@@ -444,15 +489,27 @@ func (h *AnalyticsHandler) processViewerConnection(ctx context.Context, ydb data
 		if vd.GetLongitude() != 0 {
 			longitude = vd.GetLongitude()
 		}
+		if bucket := vd.GetClientBucket(); bucket != nil && bucket.H3Index != 0 {
+			clientBucketH3 = bucket.H3Index
+			clientBucketRes = uint8(bucket.Resolution)
+		}
+		if bucket := vd.GetNodeBucket(); bucket != nil && bucket.H3Index != 0 {
+			nodeBucketH3 = bucket.H3Index
+			nodeBucketRes = uint8(bucket.Resolution)
+		}
 	default:
 		return fmt.Errorf("unexpected payload for viewer connection")
 	}
+
+	// Normalize internal name by stripping live+/vod+ prefix for consistent analytics keys
+	streamName = mist.ExtractInternalName(streamName)
 
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
         INSERT INTO connection_events (
             event_id, timestamp, tenant_id, internal_name,
             session_id, connection_addr, connector, node_id, request_url,
             country_code, city, latitude, longitude,
+            client_bucket_h3, client_bucket_res, node_bucket_h3, node_bucket_res,
             event_type, session_duration, bytes_transferred
         )`)
 	if err != nil {
@@ -481,18 +538,17 @@ func (h *AnalyticsHandler) processViewerConnection(ctx context.Context, ydb data
 		city,
 		latitude,
 		longitude,
+		clientBucketH3,
+		clientBucketRes,
+		nodeBucketH3,
+		nodeBucketRes,
 		eventType,
 		durationUI,
 		bytesTransferred,
 	); err != nil {
 		return err
 	}
-	if err := batch.Send(); err != nil {
-		return err
-	}
-
-	// Reduce Postgres state
-	return h.reduceUserConnection(ctx, ydb, event, streamName, sessionID, connector, nodeID, host, requestURL, countryCode, city, latitude, longitude, duration, upBytes, downBytes, isConnect)
+	return batch.Send()
 }
 
 func max64(a, b int64) int64 {
@@ -532,6 +588,32 @@ func nilIfZeroUint32(v uint32) interface{} {
 	}
 	return v
 }
+func nilIfZeroInt32(v int32) interface{} {
+	if v == 0 {
+		return nil
+	}
+	return v
+}
+func nilIfZeroUint8(v int32) interface{} {
+	// Proto returns int32, convert to uint8 for ClickHouse
+	if v == 0 {
+		return nil
+	}
+	return uint8(v)
+}
+func nilIfZeroUint16(v int32) interface{} {
+	// Proto returns int32, convert to uint16 for ClickHouse
+	if v == 0 {
+		return nil
+	}
+	return uint16(v)
+}
+func nilIfEmptyString(v string) interface{} {
+	if v == "" {
+		return nil
+	}
+	return v
+}
 func nilIfFalse(v bool) interface{} {
 	if !v {
 		return nil
@@ -557,15 +639,17 @@ func (h *AnalyticsHandler) processPushLifecycle(ctx context.Context, event kafka
 	if isPushStart {
 		// PUSH_OUT_START: only has push_target
 		batchSQL = `INSERT INTO stream_events (
-            timestamp, event_id, tenant_id, internal_name, node_id, event_type, 
+            timestamp, event_id, tenant_id, internal_name, node_id, event_type,
             push_target, event_data
         )`
 		p := mt.GetPushOutStart()
+		// Normalize internal name by stripping live+/vod+ prefix
+		internalName := mist.ExtractInternalName(p.GetStreamName())
 		values = []interface{}{
 			event.Timestamp,
 			event.EventID,
 			event.TenantID,
-			p.GetStreamName(),
+			internalName,
 			mt.GetNodeId(),
 			"push_out_start",
 			p.GetPushTarget(),
@@ -578,11 +662,13 @@ func (h *AnalyticsHandler) processPushLifecycle(ctx context.Context, event kafka
             push_id, push_target, target_uri_before, target_uri_after, push_status, log_messages, event_data
         )`
 		p := mt.GetPushEnd()
+		// Normalize internal name by stripping live+/vod+ prefix
+		internalName := mist.ExtractInternalName(p.GetStreamName())
 		values = []interface{}{
 			event.Timestamp,
 			event.EventID,
 			event.TenantID,
-			p.GetStreamName(),
+			internalName,
 			mt.GetNodeId(),
 			"push_end",
 			p.GetPushId(),
@@ -626,11 +712,15 @@ func (h *AnalyticsHandler) processPushRewrite(ctx context.Context, event kafka.A
 		return fmt.Errorf("unexpected payload for push_rewrite")
 	}
 	pr := tp.PushRewrite
+	// Normalize internal name by stripping live+/vod+ prefix for consistent analytics keys
+	internalName := mist.ExtractInternalName(pr.GetStreamName())
 
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
         INSERT INTO stream_events (
             timestamp, event_id, tenant_id, internal_name, node_id, event_type,
-            stream_key, hostname, push_url, protocol, latitude, longitude, location, event_data
+            stream_key, hostname, push_url, protocol,
+            latitude, longitude, location, country_code, city,
+            event_data
         )`)
 	if err != nil {
 		return err
@@ -640,6 +730,7 @@ func (h *AnalyticsHandler) processPushRewrite(ctx context.Context, event kafka.A
 	if pr.Protocol != nil && *pr.Protocol != "" {
 		prot = *pr.Protocol
 	}
+	// Node location (where MistServer is running)
 	var lat interface{}
 	if pr.Latitude != nil && *pr.Latitude != 0 {
 		lat = *pr.Latitude
@@ -652,21 +743,32 @@ func (h *AnalyticsHandler) processPushRewrite(ctx context.Context, event kafka.A
 	if pr.Location != nil && *pr.Location != "" {
 		loc = *pr.Location
 	}
+	// Publisher location (where encoder is running, from GeoIP)
+	var pubCountry interface{}
+	if pr.PublisherCountryCode != nil && *pr.PublisherCountryCode != "" {
+		pubCountry = *pr.PublisherCountryCode
+	}
+	var pubCity interface{}
+	if pr.PublisherCity != nil && *pr.PublisherCity != "" {
+		pubCity = *pr.PublisherCity
+	}
 
 	if err := batch.Append(
 		event.Timestamp,
 		event.EventID,
 		event.TenantID,
-		pr.GetStreamName(),
+		internalName,
 		mt.GetNodeId(),
 		"push-rewrite",
-		pr.GetStreamName(),
+		pr.GetStreamName(), // Original stream_key for reference
 		pr.GetHostname(),
 		pr.GetPushUrl(),
 		prot,
 		lat,
 		lon,
 		loc,
+		pubCountry,
+		pubCity,
 		marshalTypedEventData(pr),
 	); err != nil {
 		return err
@@ -688,6 +790,8 @@ func (h *AnalyticsHandler) processRecordingLifecycle(ctx context.Context, event 
 		return fmt.Errorf("unexpected payload for recording_complete")
 	}
 	recording := tp.RecordingComplete
+	// Normalize internal name by stripping live+/vod+ prefix for consistent analytics keys
+	internalName := mist.ExtractInternalName(recording.GetStreamName())
 
 	// Write to ClickHouse for time-series analysis - ONLY fields that exist in recording events
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
@@ -704,7 +808,7 @@ func (h *AnalyticsHandler) processRecordingLifecycle(ctx context.Context, event 
 		event.Timestamp,
 		event.EventID,
 		event.TenantID,
-		recording.GetStreamName(),
+		internalName,
 		recording.GetNodeId(),
 		"recording-complete",
 		nilIfZeroUint64(uint64(recording.GetBytesWritten())),   // file_size
@@ -738,6 +842,8 @@ func (h *AnalyticsHandler) processStreamView(ctx context.Context, event kafka.An
 		return fmt.Errorf("unexpected payload for stream_source")
 	}
 	streamView := tp.StreamSource
+	// Normalize internal name by stripping live+/vod+ prefix for consistent analytics keys
+	internalName := mist.ExtractInternalName(streamView.GetStreamName())
 
 	// Write to ClickHouse for time-series analysis - basic stream view event
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
@@ -753,7 +859,7 @@ func (h *AnalyticsHandler) processStreamView(ctx context.Context, event kafka.An
 		event.Timestamp,
 		event.EventID,
 		event.TenantID,
-		streamView.GetStreamName(),
+		internalName,
 		mt.GetNodeId(),
 		"stream_view",
 		marshalTypedEventData(&streamView),
@@ -784,13 +890,15 @@ func (h *AnalyticsHandler) processLoadBalancing(ctx context.Context, event kafka
 		return fmt.Errorf("unexpected payload for load_balancing")
 	}
 	loadBalancing := tp.LoadBalancingData
+	// Normalize internal name by stripping live+/vod+ prefix for consistent analytics keys
+	internalName := mist.ExtractInternalName(loadBalancing.GetInternalName())
 
 	// Write to ClickHouse routing_events table - using ACTUAL fields from LoadBalancingPayload
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
         INSERT INTO routing_events (
-            timestamp, tenant_id, stream_name, selected_node, status, details, score, 
-            client_ip, client_country, client_latitude, client_longitude,
-            node_latitude, node_longitude, node_name,
+            timestamp, tenant_id, internal_name, selected_node, status, details, score,
+            client_ip, client_country, client_latitude, client_longitude, client_bucket_h3, client_bucket_res,
+            node_latitude, node_longitude, node_name, node_bucket_h3, node_bucket_res,
             selected_node_id, routing_distance_km
         )`)
 	if err != nil {
@@ -807,10 +915,23 @@ func (h *AnalyticsHandler) processLoadBalancing(ctx context.Context, event kafka
 		routeKm = *loadBalancing.RoutingDistanceKm
 	}
 
+	var clientBucketH3 interface{}
+	var clientBucketRes interface{}
+	if loadBalancing.ClientBucket != nil && loadBalancing.ClientBucket.H3Index != 0 {
+		clientBucketH3 = loadBalancing.ClientBucket.H3Index
+		clientBucketRes = uint8(loadBalancing.ClientBucket.Resolution)
+	}
+	var nodeBucketH3 interface{}
+	var nodeBucketRes interface{}
+	if loadBalancing.NodeBucket != nil && loadBalancing.NodeBucket.H3Index != 0 {
+		nodeBucketH3 = loadBalancing.NodeBucket.H3Index
+		nodeBucketRes = uint8(loadBalancing.NodeBucket.Resolution)
+	}
+
 	if err := batch.Append(
 		event.Timestamp,
 		event.TenantID,
-		loadBalancing.GetInternalName(), // stream_name -> internal_name
+		internalName,
 		loadBalancing.GetSelectedNode(),
 		loadBalancing.GetStatus(),
 		loadBalancing.GetDetails(),
@@ -819,9 +940,13 @@ func (h *AnalyticsHandler) processLoadBalancing(ctx context.Context, event kafka
 		loadBalancing.GetClientCountry(),
 		loadBalancing.GetLatitude(),
 		loadBalancing.GetLongitude(),
+		clientBucketH3,
+		clientBucketRes,
 		loadBalancing.GetNodeLatitude(),
 		loadBalancing.GetNodeLongitude(),
 		loadBalancing.GetNodeName(),
+		nodeBucketH3,
+		nodeBucketRes,
 		selID,
 		routeKm,
 	); err != nil {
@@ -860,6 +985,8 @@ func (h *AnalyticsHandler) processClientLifecycle(ctx context.Context, event kaf
 		return fmt.Errorf("unexpected payload for client_lifecycle_update")
 	}
 	clientLifecycle := tp.ClientLifecycleUpdate
+	// Normalize internal name by stripping live+/vod+ prefix for consistent analytics keys
+	internalName := mist.ExtractInternalName(clientLifecycle.GetInternalName())
 
 	// Calculate connection quality if packets were sent
 	var connectionQuality *float32
@@ -883,7 +1010,7 @@ func (h *AnalyticsHandler) processClientLifecycle(ctx context.Context, event kaf
 	if err := batch.Append(
 		event.Timestamp,
 		event.TenantID,
-		clientLifecycle.GetInternalName(),
+		internalName,
 		clientLifecycle.GetSessionId(),
 		mt.GetNodeId(),
 		clientLifecycle.GetProtocol(),
@@ -915,6 +1042,7 @@ func (h *AnalyticsHandler) processClientLifecycle(ctx context.Context, event kaf
 }
 
 // processNodeLifecycle handles node health and resource metrics
+// Dual-writes to: live_nodes (current state) + node_metrics (historical log)
 func (h *AnalyticsHandler) processNodeLifecycle(ctx context.Context, event kafka.AnalyticsEvent) error {
 	h.logger.Infof("Processing node lifecycle event: %s", event.EventID)
 
@@ -929,39 +1057,142 @@ func (h *AnalyticsHandler) processNodeLifecycle(ctx context.Context, event kafka
 	}
 	nodeLifecycle := tp.NodeLifecycleUpdate
 
-	// Write to ClickHouse for time-series analysis using typed data
-	batch, err := h.clickhouse.PrepareBatch(ctx, `
-		INSERT INTO node_metrics (
-			timestamp, tenant_id, node_id, cpu_usage, ram_max, ram_current,
-			up_speed, down_speed, stream_count, is_healthy
+	if h.metrics != nil {
+		h.metrics.ClickHouseInserts.WithLabelValues("live_nodes", "attempt").Inc()
+	}
+
+	// 1. Write to live_nodes (current state - ReplacingMergeTree)
+	stateBatch, err := h.clickhouse.PrepareBatch(ctx, `
+		INSERT INTO live_nodes (
+			tenant_id, node_id, cpu_percent, ram_used_bytes, ram_total_bytes,
+			disk_used_bytes, disk_total_bytes, up_speed, down_speed,
+			active_streams, is_healthy, latitude, longitude, location, metadata, updated_at
 		)`)
 	if err != nil {
-		h.logger.Errorf("Failed to prepare ClickHouse batch: %v", err)
+		h.logger.Errorf("Failed to prepare live_nodes batch: %v", err)
+		if h.metrics != nil {
+			h.metrics.ClickHouseInserts.WithLabelValues("live_nodes", "error").Inc()
+		}
 		return err
 	}
 
-	if err := batch.Append(
+	cpuPercent := float32(nodeLifecycle.GetCpuTenths()) / 10.0
+
+	// Build operational metadata only - skip bulk data (streams, artifacts, storage)
+	metadata := map[string]interface{}{}
+	if caps := nodeLifecycle.GetCapabilities(); caps != nil {
+		metadata["capabilities"] = caps
+	}
+	if limits := nodeLifecycle.GetLimits(); limits != nil {
+		metadata["limits"] = limits
+	}
+	if bwLimit := nodeLifecycle.GetBwLimit(); bwLimit > 0 {
+		metadata["bw_limit"] = bwLimit
+	}
+	if baseUrl := nodeLifecycle.GetBaseUrl(); baseUrl != "" {
+		metadata["base_url"] = baseUrl
+	}
+	metadataJSON, _ := json.Marshal(metadata)
+
+	if err := stateBatch.Append(
+		event.TenantID,
+		nodeLifecycle.GetNodeId(),
+		cpuPercent,
+		uint64(nodeLifecycle.GetRamCurrent()),
+		uint64(nodeLifecycle.GetRamMax()),
+		uint64(nodeLifecycle.GetDiskUsedBytes()),
+		uint64(nodeLifecycle.GetDiskTotalBytes()),
+		uint64(nodeLifecycle.GetUpSpeed()),
+		uint64(nodeLifecycle.GetDownSpeed()),
+		uint32(nodeLifecycle.GetActiveStreams()),
+		boolToUint8(nodeLifecycle.GetIsHealthy()),
+		nodeLifecycle.GetLatitude(),
+		nodeLifecycle.GetLongitude(),
+		nodeLifecycle.GetLocation(),
+		metadataJSON,
+		event.Timestamp,
+	); err != nil {
+		h.logger.Errorf("Failed to append to live_nodes batch: %v", err)
+		if h.metrics != nil {
+			h.metrics.ClickHouseInserts.WithLabelValues("live_nodes", "error").Inc()
+		}
+		return err
+	}
+
+	if err := stateBatch.Send(); err != nil {
+		h.logger.Errorf("Failed to send live_nodes batch: %v", err)
+		if h.metrics != nil {
+			h.metrics.ClickHouseInserts.WithLabelValues("live_nodes", "error").Inc()
+		}
+		return err
+	}
+
+	if h.metrics != nil {
+		h.metrics.ClickHouseInserts.WithLabelValues("live_nodes", "success").Inc()
+		h.metrics.ClickHouseInserts.WithLabelValues("node_metrics", "attempt").Inc()
+	}
+
+	// 2. Write to node_metrics (historical log - MergeTree)
+	metricsBatch, err := h.clickhouse.PrepareBatch(ctx, `
+		INSERT INTO node_metrics (
+			timestamp, tenant_id, node_id, cpu_usage, ram_max, ram_current,
+			shm_total_bytes, shm_used_bytes, disk_total_bytes, disk_used_bytes,
+			up_speed, down_speed, stream_count, is_healthy, latitude, longitude, metadata
+		)`)
+	if err != nil {
+		h.logger.Errorf("Failed to prepare node_metrics batch: %v", err)
+		if h.metrics != nil {
+			h.metrics.ClickHouseInserts.WithLabelValues("node_metrics", "error").Inc()
+		}
+		return err
+	}
+
+	if err := metricsBatch.Append(
 		event.Timestamp,
 		event.TenantID,
 		nodeLifecycle.GetNodeId(),
-		float32(nodeLifecycle.GetCpuTenths())/10.0, // cpu_tenths (0-1000) -> percentage
+		cpuPercent,
 		int64(nodeLifecycle.GetRamMax()),
 		int64(nodeLifecycle.GetRamCurrent()),
+		uint64(nodeLifecycle.GetShmTotalBytes()),
+		uint64(nodeLifecycle.GetShmUsedBytes()),
+		uint64(nodeLifecycle.GetDiskTotalBytes()),
+		uint64(nodeLifecycle.GetDiskUsedBytes()),
 		int64(nodeLifecycle.GetUpSpeed()),
 		int64(nodeLifecycle.GetDownSpeed()),
 		int(nodeLifecycle.GetActiveStreams()),
 		nodeLifecycle.GetIsHealthy(),
+		nodeLifecycle.GetLatitude(),
+		nodeLifecycle.GetLongitude(),
+		metadataJSON,
 	); err != nil {
-		h.logger.Errorf("Failed to append to ClickHouse batch: %v", err)
+		h.logger.Errorf("Failed to append to node_metrics batch: %v", err)
+		if h.metrics != nil {
+			h.metrics.ClickHouseInserts.WithLabelValues("node_metrics", "error").Inc()
+		}
 		return err
 	}
 
-	if err := batch.Send(); err != nil {
-		h.logger.Errorf("Failed to send ClickHouse batch: %v", err)
+	if err := metricsBatch.Send(); err != nil {
+		h.logger.Errorf("Failed to send node_metrics batch: %v", err)
+		if h.metrics != nil {
+			h.metrics.ClickHouseInserts.WithLabelValues("node_metrics", "error").Inc()
+		}
 		return err
+	}
+
+	if h.metrics != nil {
+		h.metrics.ClickHouseInserts.WithLabelValues("node_metrics", "success").Inc()
 	}
 
 	return nil
+}
+
+func boolToUint8(b bool) uint8 {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // processStreamBuffer handles STREAM_BUFFER webhook events with rich health metrics
@@ -978,12 +1209,14 @@ func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event kafka.
 		return fmt.Errorf("unexpected payload for stream_buffer")
 	}
 	streamBuffer := payload.StreamBuffer
+	// Normalize internal name by stripping live+/vod+ prefix for consistent analytics keys
+	internalName := mist.ExtractInternalName(streamBuffer.GetStreamName())
 
 	// Write to ClickHouse stream_events table
 	streamEventsBatch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO stream_events (
 			timestamp, event_id, tenant_id, internal_name, node_id, event_type,
-			buffer_state, health_score, has_issues, issues_description, track_count, 
+			buffer_state, has_issues, issues_description, track_count,
 			quality_tier, primary_width, primary_height, primary_fps, event_data
 		)`)
 	if err != nil {
@@ -995,15 +1228,14 @@ func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event kafka.
 		event.Timestamp,
 		event.EventID,
 		event.TenantID,
-		streamBuffer.GetStreamName(),
+		internalName,
 		mt.GetNodeId(),
 		"stream_buffer",
 		streamBuffer.GetBufferState(),
-		nilIfZeroFloat32(streamBuffer.GetHealthScore()),
 		nilIfZeroBool(streamBuffer.GetHasIssues()),
-		streamBuffer.GetIssuesDescription(),
-		streamBuffer.GetTrackCount(),
-		streamBuffer.GetQualityTier(),
+		nilIfEmptyString(streamBuffer.GetIssuesDescription()),
+		nilIfZeroInt32(streamBuffer.GetTrackCount()),
+		nilIfEmptyString(streamBuffer.GetQualityTier()),
 		nil, // width N/A
 		nil, // height N/A
 		nil, // fps N/A
@@ -1018,13 +1250,19 @@ func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event kafka.
 		return err
 	}
 
+	// Serialize tracks to JSON for track_metadata column
+	var trackMetadataJSON string
+	if tracks := streamBuffer.GetTracks(); len(tracks) > 0 {
+		if jsonBytes, err := json.Marshal(tracks); err == nil {
+			trackMetadataJSON = string(jsonBytes)
+		}
+	}
+
 	// ALSO write to stream_health_metrics table for detailed health tracking and rebuffering_events MV
 	healthBatch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO stream_health_metrics (
-			timestamp, tenant_id, internal_name, node_id, buffer_state, health_score, 
-			has_issues, issues_description, track_count, frame_jitter_ms, keyframe_stability_ms,
-			codec, bitrate, fps, width, height, frame_ms_max, frame_ms_min, 
-			frames_max, frames_min, keyframe_ms_max
+			timestamp, tenant_id, internal_name, node_id, buffer_state,
+			has_issues, issues_description, track_count, track_metadata
 		)`)
 	if err != nil {
 		h.logger.Errorf("Failed to prepare stream_health_metrics batch: %v", err)
@@ -1034,25 +1272,13 @@ func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event kafka.
 	if err := healthBatch.Append(
 		event.Timestamp,
 		event.TenantID,
-		streamBuffer.GetStreamName(),
+		internalName,
 		mt.GetNodeId(),
 		streamBuffer.GetBufferState(),
-		nilIfZeroFloat32(streamBuffer.GetHealthScore()),
 		nilIfZeroBool(streamBuffer.GetHasIssues()),
-		streamBuffer.GetIssuesDescription(),
-		streamBuffer.GetTrackCount(),
-		nil, // frame_jitter_ms N/A
-		nil, // keyframe_stability_ms N/A
-		nil, // codec N/A
-		nil, // bitrate N/A
-		nil, // fps N/A
-		nil, // width N/A
-		nil, // height N/A
-		nil, // frame_ms_max N/A
-		nil, // frame_ms_min N/A
-		nil, // frames_max N/A
-		nil, // frames_min N/A
-		nil, // keyframe_interval_ms N/A
+		nilIfEmptyString(streamBuffer.GetIssuesDescription()),
+		nilIfZeroUint16(streamBuffer.GetTrackCount()),
+		trackMetadataJSON,
 	); err != nil {
 		h.logger.Errorf("Failed to append to stream_health_metrics batch: %v", err)
 		return err
@@ -1068,7 +1294,7 @@ func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event kafka.
 }
 
 // processStreamEnd handles STREAM_END webhook events
-func (h *AnalyticsHandler) processStreamEnd(ctx context.Context, ydb database.PostgresConn, event kafka.AnalyticsEvent) error {
+func (h *AnalyticsHandler) processStreamEnd(ctx context.Context, event kafka.AnalyticsEvent) error {
 	h.logger.Infof("Processing stream end event: %s", event.EventID)
 
 	// Parse MistTrigger envelope and extract StreamEndTrigger
@@ -1081,12 +1307,14 @@ func (h *AnalyticsHandler) processStreamEnd(ctx context.Context, ydb database.Po
 		return fmt.Errorf("unexpected payload for stream_end")
 	}
 	streamEnd := tp.StreamEnd
+	// Normalize internal name by stripping live+/vod+ prefix for consistent analytics keys
+	internalName := mist.ExtractInternalName(streamEnd.GetStreamName())
 
 	// Write to ClickHouse stream_events table using ONLY end-specific fields
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO stream_events (
 			timestamp, event_id, tenant_id, internal_name, node_id, event_type,
-			downloaded_bytes, uploaded_bytes, total_viewers, total_inputs, total_outputs, 
+			downloaded_bytes, uploaded_bytes, total_viewers, total_inputs, total_outputs,
 			viewer_seconds, event_data
 		)`)
 	if err != nil {
@@ -1118,7 +1346,7 @@ func (h *AnalyticsHandler) processStreamEnd(ctx context.Context, ydb database.Po
 		event.Timestamp,
 		event.EventID,
 		event.TenantID,
-		streamEnd.GetStreamName(),
+		internalName,
 		mt.GetNodeId(),
 		"stream_end",
 		downloaded,
@@ -1138,134 +1366,8 @@ func (h *AnalyticsHandler) processStreamEnd(ctx context.Context, ydb database.Po
 		return err
 	}
 
-	// Also update PostgreSQL reduced state
-	if err := h.reduceStreamEnd(ctx, ydb, event, streamEnd); err != nil {
-		h.logger.Errorf("Failed to reduce stream end: %v", err)
-	}
-
 	h.logger.Debugf("Successfully processed stream end event for stream: %s", streamEnd.GetStreamName())
 	return nil
-}
-
-func (h *AnalyticsHandler) reduceStreamLifecycle(ctx context.Context, ydb database.PostgresConn, event kafka.AnalyticsEvent, streamLifecycle *pb.StreamLifecycleUpdate) error {
-	status := streamLifecycle.GetStatus()
-	var startTime interface{}
-	switch status {
-	case "start", "started", "ingest_start", "live":
-		startTime = event.Timestamp
-	default:
-		startTime = nil
-	}
-
-	// Extract metrics from detailed stream lifecycle events using protobuf data
-	nodeID := streamLifecycle.GetNodeId()
-	viewers := streamLifecycle.GetTotalViewers()
-	trackCount := streamLifecycle.GetTrackCount()
-	upBytes := streamLifecycle.GetUploadedBytes()
-	downBytes := streamLifecycle.GetDownloadedBytes()
-	inputs := streamLifecycle.GetTotalInputs()
-	var outputs uint32 = 0 // total_outputs not in StreamLifecycleUpdate
-
-	// Calculate bitrate from bandwidth (convert bytes to kbps)
-	var avgBitrateKbps int
-	if upBytes > 0 {
-		avgBitrateKbps = int((upBytes * 8) / 1000) // Convert bytes to kbps, round down
-	}
-
-	// Map Mist status strictly to enum when it matches known values
-	var mistStatus interface{}
-	switch status {
-	case "offline", "init", "boot", "wait", "ready", "shutdown", "invalid":
-		mistStatus = status
-	default:
-		mistStatus = nil
-	}
-
-	_, err := ydb.ExecContext(ctx, `
-			INSERT INTO periscope.stream_analytics (
-				tenant_id, internal_name, stream_id, status, mist_status, session_start_time, 
-				current_viewers, total_connections, track_count,
-				bandwidth_in, bandwidth_out, upbytes, downbytes,
-				inputs, outputs, bitrate_kbps, node_id, last_updated
-			)
-			VALUES ($1, $2, NULLIF($3,'')::uuid, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
-			ON CONFLICT (tenant_id, internal_name) DO UPDATE SET
-				status = EXCLUDED.status,
-				mist_status = COALESCE(EXCLUDED.mist_status, periscope.stream_analytics.mist_status),
-				session_start_time = COALESCE(periscope.stream_analytics.session_start_time, EXCLUDED.session_start_time),
-				current_viewers = EXCLUDED.current_viewers,
-				peak_viewers = GREATEST(periscope.stream_analytics.peak_viewers, EXCLUDED.current_viewers),
-				total_connections = GREATEST(periscope.stream_analytics.total_connections, EXCLUDED.total_connections),
-				track_count = EXCLUDED.track_count,
-				bandwidth_in = EXCLUDED.bandwidth_in,
-				bandwidth_out = EXCLUDED.bandwidth_out,
-				upbytes = EXCLUDED.upbytes,
-				downbytes = EXCLUDED.downbytes,
-				inputs = EXCLUDED.inputs,
-				outputs = EXCLUDED.outputs,
-				bitrate_kbps = EXCLUDED.bitrate_kbps,
-				node_id = EXCLUDED.node_id,
-				last_updated = EXCLUDED.last_updated
-		`, event.TenantID, streamLifecycle.GetInternalName(), streamLifecycle.GetInternalName(), status, mistStatus, startTime,
-		viewers, viewers, trackCount, downBytes, upBytes, upBytes, downBytes,
-		inputs, outputs, avgBitrateKbps, nodeID, event.Timestamp)
-	return err
-}
-
-func (h *AnalyticsHandler) reduceUserConnection(ctx context.Context, ydb database.PostgresConn, event kafka.AnalyticsEvent, streamName, sessionID, connector, nodeID, host, requestURL string, countryCode, city, latitude, longitude interface{}, duration, upBytes, downBytes int64, isConnect bool) error {
-	// Data is already passed as parameters from the calling handler
-	action := map[bool]string{true: "connect", false: "disconnect"}[isConnect]
-	tenantID := event.TenantID
-	internal := streamName
-
-	switch action {
-	case "connect":
-		_, err := ydb.ExecContext(ctx, `
-                        INSERT INTO periscope.stream_analytics (tenant_id, internal_name, stream_id, current_viewers, peak_viewers, total_connections, last_updated)
-                        VALUES ($1,$2,NULLIF($3,'')::uuid,1,1,1,$4)
-                        ON CONFLICT (tenant_id, internal_name) DO UPDATE SET
-                                current_viewers = periscope.stream_analytics.current_viewers + 1,
-                                peak_viewers = GREATEST(periscope.stream_analytics.peak_viewers, periscope.stream_analytics.current_viewers + 1),
-                                total_connections = periscope.stream_analytics.total_connections + 1,
-                                last_updated = EXCLUDED.last_updated
-                `, tenantID, internal, internal, event.Timestamp)
-		return err
-	case "disconnect":
-		_, err := ydb.ExecContext(ctx, `
-                        INSERT INTO periscope.stream_analytics (tenant_id, internal_name, stream_id, last_updated)
-                        VALUES ($1,$2,NULLIF($3,'')::uuid,$4)
-                        ON CONFLICT (tenant_id, internal_name) DO UPDATE SET
-                                current_viewers = GREATEST(periscope.stream_analytics.current_viewers - 1, 0),
-                                total_session_duration = periscope.stream_analytics.total_session_duration + $5,
-                                upbytes = periscope.stream_analytics.upbytes + $6,
-                                downbytes = periscope.stream_analytics.downbytes + $7,
-                                bandwidth_in = periscope.stream_analytics.bandwidth_in + $6,
-                                bandwidth_out = periscope.stream_analytics.bandwidth_out + $7,
-                                last_updated = EXCLUDED.last_updated
-                `, tenantID, internal, internal, event.Timestamp, duration, upBytes, downBytes)
-		return err
-	default:
-		_, err := ydb.ExecContext(ctx, `
-                        INSERT INTO periscope.stream_analytics (tenant_id, internal_name, stream_id, last_updated)
-                        VALUES ($1,$2,NULLIF($3,'')::uuid,$4)
-                        ON CONFLICT (tenant_id, internal_name) DO UPDATE SET
-                                last_updated = EXCLUDED.last_updated
-                `, tenantID, internal, internal, event.Timestamp)
-		return err
-	}
-}
-
-func (h *AnalyticsHandler) reduceStreamEnd(ctx context.Context, ydb database.PostgresConn, event kafka.AnalyticsEvent, streamEnd *pb.StreamEndTrigger) error {
-	status := "ended" // Stream end events indicate the stream has ended
-	_, err := ydb.ExecContext(ctx, `
-                INSERT INTO periscope.stream_analytics (tenant_id, internal_name, stream_id, status, session_end_time, last_updated)
-                VALUES ($1,$2,NULLIF($3,'')::uuid,$4,$5,$5)
-                ON CONFLICT (tenant_id, internal_name) DO UPDATE SET
-                        status = EXCLUDED.status,
-                        session_end_time = EXCLUDED.session_end_time,
-                        last_updated = EXCLUDED.last_updated
-        `, event.TenantID, streamEnd.GetStreamName(), streamEnd.GetStreamName(), status, event.Timestamp)
-	return err
 }
 
 func appendAndSend(batch interface {
@@ -1292,6 +1394,8 @@ func (h *AnalyticsHandler) processTrackList(ctx context.Context, event kafka.Ana
 		return fmt.Errorf("unexpected payload for track_list")
 	}
 	trackList := tp.TrackList
+	// Normalize internal name by stripping live+/vod+ prefix for consistent analytics keys
+	internalName := mist.ExtractInternalName(trackList.GetStreamName())
 
 	// Write to track_list_events with enhanced quality metrics using typed data
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
@@ -1311,22 +1415,24 @@ func (h *AnalyticsHandler) processTrackList(ctx context.Context, event kafka.Ana
 		event.Timestamp,
 		event.EventID,
 		event.TenantID,
-		trackList.GetStreamName(),
+		internalName,
 		mt.GetNodeId(),
 		marshalTypedEventData(trackList.GetTracks()), // serialize tracks as JSON
-		trackList.GetTotalTracks(),
-		trackList.GetVideoTrackCount(),
-		trackList.GetAudioTrackCount(),
-		trackList.GetPrimaryWidth(),
-		trackList.GetPrimaryHeight(),
-		float32(trackList.GetPrimaryFps()),
-		trackList.GetPrimaryVideoCodec(),
-		trackList.GetPrimaryVideoBitrate(),
-		trackList.GetQualityTier(),
-		trackList.GetPrimaryAudioChannels(),
-		trackList.GetPrimaryAudioSampleRate(),
-		trackList.GetPrimaryAudioCodec(),
-		trackList.GetPrimaryAudioBitrate(),
+		trackList.GetTotalTracks(),                   // track_count - required
+		trackList.GetVideoTrackCount(),               // video_track_count - required
+		trackList.GetAudioTrackCount(),               // audio_track_count - required
+		// Video fields (Nullable - may not exist for audio-only streams)
+		nilIfZeroUint16(trackList.GetPrimaryWidth()),
+		nilIfZeroUint16(trackList.GetPrimaryHeight()),
+		nilIfZeroFloat32(float32(trackList.GetPrimaryFps())),
+		nilIfEmptyString(trackList.GetPrimaryVideoCodec()),
+		nilIfZeroUint32(uint32(trackList.GetPrimaryVideoBitrate())),
+		nilIfEmptyString(trackList.GetQualityTier()),
+		// Audio fields (Nullable - may not exist for video-only streams)
+		nilIfZeroUint8(trackList.GetPrimaryAudioChannels()),
+		nilIfZeroUint32(uint32(trackList.GetPrimaryAudioSampleRate())),
+		nilIfEmptyString(trackList.GetPrimaryAudioCodec()),
+		nilIfZeroUint32(uint32(trackList.GetPrimaryAudioBitrate())),
 	); err != nil {
 		h.logger.Errorf("Failed to append track list data: %v", err)
 		return err
@@ -1361,11 +1467,13 @@ func (h *AnalyticsHandler) processBandwidthThreshold(ctx context.Context, event 
 		return fmt.Errorf("unexpected payload for stream_bandwidth")
 	}
 	bandwidthThreshold := tp.StreamBandwidth
+	// Normalize internal name by stripping live+/vod+ prefix for consistent analytics keys
+	internalName := mist.ExtractInternalName(bandwidthThreshold.GetStreamName())
 
 	// Write to stream_events for threshold alerts using typed data
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO stream_events (
-			timestamp, event_id, tenant_id, internal_name, event_type, node_id, 
+			timestamp, event_id, tenant_id, internal_name, event_type, node_id,
 			current_bytes_per_sec, threshold_exceeded, threshold_value, event_data
 		)`)
 	if err != nil {
@@ -1377,7 +1485,7 @@ func (h *AnalyticsHandler) processBandwidthThreshold(ctx context.Context, event 
 		event.Timestamp,
 		event.EventID,
 		event.TenantID,
-		bandwidthThreshold.GetStreamName(),
+		internalName,
 		"stream_bandwidth",
 		mt.GetNodeId(),
 		bandwidthThreshold.GetCurrentBytesPerSecond(),
@@ -1554,47 +1662,29 @@ func (h *AnalyticsHandler) processClipLifecycle(ctx context.Context, event kafka
 	}
 	cl := tp.ClipLifecycleData
 
-	batch, err := h.clickhouse.PrepareBatch(ctx, `
-		INSERT INTO clip_events (
-			timestamp, tenant_id, internal_name, request_id, stage, content_type, title, format,
-			start_unix, stop_unix, start_ms, stop_ms, duration_sec,
-			ingest_node_id, storage_node_id, routing_distance_km,
-			percent, message, file_path, s3_url, size_bytes
-		)`)
-	if err != nil {
-		return err
-	}
-
-	// Required
-	internalName := ""
-	if cl.GetInternalName() != "" {
-		internalName = cl.GetInternalName()
-	}
+	// Required - normalize internal name by stripping any prefix for consistent analytics keys
+	internalName := mist.ExtractInternalName(cl.GetInternalName())
 	tenantID := event.TenantID
 
-	// Optional
+	// Optional - extract from enriched ClipLifecycleData
+	// Note: Only extract fields that exist in clip_events ClickHouse schema
 	var (
-		title, format                                     interface{}
-		startUnix, stopUnix, startMs, stopMs, durationSec interface{}
-		ingestNode, storageNode, routeKm, percent         interface{}
-		message, filePath, s3url                          interface{}
-		sizeBytes                                         interface{}
+		startUnix, stopUnix         interface{}
+		ingestNode, percent         interface{}
+		message, filePath, s3url    interface{}
+		sizeBytes                   interface{}
 	)
-	// No title or format in ClipLifecycleData
-	// Use optional fields
-	if cl.GetStartedAt() != 0 {
-		startUnix = cl.GetStartedAt()
+	// Clip time boundaries (enriched by Foghorn from original ClipPullRequest)
+	if cl.GetStartUnix() != 0 {
+		startUnix = cl.GetStartUnix()
 	}
-	if cl.GetCompletedAt() != 0 {
-		stopUnix = cl.GetCompletedAt()
+	if cl.GetStopUnix() != 0 {
+		stopUnix = cl.GetStopUnix()
 	}
-	// No start_ms/stop_ms in ClipLifecycleData
-	// No duration_sec in ClipLifecycleData
+	// Processing info
 	if cl.GetNodeId() != "" {
 		ingestNode = cl.GetNodeId()
 	}
-	// No storage node in ClipLifecycleData
-	// No routing distance in ClipLifecycleData
 	if cl.GetProgressPercent() != 0 {
 		percent = cl.GetProgressPercent()
 	}
@@ -1611,35 +1701,120 @@ func (h *AnalyticsHandler) processClipLifecycle(ctx context.Context, event kafka
 		sizeBytes = cl.GetSizeBytes()
 	}
 
+	if h.metrics != nil {
+		h.metrics.ClickHouseInserts.WithLabelValues("live_artifacts", "attempt").Inc()
+	}
+
+	// 1. Write to live_artifacts (current state - ReplacingMergeTree)
+	stateBatch, err := h.clickhouse.PrepareBatch(ctx, `
+		INSERT INTO live_artifacts (
+			tenant_id, request_id, internal_name, content_type, stage,
+			progress_percent, error_message, requested_at, started_at, completed_at,
+			clip_start_unix, clip_stop_unix, file_path, s3_url, size_bytes,
+			processing_node_id, updated_at
+		)`)
+	if err != nil {
+		h.logger.Errorf("Failed to prepare live_artifacts batch: %v", err)
+		if h.metrics != nil {
+			h.metrics.ClickHouseInserts.WithLabelValues("live_artifacts", "error").Inc()
+		}
+		return err
+	}
+
+	// Map stage string for consistency
+	stageStr := cl.GetStage().String()
+
+	if err := stateBatch.Append(
+		tenantID,
+		cl.GetRequestId(),
+		internalName,
+		"clip",
+		stageStr,
+		uint8(cl.GetProgressPercent()),
+		nilIfEmptyString(cl.GetError()),
+		event.Timestamp, // requested_at = first event timestamp
+		nilIfZeroInt64(cl.GetStartedAt()),
+		nilIfZeroInt64(cl.GetCompletedAt()),
+		nilIfZeroInt64(cl.GetStartUnix()), // clip time boundaries (enriched by Foghorn)
+		nilIfZeroInt64(cl.GetStopUnix()),
+		nilIfEmptyString(cl.GetFilePath()),
+		nilIfEmptyString(cl.GetS3Url()),
+		nilIfZeroUint64(cl.GetSizeBytes()),
+		nilIfEmptyString(cl.GetNodeId()),
+		event.Timestamp,
+	); err != nil {
+		h.logger.Errorf("Failed to append to live_artifacts batch: %v", err)
+		if h.metrics != nil {
+			h.metrics.ClickHouseInserts.WithLabelValues("live_artifacts", "error").Inc()
+		}
+		return err
+	}
+
+	if err := stateBatch.Send(); err != nil {
+		h.logger.Errorf("Failed to send live_artifacts batch: %v", err)
+		if h.metrics != nil {
+			h.metrics.ClickHouseInserts.WithLabelValues("live_artifacts", "error").Inc()
+		}
+		return err
+	}
+
+	if h.metrics != nil {
+		h.metrics.ClickHouseInserts.WithLabelValues("live_artifacts", "success").Inc()
+		h.metrics.ClickHouseInserts.WithLabelValues("clip_events", "attempt").Inc()
+	}
+
+	// 2. Write to clip_events (historical log - MergeTree)
+	batch, err := h.clickhouse.PrepareBatch(ctx, `
+		INSERT INTO clip_events (
+			timestamp, tenant_id, internal_name, request_id, stage, content_type,
+			start_unix, stop_unix, ingest_node_id,
+			percent, message, file_path, s3_url, size_bytes
+		)`)
+	if err != nil {
+		if h.metrics != nil {
+			h.metrics.ClickHouseInserts.WithLabelValues("clip_events", "error").Inc()
+		}
+		return err
+	}
+
 	if err := batch.Append(
 		event.Timestamp,
 		tenantID,
 		internalName,
 		cl.GetRequestId(),
-		cl.GetStage().String(),
-		"", // content_type not in ClipLifecycleData
-		title,
-		format,
+		stageStr,
+		"clip",
 		startUnix,
 		stopUnix,
-		startMs,
-		stopMs,
-		durationSec,
 		ingestNode,
-		storageNode,
-		routeKm,
 		percent,
 		message,
 		filePath,
 		s3url,
 		sizeBytes,
 	); err != nil {
+		if h.metrics != nil {
+			h.metrics.ClickHouseInserts.WithLabelValues("clip_events", "error").Inc()
+		}
 		return err
 	}
-	return batch.Send()
+
+	if err := batch.Send(); err != nil {
+		if h.metrics != nil {
+			h.metrics.ClickHouseInserts.WithLabelValues("clip_events", "error").Inc()
+		}
+		return err
+	}
+
+	if h.metrics != nil {
+		h.metrics.ClickHouseInserts.WithLabelValues("clip_events", "success").Inc()
+	}
+
+	return nil
 }
 
 // processDVRLifecycle handles DVR lifecycle events
+// Dual-writes to: live_artifacts (current state) + clip_events (historical log)
 func (h *AnalyticsHandler) processDVRLifecycle(ctx context.Context, event kafka.AnalyticsEvent) error {
 	h.logger.Infof("Processing DVR lifecycle event: %s", event.EventID)
 
@@ -1654,37 +1829,135 @@ func (h *AnalyticsHandler) processDVRLifecycle(ctx context.Context, event kafka.
 	}
 	dvrData := tp.DvrLifecycleData
 
-	// Write to ClickHouse dvr_events table
-	batch, err := h.clickhouse.PrepareBatch(ctx, `
-		INSERT INTO dvr_events (
-			timestamp, tenant_id, internal_name, event_type, source,
-			dvr_hash, status, node_id, storage_path
-		)`)
-	if err != nil {
-		return err
-	}
-
 	var tenantID, internalName string
 	if dvrData.TenantId != nil {
 		tenantID = *dvrData.TenantId
 	}
 	if dvrData.InternalName != nil {
-		internalName = *dvrData.InternalName
+		// Normalize internal name by stripping any prefix for consistent analytics keys
+		internalName = mist.ExtractInternalName(*dvrData.InternalName)
+	}
+
+	// Map status to stage
+	stageStr := dvrData.GetStatus().String()
+
+	if h.metrics != nil {
+		h.metrics.ClickHouseInserts.WithLabelValues("live_artifacts", "attempt").Inc()
+	}
+
+	// 1. Write to live_artifacts (current state - ReplacingMergeTree)
+	stateBatch, err := h.clickhouse.PrepareBatch(ctx, `
+		INSERT INTO live_artifacts (
+			tenant_id, request_id, internal_name, content_type, stage,
+			progress_percent, error_message, requested_at, started_at, completed_at,
+			segment_count, manifest_path, file_path, processing_node_id, updated_at
+		)`)
+	if err != nil {
+		h.logger.Errorf("Failed to prepare live_artifacts batch: %v", err)
+		if h.metrics != nil {
+			h.metrics.ClickHouseInserts.WithLabelValues("live_artifacts", "error").Inc()
+		}
+		return err
+	}
+
+	if err := stateBatch.Append(
+		tenantID,
+		dvrData.GetDvrHash(),
+		internalName,
+		"dvr",
+		stageStr,
+		uint8(0), // progress_percent - not in DVRLifecycleData
+		nilIfEmptyString(dvrData.GetError()),
+		event.Timestamp,                        // requested_at = first event timestamp
+		nilIfZeroInt64(dvrData.GetStartedAt()), // DVR time boundaries
+		nilIfZeroInt64(dvrData.GetEndedAt()),
+		nilIfZeroInt32ToUint32(dvrData.GetSegmentCount()),
+		nilIfEmptyString(dvrData.GetManifestPath()),
+		nilIfEmptyString(dvrData.GetManifestPath()), // file_path = manifest_path for DVR
+		nilIfEmptyString(mt.GetNodeId()),
+		event.Timestamp,
+	); err != nil {
+		h.logger.Errorf("Failed to append to live_artifacts batch: %v", err)
+		if h.metrics != nil {
+			h.metrics.ClickHouseInserts.WithLabelValues("live_artifacts", "error").Inc()
+		}
+		return err
+	}
+
+	if err := stateBatch.Send(); err != nil {
+		h.logger.Errorf("Failed to send live_artifacts batch: %v", err)
+		if h.metrics != nil {
+			h.metrics.ClickHouseInserts.WithLabelValues("live_artifacts", "error").Inc()
+		}
+		return err
+	}
+
+	if h.metrics != nil {
+		h.metrics.ClickHouseInserts.WithLabelValues("live_artifacts", "success").Inc()
+		h.metrics.ClickHouseInserts.WithLabelValues("clip_events", "attempt").Inc()
+	}
+
+	// 2. Write to clip_events (historical log - MergeTree)
+	batch, err := h.clickhouse.PrepareBatch(ctx, `
+		INSERT INTO clip_events (
+			timestamp, tenant_id, internal_name, request_id, stage, content_type,
+			start_unix, stop_unix, ingest_node_id, file_path, message
+		)`)
+	if err != nil {
+		if h.metrics != nil {
+			h.metrics.ClickHouseInserts.WithLabelValues("clip_events", "error").Inc()
+		}
+		return err
+	}
+
+	var message interface{}
+	if dvrData.GetError() != "" {
+		message = dvrData.GetError()
 	}
 
 	if err := batch.Append(
 		event.Timestamp,
 		tenantID,
 		internalName,
-		event.EventType,
-		event.Source,
-		dvrData.GetDvrHash(),
-		dvrData.GetStatus().String(),
-		mt.GetNodeId(),
-		dvrData.GetManifestPath(), // use manifest_path instead of storage_path
+		dvrData.GetDvrHash(),                   // request_id
+		stageStr,                               // stage
+		"dvr",                                  // content_type
+		nilIfZeroInt64(dvrData.GetStartedAt()), // start_unix = DVR started_at
+		nilIfZeroInt64(dvrData.GetEndedAt()),   // stop_unix = DVR ended_at
+		mt.GetNodeId(),                         // ingest_node_id
+		dvrData.GetManifestPath(),              // file_path
+		message,                                // message
 	); err != nil {
+		if h.metrics != nil {
+			h.metrics.ClickHouseInserts.WithLabelValues("clip_events", "error").Inc()
+		}
 		return err
 	}
 
-	return batch.Send()
+	if err := batch.Send(); err != nil {
+		if h.metrics != nil {
+			h.metrics.ClickHouseInserts.WithLabelValues("clip_events", "error").Inc()
+		}
+		return err
+	}
+
+	if h.metrics != nil {
+		h.metrics.ClickHouseInserts.WithLabelValues("clip_events", "success").Inc()
+	}
+
+	return nil
+}
+
+func nilIfZeroInt64(v int64) interface{} {
+	if v == 0 {
+		return nil
+	}
+	return v
+}
+
+func nilIfZeroInt32ToUint32(v int32) interface{} {
+	if v == 0 {
+		return nil
+	}
+	return uint32(v)
 }

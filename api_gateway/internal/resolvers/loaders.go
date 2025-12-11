@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync"
 
-	"frameworks/pkg/models"
+	pb "frameworks/pkg/proto"
 )
 
 // Simple per-request loaders. These de-dup repeated lookups and provide caching.
@@ -12,14 +12,14 @@ import (
 type NodeLoader struct {
 	r     *Resolver
 	mu    sync.Mutex
-	cache map[string]*models.InfrastructureNode
+	cache map[string]*pb.InfrastructureNode
 }
 
 func NewNodeLoader(r *Resolver) *NodeLoader {
-	return &NodeLoader{r: r, cache: make(map[string]*models.InfrastructureNode)}
+	return &NodeLoader{r: r, cache: make(map[string]*pb.InfrastructureNode)}
 }
 
-func (l *NodeLoader) Load(ctx context.Context, nodeID string) (*models.InfrastructureNode, error) {
+func (l *NodeLoader) Load(ctx context.Context, nodeID string) (*pb.InfrastructureNode, error) {
 	l.mu.Lock()
 	if n, ok := l.cache[nodeID]; ok {
 		l.mu.Unlock()
@@ -31,22 +31,22 @@ func (l *NodeLoader) Load(ctx context.Context, nodeID string) (*models.Infrastru
 		return nil, err
 	}
 	l.mu.Lock()
-	l.cache[nodeID] = &resp.Node
+	l.cache[nodeID] = resp.Node
 	l.mu.Unlock()
-	return &resp.Node, nil
+	return resp.Node, nil
 }
 
 type ClusterLoader struct {
 	r     *Resolver
 	mu    sync.Mutex
-	cache map[string]*models.InfrastructureCluster
+	cache map[string]*pb.InfrastructureCluster
 }
 
 func NewClusterLoader(r *Resolver) *ClusterLoader {
-	return &ClusterLoader{r: r, cache: make(map[string]*models.InfrastructureCluster)}
+	return &ClusterLoader{r: r, cache: make(map[string]*pb.InfrastructureCluster)}
 }
 
-func (l *ClusterLoader) Load(ctx context.Context, clusterID string) (*models.InfrastructureCluster, error) {
+func (l *ClusterLoader) Load(ctx context.Context, clusterID string) (*pb.InfrastructureCluster, error) {
 	l.mu.Lock()
 	if c, ok := l.cache[clusterID]; ok {
 		l.mu.Unlock()
@@ -58,9 +58,9 @@ func (l *ClusterLoader) Load(ctx context.Context, clusterID string) (*models.Inf
 		return nil, err
 	}
 	l.mu.Lock()
-	l.cache[clusterID] = &resp.Cluster
+	l.cache[clusterID] = resp.Cluster
 	l.mu.Unlock()
-	return &resp.Cluster, nil
+	return resp.Cluster, nil
 }
 
 // Loaders bundles all dataloaders for request context

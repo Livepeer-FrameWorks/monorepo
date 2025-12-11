@@ -1,0 +1,18 @@
+query GetClip($id: ID!) {
+  clip(id: $id) {
+    id
+    clipHash
+    streamName
+    title
+    description
+    startTime
+    duration
+    nodeId
+    storagePath
+    sizeBytes
+    status
+    accessCount
+    createdAt
+    updatedAt
+  }
+}

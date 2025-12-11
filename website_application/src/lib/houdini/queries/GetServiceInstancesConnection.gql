@@ -1,0 +1,42 @@
+query GetServiceInstancesConnection(
+  $clusterId: String
+  $nodeId: String
+  $status: InstanceStatus
+  $first: Int = 50
+  $after: String
+) {
+  serviceInstancesConnection(
+    clusterId: $clusterId
+    nodeId: $nodeId
+    status: $status
+    first: $first
+    after: $after
+  ) @paginate {
+    edges {
+      cursor
+      node {
+        id
+        instanceId
+        clusterId
+        nodeId
+        serviceId
+        version
+        port
+        processId
+        containerId
+        status
+        healthStatus
+        startedAt
+        stoppedAt
+        lastHealthCheck
+      }
+    }
+    pageInfo {
+      hasNextPage
+      hasPreviousPage
+      startCursor
+      endCursor
+    }
+    totalCount
+  }
+}

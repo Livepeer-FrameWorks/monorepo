@@ -1,45 +1,92 @@
 <script lang="ts">
+  import { browser } from '$app/environment';
+  import CodeMirrorEditor from './CodeMirrorEditor.svelte';
+
+  // Schema can be a GraphQLSchema, introspection result, or null
+  type SchemaInput = Record<string, unknown> | null;
+
   interface Props {
     query: string;
     variables: string;
+    schema?: SchemaInput;
     onKeyPress: (event: KeyboardEvent) => void;
   }
 
   let {
     query = $bindable(),
     variables = $bindable(),
+    schema = null,
     onKeyPress,
   }: Props = $props();
 
-  let queryTextarea = $state<HTMLTextAreaElement | undefined>();
-  let variablesTextarea = $state<HTMLTextAreaElement | undefined>();
+  function handleQueryKeydown(event: KeyboardEvent) {
+    // Check for Ctrl+Enter to execute
+    if (event.ctrlKey && event.key === 'Enter') {
+      event.preventDefault();
+      onKeyPress(event);
+    }
+  }
+
+  function handleVariablesKeydown(event: KeyboardEvent) {
+    // Check for Ctrl+Enter to execute
+    if (event.ctrlKey && event.key === 'Enter') {
+      event.preventDefault();
+      onKeyPress(event);
+    }
+  }
 </script>
 
 <!-- Query Editor Section -->
-<div class="p-4 flex-1 flex flex-col">
-  <div class="flex items-center justify-between mb-2">
-    <h3 class="text-sm font-semibold text-tokyo-night-fg">GraphQL Query</h3>
-    <span class="text-xs text-tokyo-night-comment">Ctrl+Enter to execute</span>
+<div class="flex-1 flex flex-col min-h-0">
+  <div class="flex items-center justify-between px-4 py-2 border-b border-border/30 bg-muted/20">
+    <h3 class="text-sm font-semibold text-foreground">GraphQL Query</h3>
+    <div class="flex items-center gap-3 text-xs text-muted-foreground">
+      <span><kbd class="px-1 py-0.5 bg-muted border border-border/50 font-mono text-[10px]">Ctrl</kbd>+<kbd class="px-1 py-0.5 bg-muted border border-border/50 font-mono text-[10px]">Space</kbd> autocomplete</span>
+      <span><kbd class="px-1 py-0.5 bg-muted border border-border/50 font-mono text-[10px]">Ctrl</kbd>+<kbd class="px-1 py-0.5 bg-muted border border-border/50 font-mono text-[10px]">Enter</kbd> run</span>
+    </div>
   </div>
-  <textarea
-    bind:this={queryTextarea}
-    bind:value={query}
-    placeholder="Enter your GraphQL query here..."
-    class="w-full flex-1 min-h-[300px] text-sm font-mono bg-tokyo-night-bg border border-tokyo-night-fg-gutter rounded p-3 text-tokyo-night-fg placeholder-tokyo-night-comment resize-none focus:border-tokyo-night-blue focus:ring-1 focus:ring-tokyo-night-blue"
-    onkeydown={onKeyPress}
-  ></textarea>
+  <div class="flex-1 min-h-[300px] overflow-hidden">
+    {#if browser}
+      <CodeMirrorEditor
+        bind:value={query}
+        language="graphql"
+        {schema}
+        placeholder="# Enter your GraphQL query here..."
+        minHeight="300px"
+        onkeydown={handleQueryKeydown}
+      />
+    {:else}
+      <!-- SSR fallback -->
+      <textarea
+        bind:value={query}
+        placeholder="Enter your GraphQL query here..."
+        class="w-full h-full text-sm font-mono bg-background p-3 text-foreground placeholder-muted-foreground resize-none border-0 focus:outline-none"
+      ></textarea>
+    {/if}
+  </div>
 </div>
 
 <!-- Variables Section -->
-<div class="border-t border-tokyo-night-fg-gutter p-4">
-  <h3 class="text-sm font-semibold text-tokyo-night-fg mb-2">
-    Variables (JSON)
-  </h3>
-  <textarea
-    bind:this={variablesTextarea}
-    bind:value={variables}
-    placeholder={"{}"}
-    class="w-full h-32 text-sm font-mono bg-tokyo-night-bg border border-tokyo-night-fg-gutter rounded p-3 text-tokyo-night-fg placeholder-tokyo-night-comment resize-none focus:border-tokyo-night-blue focus:ring-1 focus:ring-tokyo-night-blue"
-    onkeydown={onKeyPress}
-  ></textarea>
+<div class="border-t border-border/30">
+  <div class="flex items-center justify-between px-4 py-2 bg-muted/20">
+    <h3 class="text-sm font-semibold text-foreground">Variables (JSON)</h3>
+  </div>
+  <div class="h-32 overflow-hidden">
+    {#if browser}
+      <CodeMirrorEditor
+        bind:value={variables}
+        language="json"
+        placeholder={"\u007B\u007D"}
+        minHeight="128px"
+        onkeydown={handleVariablesKeydown}
+      />
+    {:else}
+      <!-- SSR fallback -->
+      <textarea
+        bind:value={variables}
+        placeholder={"\u007B\u007D"}
+        class="w-full h-full text-sm font-mono bg-background p-3 text-foreground placeholder-muted-foreground resize-none border-0 focus:outline-none"
+      ></textarea>
+    {/if}
+  </div>
 </div>

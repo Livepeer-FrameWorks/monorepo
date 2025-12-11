@@ -34,6 +34,7 @@ type EmailData struct {
 	PaymentMethod string
 	DaysPastDue   int
 	LoginURL      string
+	UsageDetails  map[string]interface{}
 }
 
 // NewEmailService creates a new email service instance
@@ -60,7 +61,7 @@ func (es *EmailService) IsConfigured() bool {
 }
 
 // SendInvoiceCreatedEmail sends notification when a new invoice is created
-func (es *EmailService) SendInvoiceCreatedEmail(tenantEmail, tenantName, invoiceID string, amount float64, currency string, dueDate time.Time) error {
+func (es *EmailService) SendInvoiceCreatedEmail(tenantEmail, tenantName, invoiceID string, amount float64, currency string, dueDate time.Time, usageDetails map[string]interface{}) error {
 	if !es.IsConfigured() {
 		es.logger.Warn("Email service not configured, skipping invoice created email")
 		return nil
@@ -69,12 +70,13 @@ func (es *EmailService) SendInvoiceCreatedEmail(tenantEmail, tenantName, invoice
 	subject := fmt.Sprintf("New Invoice %s - FrameWorks", invoiceID)
 
 	data := EmailData{
-		TenantName: tenantName,
-		InvoiceID:  invoiceID,
-		Amount:     amount,
-		Currency:   currency,
-		DueDate:    dueDate,
-		LoginURL:   os.Getenv("WEBAPP_PUBLIC_URL") + "/login",
+		TenantName:   tenantName,
+		InvoiceID:    invoiceID,
+		Amount:       amount,
+		Currency:     currency,
+		DueDate:      dueDate,
+		LoginURL:     os.Getenv("WEBAPP_PUBLIC_URL") + "/login",
+		UsageDetails: usageDetails,
 	}
 
 	body, err := es.renderTemplate("invoice_created", data)
@@ -220,6 +222,58 @@ func (es *EmailService) renderTemplate(templateName string, data EmailData) (str
             <p><strong>Amount:</strong> {{.Amount}} {{.Currency}}</p>
             <p><strong>Due Date:</strong> {{.DueDate.Format "January 2, 2006"}}</p>
         </div>
+
+        {{if .UsageDetails}}
+        <h3 style="color: #2c3e50; margin-top: 30px;">Usage Breakdown</h3>
+        <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
+            <tr style="background-color: #eee;">
+                <th style="padding: 10px; text-align: left; border-bottom: 1px solid #ddd;">Metric</th>
+                <th style="padding: 10px; text-align: right; border-bottom: 1px solid #ddd;">Value</th>
+            </tr>
+            {{if .UsageDetails.viewer_hours}}
+            <tr>
+                <td style="padding: 10px; border-bottom: 1px solid #ddd;">Viewer Hours</td>
+                <td style="padding: 10px; text-align: right; border-bottom: 1px solid #ddd;">{{printf "%.2f" .UsageDetails.viewer_hours}} hrs</td>
+            </tr>
+            {{end}}
+            {{if .UsageDetails.egress_gb}}
+            <tr>
+                <td style="padding: 10px; border-bottom: 1px solid #ddd;">Bandwidth (Egress)</td>
+                <td style="padding: 10px; text-align: right; border-bottom: 1px solid #ddd;">{{printf "%.2f" .UsageDetails.egress_gb}} GB</td>
+            </tr>
+            {{end}}
+            {{if .UsageDetails.average_storage_gb}}
+            <tr>
+                <td style="padding: 10px; border-bottom: 1px solid #ddd;">Avg Storage</td>
+                <td style="padding: 10px; text-align: right; border-bottom: 1px solid #ddd;">{{printf "%.2f" .UsageDetails.average_storage_gb}} GB</td>
+            </tr>
+            {{end}}
+            {{if .UsageDetails.unique_users}}
+            <tr>
+                <td style="padding: 10px; border-bottom: 1px solid #ddd;">Unique Viewers</td>
+                <td style="padding: 10px; text-align: right; border-bottom: 1px solid #ddd;">{{.UsageDetails.unique_users}}</td>
+            </tr>
+            {{end}}
+        </table>
+
+        {{if .UsageDetails.geo_breakdown}}
+        <h4 style="color: #2c3e50; margin-top: 20px;">Top Regions</h4>
+        <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 0.9em;">
+            <tr style="background-color: #f8f9fa;">
+                <th style="padding: 8px 10px; text-align: left; border-bottom: 1px solid #ddd;">Country</th>
+                <th style="padding: 8px 10px; text-align: right; border-bottom: 1px solid #ddd;">Viewers</th>
+                <th style="padding: 8px 10px; text-align: right; border-bottom: 1px solid #ddd;">Hours</th>
+            </tr>
+            {{range .UsageDetails.geo_breakdown}}
+            <tr>
+                <td style="padding: 5px 10px; border-bottom: 1px solid #eee;">{{.country_code}}</td>
+                <td style="padding: 5px 10px; text-align: right; border-bottom: 1px solid #eee;">{{.viewer_count}} ({{printf "%.1f" .percentage}}%)</td>
+                <td style="padding: 5px 10px; text-align: right; border-bottom: 1px solid #eee;">{{printf "%.1f" .viewer_hours}}h</td>
+            </tr>
+            {{end}}
+        </table>
+        {{end}}
+        {{end}}
         
         <p>Please log in to your account to view the invoice details and make payment:</p>
         

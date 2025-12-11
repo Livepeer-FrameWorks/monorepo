@@ -1,0 +1,18 @@
+query GetServiceInstances($clusterId: String) {
+  serviceInstances(clusterId: $clusterId) {
+    id
+    instanceId
+    clusterId
+    nodeId
+    serviceId
+    version
+    port
+    processId
+    containerId
+    status
+    healthStatus
+    startedAt
+    stoppedAt
+    lastHealthCheck
+  }
+}

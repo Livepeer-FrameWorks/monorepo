@@ -1,20 +1,48 @@
-<script>
+<script lang="ts">
   import { onMount } from "svelte";
-  import { billingService } from "$lib/graphql/services/billing.js";
+  import { resolve } from "$app/paths";
+  import {
+    GetUsageRecordsStore,
+    GetBillingStatusStore,
+    GetStorageUsageStore
+  } from "$houdini";
   import { getIconComponent } from "$lib/iconUtils";
   import { Button } from "$lib/components/ui/button";
+  import { GridSeam } from "$lib/components/layout";
+  import DashboardMetricCard from "$lib/components/shared/DashboardMetricCard.svelte";
+  import { Alert, AlertTitle, AlertDescription } from "$lib/components/ui/alert";
   import {
     Select,
     SelectTrigger,
     SelectContent,
     SelectItem,
   } from "$lib/components/ui/select";
+  import CodecDistributionChart from "$lib/components/charts/CodecDistributionChart.svelte";
+  import StorageBreakdownChart from "$lib/components/charts/StorageBreakdownChart.svelte";
 
-  let loading = $state(true);
-  let error = $state(null);
+  // Houdini stores
+  const usageRecordsStore = new GetUsageRecordsStore();
+  const billingStatusStore = new GetBillingStatusStore();
+  const storageUsageStore = new GetStorageUsageStore();
 
-  // Usage data from Periscope
-  let usageData = $state({
+  // Types from Houdini
+  type UsageRecord = NonNullable<NonNullable<typeof $usageRecordsStore.data>["usageRecords"]>[0];
+
+  let loading = $derived($usageRecordsStore.fetching || $billingStatusStore.fetching);
+  let error = $state<string | null>(null);
+
+  interface AggregatedUsage {
+    stream_hours: number;
+    egress_gb: number;
+    recording_gb: number;
+    peak_bandwidth_mbps: number;
+    total_streams: number;
+    total_viewers: number;
+    peak_viewers: number;
+    period: string;
+  }
+
+  let usageData = $state<AggregatedUsage>({
     stream_hours: 0,
     egress_gb: 0,
     recording_gb: 0,
@@ -25,15 +53,25 @@
     period: "",
   });
 
-  // Billing data from Purser
-  let billingData = $state({
-    tier: null,
-    subscription: null,
+  let billingData = $derived($billingStatusStore.data?.billingStatus ?? null);
+
+  // Aggregate storage data from edges
+  let storageData = $derived.by(() => {
+    const edges = $storageUsageStore.data?.storageUsageConnection?.edges ?? [];
+    if (edges.length === 0) return null;
+    // Get the most recent snapshot or aggregate
+    const latest = edges[0]?.node;
+    if (!latest) return null;
+    return {
+      dvrBytes: latest.dvrBytes || 0,
+      clipBytes: latest.clipBytes || 0,
+      recordingBytes: latest.recordingBytes || 0,
+      totalBytes: latest.totalBytes || 0,
+    };
   });
 
-  // Time range for usage query
-  let timeRange = $state("7d"); // 7d, 30d, 90d
-  const timeRangeLabels = {
+  let timeRange = $state("7d");
+  const timeRangeLabels: Record<string, string> = {
     "7d": "Last 7 days",
     "30d": "Last 30 days",
     "90d": "Last 90 days",
@@ -46,55 +84,43 @@
   });
 
   async function loadUsageAndCosts() {
-    loading = true;
     error = null;
 
     try {
-      // Set time range based on selection
       const now = new Date();
       const days = timeRange === "7d" ? 7 : timeRange === "30d" ? 30 : 90;
-      startTime = new Date(
-        now.getTime() - days * 24 * 60 * 60 * 1000,
-      ).toISOString();
+      startTime = new Date(now.getTime() - days * 24 * 60 * 60 * 1000).toISOString();
       endTime = now.toISOString();
 
-      // Load usage data and billing data from GraphQL
-      const [usageRecords, billingStatus] = await Promise.all([
-        billingService.getUsageRecords({
-          start: new Date(startTime),
-          end: new Date(endTime),
-        }),
-        billingService.getBillingStatus(),
+      await Promise.all([
+        usageRecordsStore.fetch({ variables: { timeRange: { start: startTime, end: endTime } } }),
+        billingStatusStore.fetch(),
+        storageUsageStore.fetch({ variables: { timeRange: { start: startTime, end: endTime }, first: 1 } }).catch(() => null),
       ]);
 
-      // Process usage data - aggregate usage records
-      if (usageRecords && usageRecords.length > 0) {
+      const usageRecords = $usageRecordsStore.data?.usageRecords ?? [];
+
+      if (usageRecords.length > 0) {
         const aggregated = usageRecords.reduce(
-          (acc, record) => {
-            switch (record.resourceType) {
+          (acc: AggregatedUsage, record: UsageRecord) => {
+            switch (record.usageType) {
               case "stream_hours":
-                acc.stream_hours += record.quantity;
+                acc.stream_hours += record.usageValue;
                 break;
               case "egress_gb":
-                acc.egress_gb += record.quantity;
+                acc.egress_gb += record.usageValue;
                 break;
               case "recording_gb":
-                acc.recording_gb += record.quantity;
+                acc.recording_gb += record.usageValue;
                 break;
               case "peak_bandwidth_mbps":
-                acc.peak_bandwidth_mbps = Math.max(
-                  acc.peak_bandwidth_mbps,
-                  record.quantity,
-                );
+                acc.peak_bandwidth_mbps = Math.max(acc.peak_bandwidth_mbps, record.usageValue);
                 break;
               case "total_streams":
-                acc.total_streams = Math.max(
-                  acc.total_streams,
-                  record.quantity,
-                );
+                acc.total_streams = Math.max(acc.total_streams, record.usageValue);
                 break;
               case "peak_viewers":
-                acc.peak_viewers = Math.max(acc.peak_viewers, record.quantity);
+                acc.peak_viewers = Math.max(acc.peak_viewers, record.usageValue);
                 break;
             }
             return acc;
@@ -110,67 +136,99 @@
             period: `${days} days`,
           },
         );
-
         usageData = aggregated;
       }
 
-      // Process billing data
-      billingData = billingStatus || {};
-    } catch (err) {
-      error =
-        err?.response?.data?.error ||
-        err?.message ||
-        "Failed to load usage and costs data";
+      if ($usageRecordsStore.errors?.length || $billingStatusStore.errors?.length) {
+        error = $usageRecordsStore.errors?.[0]?.message || $billingStatusStore.errors?.[0]?.message || "Failed to load data";
+      }
+    } catch (err: any) {
+      error = err?.response?.data?.error || err?.message || "Failed to load usage and costs data";
       console.error("Failed to load usage and costs:", err);
-    } finally {
-      loading = false;
     }
   }
 
-  // Calculate estimated costs based on usage and tier pricing
   function calculateEstimatedCosts() {
-    if (!billingData.currentTier || !billingData.currentTier.price) {
-      return { total: 0, breakdown: {} };
+    if (!billingData?.currentTier?.basePrice) {
+      return { total: 0, breakdown: { base: 0, bandwidth: 0, streaming: 0, storage: 0 } };
     }
 
-    // Basic cost calculation (this would be more sophisticated in production)
-    const baseCost = billingData.currentTier.price || 0;
-    const bandwidthCost = usageData.egress_gb * 0.05; // Example: $0.05 per GB
-    const streamingCost = usageData.stream_hours * 0.1; // Example: $0.10 per hour
-    const storageCost = usageData.recording_gb * 0.02; // Example: $0.02 per GB stored
+    const tier = billingData.currentTier;
+    const bandwidthRate = tier.overageRates?.bandwidth?.unitPrice ?? 0;
+    const storageRate = tier.overageRates?.storage?.unitPrice ?? 0;
+    const streamingRate = tier.computeAllocation?.unitPrice ?? 0;
+
+    const baseCost = tier.basePrice;
+    const bandwidthCost = usageData.egress_gb * bandwidthRate;
+    const streamingCost = usageData.stream_hours * streamingRate;
+    const storageCost = usageData.recording_gb * storageRate;
 
     return {
       total: baseCost + bandwidthCost + streamingCost + storageCost,
-      breakdown: {
-        base: baseCost,
-        bandwidth: bandwidthCost,
-        streaming: streamingCost,
-        storage: storageCost,
-      },
+      breakdown: { base: baseCost, bandwidth: bandwidthCost, streaming: streamingCost, storage: storageCost },
     };
   }
 
-  let estimatedCosts = $derived(calculateEstimatedCosts());
-  // Format currency
-  function formatCurrency(amount, currency = "USD") {
-    return new Intl.NumberFormat("en-US", {
-      style: "currency",
-      currency: currency,
-    }).format(amount);
+  let estimatedCosts = $derived.by(() => calculateEstimatedCosts());
+
+  function formatCurrency(amount: number, currency = "USD") {
+    return new Intl.NumberFormat("en-US", { style: "currency", currency }).format(amount);
   }
 
-  // Format number with commas
-  function formatNumber(num) {
+  function formatNumber(num: number) {
     return new Intl.NumberFormat().format(Math.round(num));
   }
 
-  const SvelteComponent = $derived(getIconComponent("RefreshCw"));
+  function formatBytes(bytes: number): string {
+    if (bytes === 0) return "0 B";
+    const k = 1024;
+    const sizes = ["B", "KB", "MB", "GB", "TB"];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
+  }
 
-  function handleTimeRangeChange(detail) {
-    if (detail && detail !== timeRange) {
-      timeRange = detail;
-      loadUsageAndCosts();
-    }
+  function handleTimeRangeChange(val: string) {
+    timeRange = val;
+    loadUsageAndCosts();
+  }
+
+  // Icons
+  const RefreshIcon = getIconComponent("RefreshCw");
+  const AlertCircleIcon = getIconComponent("AlertCircle");
+  const ClockIcon = getIconComponent("Clock");
+  const RadioIcon = getIconComponent("Radio");
+  const UsersIcon = getIconComponent("Users");
+  const VideoIcon = getIconComponent("Video");
+  const HardDriveIcon = getIconComponent("HardDrive");
+  const TrendingUpIcon = getIconComponent("TrendingUp");
+  const LightbulbIcon = getIconComponent("Lightbulb");
+  const GaugeIcon = getIconComponent("Gauge");
+  const CreditCardIcon = getIconComponent("CreditCard");
+  const ChartLineIcon = getIconComponent("ChartLine");
+  const ZapIcon = getIconComponent("Zap");
+  const GlobeIcon = getIconComponent("Globe2");
+
+  // Country code to name mapping
+  const countryNames: Record<string, string> = {
+    US: 'United States',
+    GB: 'United Kingdom',
+    DE: 'Germany',
+    FR: 'France',
+    JP: 'Japan',
+    CA: 'Canada',
+    AU: 'Australia',
+    BR: 'Brazil',
+    IN: 'India',
+    KR: 'South Korea',
+  };
+
+  function getCountryName(code: string): string {
+    return countryNames[code] || code;
+  }
+
+  function formatViewerHours(hours: number): string {
+    if (hours >= 1000) return `${(hours / 1000).toFixed(1)}k`;
+    return hours.toFixed(1);
   }
 </script>
 
@@ -178,292 +236,337 @@
   <title>Usage & Costs - FrameWorks</title>
 </svelte:head>
 
-<div class="space-y-6">
-  <!-- Header -->
-  <div class="flex items-center justify-between">
-    <div>
-      <h1 class="text-2xl font-bold text-tokyo-night-fg">Your Usage & Costs</h1>
-      <p class="text-tokyo-night-comment mt-1">
-        Keep track of how much you're streaming and what it's costing you
-      </p>
-    </div>
-
-    <div class="flex items-center space-x-3">
-      <!-- Time Range Selector -->
-      <Select
-        bind:value={timeRange}
-        on:valueChange={(event) => handleTimeRangeChange(event.detail)}
-      >
-        <SelectTrigger class="min-w-[160px]">
-          {timeRangeLabels[timeRange] ?? "Last 7 days"}
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="7d">Last 7 days</SelectItem>
-          <SelectItem value="30d">Last 30 days</SelectItem>
-          <SelectItem value="90d">Last 90 days</SelectItem>
-        </SelectContent>
-      </Select>
-
-      <Button variant="secondary" onclick={loadUsageAndCosts}>
-        <SvelteComponent class="w-4 h-4 mr-2" />
-        Refresh
-      </Button>
+<div class="h-full flex flex-col">
+  <!-- Fixed Page Header -->
+  <div class="px-4 sm:px-6 lg:px-8 py-4 border-b border-border shrink-0">
+    <div class="flex justify-between items-center">
+      <div class="flex items-center gap-3">
+        <GaugeIcon class="w-5 h-5 text-primary" />
+        <div>
+          <h1 class="text-xl font-bold text-foreground">Usage & Costs</h1>
+          <p class="text-sm text-muted-foreground">
+            Track your streaming usage and what it's costing you
+          </p>
+        </div>
+      </div>
+      <div class="flex items-center gap-3">
+        <Select value={timeRange} onValueChange={handleTimeRangeChange} type="single">
+          <SelectTrigger class="min-w-[140px]">
+            {timeRangeLabels[timeRange] ?? "Last 7 days"}
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="7d">Last 7 days</SelectItem>
+            <SelectItem value="30d">Last 30 days</SelectItem>
+            <SelectItem value="90d">Last 90 days</SelectItem>
+          </SelectContent>
+        </Select>
+        <Button variant="outline" size="sm" onclick={loadUsageAndCosts}>
+          <RefreshIcon class="w-4 h-4 mr-2" />
+          Refresh
+        </Button>
+      </div>
     </div>
   </div>
 
+  <!-- Scrollable Content -->
+  <div class="flex-1 overflow-y-auto">
   {#if loading}
-    <div class="flex items-center justify-center min-h-64">
-      <div class="text-center">
-        <div
-          class="animate-spin w-8 h-8 border-2 border-tokyo-night-blue border-t-transparent rounded-full mx-auto mb-4"
-        ></div>
-        <p class="text-tokyo-night-comment">Loading usage and costs data...</p>
+    <div class="px-4 sm:px-6 lg:px-8 py-6">
+      <div class="flex items-center justify-center min-h-64">
+        <div class="loading-spinner w-8 h-8"></div>
       </div>
     </div>
   {:else if error}
-    {@const SvelteComponent_1 = getIconComponent("AlertCircle")}
-    <div
-      class="bg-tokyo-night-red/10 border border-tokyo-night-red/30 rounded-lg p-4"
-    >
-      <div class="flex items-center space-x-2">
-        <SvelteComponent_1 class="w-5 h-5 text-tokyo-night-red" />
-        <span class="text-tokyo-night-red font-medium">Error loading data</span>
+    <div class="px-4 sm:px-6 lg:px-8 py-6">
+      <div class="text-center py-12">
+        <AlertCircleIcon class="w-6 h-6 text-destructive mx-auto mb-4" />
+        <h3 class="text-lg font-semibold text-destructive mb-2">Error Loading Data</h3>
+        <p class="text-muted-foreground mb-6">{error}</p>
+        <Button onclick={loadUsageAndCosts}>Try Again</Button>
       </div>
-      <p class="text-tokyo-night-red/80 text-sm mt-1">{error}</p>
     </div>
   {:else}
-    <!-- Current Plan & Billing Status -->
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-      <!-- Plan Information -->
-      <div
-        class="bg-tokyo-night-bg-highlight p-6 rounded-lg border border-tokyo-night-fg-gutter"
-      >
-        <h2 class="text-lg font-semibold text-tokyo-night-fg mb-4">
-          Your Plan
-        </h2>
+    <div class="page-transition">
 
-        <div class="space-y-4">
-          <div class="flex items-center justify-between">
-            <span class="text-tokyo-night-comment">Plan</span>
-            <span class="text-tokyo-night-fg font-semibold">
-              {billingData.currentTier?.name || "Free"}
-            </span>
-          </div>
-
-          <div class="flex items-center justify-between">
-            <span class="text-tokyo-night-comment">Monthly Cost</span>
-            <span class="text-tokyo-night-green font-semibold">
-              {billingData.currentTier?.price
-                ? formatCurrency(
-                    billingData.currentTier.price,
-                    billingData.currentTier.currency,
-                  )
-                : "Free"}
-            </span>
-          </div>
-
-          <div class="flex items-center justify-between">
-            <span class="text-tokyo-night-comment">Status</span>
-            <span
-              class="bg-tokyo-night-green/20 text-tokyo-night-green px-2 py-1 rounded text-sm capitalize"
-            >
-              {billingData.status || "active"}
-            </span>
-          </div>
-        </div>
-      </div>
-
-      <!-- Estimated Costs -->
-      <div
-        class="bg-tokyo-night-bg-highlight p-6 rounded-lg border border-tokyo-night-fg-gutter"
-      >
-        <h2 class="text-lg font-semibold text-tokyo-night-fg mb-4">
-          What This Period Cost You
-        </h2>
-
-        <div class="space-y-3">
-          {#if estimatedCosts.breakdown.base > 0}
-            <div class="flex items-center justify-between text-sm">
-              <span class="text-tokyo-night-comment">Base plan</span>
-              <span class="text-tokyo-night-fg"
-                >{formatCurrency(estimatedCosts.breakdown.base)}</span
-              >
-            </div>
-          {/if}
-
-          {#if estimatedCosts.breakdown.streaming > 0}
-            <div class="flex items-center justify-between text-sm">
-              <span class="text-tokyo-night-comment"
-                >Streaming ({formatNumber(usageData.stream_hours)}h)</span
-              >
-              <span class="text-tokyo-night-fg"
-                >{formatCurrency(estimatedCosts.breakdown.streaming)}</span
-              >
-            </div>
-          {/if}
-
-          {#if estimatedCosts.breakdown.bandwidth > 0}
-            <div class="flex items-center justify-between text-sm">
-              <span class="text-tokyo-night-comment"
-                >Bandwidth ({formatNumber(usageData.egress_gb)} GB)</span
-              >
-              <span class="text-tokyo-night-fg"
-                >{formatCurrency(estimatedCosts.breakdown.bandwidth)}</span
-              >
-            </div>
-          {/if}
-
-          {#if estimatedCosts.breakdown.storage > 0}
-            <div class="flex items-center justify-between text-sm">
-              <span class="text-tokyo-night-comment"
-                >Storage ({formatNumber(usageData.recording_gb)} GB)</span
-              >
-              <span class="text-tokyo-night-fg"
-                >{formatCurrency(estimatedCosts.breakdown.storage)}</span
-              >
-            </div>
-          {/if}
-
-          <hr class="border-tokyo-night-fg-gutter" />
-          <div class="flex items-center justify-between">
-            <span class="text-tokyo-night-fg font-medium">Estimated Total</span>
-            <span class="text-tokyo-night-green font-bold text-lg">
-              {formatCurrency(estimatedCosts.total)}
-            </span>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Usage Metrics -->
-    {@const SvelteComponent_2 = getIconComponent("Clock")}
-    {@const SvelteComponent_3 = getIconComponent("Radio")}
-    {@const SvelteComponent_4 = getIconComponent("Users")}
-    {@const SvelteComponent_5 = getIconComponent("Video")}
-    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-      <!-- Stream Hours -->
-      <div
-        class="bg-tokyo-night-bg-highlight p-4 rounded-lg border border-tokyo-night-fg-gutter"
-      >
-        <div class="flex items-center justify-between">
-          <div>
-            <h3 class="text-sm text-tokyo-night-comment mb-1">Stream Hours</h3>
-            <p class="text-2xl font-bold text-tokyo-night-blue">
-              {formatNumber(usageData.stream_hours)}
-            </p>
-          </div>
-          <SvelteComponent_2 class="w-6 h-6 text-tokyo-night-blue" />
-        </div>
-      </div>
-
-      <!-- Bandwidth Usage -->
-      <div
-        class="bg-tokyo-night-bg-highlight p-4 rounded-lg border border-tokyo-night-fg-gutter"
-      >
-        <div class="flex items-center justify-between">
-          <div>
-            <h3 class="text-sm text-tokyo-night-comment mb-1">Bandwidth Out</h3>
-            <p class="text-2xl font-bold text-tokyo-night-green">
-              {formatNumber(usageData.egress_gb)} GB
-            </p>
-          </div>
-          <SvelteComponent_3 class="w-6 h-6 text-tokyo-night-green" />
-        </div>
-      </div>
-
-      <!-- Peak Viewers -->
-      <div
-        class="bg-tokyo-night-bg-highlight p-4 rounded-lg border border-tokyo-night-fg-gutter"
-      >
-        <div class="flex items-center justify-between">
-          <div>
-            <h3 class="text-sm text-tokyo-night-comment mb-1">Peak Viewers</h3>
-            <p class="text-2xl font-bold text-tokyo-night-purple">
-              {formatNumber(usageData.peak_viewers)}
-            </p>
-          </div>
-          <SvelteComponent_4 class="w-6 h-6 text-tokyo-night-purple" />
-        </div>
-      </div>
-
-      <!-- Total Streams -->
-      <div
-        class="bg-tokyo-night-bg-highlight p-4 rounded-lg border border-tokyo-night-fg-gutter"
-      >
-        <div class="flex items-center justify-between">
-          <div>
-            <h3 class="text-sm text-tokyo-night-comment mb-1">Total Streams</h3>
-            <p class="text-2xl font-bold text-tokyo-night-cyan">
-              {formatNumber(usageData.total_streams)}
-            </p>
-          </div>
-          <SvelteComponent_5 class="w-6 h-6 text-tokyo-night-cyan" />
-        </div>
-      </div>
-    </div>
-
-    <!-- Additional Metrics -->
-    {#if usageData.recording_gb > 0 || usageData.peak_bandwidth_mbps > 0}
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {#if usageData.recording_gb > 0}
-          {@const SvelteComponent_6 = getIconComponent("HardDrive")}
-          <div
-            class="bg-tokyo-night-bg-highlight p-4 rounded-lg border border-tokyo-night-fg-gutter"
-          >
-            <div class="flex items-center justify-between">
-              <div>
-                <h3 class="text-sm text-tokyo-night-comment mb-1">
-                  Recording Storage
-                </h3>
-                <p class="text-xl font-bold text-tokyo-night-yellow">
-                  {formatNumber(usageData.recording_gb)} GB
-                </p>
-              </div>
-              <SvelteComponent_6 class="w-6 h-6 text-tokyo-night-yellow" />
-            </div>
-          </div>
-        {/if}
-
-        {#if usageData.peak_bandwidth_mbps > 0}
-          {@const SvelteComponent_7 = getIconComponent("TrendingUp")}
-          <div
-            class="bg-tokyo-night-bg-highlight p-4 rounded-lg border border-tokyo-night-fg-gutter"
-          >
-            <div class="flex items-center justify-between">
-              <div>
-                <h3 class="text-sm text-tokyo-night-comment mb-1">
-                  Peak Bandwidth
-                </h3>
-                <p class="text-xl font-bold text-tokyo-night-red">
-                  {formatNumber(usageData.peak_bandwidth_mbps)} Mbps
-                </p>
-              </div>
-              <SvelteComponent_7 class="w-6 h-6 text-tokyo-night-red" />
-            </div>
-          </div>
-        {/if}
-      </div>
-    {/if}
-
-    <!-- Footer Note -->
-    {@const SvelteComponent_8 = getIconComponent("Lightbulb")}
-    <div
-      class="bg-tokyo-night-yellow/10 border border-tokyo-night-yellow/30 rounded-lg p-4"
-    >
-      <div class="flex items-start space-x-3">
-        <SvelteComponent_8 class="w-5 h-5 text-tokyo-night-yellow mt-0.5" />
+      <!-- Usage Stats -->
+      <GridSeam cols={4} stack="2x2" surface="panel" flush={true} class="mb-0">
         <div>
-          <h3 class="text-tokyo-night-yellow font-medium mb-1">
-            How We Calculate This
-          </h3>
-          <p class="text-tokyo-night-yellow/80 text-sm">
-            Your usage data comes from real streaming activity, and costs are
-            estimated based on your current plan. Don't worry - your actual bill
-            will match your subscription terms, and we'll never surprise you
-            with extra charges.
-          </p>
+          <DashboardMetricCard
+            icon={ClockIcon}
+            iconColor="text-primary"
+            value={formatNumber(usageData.stream_hours)}
+            valueColor="text-primary"
+            label="Stream Hours"
+          />
+        </div>
+        <div>
+          <DashboardMetricCard
+            icon={RadioIcon}
+            iconColor="text-success"
+            value={`${formatNumber(usageData.egress_gb)} GB`}
+            valueColor="text-success"
+            label="Bandwidth Out"
+          />
+        </div>
+        <div>
+          <DashboardMetricCard
+            icon={UsersIcon}
+            iconColor="text-accent-purple"
+            value={formatNumber(usageData.peak_viewers)}
+            valueColor="text-accent-purple"
+            label="Peak Viewers"
+          />
+        </div>
+        <div>
+          <DashboardMetricCard
+            icon={VideoIcon}
+            iconColor="text-info"
+            value={formatNumber(usageData.total_streams)}
+            valueColor="text-info"
+            label="Total Streams"
+          />
+        </div>
+      </GridSeam>
+
+      <!-- Main Content Grid -->
+      <div class="dashboard-grid">
+        <!-- Your Plan Slab -->
+        <div class="slab">
+          <div class="slab-header">
+            <div class="flex items-center gap-2">
+              <CreditCardIcon class="w-4 h-4 text-primary" />
+              <h3>Your Plan</h3>
+            </div>
+          </div>
+          <div class="slab-body--padded">
+            <div class="space-y-4">
+              <div class="flex items-center justify-between">
+                <span class="text-muted-foreground">Plan</span>
+                <span class="font-semibold text-foreground">
+                  {billingData?.currentTier?.name || "Free"}
+                </span>
+              </div>
+              <div class="flex items-center justify-between">
+                <span class="text-muted-foreground">Monthly Cost</span>
+                <span class="font-semibold text-success">
+                  {billingData?.currentTier?.basePrice
+                    ? formatCurrency(billingData.currentTier.basePrice, billingData.currentTier.currency)
+                    : "Free"}
+                </span>
+              </div>
+              <div class="flex items-center justify-between">
+                <span class="text-muted-foreground">Status</span>
+                <span class="text-xs px-2 py-0.5 rounded-full bg-success/20 text-success capitalize">
+                  {billingData?.billingStatus || "active"}
+                </span>
+              </div>
+            </div>
+          </div>
+          <div class="slab-actions">
+            <Button href={resolve("/account/billing")} variant="ghost" class="gap-2">
+              <CreditCardIcon class="w-4 h-4" />
+              Manage Billing
+            </Button>
+          </div>
+        </div>
+
+        <!-- Estimated Costs Slab -->
+        <div class="slab">
+          <div class="slab-header">
+            <h3>What This Period Cost You</h3>
+          </div>
+          <div class="slab-body--padded">
+            <div class="space-y-3">
+              {#if estimatedCosts.breakdown.base > 0}
+                <div class="flex items-center justify-between text-sm">
+                  <span class="text-muted-foreground">Base plan</span>
+                  <span class="text-foreground">{formatCurrency(estimatedCosts.breakdown.base)}</span>
+                </div>
+              {/if}
+              {#if estimatedCosts.breakdown.streaming > 0}
+                <div class="flex items-center justify-between text-sm">
+                  <span class="text-muted-foreground">Streaming ({formatNumber(usageData.stream_hours)}h)</span>
+                  <span class="text-foreground">{formatCurrency(estimatedCosts.breakdown.streaming)}</span>
+                </div>
+              {/if}
+              {#if estimatedCosts.breakdown.bandwidth > 0}
+                <div class="flex items-center justify-between text-sm">
+                  <span class="text-muted-foreground">Bandwidth ({formatNumber(usageData.egress_gb)} GB)</span>
+                  <span class="text-foreground">{formatCurrency(estimatedCosts.breakdown.bandwidth)}</span>
+                </div>
+              {/if}
+              {#if estimatedCosts.breakdown.storage > 0}
+                <div class="flex items-center justify-between text-sm">
+                  <span class="text-muted-foreground">Storage ({formatNumber(usageData.recording_gb)} GB)</span>
+                  <span class="text-foreground">{formatCurrency(estimatedCosts.breakdown.storage)}</span>
+                </div>
+              {/if}
+              <div class="pt-3 border-t border-border/30">
+                <div class="flex items-center justify-between">
+                  <span class="text-foreground font-medium">Estimated Total</span>
+                  <span class="text-success font-bold text-xl">
+                    {formatCurrency(estimatedCosts.total)}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Additional Metrics Slab -->
+        {#if usageData.recording_gb > 0 || usageData.peak_bandwidth_mbps > 0}
+          <div class="slab">
+            <div class="slab-header">
+              <h3>Additional Metrics</h3>
+            </div>
+            <div class="slab-body--padded">
+              <div class="space-y-4">
+                {#if usageData.recording_gb > 0}
+                  <div class="flex items-center justify-between p-3 border border-border/30 bg-muted/20">
+                    <div class="flex items-center gap-3">
+                      <HardDriveIcon class="w-5 h-5 text-warning" />
+                      <span class="text-muted-foreground">Recording Storage</span>
+                    </div>
+                    <span class="font-bold text-warning">{formatNumber(usageData.recording_gb)} GB</span>
+                  </div>
+                {/if}
+                {#if usageData.peak_bandwidth_mbps > 0}
+                  <div class="flex items-center justify-between p-3 border border-border/30 bg-muted/20">
+                    <div class="flex items-center gap-3">
+                      <TrendingUpIcon class="w-5 h-5 text-destructive" />
+                      <span class="text-muted-foreground">Peak Bandwidth</span>
+                    </div>
+                    <span class="font-bold text-destructive">{formatNumber(usageData.peak_bandwidth_mbps)} Mbps</span>
+                  </div>
+                {/if}
+              </div>
+            </div>
+          </div>
+        {/if}
+
+        <!-- Storage Breakdown Slab -->
+        <div class="slab">
+          <div class="slab-header">
+            <div class="flex items-center gap-2">
+              <HardDriveIcon class="w-4 h-4 text-warning" />
+              <h3>Storage Breakdown</h3>
+            </div>
+          </div>
+          <div class="slab-body--padded">
+            <StorageBreakdownChart data={storageData} height={160} />
+            {#if storageData}
+              <div class="mt-4 pt-4 border-t border-border/30">
+                <div class="flex items-center justify-between text-sm">
+                  <span class="text-muted-foreground">Total Storage</span>
+                  <span class="font-bold text-foreground">
+                    {formatBytes(storageData.totalBytes)}
+                  </span>
+                </div>
+              </div>
+            {/if}
+          </div>
+        </div>
+
+        <!-- Geographic Bandwidth Distribution Slab -->
+        {#if billingData?.usageSummary?.geoBreakdown && billingData.usageSummary.geoBreakdown.length > 0}
+          <div class="slab">
+            <div class="slab-header">
+              <div class="flex items-center gap-2">
+                <GlobeIcon class="w-4 h-4 text-tokyo-night-cyan" />
+                <h3>Bandwidth by Region</h3>
+              </div>
+            </div>
+            <div class="slab-body--padded">
+              <div class="space-y-2">
+                {#each billingData.usageSummary.geoBreakdown.slice(0, 5) as country (country.countryCode)}
+                  <div class="flex items-center gap-3">
+                    <span class="w-20 text-sm text-muted-foreground truncate" title={getCountryName(country.countryCode)}>
+                      {country.countryCode}
+                    </span>
+                    <div class="flex-1 h-2 bg-muted overflow-hidden">
+                      <div
+                        class="h-full bg-tokyo-night-cyan"
+                        style="width: {Math.min(country.percentage, 100)}%"
+                      ></div>
+                    </div>
+                    <span class="w-16 text-right text-sm font-mono">
+                      {country.egressGb.toFixed(1)} GB
+                    </span>
+                  </div>
+                {/each}
+              </div>
+              <div class="mt-4 pt-4 border-t border-border/30 flex justify-between text-sm">
+                <span class="text-muted-foreground">
+                  {billingData.usageSummary.uniqueCountries} countries
+                </span>
+                <span class="text-muted-foreground">
+                  {formatViewerHours(billingData.usageSummary.viewerHours)}h total watch time
+                </span>
+              </div>
+            </div>
+            <div class="slab-actions">
+              <Button href={resolve("/analytics/geographic")} variant="ghost" class="gap-2">
+                <GlobeIcon class="w-4 h-4" />
+                Full Geographic View
+              </Button>
+            </div>
+          </div>
+        {/if}
+
+        <!-- Navigation Links Slab -->
+        <div class="slab">
+          <div class="slab-header">
+            <h3>More Analytics</h3>
+          </div>
+          <div class="slab-body--padded">
+            <div class="grid grid-cols-1 gap-2">
+              <a
+                href={resolve("/analytics")}
+                class="flex items-center gap-3 p-3 border border-border/30 bg-muted/20 hover:bg-muted/40 transition-colors"
+              >
+                <ChartLineIcon class="w-5 h-5 text-primary" />
+                <div>
+                  <p class="font-medium text-foreground">Analytics Overview</p>
+                  <p class="text-xs text-muted-foreground">Comprehensive streaming analytics</p>
+                </div>
+              </a>
+              <a
+                href={resolve("/account/billing")}
+                class="flex items-center gap-3 p-3 border border-border/30 bg-muted/20 hover:bg-muted/40 transition-colors"
+              >
+                <CreditCardIcon class="w-5 h-5 text-warning" />
+                <div>
+                  <p class="font-medium text-foreground">Billing</p>
+                  <p class="text-xs text-muted-foreground">Manage subscription and payments</p>
+                </div>
+              </a>
+              <a
+                href={resolve("/analytics/geographic")}
+                class="flex items-center gap-3 p-3 border border-border/30 bg-muted/20 hover:bg-muted/40 transition-colors"
+              >
+                <GlobeIcon class="w-5 h-5 text-success" />
+                <div>
+                  <p class="font-medium text-foreground">Geographic</p>
+                  <p class="text-xs text-muted-foreground">Viewer distribution worldwide</p>
+                </div>
+              </a>
+            </div>
+          </div>
+        </div>
+
+        <!-- Info Note -->
+        <div class="col-span-full px-4 sm:px-6 lg:px-8 -mx-4 sm:-mx-6 lg:-mx-8">
+          <Alert variant="warning">
+            <LightbulbIcon class="w-4 h-4" />
+            <AlertTitle>How We Calculate This</AlertTitle>
+            <AlertDescription>
+              Your usage data comes from real streaming activity, and costs are estimated based on your current plan.
+              Your actual bill will match your subscription terms.
+            </AlertDescription>
+          </Alert>
         </div>
       </div>
     </div>
   {/if}
+  </div>
 </div>

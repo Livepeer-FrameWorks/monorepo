@@ -2,15 +2,21 @@ package main
 
 import (
 	"context"
-	internalauth "frameworks/api_control/internal/auth"
-	"frameworks/api_control/internal/handlers"
-	qmapi "frameworks/pkg/api/quartermaster"
-	"frameworks/pkg/auth"
+	"fmt"
+	"net"
+	"os"
+	"strconv"
+
+	commodoregrpc "frameworks/api_control/internal/grpc"
+	foghornclient "frameworks/pkg/clients/foghorn"
+	"frameworks/pkg/clients/listmonk"
+	purserclient "frameworks/pkg/clients/purser"
 	qmclient "frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/config"
 	"frameworks/pkg/database"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/monitoring"
+	pb "frameworks/pkg/proto"
 	"frameworks/pkg/server"
 	"frameworks/pkg/version"
 	"time"
@@ -28,19 +34,13 @@ func main() {
 	dbURL := config.RequireEnv("DATABASE_URL")
 	jwtSecret := config.RequireEnv("JWT_SECRET")
 	serviceToken := config.RequireEnv("SERVICE_TOKEN")
-	quartermasterURL := config.RequireEnv("QUARTERMASTER_URL")
+	foghornControlAddr := config.GetEnv("FOGHORN_CONTROL_ADDR", "foghorn:18019")
 
 	// Connect to database
 	dbConfig := database.DefaultConfig()
 	dbConfig.URL = dbURL
 	db := database.MustConnect(dbConfig, logger)
 	defer db.Close()
-
-	// Initialize router
-	router, err := handlers.NewRouter(db, logger)
-	if err != nil {
-		logger.WithError(err).Fatal("Failed to create router")
-	}
 
 	// Setup monitoring
 	healthChecker := monitoring.NewHealthChecker("commodore", version.Version)
@@ -53,133 +53,146 @@ func main() {
 		"JWT_SECRET":   jwtSecret,
 	}))
 
-	// Create custom auth and stream metrics
-	metrics := &handlers.HandlerMetrics{
+	// Create custom auth and stream metrics for gRPC server
+	serverMetrics := &commodoregrpc.ServerMetrics{
 		AuthOperations:   metricsCollector.NewCounter("auth_operations_total", "Authentication operations", []string{"operation", "status"}),
 		AuthDuration:     metricsCollector.NewHistogram("auth_operation_duration_seconds", "Authentication operation duration", []string{"operation"}, nil),
 		ActiveSessions:   metricsCollector.NewGauge("active_sessions_count", "Active user sessions", []string{}),
 		StreamOperations: metricsCollector.NewCounter("stream_operations_total", "Stream CRUD operations", []string{"operation", "status"}),
 	}
 
-	// Initialize handlers with metrics
-	handlers.Init(db, logger, router, metrics)
+	// Create Foghorn gRPC client for clip/DVR/viewer operations
+	//
+	// TODO: Multi-cluster support - Currently uses a single Foghorn address.
+	// In multi-cluster deployments, each tenant maps to a specific cluster with its own Foghorn.
+	// Future options:
+	//   1. Query Quartermaster to resolve tenant -> cluster -> foghorn_grpc_addr
+	//   2. Move clip/DVR/viewer resolution to Gateway instead of proxying through Commodore
+	// For now, this works for single-cluster deployments.
+	foghornClient, err := foghornclient.NewGRPCClient(foghornclient.GRPCConfig{
+		GRPCAddr:     foghornControlAddr,
+		Timeout:      30 * time.Second,
+		Logger:       logger,
+		ServiceToken: serviceToken,
+	})
+	if err != nil {
+		logger.WithError(err).Warn("Failed to create Foghorn gRPC client - clip/DVR/viewer operations will be unavailable")
+		foghornClient = nil
+	} else {
+		defer foghornClient.Close()
+		logger.WithField("addr", foghornControlAddr).Info("Connected to Foghorn gRPC")
+	}
 
-	// Setup router with unified monitoring
+	// Create Quartermaster gRPC client for tenant creation during registration
+	quartermasterGRPCAddr := config.GetEnv("QUARTERMASTER_GRPC_ADDR", "quartermaster:19002")
+	quartermasterGRPCClient, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
+		GRPCAddr:     quartermasterGRPCAddr,
+		Timeout:      30 * time.Second,
+		Logger:       logger,
+		ServiceToken: serviceToken,
+	})
+	if err != nil {
+		logger.WithError(err).Warn("Failed to create Quartermaster gRPC client - tenant creation will use fallback")
+		quartermasterGRPCClient = nil
+	} else {
+		defer quartermasterGRPCClient.Close()
+		logger.WithField("addr", quartermasterGRPCAddr).Info("Connected to Quartermaster gRPC")
+	}
+
+	// Create Purser gRPC client for user limit checking during registration
+	purserGRPCAddr := config.GetEnv("PURSER_GRPC_ADDR", "purser:19003")
+	purserGRPCClient, err := purserclient.NewGRPCClient(purserclient.GRPCConfig{
+		GRPCAddr:     purserGRPCAddr,
+		Timeout:      30 * time.Second,
+		Logger:       logger,
+		ServiceToken: serviceToken,
+	})
+	if err != nil {
+		logger.WithError(err).Warn("Failed to create Purser gRPC client - user limit checks will be skipped")
+		purserGRPCClient = nil
+	} else {
+		defer purserGRPCClient.Close()
+		logger.WithField("addr", purserGRPCAddr).Info("Connected to Purser gRPC")
+	}
+
+	// Create Listmonk client for newsletter subscription
+	var listmonkClient *listmonk.Client
+	defaultMailingListID := 1
+	if listmonkURL := os.Getenv("LISTMONK_URL"); listmonkURL != "" {
+		listmonkUser := os.Getenv("LISTMONK_USERNAME")
+		listmonkPass := os.Getenv("LISTMONK_PASSWORD")
+		listmonkClient = listmonk.NewClient(listmonkURL, listmonkUser, listmonkPass)
+		if id, err := strconv.Atoi(os.Getenv("DEFAULT_MAILING_LIST_ID")); err == nil {
+			defaultMailingListID = id
+		}
+		logger.WithField("url", listmonkURL).Info("Listmonk client configured")
+	}
+
+	// Setup router with unified monitoring (health/metrics only)
+	// NOTE: All API routes removed - now handled via gRPC only.
+	// Gateway -> Commodore gRPC for all auth, streams, clips, DVR, etc.
 	app := server.SetupServiceRouter(logger, "commodore", healthChecker, metricsCollector)
 
-	// API routes (root level - nginx adds /api/control/ prefix)
-	{
-		// Public routes
-		app.POST("/register", handlers.Register)
-		app.POST("/login", handlers.Login)
-		app.GET("/verify", handlers.VerifyEmail)
-		app.GET("/verify/:token", handlers.VerifyEmail) // also accept token in path
-		// Protected routes
-		protected := app.Group("")
-		protected.Use(auth.JWTAuthMiddleware([]byte(jwtSecret)))
-		{
-			// User profile
-			protected.GET("/me", handlers.GetMe)
-
-			// Stream management
-			protected.GET("/streams", handlers.GetStreams)
-			protected.POST("/streams", handlers.CreateStream)
-			protected.GET("/streams/:id", handlers.GetStream)
-			protected.DELETE("/streams/:id", handlers.DeleteStream)
-			protected.GET("/streams/:id/metrics", handlers.GetStreamMetrics)
-			protected.POST("/streams/:id/refresh-key", handlers.RefreshStreamKey)
-
-			// Stream keys management
-			protected.GET("/streams/:id/keys", handlers.GetStreamKeys)
-			protected.POST("/streams/:id/keys", handlers.CreateStreamKey)
-			protected.DELETE("/streams/:id/keys/:key_id", handlers.DeactivateStreamKey)
-
-			// Recordings management
-			protected.GET("/recordings", handlers.GetRecordings)
-
-			// Clipping
-			protected.POST("/clips", handlers.CreateClip)
-			protected.GET("/clips", handlers.GetClips)
-			protected.GET("/clips/:id", handlers.GetClip)
-			protected.GET("/clips/:id/urls", handlers.GetClipURLs)
-			protected.DELETE("/clips/:id", handlers.DeleteClip)
-
-			// DVR
-			protected.POST("/dvr/start", handlers.StartDVR)
-			protected.POST("/dvr/stop", handlers.StopDVR)
-			protected.GET("/dvr/status/:dvr_hash", handlers.GetDVRStatus)
-			protected.GET("/dvr/requests", handlers.ListDVRRequests)
-
-			// Recording config
-			protected.GET("/streams/:id/recording-config", handlers.GetRecordingConfig)
-			protected.PUT("/streams/:id/recording-config", handlers.UpdateRecordingConfig)
-
-			// API tokens
-			protected.POST("/developer/tokens", handlers.CreateAPIToken)
-			protected.GET("/developer/tokens", handlers.GetAPITokens)
-			protected.DELETE("/developer/tokens/:id", handlers.RevokeAPIToken)
-		}
-
-		// Webhook endpoints for external services (Helmsman, etc.)
-		webhooks := app.Group("")
-		webhooks.Use(auth.ServiceAuthMiddleware(serviceToken))
-		{
-			webhooks.POST("/stream-start", handlers.HandleStreamStart)
-			webhooks.POST("/stream-status", handlers.HandleStreamStatus)
-			webhooks.POST("/recording-status", handlers.HandleRecordingStatus)
-			webhooks.POST("/push-status", handlers.HandlePushStatus)
-			webhooks.GET("/validate-stream-key/:stream_key", handlers.ValidateStreamKey)
-			webhooks.GET("/resolve-playback-id/:playback_id", handlers.ResolvePlaybackID)
-			webhooks.GET("/resolve-internal-name/:internal_name", handlers.ResolveInternalName)
-			webhooks.POST("/viewer/resolve-endpoint", handlers.ResolveViewerEndpoint)
-		}
-
-		// Public auth utility endpoints
-		app.POST("/forgot-password", handlers.ForgotPassword)
-		app.POST("/reset-password", handlers.ResetPassword)
-		app.POST("/logout", handlers.Logout)
-
-		// Stream node discovery (cluster-aware)
-		app.GET("/stream-node/:stream_key", handlers.GetStreamNode)
-
-		// Stream meta by stream key (service-to-service safe proxy)
-		app.GET("/stream-meta/:stream_key", handlers.StreamMetaByKey)
-
-		// Developer API routes (using API token authentication)
-		devAPI := app.Group("/dev")
-		devAPI.Use(internalauth.APIAuthMiddleware(db))
-		{
-			devAPI.GET("/streams", handlers.GetStreams)
-			devAPI.GET("/streams/:id", handlers.GetStream)
-			devAPI.GET("/streams/:id/metrics", handlers.GetStreamMetrics)
-			devAPI.POST("/clips", handlers.CreateClip)
-		}
-
-		// Admin routes
-		admin := app.Group("/admin")
-		admin.Use(auth.JWTAuthMiddleware([]byte(jwtSecret)))
-		{
-			admin.GET("/users", handlers.GetUsers)
-			admin.GET("/streams", handlers.GetAllStreams)
-			admin.POST("/streams/:id/terminate", handlers.TerminateStream)
-		}
-	}
-
-	// Start server with graceful shutdown
-	serverConfig := server.DefaultConfig("commodore", "18001")
-	if err := server.Start(serverConfig, app, logger); err != nil {
-		logger.WithError(err).Fatal("Server startup failed")
-	}
-
-	// Best-effort service registration in Quartermaster
+	// Start gRPC server in a goroutine
+	grpcPort := config.GetEnv("GRPC_PORT", "19001")
 	go func() {
-		qc := qmclient.NewClient(qmclient.Config{BaseURL: quartermasterURL, ServiceToken: serviceToken, Logger: logger})
+		grpcAddr := fmt.Sprintf(":%s", grpcPort)
+		lis, err := net.Listen("tcp", grpcAddr)
+		if err != nil {
+			logger.WithError(err).Fatal("Failed to listen on gRPC port")
+		}
+
+		grpcServer := commodoregrpc.NewGRPCServer(commodoregrpc.CommodoreServerConfig{
+			DB:                   db,
+			Logger:               logger,
+			FoghornClient:        foghornClient,
+			QuartermasterClient:  quartermasterGRPCClient,
+			PurserClient:         purserGRPCClient,
+			ListmonkClient:       listmonkClient,
+			DefaultMailingListID: defaultMailingListID,
+			Metrics:              serverMetrics,
+			ServiceToken:         serviceToken,
+			JWTSecret:            []byte(jwtSecret),
+			TurnstileSecretKey:   config.GetEnv("TURNSTILE_AUTH_SECRET_KEY", ""),
+			PasswordResetSecret:  []byte(config.GetEnv("PASSWORD_RESET_SECRET", "")),
+		})
+		logger.WithField("addr", grpcAddr).Info("Starting gRPC server")
+
+		if err := grpcServer.Serve(lis); err != nil {
+			logger.WithError(err).Fatal("gRPC server failed")
+		}
+	}()
+
+	// Start HTTP server with graceful shutdown
+	serverConfig := server.DefaultConfig("commodore", "18001")
+
+	// Best-effort service registration in Quartermaster (using gRPC client)
+	// Must be launched BEFORE server.Start() which blocks
+	go func() {
+		if quartermasterGRPCClient == nil {
+			logger.Warn("Quartermaster gRPC client not available, skipping bootstrap")
+			return
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if _, err := qc.BootstrapService(ctx, &qmapi.BootstrapServiceRequest{Type: "commodore", Version: version.Version, Protocol: "http", HealthEndpoint: func() *string { s := "/health"; return &s }(), Port: 18001}); err != nil {
+		healthEndpoint := "/health"
+		httpPort, _ := strconv.Atoi(serverConfig.Port)
+		advertiseHost := config.GetEnv("COMMODORE_HOST", "commodore")
+		if _, err := quartermasterGRPCClient.BootstrapService(ctx, &pb.BootstrapServiceRequest{
+			Type:           "commodore",
+			Version:        version.Version,
+			Protocol:       "http",
+			HealthEndpoint: &healthEndpoint,
+			Port:           int32(httpPort),
+			AdvertiseHost:  &advertiseHost,
+		}); err != nil {
 			logger.WithError(err).Warn("Quartermaster bootstrap (commodore) failed")
 		} else {
 			logger.Info("Quartermaster bootstrap (commodore) ok")
 		}
 	}()
+
+	if err := server.Start(serverConfig, app, logger); err != nil {
+		logger.WithError(err).Fatal("Server startup failed")
+	}
 }

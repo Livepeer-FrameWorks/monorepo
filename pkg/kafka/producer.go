@@ -12,13 +12,14 @@ import (
 
 // KafkaProducer implements KafkaProducerInterface
 type KafkaProducer struct {
-	client    *kgo.Client
-	logger    *logrus.Logger
-	clusterID string
+	client       *kgo.Client
+	logger       *logrus.Logger
+	clusterID    string
+	defaultTopic string
 }
 
 // NewKafkaProducer creates a new Kafka producer
-func NewKafkaProducer(brokers []string, clusterID string, logger *logrus.Logger) (*KafkaProducer, error) {
+func NewKafkaProducer(brokers []string, defaultTopic string, clusterID string, logger *logrus.Logger) (*KafkaProducer, error) {
 	opts := []kgo.Opt{
 		kgo.SeedBrokers(brokers...),
 		kgo.ClientID("decklog"),
@@ -33,9 +34,10 @@ func NewKafkaProducer(brokers []string, clusterID string, logger *logrus.Logger)
 	}
 
 	return &KafkaProducer{
-		client:    client,
-		logger:    logger,
-		clusterID: clusterID,
+		client:       client,
+		logger:       logger,
+		clusterID:    clusterID,
+		defaultTopic: defaultTopic,
 	}, nil
 }
 
@@ -117,7 +119,7 @@ func (p *KafkaProducer) PublishTypedEvent(event *AnalyticsEvent) error {
 	}
 
 	// Publish to Kafka
-	return p.ProduceMessage("analytics_events", []byte(event.EventID), value, headers)
+	return p.ProduceMessage(p.defaultTopic, []byte(event.EventID), value, headers)
 }
 
 // PublishTypedBatch publishes a batch of typed AnalyticsEvents
@@ -137,7 +139,7 @@ func (p *KafkaProducer) PublishTypedBatch(events []AnalyticsEvent) error {
 
 		// Create record with headers
 		record := &kgo.Record{
-			Topic: "analytics_events",
+			Topic: p.defaultTopic,
 			Key:   []byte(event.EventID),
 			Value: value,
 			Headers: []kgo.RecordHeader{

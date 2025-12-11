@@ -115,22 +115,7 @@ export interface PlayerOptions {
   muted?: boolean;
   controls?: boolean;
   stockControls?: boolean;
-  preferredProtocol?: 'auto' | 'whep' | 'mist' | 'native';
-  analytics?: {
-    enabled: boolean;
-    endpoint?: string;
-    sessionTracking: boolean;
-  };
-  branding?: {
-    logoUrl?: string;
-    showLogo?: boolean;
-    position?: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
-    width?: number;
-    height?: number;
-    clickUrl?: string;
-  };
   debug?: boolean;
-  verboseLogging?: boolean;
 }
 
 // To-be Gateway/Foghorn viewer resolution types
@@ -186,4 +171,255 @@ export interface ContentEndpoints {
   primary: EndpointInfo;
   fallbacks: EndpointInfo[];
   metadata?: ContentMetadata;
+}
+
+// =====================================================
+// Stream State Types (MistServer native polling)
+// =====================================================
+
+/** Stream status from MistServer info.js endpoint */
+export type StreamStatus =
+  | 'ONLINE'
+  | 'OFFLINE'
+  | 'INITIALIZING'
+  | 'BOOTING'
+  | 'WAITING_FOR_DATA'
+  | 'SHUTTING_DOWN'
+  | 'INVALID'
+  | 'ERROR';
+
+/** MistServer info.js response structure */
+export interface MistStreamInfo {
+  error?: string;
+  on_error?: string;
+  perc?: number;
+  source?: MistStreamSource[];
+  meta?: {
+    tracks?: Record<string, MistTrackInfo>;
+  };
+}
+
+export interface MistStreamSource {
+  url: string;
+  type: string;
+  priority?: number;
+  simul_tracks?: number;
+  relurl?: string;
+}
+
+export interface MistTrackInfo {
+  type: 'video' | 'audio' | 'meta';
+  codec: string;
+  width?: number;
+  height?: number;
+  bps?: number;
+  fpks?: number;
+  init?: string;
+  codecstring?: string;
+}
+
+/** Options for useStreamState hook */
+export interface UseStreamStateOptions {
+  /** MistServer base URL (from Gateway endpoint.baseUrl) */
+  mistBaseUrl: string;
+  /** Stream name/identifier */
+  streamName: string;
+  /** Poll interval in ms (default: 3000) */
+  pollInterval?: number;
+  /** Enable polling (default: true) */
+  enabled?: boolean;
+  /** Use WebSocket instead of HTTP polling (default: true) */
+  useWebSocket?: boolean;
+}
+
+/** Stream state returned by useStreamState hook */
+export interface StreamState {
+  /** Current stream status */
+  status: StreamStatus;
+  /** Whether stream is live and playable */
+  isOnline: boolean;
+  /** Human-readable status message */
+  message: string;
+  /** Processing percentage (if initializing) */
+  percentage?: number;
+  /** Last update timestamp */
+  lastUpdate: number;
+  /** Full MistServer stream info (when online) */
+  streamInfo?: MistStreamInfo;
+  /** Error message if status is ERROR */
+  error?: string;
+}
+
+// =====================================================
+// Playback Quality Types
+// =====================================================
+
+/** Playback quality metrics */
+export interface PlaybackQuality {
+  /** Composite quality score (0-100) */
+  score: number;
+  /** Current bitrate in bps */
+  bitrate: number;
+  /** Seconds of buffered content ahead */
+  bufferedAhead: number;
+  /** Total stall count */
+  stallCount: number;
+  /** Frame drop rate as percentage (0-100) */
+  frameDropRate: number;
+  /** End-to-end latency in ms (for live streams) */
+  latency: number;
+  /** Timestamp of measurement */
+  timestamp: number;
+}
+
+/** Thresholds for quality degradation triggers */
+export interface QualityThresholds {
+  /** Trigger ABR downgrade below this score (default: 60) */
+  minScore: number;
+  /** Max stalls before downgrade (default: 3) */
+  maxStalls: number;
+  /** Critical buffer threshold in seconds (default: 2) */
+  minBuffer: number;
+}
+
+/** Options for usePlaybackQuality hook */
+export interface UsePlaybackQualityOptions {
+  /** Video element to monitor */
+  videoElement: HTMLVideoElement | null;
+  /** Enable monitoring (default: true) */
+  enabled?: boolean;
+  /** Sample interval in ms (default: 500) */
+  sampleInterval?: number;
+  /** Quality thresholds for triggers */
+  thresholds?: Partial<QualityThresholds>;
+  /** Callback when quality degrades below threshold */
+  onQualityDegraded?: (quality: PlaybackQuality) => void;
+}
+
+// =====================================================
+// Meta Track Subscription Types
+// =====================================================
+
+/** Types of meta track events */
+export type MetaTrackEventType = 'subtitle' | 'score' | 'event' | 'chapter' | 'unknown';
+
+/** Base meta track event */
+export interface MetaTrackEvent {
+  /** Event type */
+  type: MetaTrackEventType;
+  /** Event timestamp in ms */
+  timestamp: number;
+  /** Track ID this event belongs to */
+  trackId: string;
+  /** Raw event data */
+  data: unknown;
+}
+
+/** Subtitle cue event */
+export interface SubtitleCue {
+  id: string;
+  startTime: number;
+  endTime: number;
+  text: string;
+  lang?: string;
+}
+
+/** Score/stat update event */
+export interface ScoreUpdate {
+  key: string;
+  value: number | string;
+  team?: string;
+}
+
+/** Timed event (generic) */
+export interface TimedEvent {
+  id: string;
+  name: string;
+  description?: string;
+}
+
+/** Chapter marker */
+export interface ChapterMarker {
+  id: string;
+  title: string;
+  startTime: number;
+  endTime?: number;
+  thumbnailUrl?: string;
+}
+
+/** Options for useMetaTrack hook */
+export interface UseMetaTrackOptions {
+  /** MistServer base URL */
+  mistBaseUrl: string;
+  /** Stream name */
+  streamName: string;
+  /** Track subscriptions with callbacks */
+  subscriptions?: Array<{
+    trackId: string;
+    callback: (event: MetaTrackEvent) => void;
+  }>;
+  /** Enable subscriptions (default: true) */
+  enabled?: boolean;
+}
+
+// =====================================================
+// Telemetry Types
+// =====================================================
+
+/** Telemetry payload sent to server */
+export interface TelemetryPayload {
+  timestamp: number;
+  sessionId: string;
+  contentId: string;
+  contentType: 'live' | 'dvr' | 'clip';
+  metrics: {
+    currentTime: number;
+    duration: number;
+    bufferedSeconds: number;
+    stallCount: number;
+    totalStallMs: number;
+    bitrate: number;
+    qualityScore: number;
+    framesDecoded: number;
+    framesDropped: number;
+    playerType: string;
+    protocol: string;
+    resolution?: { width: number; height: number };
+  };
+  errors?: Array<{ code: string; message: string; timestamp: number }>;
+}
+
+/** Options for telemetry reporting */
+export interface TelemetryOptions {
+  /** Enable telemetry (default: false) */
+  enabled: boolean;
+  /** Telemetry endpoint URL */
+  endpoint: string;
+  /** Report interval in ms (default: 5000) */
+  interval?: number;
+  /** Auth token for endpoint */
+  authToken?: string;
+  /** Batch size before flush (default: 1) */
+  batchSize?: number;
+}
+
+// =====================================================
+// ABR Types
+// =====================================================
+
+/** ABR mode configuration */
+export type ABRMode = 'auto' | 'resize' | 'bitrate' | 'manual';
+
+/** ABR controller options */
+export interface ABROptions {
+  /** ABR mode (default: 'auto') */
+  mode: ABRMode;
+  /** Max resolution constraint */
+  maxResolution?: { width: number; height: number };
+  /** Max bitrate constraint in bps */
+  maxBitrate?: number;
+  /** Min buffer before switching up (default: 10s) */
+  minBufferForUpgrade?: number;
+  /** Quality score threshold for downgrade (default: 60) */
+  downgradeThreshold?: number;
 }

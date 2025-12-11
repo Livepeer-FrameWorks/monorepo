@@ -91,8 +91,8 @@
       return;
     }
 
-    if (password.length < 6) {
-      error = "Password must be at least 6 characters long";
+    if (password.length < 8) {
+      error = "Password must be at least 8 characters long";
       return;
     }
 
@@ -114,7 +114,7 @@
       phone_number, // Honeypot
       human_check,
       behavior: JSON.stringify(behaviorData),
-      turnstile_token: turnstileToken || undefined,
+      turnstileToken: turnstileToken || undefined,
     });
 
     if (result.success) {
@@ -144,63 +144,55 @@
   <title>Register - FrameWorks</title>
 </svelte:head>
 
-<section class="min-h-screen bg-brand-surface-muted py-16 sm:py-24">
-  <!-- Header -->
-  <div class="text-center mb-12">
-      <div class="flex justify-center mb-4">
-        <img
-          src="/frameworks-dark-logomark-transparent.svg"
-          alt="FrameWorks"
-          class="h-80 w-80 rounded-lg"
-        />
+<section class="min-h-full bg-brand-surface-muted flex items-center justify-center p-4 sm:p-8">
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 lg:gap-12 items-center w-full max-w-5xl">
+    <!-- Left: Branding -->
+    <div class="flex flex-col items-center lg:items-start text-center lg:text-left">
+      <!-- Logo + Title inline -->
+      <div class="flex items-center gap-4 mb-6">
+        <img src="/frameworks-dark-logomark-transparent.svg" alt="FrameWorks" class="h-16 w-16" />
+        <div class="text-left">
+          <h1 class="text-3xl sm:text-4xl font-bold gradient-text">Join FrameWorks</h1>
+          <p class="text-muted-foreground">Create your account to start streaming</p>
+        </div>
       </div>
-      <h1 class="text-4xl font-bold gradient-text mb-2">Join FrameWorks</h1>
-      <p class="text-tokyo-night-fg-dark">
-        Create your account to start streaming
-      </p>
 
-      <p class="text-center text-tokyo-night-comment mt-4">
-        Already have an account?
+      <!-- Beta Disclaimer -->
+      <div class="p-4 border bg-warning-alt/10 border-warning-alt/30 mb-6 w-full">
+        <div class="flex items-start space-x-3">
+          <div class="flex-shrink-0">
+            <AlertTriangle class="w-5 h-5 text-warning-alt mt-0.5" />
+          </div>
+          <div>
+            <h3 class="text-sm font-medium text-warning-alt">Alpha Release</h3>
+            <p class="text-sm text-muted-foreground mt-1">
+              FrameWorks is currently in alpha and rapidly evolving. Features may change, and there could be occasional service interruptions.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <p class="text-muted-foreground">
+        Already have an account?{" "}
         <a
           href={resolve("/login")}
-          class="text-tokyo-night-cyan hover:text-tokyo-night-blue transition-colors duration-200 font-medium"
+          class="text-info font-medium underline underline-offset-4 hover:text-primary transition-colors"
         >
           Sign in
         </a>
       </p>
-  </div>
-
-  <!-- Registration Content -->
-  <div class="max-w-7xl mx-auto">
-    <!-- Beta Disclaimer -->
-    <div
-      class="mb-8 p-4 rounded-lg border bg-tokyo-night-orange/10 border-tokyo-night-orange/30 max-w-4xl mx-auto"
-    >
-      <div class="flex items-start space-x-3">
-        <div class="flex-shrink-0">
-          <AlertTriangle class="w-5 h-5 text-tokyo-night-orange mt-0.5" />
-        </div>
-        <div>
-          <h3 class="text-sm font-medium text-tokyo-night-orange">
-            Beta Platform
-          </h3>
-          <p class="text-sm text-tokyo-night-fg-dark mt-1">
-            FrameWorks is currently in beta and rapidly evolving. Features may
-            change, and there could be occasional service interruptions as we
-            improve the platform.
-          </p>
-        </div>
-      </div>
     </div>
 
-    <!-- Registration Form - Centered -->
-    <div class="marketing-slab auth-form-slab max-w-2xl mx-auto">
-      <form onsubmit={preventDefault(handleRegister)} class="space-y-6">
-        <div>
-          <label
-            for="email"
-            class="block text-sm font-medium mb-2 text-tokyo-night-fg-dark"
-          >
+    <!-- Right: Registration Form -->
+    <div class="slab">
+      <div class="slab-header">
+        <h3>Create Account</h3>
+      </div>
+
+      <form id="register-form" onsubmit={preventDefault(handleRegister)}>
+        <!-- Email field -->
+        <div class="px-4 py-3 border-b border-[hsl(var(--tn-fg-gutter)/0.3)]">
+          <label for="email" class="block text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
             Email Address
           </label>
           <Input
@@ -213,29 +205,25 @@
           />
         </div>
 
-        <div>
-          <label
-            for="password"
-            class="block text-sm font-medium mb-2 text-tokyo-night-fg-dark"
-          >
+        <!-- Password field -->
+        <div class="px-4 py-3 border-b border-[hsl(var(--tn-fg-gutter)/0.3)]">
+          <label for="password" class="block text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
             Password
           </label>
           <Input
             id="password"
             type="password"
             bind:value={password}
-            placeholder="Enter your password (min 6 characters)"
+            placeholder="Min 8 characters"
             class="w-full"
             onkeypress={handleKeypress}
             required
           />
         </div>
 
-        <div>
-          <label
-            for="confirmPassword"
-            class="block text-sm font-medium mb-2 text-tokyo-night-fg-dark"
-          >
+        <!-- Confirm Password field -->
+        <div class="px-4 py-3 border-b border-[hsl(var(--tn-fg-gutter)/0.3)]">
+          <label for="confirmPassword" class="block text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
             Confirm Password
           </label>
           <Input
@@ -251,7 +239,7 @@
 
         <!-- Honeypot field - hidden from users but visible to bots -->
         {#if !turnstileSiteKey}
-          <div style="position: absolute; left: -9999px; visibility: hidden;">
+          <div class="sr-only">
             <label for="phone_number">Phone (leave blank)</label>
             <input
               id="phone_number"
@@ -265,69 +253,67 @@
         {/if}
 
         {#if turnstileSiteKey}
-          <div class="space-y-3">
-            <p class="block text-sm font-medium text-tokyo-night-fg-dark">
-              Verification *
+          <div class="px-4 py-3 border-b border-[hsl(var(--tn-fg-gutter)/0.3)]">
+            <p class="block text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
+              Verification
             </p>
-            <div
-              class="inline-flex rounded-lg border border-border/50 bg-background/70 p-4"
-            >
-              <Turnstile
-                siteKey={turnstileSiteKey}
-                theme="dark"
-                action="register_form"
-                bind:widgetId={turnstileWidgetId}
-                on:callback={({ detail }) => {
-                  const value = detail?.token ?? detail ?? "";
-                  turnstileToken = value;
-                  human_check = "human";
-                  error = null;
-                }}
-                on:error={() => {
-                  turnstileToken = "";
-                  human_check = defaultHumanCheck;
-                }}
-                on:expire={() => {
-                  turnstileToken = "";
-                  human_check = defaultHumanCheck;
-                }}
-              />
-            </div>
+            <Turnstile
+              siteKey={turnstileSiteKey}
+              theme="dark"
+              action="register_form"
+              bind:widgetId={turnstileWidgetId}
+              on:callback={({ detail }) => {
+                const value = detail?.token ?? detail ?? "";
+                turnstileToken = value;
+                human_check = "human";
+                error = null;
+              }}
+              on:error={() => {
+                turnstileToken = "";
+                human_check = defaultHumanCheck;
+              }}
+              on:expire={() => {
+                turnstileToken = "";
+                human_check = defaultHumanCheck;
+              }}
+            />
           </div>
         {/if}
 
         {#if !turnstileSiteKey}
           <!-- Human verification -->
-          <div class="space-y-3">
-            <p class="block text-sm font-medium text-tokyo-night-fg-dark">
-              Please confirm you are human:
+          <div class="px-4 py-3 border-b border-[hsl(var(--tn-fg-gutter)/0.3)]">
+            <p class="block text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
+              Verification
             </p>
-            <RadioGroup bind:value={human_check} required class="space-y-2">
-              <div class="flex items-center space-x-2">
+            <RadioGroup bind:value={human_check} required class="flex gap-6">
+              <div class="flex items-center gap-2">
                 <RadioGroupItem value="human" id="human-check-human" />
-                <Label
-                  for="human-check-human"
-                  class="text-sm text-tokyo-night-fg-dark"
-                >
-                  I am a human
-                </Label>
+                <Label for="human-check-human" class="cursor-pointer">I am human</Label>
               </div>
-              <div class="flex items-center space-x-2">
+              <div class="flex items-center gap-2">
                 <RadioGroupItem value="robot" id="human-check-robot" />
-                <Label
-                  for="human-check-robot"
-                  class="text-sm text-tokyo-night-fg-dark"
-                >
-                  I am a robot
-                </Label>
+                <Label for="human-check-robot" class="cursor-pointer">I am a robot</Label>
               </div>
             </RadioGroup>
           </div>
         {/if}
 
+        {#if error}
+          <div class="px-4 py-3 bg-destructive/10 border-b border-destructive/30">
+            <p class="block text-xs font-medium text-destructive uppercase tracking-wider mb-2">
+              Error
+            </p>
+            <p class="text-destructive text-sm">{error}</p>
+          </div>
+        {/if}
+      </form>
+
+      <div class="slab-actions">
         <Button
           type="submit"
-          class="w-full"
+          form="register-form"
+          variant="ghost"
           disabled={authLoading || (turnstileSiteKey && !turnstileToken)}
         >
           {#if authLoading}
@@ -335,15 +321,12 @@
           {/if}
           Create Account
         </Button>
-      </form>
-
-      {#if error}
-        <div
-          class="mt-6 p-4 rounded-lg border bg-tokyo-night-red/10 border-tokyo-night-red/30"
-        >
-          <p class="text-tokyo-night-red">Error: {error}</p>
-        </div>
-      {/if}
+      </div>
+      <div class="slab-actions slab-actions--row">
+        <Button href={resolve("/login")} variant="ghost">
+          Already have an account?
+        </Button>
+      </div>
     </div>
   </div>
 </section>

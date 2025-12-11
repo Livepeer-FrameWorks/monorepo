@@ -2,7 +2,6 @@ package resolvers
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -11,12 +10,14 @@ import (
 	"frameworks/api_gateway/internal/demo"
 	"frameworks/api_gateway/internal/loaders"
 	"frameworks/api_gateway/internal/middleware"
-	"frameworks/pkg/api/commodore"
-	"frameworks/pkg/models"
+	"frameworks/pkg/pagination"
+	pb "frameworks/pkg/proto"
+
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // DoGetStreams retrieves all streams for the authenticated user
-func (r *Resolver) DoGetStreams(ctx context.Context) ([]*models.Stream, error) {
+func (r *Resolver) DoGetStreams(ctx context.Context) ([]*pb.Stream, error) {
 	start := time.Now()
 
 	// Record metrics
@@ -36,16 +37,8 @@ func (r *Resolver) DoGetStreams(ctx context.Context) ([]*models.Stream, error) {
 		return demo.GenerateStreams(), nil
 	}
 
-	// Extract JWT token from context (set by auth middleware)
-	userToken, ok := ctx.Value("jwt_token").(string)
-	if !ok {
-		if r.Metrics != nil {
-			r.Metrics.Operations.WithLabelValues("streams", "error").Inc()
-		}
-		return nil, fmt.Errorf("user not authenticated")
-	}
-
-	streamsResp, err := r.getStreamsMemoized(ctx, userToken)
+	// gRPC uses context metadata for auth (set by userContextInterceptor)
+	streamsResp, err := r.getStreamsMemoized(ctx)
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to get streams")
 		if r.Metrics != nil {
@@ -54,21 +47,15 @@ func (r *Resolver) DoGetStreams(ctx context.Context) ([]*models.Stream, error) {
 		return nil, fmt.Errorf("failed to get streams: %w", err)
 	}
 
-	// Convert from []models.Stream to []*models.Stream
-	result := make([]*models.Stream, len(*streamsResp))
-	for i := range *streamsResp {
-		result[i] = &(*streamsResp)[i]
-	}
-
 	if r.Metrics != nil {
 		r.Metrics.Operations.WithLabelValues("streams", "success").Inc()
 	}
 
-	return result, nil
+	return streamsResp, nil
 }
 
 // DoGetStream retrieves a specific stream by ID
-func (r *Resolver) DoGetStream(ctx context.Context, id string) (*models.Stream, error) {
+func (r *Resolver) DoGetStream(ctx context.Context, id string) (*pb.Stream, error) {
 	start := time.Now()
 
 	// Record metrics
@@ -82,7 +69,7 @@ func (r *Resolver) DoGetStream(ctx context.Context, id string) (*models.Stream, 
 	if middleware.IsDemoMode(ctx) {
 		streams := demo.GenerateStreams()
 		for _, stream := range streams {
-			if stream.ID == id {
+			if stream.InternalName == id {
 				if r.Metrics != nil {
 					r.Metrics.Operations.WithLabelValues("stream", "success").Inc()
 				}
@@ -95,15 +82,8 @@ func (r *Resolver) DoGetStream(ctx context.Context, id string) (*models.Stream, 
 		return nil, fmt.Errorf("stream not found")
 	}
 
-	userToken, ok := ctx.Value("jwt_token").(string)
-	if !ok || userToken == "" {
-		if r.Metrics != nil {
-			r.Metrics.Operations.WithLabelValues("stream", "error").Inc()
-		}
-		return nil, fmt.Errorf("user not authenticated")
-	}
-
-	stream, err := r.getStreamMemoized(ctx, userToken, id)
+	// gRPC uses context metadata for auth
+	stream, err := r.getStreamMemoized(ctx, id)
 	if err != nil {
 		r.Logger.WithError(err).WithField("stream_id", id).Error("Failed to get stream")
 		if r.Metrics != nil {
@@ -119,44 +99,37 @@ func (r *Resolver) DoGetStream(ctx context.Context, id string) (*models.Stream, 
 }
 
 // DoCreateStream creates a new stream
-func (r *Resolver) DoCreateStream(ctx context.Context, input model.CreateStreamInput) (*models.Stream, error) {
+func (r *Resolver) DoCreateStream(ctx context.Context, input model.CreateStreamInput) (*pb.Stream, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo stream creation")
-		return &models.Stream{
-			ID:    "demo_stream_" + time.Now().Format("20060102150405"),
-			Title: input.Name,
-			Description: func() string {
-				if input.Description != nil {
-					return *input.Description
-				}
-				return ""
-			}(),
-			StreamKey:  "sk_demo_" + time.Now().Format("150405"),
-			PlaybackID: "pb_demo_" + time.Now().Format("150405"),
-			Status:     "offline",
-			IsRecording: func() bool {
-				if input.Record != nil {
-					return *input.Record
-				}
-				return false
-			}(),
-			CreatedAt: time.Now(),
-			UpdatedAt: time.Now(),
+		now := time.Now()
+		description := ""
+		if input.Description != nil {
+			description = *input.Description
+		}
+		isRecording := false
+		if input.Record != nil {
+			isRecording = *input.Record
+		}
+		return &pb.Stream{
+			InternalName: "demo_stream_" + now.Format("20060102150405"),
+			Title:        input.Name,
+			Description:  description,
+			StreamKey:    "sk_demo_" + now.Format("150405"),
+			PlaybackId:   "pb_demo_" + now.Format("150405"),
+			Status:       "offline",
+			IsRecording:  isRecording,
+			CreatedAt:    timestamppb.New(now),
+			UpdatedAt:    timestamppb.New(now),
 		}, nil
 	}
 
-	// Extract JWT token from context
-	userToken, ok := ctx.Value("jwt_token").(string)
-	if !ok {
-		return nil, fmt.Errorf("user not authenticated")
-	}
-
-	// Convert to Commodore request format
-	req := &commodore.CreateStreamRequest{
+	// Build gRPC request
+	req := &pb.CreateStreamRequest{
 		Title: input.Name,
 	}
 
-	// Handle optional fields
+	// Handle optional fields - proto uses non-pointer types
 	if input.Description != nil {
 		req.Description = *input.Description
 	}
@@ -164,46 +137,56 @@ func (r *Resolver) DoCreateStream(ctx context.Context, input model.CreateStreamI
 		req.IsRecording = *input.Record
 	}
 
-	// Call Commodore to create stream
-	streamResp, err := r.Clients.Commodore.CreateStream(ctx, userToken, req)
+	// Call Commodore gRPC (context metadata carries auth)
+	createResp, err := r.Clients.Commodore.CreateStream(ctx, req)
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to create stream")
 		return nil, fmt.Errorf("failed to create stream: %w", err)
 	}
 
-	return streamResp, nil
+	// Fetch full stream details after creation
+	stream, err := r.Clients.Commodore.GetStream(ctx, createResp.Id)
+	if err != nil {
+		r.Logger.WithError(err).Error("Failed to get stream after creation")
+		return nil, fmt.Errorf("failed to get stream after creation: %w", err)
+	}
+
+	return stream, nil
 }
 
 // DoDeleteStream deletes a stream
-func (r *Resolver) DoDeleteStream(ctx context.Context, id string) (bool, error) {
+func (r *Resolver) DoDeleteStream(ctx context.Context, id string) (model.DeleteStreamResult, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo stream deletion")
-		return true, nil
+		return &model.DeleteSuccess{Success: true, DeletedID: id}, nil
 	}
 
-	// Extract JWT token from context
-	userToken, ok := ctx.Value("jwt_token").(string)
-	if !ok {
-		return false, fmt.Errorf("user not authenticated")
-	}
-
-	// Call Commodore to delete stream
-	err := r.Clients.Commodore.DeleteStream(ctx, userToken, id)
+	// Call Commodore gRPC (context metadata carries auth)
+	_, err := r.Clients.Commodore.DeleteStream(ctx, id)
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to delete stream")
-		return false, fmt.Errorf("failed to delete stream: %w", err)
+		// Check if it's a not found error
+		if strings.Contains(err.Error(), "not found") {
+			return &model.NotFoundError{
+				Message:      "Stream not found",
+				Code:         strPtr("NOT_FOUND"),
+				ResourceType: "Stream",
+				ResourceID:   id,
+			}, nil
+		}
+		return nil, fmt.Errorf("failed to delete stream: %w", err)
 	}
 
-	return true, nil
+	return &model.DeleteSuccess{Success: true, DeletedID: id}, nil
 }
 
 // DoRefreshStreamKey refreshes the stream key for a stream
-func (r *Resolver) DoRefreshStreamKey(ctx context.Context, id string) (*models.Stream, error) {
+func (r *Resolver) DoRefreshStreamKey(ctx context.Context, id string) (*pb.Stream, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo stream refresh")
 		streams := demo.GenerateStreams()
 		for _, stream := range streams {
-			if stream.ID == id {
+			if stream.InternalName == id {
 				// Generate new demo stream key
 				stream.StreamKey = "sk_demo_refreshed_" + time.Now().Format("20060102150405")
 				return stream, nil
@@ -212,20 +195,15 @@ func (r *Resolver) DoRefreshStreamKey(ctx context.Context, id string) (*models.S
 		return nil, fmt.Errorf("demo stream not found")
 	}
 
-	// Extract JWT token from context
-	userToken, ok := ctx.Value("jwt_token").(string)
-	if !ok {
-		return nil, fmt.Errorf("user not authenticated")
-	}
-
-	// Call Commodore to refresh stream key
-	streamResp, err := r.Clients.Commodore.RefreshStreamKey(ctx, userToken, id)
+	// Call Commodore gRPC (context metadata carries auth)
+	_, err := r.Clients.Commodore.RefreshStreamKey(ctx, id)
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to refresh stream key")
 		return nil, fmt.Errorf("failed to refresh stream key: %w", err)
 	}
 
-	return streamResp, nil
+	// Refetch the stream to get full details with new key
+	return r.Clients.Commodore.GetStream(ctx, id)
 }
 
 // DoValidateStreamKey validates a stream key
@@ -234,13 +212,15 @@ func (r *Resolver) DoValidateStreamKey(ctx context.Context, streamKey string) (*
 		r.Logger.Debug("Returning demo stream key validation")
 		// Demo validation - validate demo stream keys
 		valid := strings.HasPrefix(streamKey, "sk_demo_")
+		status := model.ValidationStatusValid
 		errorPtr := (*string)(nil)
 		if !valid {
+			status = model.ValidationStatusInvalid
 			errorMsg := "Invalid demo stream key"
 			errorPtr = &errorMsg
 		}
 		return &model.StreamValidation{
-			Valid:     valid,
+			Status:    status,
 			StreamKey: streamKey,
 			Error:     errorPtr,
 		}, nil
@@ -250,58 +230,66 @@ func (r *Resolver) DoValidateStreamKey(ctx context.Context, streamKey string) (*
 	validation, err := r.Clients.Commodore.ValidateStreamKey(ctx, streamKey)
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to validate stream key")
-		return nil, fmt.Errorf("failed to validate stream key: %w", err)
+		// Return ERROR status instead of failing the whole query
+		errorMsg := err.Error()
+		return &model.StreamValidation{
+			Status:    model.ValidationStatusError,
+			StreamKey: streamKey,
+			Error:     &errorMsg,
+		}, nil
 	}
 
 	// Convert to GraphQL model
+	status := model.ValidationStatusValid
 	var errorPtr *string
-	if validation.Error != "" {
-		errorPtr = &validation.Error
+	if !validation.Valid {
+		status = model.ValidationStatusInvalid
+		if validation.Error != "" {
+			errorPtr = &validation.Error
+		}
 	}
 
 	return &model.StreamValidation{
-		Valid:     validation.Valid,
+		Status:    status,
 		StreamKey: streamKey, // Use the input streamKey since response doesn't include it
 		Error:     errorPtr,
 	}, nil
 }
 
 // DoCreateClip creates a new clip
-func (r *Resolver) DoCreateClip(ctx context.Context, input model.CreateClipInput) (*commodore.ClipResponse, error) {
+func (r *Resolver) DoCreateClip(ctx context.Context, input model.CreateClipInput) (*pb.ClipInfo, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo clip creation")
-		return &commodore.ClipResponse{
-			ID:       "clip_demo_" + time.Now().Format("20060102150405"),
-			StreamID: input.Stream,
-			Title:    input.Title,
-			Description: func() string {
-				if input.Description != nil {
-					return *input.Description
-				}
-				return ""
-			}(),
-			StartTime:  int64(input.StartTime),
-			EndTime:    int64(input.EndTime),
-			Duration:   int64(input.EndTime - input.StartTime),
-			PlaybackID: "pb_clip_demo_" + time.Now().Format("150405"),
-			Status:     "processing",
-			CreatedAt:  time.Now(),
-			UpdatedAt:  time.Now(),
+		now := time.Now()
+		description := ""
+		if input.Description != nil {
+			description = *input.Description
+		}
+		return &pb.ClipInfo{
+			Id:          "clip_demo_" + now.Format("20060102150405"),
+			StreamName:  input.Stream,
+			Title:       input.Title,
+			Description: description,
+			StartTime:   int64(input.StartTime),
+			Duration:    int64(input.EndTime - input.StartTime),
+			ClipHash:    "pb_clip_demo_" + now.Format("150405"),
+			Status:      "processing",
+			CreatedAt:   timestamppb.New(now),
+			UpdatedAt:   timestamppb.New(now),
 		}, nil
 	}
 
-	// Extract JWT token from context
-	userToken, ok := ctx.Value("jwt_token").(string)
-	if !ok {
-		return nil, fmt.Errorf("user not authenticated")
-	}
+	// Build gRPC request - proto uses StartUnix/StopUnix
+	startUnix := int64(input.StartTime)
+	stopUnix := int64(input.EndTime)
+	durationSec := stopUnix - startUnix
 
-	// Convert to Commodore request format
-	req := &commodore.CreateClipRequest{
-		StreamID:  input.Stream,
-		StartTime: int64(input.StartTime),
-		EndTime:   int64(input.EndTime),
-		Title:     input.Title,
+	req := &pb.CreateClipRequest{
+		InternalName: input.Stream,
+		StartUnix:    &startUnix,
+		StopUnix:     &stopUnix,
+		DurationSec:  &durationSec,
+		Title:        input.Title,
 	}
 
 	// Handle optional description
@@ -309,413 +297,314 @@ func (r *Resolver) DoCreateClip(ctx context.Context, input model.CreateClipInput
 		req.Description = *input.Description
 	}
 
-	// Call Commodore to create clip
-	clipResp, err := r.Clients.Commodore.CreateClip(ctx, userToken, req)
+	// Call Commodore gRPC (context metadata carries auth)
+	clipResp, err := r.Clients.Commodore.CreateClip(ctx, req)
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to create clip")
 		return nil, fmt.Errorf("failed to create clip: %w", err)
 	}
 
-	return clipResp, nil
+	// Construct ClipInfo from response (CreateClipResponse only returns status info)
+	now := time.Now()
+	description := ""
+	if input.Description != nil {
+		description = *input.Description
+	}
+	return &pb.ClipInfo{
+		Id:          clipResp.RequestId,
+		ClipHash:    clipResp.ClipHash,
+		StreamName:  input.Stream,
+		Title:       input.Title,
+		Description: description,
+		StartTime:   startUnix,
+		Duration:    durationSec,
+		NodeId:      clipResp.NodeId,
+		Status:      clipResp.Status,
+		CreatedAt:   timestamppb.New(now),
+		UpdatedAt:   timestamppb.New(now),
+	}, nil
 }
 
 // === STREAM KEYS MANAGEMENT ===
 
 // DoGetStreamKeys retrieves all stream keys for a specific stream
-func (r *Resolver) DoGetStreamKeys(ctx context.Context, streamID string) ([]*models.StreamKey, error) {
+func (r *Resolver) DoGetStreamKeys(ctx context.Context, streamID string) ([]*pb.StreamKey, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo stream keys")
-		return []*models.StreamKey{
+		now := time.Now()
+		lastUsed1 := now.Add(-1 * time.Hour)
+		lastUsed2 := now.Add(-3 * 24 * time.Hour)
+		return []*pb.StreamKey{
 			{
-				ID:         "sk_demo_1",
-				TenantID:   "tenant_demo_1",
-				UserID:     "user_demo_1",
-				StreamID:   streamID,
+				Id:         "sk_demo_1",
+				TenantId:   "tenant_demo_1",
+				UserId:     "user_demo_1",
+				StreamId:   streamID,
 				KeyValue:   "sk_demo_live_primary",
-				KeyName:    func() *string { s := "Primary Key"; return &s }(),
+				KeyName:    "Primary Key",
 				IsActive:   true,
-				LastUsedAt: func() *time.Time { t := time.Now().Add(-1 * time.Hour); return &t }(),
-				CreatedAt:  time.Now().Add(-7 * 24 * time.Hour),
-				UpdatedAt:  time.Now().Add(-7 * 24 * time.Hour),
+				LastUsedAt: timestamppb.New(lastUsed1),
+				CreatedAt:  timestamppb.New(now.Add(-7 * 24 * time.Hour)),
+				UpdatedAt:  timestamppb.New(now.Add(-7 * 24 * time.Hour)),
 			},
 			{
-				ID:         "sk_demo_2",
-				TenantID:   "tenant_demo_1",
-				UserID:     "user_demo_1",
-				StreamID:   streamID,
+				Id:         "sk_demo_2",
+				TenantId:   "tenant_demo_1",
+				UserId:     "user_demo_1",
+				StreamId:   streamID,
 				KeyValue:   "sk_demo_live_backup",
-				KeyName:    func() *string { s := "Backup Key"; return &s }(),
+				KeyName:    "Backup Key",
 				IsActive:   false,
-				LastUsedAt: func() *time.Time { t := time.Now().Add(-3 * 24 * time.Hour); return &t }(),
-				CreatedAt:  time.Now().Add(-30 * 24 * time.Hour),
-				UpdatedAt:  time.Now().Add(-30 * 24 * time.Hour),
+				LastUsedAt: timestamppb.New(lastUsed2),
+				CreatedAt:  timestamppb.New(now.Add(-30 * 24 * time.Hour)),
+				UpdatedAt:  timestamppb.New(now.Add(-30 * 24 * time.Hour)),
 			},
 		}, nil
 	}
 
-	// Extract JWT token from context
-	userToken, ok := ctx.Value("jwt_token").(string)
-	if !ok {
-		return nil, fmt.Errorf("user not authenticated")
-	}
-
-	// Get stream keys from Commodore
-	keysResp, err := r.Clients.Commodore.GetStreamKeys(ctx, userToken, streamID)
+	// Call Commodore gRPC (context metadata carries auth)
+	keysResp, err := r.Clients.Commodore.ListStreamKeys(ctx, streamID, nil)
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to get stream keys")
 		return nil, fmt.Errorf("failed to get stream keys: %w", err)
 	}
 
-	// Convert to GraphQL model
-	keys := make([]*models.StreamKey, len(keysResp.StreamKeys))
-	for i, key := range keysResp.StreamKeys {
-		keys[i] = &models.StreamKey{
-			ID:       key.ID,
-			TenantID: key.TenantID,
-			UserID:   key.UserID,
-			StreamID: key.StreamID,
-			KeyValue: key.KeyValue,
-			KeyName: func() *string {
-				if key.KeyName != "" {
-					return &key.KeyName
-				} else {
-					return nil
-				}
-			}(),
-			IsActive:   key.IsActive,
-			LastUsedAt: key.LastUsedAt,
-			CreatedAt:  key.CreatedAt,
-			UpdatedAt:  key.UpdatedAt,
-		}
-	}
-
-	return keys, nil
+	return keysResp.StreamKeys, nil
 }
 
 // DoCreateStreamKey creates a new stream key for a specific stream
-func (r *Resolver) DoCreateStreamKey(ctx context.Context, streamID string, input model.CreateStreamKeyInput) (*models.StreamKey, error) {
+func (r *Resolver) DoCreateStreamKey(ctx context.Context, streamID string, input model.CreateStreamKeyInput) (*pb.StreamKey, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo stream key creation")
-		return &models.StreamKey{
-			ID:         "sk_demo_new_" + time.Now().Format("20060102150405"),
-			TenantID:   "tenant_demo_1",
-			UserID:     "user_demo_1",
-			StreamID:   streamID,
-			KeyValue:   "sk_demo_" + time.Now().Format("150405"),
-			KeyName:    &input.Name,
-			IsActive:   true,
-			LastUsedAt: nil,
-			CreatedAt:  time.Now(),
-			UpdatedAt:  time.Now(),
+		now := time.Now()
+		return &pb.StreamKey{
+			Id:        "sk_demo_new_" + now.Format("20060102150405"),
+			TenantId:  "tenant_demo_1",
+			UserId:    "user_demo_1",
+			StreamId:  streamID,
+			KeyValue:  "sk_demo_" + now.Format("150405"),
+			KeyName:   input.Name,
+			IsActive:  true,
+			CreatedAt: timestamppb.New(now),
+			UpdatedAt: timestamppb.New(now),
 		}, nil
 	}
 
-	// Extract JWT token from context
-	userToken, ok := ctx.Value("jwt_token").(string)
-	if !ok {
-		return nil, fmt.Errorf("user not authenticated")
-	}
-
-	// Convert to Commodore request format
-	req := &commodore.CreateStreamKeyRequest{
-		KeyName: input.Name,
-	}
-
-	// Call Commodore to create stream key
-	keyResp, err := r.Clients.Commodore.CreateStreamKey(ctx, userToken, streamID, req)
+	// Call Commodore gRPC (context metadata carries auth)
+	keyResp, err := r.Clients.Commodore.CreateStreamKey(ctx, streamID, input.Name)
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to create stream key")
 		return nil, fmt.Errorf("failed to create stream key: %w", err)
 	}
 
-	// Convert to GraphQL model
-	return &models.StreamKey{
-		ID:       keyResp.StreamKey.ID,
-		TenantID: keyResp.StreamKey.TenantID,
-		UserID:   keyResp.StreamKey.UserID,
-		StreamID: keyResp.StreamKey.StreamID,
-		KeyValue: keyResp.StreamKey.KeyValue,
-		KeyName: func() *string {
-			if keyResp.StreamKey.KeyName != "" {
-				return &keyResp.StreamKey.KeyName
-			} else {
-				return nil
-			}
-		}(),
-		IsActive:   keyResp.StreamKey.IsActive,
-		LastUsedAt: keyResp.StreamKey.LastUsedAt,
-		CreatedAt:  keyResp.StreamKey.CreatedAt,
-		UpdatedAt:  keyResp.StreamKey.UpdatedAt,
-	}, nil
+	return keyResp.StreamKey, nil
 }
 
 // DoDeleteStreamKey deactivates a stream key
-func (r *Resolver) DoDeleteStreamKey(ctx context.Context, streamID, keyID string) (bool, error) {
+func (r *Resolver) DoDeleteStreamKey(ctx context.Context, streamID, keyID string) (model.DeleteStreamKeyResult, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo stream key deletion")
-		return true, nil
+		return &model.DeleteSuccess{Success: true, DeletedID: keyID}, nil
 	}
 
-	// Extract JWT token from context
-	userToken, ok := ctx.Value("jwt_token").(string)
-	if !ok {
-		return false, fmt.Errorf("user not authenticated")
-	}
-
-	// Call Commodore to deactivate stream key
-	_, err := r.Clients.Commodore.DeactivateStreamKey(ctx, userToken, streamID, keyID)
+	// Call Commodore gRPC (context metadata carries auth)
+	err := r.Clients.Commodore.DeactivateStreamKey(ctx, streamID, keyID)
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to deactivate stream key")
-		return false, fmt.Errorf("failed to deactivate stream key: %w", err)
+		if strings.Contains(err.Error(), "not found") {
+			return &model.NotFoundError{
+				Message:      "Stream key not found",
+				Code:         strPtr("NOT_FOUND"),
+				ResourceType: "StreamKey",
+				ResourceID:   keyID,
+			}, nil
+		}
+		return nil, fmt.Errorf("failed to deactivate stream key: %w", err)
 	}
 
-	return true, nil
+	return &model.DeleteSuccess{Success: true, DeletedID: keyID}, nil
 }
 
 // === RECORDINGS MANAGEMENT ===
 
 // DoGetRecordings retrieves all recordings for the authenticated user
-func (r *Resolver) DoGetRecordings(ctx context.Context, streamID *string) ([]*commodore.Recording, error) {
+func (r *Resolver) DoGetRecordings(ctx context.Context, streamID *string) ([]*pb.Recording, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo recordings")
 		now := time.Now()
-		oneHour := 3600
-		thirtyMin := 1800
+		oneHour := int32(3600)
+		thirtyMin := int32(1800)
 		fileSize1 := int64(1048576)
 		fileSize2 := int64(512000)
 		pb1 := "pb_rec_demo_1"
 		pb2 := "pb_rec_demo_2"
-		thumb1 := "https://example.com/thumb1.jpg"
-		return []*commodore.Recording{
+		return []*pb.Recording{
 			{
-				ID:           "rec_demo_1",
-				StreamID:     "stream_demo_1",
-				Filename:     "Demo Recording #1",
-				Duration:     &oneHour,
-				Status:       "completed",
-				PlaybackID:   &pb1,
-				ThumbnailURL: &thumb1,
-				FileSize:     &fileSize1,
-				CreatedAt:    now.Add(-24 * time.Hour),
-				UpdatedAt:    now.Add(-23 * time.Hour),
+				Id:         "rec_demo_1",
+				StreamId:   "stream_demo_1",
+				Filename:   "Demo Recording #1",
+				Duration:   &oneHour,
+				Status:     "completed",
+				PlaybackId: &pb1,
+				FileSize:   &fileSize1,
+				CreatedAt:  timestamppb.New(now.Add(-24 * time.Hour)),
+				UpdatedAt:  timestamppb.New(now.Add(-23 * time.Hour)),
 			},
 			{
-				ID:         "rec_demo_2",
-				StreamID:   "stream_demo_2",
+				Id:         "rec_demo_2",
+				StreamId:   "stream_demo_2",
 				Filename:   "Demo Recording #2",
 				Duration:   &thirtyMin,
 				Status:     "processing",
-				PlaybackID: &pb2,
+				PlaybackId: &pb2,
 				FileSize:   &fileSize2,
-				CreatedAt:  now.Add(-6 * time.Hour),
-				UpdatedAt:  now.Add(-5 * time.Hour),
+				CreatedAt:  timestamppb.New(now.Add(-6 * time.Hour)),
+				UpdatedAt:  timestamppb.New(now.Add(-5 * time.Hour)),
 			},
 		}, nil
 	}
 
-	// Extract JWT token from context
-	userToken, ok := ctx.Value("jwt_token").(string)
-	if !ok {
-		return nil, fmt.Errorf("user not authenticated")
+	// Call Commodore gRPC (context metadata carries auth)
+	streamFilter := ""
+	if streamID != nil {
+		streamFilter = *streamID
 	}
-
-	// Get recordings from Commodore
-	recordingsResp, err := r.Clients.Commodore.GetRecordings(ctx, userToken, streamID)
+	recordingsResp, err := r.Clients.Commodore.ListRecordings(ctx, streamFilter, nil)
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to get recordings")
 		return nil, fmt.Errorf("failed to get recordings: %w", err)
 	}
 
-	// Return pointers to commodore.Recording items
-	recordings := make([]*commodore.Recording, len(recordingsResp.Recordings))
-	for i := range recordingsResp.Recordings {
-		recordings[i] = &recordingsResp.Recordings[i]
-	}
-
-	return recordings, nil
+	return recordingsResp.Recordings, nil
 }
 
 // === CLIPS MANAGEMENT ===
 
 // DoGetClips retrieves all clips for the authenticated user
-func (r *Resolver) DoGetClips(ctx context.Context, streamID *string) ([]*commodore.ClipResponse, error) {
+func (r *Resolver) DoGetClips(ctx context.Context, streamID *string) ([]*pb.ClipInfo, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo clips")
 		now := time.Now()
-		return []*commodore.ClipResponse{
+		return []*pb.ClipInfo{
 			{
-				ID:          "clip_demo_1",
-				StreamID:    "stream_demo_1",
+				Id:          "clip_demo_1",
+				StreamName:  "stream_demo_1",
 				Title:       "Demo Highlight Reel #1",
 				Description: "Amazing gameplay highlights from last night's stream",
 				StartTime:   1640995200, // Jan 1, 2022 00:00:00 UTC
-				EndTime:     1640995800, // Jan 1, 2022 00:10:00 UTC
 				Duration:    600,        // 10 minutes
-				PlaybackID:  "pb_clip_demo_1",
+				ClipHash:    "pb_clip_demo_1",
 				Status:      "ready",
-				CreatedAt:   now.Add(-24 * time.Hour),
-				UpdatedAt:   now.Add(-23 * time.Hour),
+				CreatedAt:   timestamppb.New(now.Add(-24 * time.Hour)),
+				UpdatedAt:   timestamppb.New(now.Add(-23 * time.Hour)),
 			},
 			{
-				ID:          "clip_demo_2",
-				StreamID:    "stream_demo_2",
+				Id:          "clip_demo_2",
+				StreamName:  "stream_demo_2",
 				Title:       "Best Moments Compilation",
 				Description: "Top 5 moments from this week's streams",
 				StartTime:   1641081600, // Jan 2, 2022 00:00:00 UTC
-				EndTime:     1641083400, // Jan 2, 2022 00:30:00 UTC
 				Duration:    1800,       // 30 minutes
-				PlaybackID:  "pb_clip_demo_2",
+				ClipHash:    "pb_clip_demo_2",
 				Status:      "processing",
-				CreatedAt:   now.Add(-6 * time.Hour),
-				UpdatedAt:   now.Add(-5 * time.Hour),
+				CreatedAt:   timestamppb.New(now.Add(-6 * time.Hour)),
+				UpdatedAt:   timestamppb.New(now.Add(-5 * time.Hour)),
 			},
 		}, nil
 	}
 
-	// Extract JWT token from context
-	userToken, ok := ctx.Value("jwt_token").(string)
+	// Get tenant_id from context
+	tenantID, ok := ctx.Value("tenant_id").(string)
 	if !ok {
-		return nil, fmt.Errorf("user not authenticated")
+		return nil, fmt.Errorf("tenant context required")
 	}
 
-	// Get clips from Commodore
-	clipsResp, err := r.Clients.Commodore.GetClips(ctx, userToken, streamID)
+	// Call Commodore gRPC (context metadata carries auth)
+	clipsResp, err := r.Clients.Commodore.GetClips(ctx, tenantID, streamID, nil)
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to get clips")
 		return nil, fmt.Errorf("failed to get clips: %w", err)
 	}
 
-	// Convert ClipFullResponse to ClipResponse
-	clips := make([]*commodore.ClipResponse, len(clipsResp.Clips))
-	for i, clip := range clipsResp.Clips {
-		clips[i] = &commodore.ClipResponse{
-			ID:          clip.ID,
-			StreamID:    clip.StreamName, // Map stream_name to stream_id
-			Title:       clip.Title,
-			Description: "", // ClipFullResponse doesn't include description
-			StartTime:   clip.StartTime,
-			EndTime:     0, // Calculate from StartTime + Duration
-			Duration:    clip.Duration,
-			PlaybackID:  "", // ClipFullResponse doesn't include playback_id
-			Status:      clip.Status,
-			CreatedAt:   clip.CreatedAt,
-			UpdatedAt:   clip.CreatedAt, // Use CreatedAt as UpdatedAt since ClipFullResponse doesn't have UpdatedAt
-		}
-		// Calculate EndTime from StartTime + Duration
-		clips[i].EndTime = clip.StartTime + clip.Duration
-	}
-
-	return clips, nil
+	return clipsResp.Clips, nil
 }
 
 // DoGetClip retrieves a specific clip by ID
-func (r *Resolver) DoGetClip(ctx context.Context, id string) (*commodore.ClipResponse, error) {
+func (r *Resolver) DoGetClip(ctx context.Context, id string) (*pb.ClipInfo, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo clip")
 		now := time.Now()
-		return &commodore.ClipResponse{
-			ID:          id,
-			StreamID:    "stream_demo_1",
+		return &pb.ClipInfo{
+			Id:          id,
+			StreamName:  "stream_demo_1",
 			Title:       "Demo Clip Details",
 			Description: "This is a detailed view of a demo clip with all metadata",
 			StartTime:   1640995200, // Jan 1, 2022 00:00:00 UTC
-			EndTime:     1640995800, // Jan 1, 2022 00:10:00 UTC
 			Duration:    600,        // 10 minutes
-			PlaybackID:  "pb_clip_" + id,
+			ClipHash:    "pb_clip_" + id,
 			Status:      "ready",
-			CreatedAt:   now.Add(-12 * time.Hour),
-			UpdatedAt:   now.Add(-11 * time.Hour),
+			CreatedAt:   timestamppb.New(now.Add(-12 * time.Hour)),
+			UpdatedAt:   timestamppb.New(now.Add(-11 * time.Hour)),
 		}, nil
 	}
 
-	// Extract JWT token from context
-	userToken, ok := ctx.Value("jwt_token").(string)
-	if !ok {
-		return nil, fmt.Errorf("user not authenticated")
-	}
-
-	// Get clip from Commodore
-	clipFull, err := r.Clients.Commodore.GetClip(ctx, userToken, id)
+	// Call Commodore gRPC (context metadata carries auth)
+	clip, err := r.Clients.Commodore.GetClip(ctx, id)
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to get clip")
 		return nil, fmt.Errorf("failed to get clip: %w", err)
-	}
-
-	// Convert ClipFullResponse to ClipResponse
-	clip := &commodore.ClipResponse{
-		ID:          clipFull.ID,
-		StreamID:    clipFull.StreamName, // Map stream_name to stream_id
-		Title:       clipFull.Title,
-		Description: "", // ClipFullResponse doesn't include description
-		StartTime:   clipFull.StartTime,
-		EndTime:     clipFull.StartTime + clipFull.Duration,
-		Duration:    clipFull.Duration,
-		PlaybackID:  "", // ClipFullResponse doesn't include playbook_id
-		Status:      clipFull.Status,
-		CreatedAt:   clipFull.CreatedAt,
-		UpdatedAt:   clipFull.CreatedAt, // Use CreatedAt as UpdatedAt
 	}
 
 	return clip, nil
 }
 
 // DoGetClipViewingUrls retrieves viewing URLs for a specific clip
-func (r *Resolver) DoGetClipViewingUrls(ctx context.Context, clipID string) (*model.ClipViewingUrls, error) {
+func (r *Resolver) DoGetClipViewingUrls(ctx context.Context, clipID string) (*pb.ClipViewingURLs, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo clip viewing URLs")
-		return &model.ClipViewingUrls{
-			Hls:  stringPtr("https://demo-clips.example.com/clips/" + clipID + "/playlist.m3u8"),
-			Dash: stringPtr("https://demo-clips.example.com/clips/" + clipID + "/manifest.mpd"),
-			Mp4:  stringPtr("https://demo-clips.example.com/clips/" + clipID + "/clip.mp4"),
-			Webm: stringPtr("https://demo-clips.example.com/clips/" + clipID + "/clip.webm"),
+		return &pb.ClipViewingURLs{
+			Urls: map[string]string{
+				"hls":  "https://demo-clips.example.com/clips/" + clipID + "/playlist.m3u8",
+				"dash": "https://demo-clips.example.com/clips/" + clipID + "/manifest.mpd",
+				"mp4":  "https://demo-clips.example.com/clips/" + clipID + "/clip.mp4",
+				"webm": "https://demo-clips.example.com/clips/" + clipID + "/clip.webm",
+			},
 		}, nil
 	}
 
-	// Extract JWT token from context
-	userToken, ok := ctx.Value("jwt_token").(string)
-	if !ok {
-		return nil, fmt.Errorf("user not authenticated")
-	}
-
-	// Get clip URLs from Commodore
-	clipURLs, err := r.Clients.Commodore.GetClipURLs(ctx, userToken, clipID)
+	// Call Commodore gRPC (context metadata carries auth)
+	clipURLs, err := r.Clients.Commodore.GetClipURLs(ctx, clipID)
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to get clip viewing URLs")
 		return nil, fmt.Errorf("failed to get clip viewing URLs: %w", err)
 	}
 
-	// Convert Commodore response to GraphQL model
-	urls := &model.ClipViewingUrls{
-		Hls:  getStringFromMap(clipURLs.URLs, "hls"),
-		Dash: getStringFromMap(clipURLs.URLs, "dash"),
-		Mp4:  getStringFromMap(clipURLs.URLs, "mp4"),
-		Webm: getStringFromMap(clipURLs.URLs, "webm"),
-	}
-
-	return urls, nil
+	return clipURLs, nil
 }
 
 // DoDeleteClip deletes a clip by ID
-func (r *Resolver) DoDeleteClip(ctx context.Context, id string) (bool, error) {
+func (r *Resolver) DoDeleteClip(ctx context.Context, id string) (model.DeleteClipResult, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: simulating clip deletion")
-		return true, nil
+		return &model.DeleteSuccess{Success: true, DeletedID: id}, nil
 	}
 
-	// Extract JWT token from context
-	userToken, ok := ctx.Value("jwt_token").(string)
-	if !ok {
-		return false, fmt.Errorf("user not authenticated")
-	}
-
-	// Delete clip via Commodore
-	err := r.Clients.Commodore.DeleteClip(ctx, userToken, id)
+	// Call Commodore gRPC (context metadata carries auth)
+	err := r.Clients.Commodore.DeleteClip(ctx, id)
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to delete clip")
-		return false, fmt.Errorf("failed to delete clip: %w", err)
+		if strings.Contains(err.Error(), "not found") {
+			return &model.NotFoundError{
+				Message:      "Clip not found",
+				Code:         strPtr("NOT_FOUND"),
+				ResourceType: "Clip",
+				ResourceID:   id,
+			}, nil
+		}
+		return nil, fmt.Errorf("failed to delete clip: %w", err)
 	}
 
-	return true, nil
+	return &model.DeleteSuccess{Success: true, DeletedID: id}, nil
 }
 
 // Helper functions
@@ -728,31 +617,23 @@ func stringPtr(s string) *string {
 	return &s
 }
 
-// getStringFromMap safely extracts a string value from a map and returns a pointer
-func getStringFromMap(m map[string]string, key string) *string {
-	if value, exists := m[key]; exists && value != "" {
-		return &value
-	}
-	return nil
-}
-
 // === DVR & Recording Config ===
 
 // DoStartDVR starts a DVR recording
-func (r *Resolver) DoStartDVR(ctx context.Context, internalName string, streamID *string) (*commodore.StartDVRResponse, error) {
+func (r *Resolver) DoStartDVR(ctx context.Context, internalName string, streamID *string) (*pb.StartDVRResponse, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo: start DVR")
-		return &commodore.StartDVRResponse{Status: "started", DVRHash: "dvr_demo_hash"}, nil
+		return &pb.StartDVRResponse{Status: "started", DvrHash: "dvr_demo_hash"}, nil
 	}
-	userToken, ok := ctx.Value("jwt_token").(string)
-	if !ok {
-		return nil, fmt.Errorf("user not authenticated")
-	}
-	req := &commodore.StartDVRRequest{InternalName: internalName}
+
+	// Build gRPC request - StreamId is *string in proto
+	req := &pb.StartDVRRequest{InternalName: internalName}
 	if streamID != nil {
-		req.StreamID = *streamID
+		req.StreamId = streamID
 	}
-	res, err := r.Clients.Commodore.StartDVR(ctx, userToken, req)
+
+	// Call Commodore gRPC (context metadata carries auth)
+	res, err := r.Clients.Commodore.StartDVR(ctx, req)
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to start DVR")
 		return nil, fmt.Errorf("failed to start DVR: %w", err)
@@ -761,69 +642,43 @@ func (r *Resolver) DoStartDVR(ctx context.Context, internalName string, streamID
 }
 
 // DoStopDVR stops an ongoing DVR recording
-func (r *Resolver) DoStopDVR(ctx context.Context, dvrHash string) (bool, error) {
+func (r *Resolver) DoStopDVR(ctx context.Context, dvrHash string) (model.StopDVRResult, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo: stop DVR")
-		return true, nil
+		return &model.DeleteSuccess{Success: true, DeletedID: dvrHash}, nil
 	}
-	userToken, ok := ctx.Value("jwt_token").(string)
-	if !ok {
-		return false, fmt.Errorf("user not authenticated")
-	}
-	if err := r.Clients.Commodore.StopDVR(ctx, userToken, dvrHash); err != nil {
+
+	// Call Commodore gRPC (context metadata carries auth)
+	if err := r.Clients.Commodore.StopDVR(ctx, dvrHash); err != nil {
 		r.Logger.WithError(err).Error("Failed to stop DVR")
-		return false, fmt.Errorf("failed to stop DVR: %w", err)
+		if strings.Contains(err.Error(), "not found") {
+			return &model.NotFoundError{
+				Message:      "DVR recording not found",
+				Code:         strPtr("NOT_FOUND"),
+				ResourceType: "DVRRequest",
+				ResourceID:   dvrHash,
+			}, nil
+		}
+		return nil, fmt.Errorf("failed to stop DVR: %w", err)
 	}
-	return true, nil
+	return &model.DeleteSuccess{Success: true, DeletedID: dvrHash}, nil
 }
 
-// DoGetRecordingConfig retrieves recording configuration for a stream
-func (r *Resolver) DoGetRecordingConfig(ctx context.Context, internalName string) (*commodore.RecordingConfig, error) {
-	if middleware.IsDemoMode(ctx) {
-		r.Logger.Debug("Demo: get recording config")
-		return &commodore.RecordingConfig{Enabled: false, RetentionDays: 30, Format: "ts", SegmentDuration: 6}, nil
-	}
-	userToken, ok := ctx.Value("jwt_token").(string)
-	if !ok {
-		return nil, fmt.Errorf("user not authenticated")
-	}
-	cfg, err := r.Clients.Commodore.GetRecordingConfig(ctx, userToken, internalName)
-	if err != nil {
-		r.Logger.WithError(err).Error("Failed to get recording config")
-		return nil, fmt.Errorf("failed to get recording config: %w", err)
-	}
-	return cfg, nil
-}
-
-// DoSetRecordingConfig updates recording configuration for a stream
-func (r *Resolver) DoSetRecordingConfig(ctx context.Context, internalName string, cfg commodore.RecordingConfig) (*commodore.RecordingConfig, error) {
-	if middleware.IsDemoMode(ctx) {
-		r.Logger.Debug("Demo: set recording config")
-		return &cfg, nil
-	}
-	userToken, ok := ctx.Value("jwt_token").(string)
-	if !ok {
-		return nil, fmt.Errorf("user not authenticated")
-	}
-	out, err := r.Clients.Commodore.SetRecordingConfig(ctx, userToken, internalName, cfg)
-	if err != nil {
-		r.Logger.WithError(err).Error("Failed to set recording config")
-		return nil, fmt.Errorf("failed to set recording config: %w", err)
-	}
-	return out, nil
-}
-
-// DoListDVRRequests lists DVR recordings
-func (r *Resolver) DoListDVRRequests(ctx context.Context, internalName *string, status *string, page, limit *int) (*commodore.DVRListResponse, error) {
+// DoListDVRRequests lists DVR recordings with cursor pagination
+func (r *Resolver) DoListDVRRequests(ctx context.Context, internalName *string, pagination *pb.CursorPaginationRequest) (*pb.ListDVRRecordingsResponse, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo: list DVR requests")
-		return &commodore.DVRListResponse{DVRRecordings: []commodore.DVRInfo{}, Total: 0, Page: 1, Limit: 20}, nil
+		return &pb.ListDVRRecordingsResponse{DvrRecordings: []*pb.DVRInfo{}}, nil
 	}
-	userToken, ok := ctx.Value("jwt_token").(string)
+
+	// Get tenant_id from context
+	tenantID, ok := ctx.Value("tenant_id").(string)
 	if !ok {
-		return nil, fmt.Errorf("user not authenticated")
+		return nil, fmt.Errorf("tenant context required")
 	}
-	out, err := r.Clients.Commodore.ListDVRRequests(ctx, userToken, internalName, status, page, limit)
+
+	// Call Commodore gRPC (context metadata carries auth)
+	out, err := r.Clients.Commodore.ListDVRRequests(ctx, tenantID, internalName, pagination)
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to list DVR requests")
 		return nil, fmt.Errorf("failed to list DVR requests: %w", err)
@@ -832,125 +687,440 @@ func (r *Resolver) DoListDVRRequests(ctx context.Context, internalName *string, 
 }
 
 // DoGetStreamMeta retrieves metadata for a stream
-func (r *Resolver) DoGetStreamMeta(ctx context.Context, streamKey string, targetBaseURL *string, targetNodeID *string, includeRaw *bool) (*model.StreamMetaResponse, error) {
+func (r *Resolver) DoGetStreamMeta(ctx context.Context, streamKey string, targetBaseURL *string, targetNodeID *string, includeRaw *bool) (*pb.StreamMetaResponse, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo: get stream meta")
-		rawData := `{"isLive":true,"bufferWindow":5000,"jitter":100,"unixOffset":1000,"now":1640995200000,"last":1640995195000,"width":1920,"height":1080,"version":3,"type":"video"}`
-		return &model.StreamMetaResponse{
-			MetaSummary: &model.StreamMetaSummary{
+		rawData := []byte(`{"isLive":true,"bufferWindow":5000,"jitter":100,"unixOffset":1000,"now":1640995200000,"last":1640995195000,"width":1920,"height":1080,"version":3,"type":"video"}`)
+		resp := &pb.StreamMetaResponse{
+			MetaSummary: &pb.MetaSummary{
 				IsLive:         true,
 				BufferWindowMs: 5000,
 				JitterMs:       100,
 				UnixOffsetMs:   1000,
-				NowMs:          intPtr(1640995200000),
-				LastMs:         intPtr(1640995195000),
-				Width:          intPtr(1920),
-				Height:         intPtr(1080),
-				Version:        intPtr(3),
-				Type:           stringPtr("video"),
+				NowMs:          int64Ptr(1640995200000),
+				LastMs:         int64Ptr(1640995195000),
+				Width:          int32Ptr(1920),
+				Height:         int32Ptr(1080),
+				Version:        int32Ptr(3),
+				Type:           "video",
 			},
-			Raw: func() *string {
-				if includeRaw != nil && *includeRaw {
-					return &rawData
-				}
-				return nil
-			}(),
-		}, nil
+		}
+		if includeRaw != nil && *includeRaw {
+			resp.Raw = rawData
+		}
+		return resp, nil
 	}
 
-	// Call Commodore to get stream metadata
-	// Commodore's GetStreamMeta signature: (ctx, streamKey string, includeRaw bool, targetBaseURL, targetNodeID *string)
+	// gRPC client signature: GetStreamMeta(ctx, internalName, contentType string, includeRaw bool, targetNodeID, targetBaseURL string)
 	includeRawBool := includeRaw != nil && *includeRaw
-	metaResp, err := r.Clients.Commodore.GetStreamMeta(ctx, streamKey, includeRawBool, targetBaseURL, targetNodeID)
+	nodeID := ""
+	if targetNodeID != nil {
+		nodeID = *targetNodeID
+	}
+	baseURL := ""
+	if targetBaseURL != nil {
+		baseURL = *targetBaseURL
+	}
+
+	// Call Commodore gRPC (context metadata carries auth)
+	metaResp, err := r.Clients.Commodore.GetStreamMeta(ctx, streamKey, "", includeRawBool, nodeID, baseURL)
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to get stream metadata")
 		return nil, fmt.Errorf("failed to get stream metadata: %w", err)
 	}
 
-	// Convert foghorn.MetaSummary to GraphQL model.StreamMetaSummary
-	result := &model.StreamMetaSummary{
-		IsLive:         metaResp.MetaSummary.IsLive,
-		BufferWindowMs: int(metaResp.MetaSummary.BufferWindowMs), // Convert int64 to int
-		JitterMs:       int(metaResp.MetaSummary.JitterMs),       // Convert int64 to int
-		UnixOffsetMs:   int(metaResp.MetaSummary.UnixOffset),     // Convert int64 to int
-	}
-
-	// Add optional fields if present
-	if metaResp.MetaSummary.NowMs != nil {
-		nowMs := int(*metaResp.MetaSummary.NowMs)
-		result.NowMs = &nowMs
-	}
-	if metaResp.MetaSummary.LastMs != nil {
-		lastMs := int(*metaResp.MetaSummary.LastMs)
-		result.LastMs = &lastMs
-	}
-	if metaResp.MetaSummary.Width != nil {
-		result.Width = metaResp.MetaSummary.Width
-	}
-	if metaResp.MetaSummary.Height != nil {
-		result.Height = metaResp.MetaSummary.Height
-	}
-	if metaResp.MetaSummary.Version != nil {
-		result.Version = metaResp.MetaSummary.Version
-	}
-	if metaResp.MetaSummary.Type != "" {
-		result.Type = &metaResp.MetaSummary.Type
-	}
-
-	// Build the response
-	response := &model.StreamMetaResponse{
-		MetaSummary: result,
-	}
-
-	// Include raw response if requested
-	if includeRawBool && metaResp.Raw != nil {
-		// Convert the 'any' type to string via JSON marshalling
-		if rawBytes, err := json.Marshal(metaResp.Raw); err == nil {
-			rawStr := string(rawBytes)
-			response.Raw = &rawStr
-		}
-	}
-
-	return response, nil
+	// gRPC client returns *pb.StreamMetaResponse directly
+	return metaResp, nil
 }
 
-// intPtr returns a pointer to the int value
-func intPtr(i int) *int {
+// int32Ptr returns a pointer to the int32 value
+func int32Ptr(i int32) *int32 {
 	return &i
 }
 
-func (r *Resolver) getStreamsMemoized(ctx context.Context, userToken string) (*[]models.Stream, error) {
-	if lds := loaders.FromContext(ctx); lds != nil && lds.Memo != nil {
-		key := fmt.Sprintf("commodore:get_streams:%s", userToken)
-		val, err := lds.Memo.GetOrLoad(key, func() (interface{}, error) {
-			return r.Clients.Commodore.GetStreams(ctx, userToken)
-		})
-		if err != nil {
-			return nil, err
-		}
-		streams, ok := val.(*[]models.Stream)
-		if !ok {
-			return nil, fmt.Errorf("unexpected cache type for %s", key)
-		}
-		return streams, nil
-	}
-	return r.Clients.Commodore.GetStreams(ctx, userToken)
+// int64Ptr returns a pointer to the int64 value
+func int64Ptr(i int64) *int64 {
+	return &i
 }
 
-func (r *Resolver) getStreamMemoized(ctx context.Context, userToken, streamID string) (*models.Stream, error) {
+func (r *Resolver) getStreamsMemoized(ctx context.Context) ([]*pb.Stream, error) {
+	tenantID, _ := ctx.Value("tenant_id").(string)
+
+	var streams []*pb.Stream
+
 	if lds := loaders.FromContext(ctx); lds != nil && lds.Memo != nil {
-		key := fmt.Sprintf("commodore:get_stream:%s:%s", userToken, streamID)
+		// Use tenant_id from context for cache key (gRPC uses context metadata for auth)
+		key := fmt.Sprintf("commodore:get_streams:%s", tenantID)
 		val, err := lds.Memo.GetOrLoad(key, func() (interface{}, error) {
-			return r.Clients.Commodore.GetStream(ctx, userToken, streamID)
+			resp, err := r.Clients.Commodore.ListStreams(ctx, nil)
+			if err != nil {
+				return nil, err
+			}
+			return resp.Streams, nil
 		})
 		if err != nil {
 			return nil, err
 		}
-		stream, ok := val.(*models.Stream)
+		var ok bool
+		streams, ok = val.([]*pb.Stream)
 		if !ok {
 			return nil, fmt.Errorf("unexpected cache type for %s", key)
 		}
-		return stream, nil
+	} else {
+		resp, err := r.Clients.Commodore.ListStreams(ctx, nil)
+		if err != nil {
+			return nil, err
+		}
+		streams = resp.Streams
 	}
-	return r.Clients.Commodore.GetStream(ctx, userToken, streamID)
+
+	return streams, nil
+}
+
+func (r *Resolver) getStreamMemoized(ctx context.Context, streamID string) (*pb.Stream, error) {
+	tenantID, _ := ctx.Value("tenant_id").(string)
+	var stream *pb.Stream
+
+	if lds := loaders.FromContext(ctx); lds != nil && lds.Memo != nil {
+		// Use tenant_id from context for cache key (gRPC uses context metadata for auth)
+		key := fmt.Sprintf("commodore:get_stream:%s:%s", tenantID, streamID)
+		val, err := lds.Memo.GetOrLoad(key, func() (interface{}, error) {
+			return r.Clients.Commodore.GetStream(ctx, streamID)
+		})
+		if err != nil {
+			return nil, err
+		}
+		var ok bool
+		stream, ok = val.(*pb.Stream)
+		if !ok {
+			return nil, fmt.Errorf("unexpected cache type for %s", key)
+		}
+	} else {
+		var err error
+		stream, err = r.Clients.Commodore.GetStream(ctx, streamID)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return stream, nil
+}
+
+// === CONNECTION-BASED PAGINATION ===
+
+// DoGetStreamsConnection retrieves streams with Relay-style cursor pagination
+func (r *Resolver) DoGetStreamsConnection(ctx context.Context, first *int, after *string, last *int, before *string) (*model.StreamsConnection, error) {
+	// TODO: Implement bidirectional keyset pagination once Commodore supports it
+	_ = last
+	_ = before
+	start := time.Now()
+
+	defer func() {
+		duration := time.Since(start).Seconds()
+		if r.Metrics != nil {
+			r.Metrics.Duration.WithLabelValues("streamsConnection").Observe(duration)
+		}
+	}()
+
+	// Parse pagination parameters
+	limit := pagination.DefaultLimit
+	offset := 0
+
+	if first != nil {
+		limit = pagination.ClampLimit(*first)
+	}
+	if after != nil && *after != "" {
+		// For cursor-based pagination, decode the cursor to get offset
+		// Currently using index-based cursor - can enhance later with Commodore pagination support
+	}
+
+	// Check for demo mode
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Returning demo streams connection")
+		streams := demo.GenerateStreams()
+		return r.buildStreamsConnection(streams, len(streams), false, offset), nil
+	}
+
+	// gRPC uses context metadata for auth (set by userContextInterceptor)
+	streamsResp, err := r.getStreamsMemoized(ctx)
+	if err != nil {
+		r.Logger.WithError(err).Error("Failed to get streams")
+		if r.Metrics != nil {
+			r.Metrics.Operations.WithLabelValues("streamsConnection", "error").Inc()
+		}
+		return nil, fmt.Errorf("failed to get streams: %w", err)
+	}
+
+	// Apply pagination in-memory (until Commodore supports cursor pagination)
+	allStreams := streamsResp
+	total := len(allStreams)
+
+	// Apply offset and limit
+	startIdx := offset
+	if startIdx > total {
+		startIdx = total
+	}
+	end := startIdx + limit
+	if end > total {
+		end = total
+	}
+
+	paginatedStreams := allStreams[startIdx:end]
+	hasMore := end < total
+
+	if r.Metrics != nil {
+		r.Metrics.Operations.WithLabelValues("streamsConnection", "success").Inc()
+	}
+
+	return r.buildStreamsConnection(paginatedStreams, total, hasMore, offset), nil
+}
+
+// buildStreamsConnection constructs a StreamsConnection from a slice of streams
+func (r *Resolver) buildStreamsConnection(streams []*pb.Stream, total int, hasMore bool, offset int) *model.StreamsConnection {
+	edges := make([]*model.StreamEdge, len(streams))
+	for i, stream := range streams {
+		cursor := pagination.EncodeIndexCursor(offset + i)
+		edges[i] = &model.StreamEdge{
+			Cursor: cursor,
+			Node:   stream,
+		}
+	}
+
+	pageInfo := &model.PageInfo{
+		HasPreviousPage: offset > 0,
+		HasNextPage:     hasMore,
+	}
+	if len(edges) > 0 {
+		firstCursor := pagination.EncodeIndexCursor(offset)
+		lastCursor := pagination.EncodeIndexCursor(offset + len(streams) - 1)
+		pageInfo.StartCursor = &firstCursor
+		pageInfo.EndCursor = &lastCursor
+	}
+
+	return &model.StreamsConnection{
+		Edges:      edges,
+		PageInfo:   pageInfo,
+		TotalCount: total,
+	}
+}
+
+// DoGetRecordingsConnection retrieves recordings with Relay-style cursor pagination
+func (r *Resolver) DoGetRecordingsConnection(ctx context.Context, streamID *string, first *int, after *string, last *int, before *string) (*model.RecordingsConnection, error) {
+	// TODO: Implement bidirectional keyset pagination once Commodore supports it
+	_ = last
+	_ = before
+	// Parse pagination parameters
+	limit := pagination.DefaultLimit
+	offset := 0
+
+	if first != nil {
+		limit = pagination.ClampLimit(*first)
+	}
+
+	// Check for demo mode
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Returning demo recordings connection")
+		recordings, _ := r.DoGetRecordings(ctx, streamID)
+		return r.buildRecordingsConnection(recordings, len(recordings), false, offset), nil
+	}
+
+	// gRPC uses context metadata for auth (set by userContextInterceptor)
+	streamFilter := ""
+	if streamID != nil {
+		streamFilter = *streamID
+	}
+	recordingsResp, err := r.Clients.Commodore.ListRecordings(ctx, streamFilter, nil)
+	if err != nil {
+		r.Logger.WithError(err).Error("Failed to get recordings")
+		return nil, fmt.Errorf("failed to get recordings: %w", err)
+	}
+
+	// Apply pagination in-memory
+	allRecordings := recordingsResp.Recordings
+	total := len(allRecordings)
+
+	startIdx := offset
+	if startIdx > total {
+		startIdx = total
+	}
+	end := startIdx + limit
+	if end > total {
+		end = total
+	}
+
+	paginatedRecordings := allRecordings[startIdx:end]
+	hasMore := end < total
+
+	return r.buildRecordingsConnection(paginatedRecordings, total, hasMore, offset), nil
+}
+
+// buildRecordingsConnection constructs a RecordingsConnection from a slice of recordings
+func (r *Resolver) buildRecordingsConnection(recordings []*pb.Recording, total int, hasMore bool, offset int) *model.RecordingsConnection {
+	edges := make([]*model.RecordingEdge, len(recordings))
+	for i, recording := range recordings {
+		cursor := pagination.EncodeIndexCursor(offset + i)
+		edges[i] = &model.RecordingEdge{
+			Cursor: cursor,
+			Node:   recording,
+		}
+	}
+
+	pageInfo := &model.PageInfo{
+		HasPreviousPage: offset > 0,
+		HasNextPage:     hasMore,
+	}
+	if len(edges) > 0 {
+		firstCursor := pagination.EncodeIndexCursor(offset)
+		lastCursor := pagination.EncodeIndexCursor(offset + len(recordings) - 1)
+		pageInfo.StartCursor = &firstCursor
+		pageInfo.EndCursor = &lastCursor
+	}
+
+	return &model.RecordingsConnection{
+		Edges:      edges,
+		PageInfo:   pageInfo,
+		TotalCount: total,
+	}
+}
+
+// DoGetClipsConnection retrieves clips with Relay-style cursor pagination
+func (r *Resolver) DoGetClipsConnection(ctx context.Context, streamID *string, first *int, after *string, last *int, before *string) (*model.ClipsConnection, error) {
+	// TODO: Implement bidirectional keyset pagination once Commodore supports it
+	_ = last
+	_ = before
+	// Parse pagination parameters
+	limit := pagination.DefaultLimit
+	offset := 0
+
+	if first != nil {
+		limit = pagination.ClampLimit(*first)
+	}
+
+	// Check for demo mode
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Returning demo clips connection")
+		clips, _ := r.DoGetClips(ctx, streamID)
+		return r.buildClipsConnection(clips, len(clips), false, offset), nil
+	}
+
+	// Get tenant_id from context
+	tenantID, ok := ctx.Value("tenant_id").(string)
+	if !ok {
+		return nil, fmt.Errorf("tenant context required")
+	}
+
+	// gRPC uses context metadata for auth (set by userContextInterceptor)
+	clipsResp, err := r.Clients.Commodore.GetClips(ctx, tenantID, streamID, nil)
+	if err != nil {
+		r.Logger.WithError(err).Error("Failed to get clips")
+		return nil, fmt.Errorf("failed to get clips: %w", err)
+	}
+
+	// gRPC client returns []*pb.ClipInfo directly
+	allClips := clipsResp.Clips
+	total := len(allClips)
+
+	// Apply pagination in-memory
+	startIdx := offset
+	if startIdx > total {
+		startIdx = total
+	}
+	end := startIdx + limit
+	if end > total {
+		end = total
+	}
+
+	paginatedClips := allClips[startIdx:end]
+	hasMore := end < total
+
+	return r.buildClipsConnection(paginatedClips, total, hasMore, offset), nil
+}
+
+// buildClipsConnection constructs a ClipsConnection from a slice of clips
+func (r *Resolver) buildClipsConnection(clips []*pb.ClipInfo, total int, hasMore bool, offset int) *model.ClipsConnection {
+	edges := make([]*model.ClipEdge, len(clips))
+	for i, clip := range clips {
+		cursor := pagination.EncodeIndexCursor(offset + i)
+		edges[i] = &model.ClipEdge{
+			Cursor: cursor,
+			Node:   clip,
+		}
+	}
+
+	pageInfo := &model.PageInfo{
+		HasPreviousPage: offset > 0,
+		HasNextPage:     hasMore,
+	}
+	if len(edges) > 0 {
+		firstCursor := pagination.EncodeIndexCursor(offset)
+		lastCursor := pagination.EncodeIndexCursor(offset + len(clips) - 1)
+		pageInfo.StartCursor = &firstCursor
+		pageInfo.EndCursor = &lastCursor
+	}
+
+	return &model.ClipsConnection{
+		Edges:      edges,
+		PageInfo:   pageInfo,
+		TotalCount: total,
+	}
+}
+
+// DoGetDVRRecordingsConnection retrieves DVR recordings with Relay-style cursor pagination
+func (r *Resolver) DoGetDVRRecordingsConnection(ctx context.Context, internalName *string, first *int, after *string, last *int, before *string) (*model.DVRRecordingsConnection, error) {
+	// Build cursor pagination request with bidirectional support
+	paginationReq := &pb.CursorPaginationRequest{
+		First: int32(pagination.DefaultLimit),
+	}
+	if first != nil {
+		paginationReq.First = int32(pagination.ClampLimit(*first))
+	}
+	if after != nil && *after != "" {
+		paginationReq.After = after
+	}
+	if last != nil {
+		paginationReq.Last = int32(pagination.ClampLimit(*last))
+	}
+	if before != nil && *before != "" {
+		paginationReq.Before = before
+	}
+
+	// Call the internal method that fetches from gRPC
+	response, err := r.DoListDVRRequests(ctx, internalName, paginationReq)
+	if err != nil {
+		return nil, err
+	}
+
+	// Build edges from proto response (DVRInfo maps to DVRRequest via autobind)
+	edges := make([]*model.DVRRecordingEdge, len(response.DvrRecordings))
+	for i, dvrInfo := range response.DvrRecordings {
+		cursor := dvrInfo.DvrHash
+		if cursor == "" {
+			cursor = pagination.EncodeIndexCursor(i)
+		}
+		edges[i] = &model.DVRRecordingEdge{
+			Cursor: cursor,
+			Node:   dvrInfo, // pb.DVRInfo autobinds to DVRRequest
+		}
+	}
+
+	// Build page info from proto pagination response
+	pageInfo := &model.PageInfo{
+		HasPreviousPage: response.Pagination != nil && response.Pagination.HasPreviousPage,
+		HasNextPage:     response.Pagination != nil && response.Pagination.HasNextPage,
+	}
+	if response.Pagination != nil {
+		pageInfo.StartCursor = response.Pagination.StartCursor
+		pageInfo.EndCursor = response.Pagination.EndCursor
+	}
+
+	totalCount := 0
+	if response.Pagination != nil {
+		totalCount = int(response.Pagination.TotalCount)
+	}
+
+	return &model.DVRRecordingsConnection{
+		Edges:      edges,
+		PageInfo:   pageInfo,
+		TotalCount: totalCount,
+	}, nil
 }

@@ -2,7 +2,7 @@
 query GetAPITokens {
   developerTokens {
     id
-    name
+    tokenName
     permissions
     status
     lastUsedAt

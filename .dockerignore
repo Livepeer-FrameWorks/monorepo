@@ -7,6 +7,9 @@ logs
 **/logs
 tmp
 dist
+**/dist
+**/build
+**/.svelte-kit
 .env
 **/.env
 npm-debug.log*

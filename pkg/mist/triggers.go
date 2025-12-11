@@ -16,7 +16,7 @@ type TriggerType string
 
 const (
 	TriggerPushRewrite   TriggerType = "PUSH_REWRITE"
-	TriggerDefaultStream TriggerType = "DEFAULT_STREAM"
+	TriggerPlayRewrite   TriggerType = "PLAY_REWRITE"
 	TriggerStreamSource  TriggerType = "STREAM_SOURCE"
 	TriggerPushOutStart  TriggerType = "PUSH_OUT_START"
 	TriggerPushEnd       TriggerType = "PUSH_END"
@@ -62,26 +62,20 @@ func ParseTriggerToProtobuf(triggerType TriggerType, rawPayload []byte, nodeID s
 			},
 		}
 
-	case TriggerDefaultStream:
-		if len(params) < 2 {
-			return nil, fmt.Errorf("DEFAULT_STREAM requires at least 2 parameters, got %d", len(params))
+	case TriggerPlayRewrite:
+		if len(params) < 4 {
+			return nil, fmt.Errorf("PLAY_REWRITE requires at least 4 parameters, got %d", len(params))
 		}
 		// Map to ViewerResolveTrigger (viewer-side resolve)
+		// PLAY_REWRITE params: stream_name, ip, connector, request_url
 		trigger := &pb.ViewerResolveTrigger{
-			DefaultStream:   params[0],
-			RequestedStream: params[1],
+			RequestedStream: params[0],
+			ViewerHost:      params[1],
+			OutputType:      params[2],
+			RequestUrl:      params[3],
 		}
-		if len(params) > 2 {
-			trigger.ViewerHost = params[2]
-		}
-		if len(params) > 3 {
-			trigger.OutputType = params[3]
-		}
-		if len(params) > 4 {
-			trigger.RequestUrl = params[4]
-		}
-		mistTrigger.TriggerPayload = &pb.MistTrigger_ViewerResolve{
-			ViewerResolve: trigger,
+		mistTrigger.TriggerPayload = &pb.MistTrigger_PlayRewrite{
+			PlayRewrite: trigger,
 		}
 
 	case TriggerStreamSource:
@@ -341,7 +335,7 @@ func ExtractInternalName(streamName string) string {
 // IsBlocking returns whether the trigger type requires a blocking response
 func (t TriggerType) IsBlocking() bool {
 	switch t {
-	case TriggerPushRewrite, TriggerDefaultStream, TriggerStreamSource, TriggerPushOutStart, TriggerUserNew:
+	case TriggerPushRewrite, TriggerPlayRewrite, TriggerStreamSource, TriggerPushOutStart, TriggerUserNew:
 		return true
 	default:
 		return false
@@ -442,6 +436,18 @@ func parseTracksFromJSON(tracksData map[string]interface{}) []*pb.StreamTrack {
 			if frameMin, ok := keys["frames_min"].(float64); ok {
 				framesMin := int32(frameMin)
 				track.FramesMin = &framesMin
+			}
+			if frameMsMax, ok := keys["frame_ms_max"].(float64); ok {
+				track.FrameMsMax = &frameMsMax
+			}
+			if frameMsMin, ok := keys["frame_ms_min"].(float64); ok {
+				track.FrameMsMin = &frameMsMin
+			}
+			if keyframeMsMax, ok := keys["ms_max"].(float64); ok {
+				track.KeyframeMsMax = &keyframeMsMax
+			}
+			if keyframeMsMin, ok := keys["ms_min"].(float64); ok {
+				track.KeyframeMsMin = &keyframeMsMin
 			}
 		}
 

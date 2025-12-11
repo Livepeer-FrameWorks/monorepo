@@ -1,0 +1,230 @@
+package foghorn
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"frameworks/pkg/logging"
+	pb "frameworks/pkg/proto"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
+)
+
+// GRPCClient is the gRPC client for Foghorn control plane services
+type GRPCClient struct {
+	conn    *grpc.ClientConn
+	clip    pb.ClipControlServiceClient
+	dvr     pb.DVRControlServiceClient
+	viewer  pb.ViewerControlServiceClient
+	logger  logging.Logger
+	timeout time.Duration
+}
+
+// GRPCConfig represents the configuration for the Foghorn gRPC client
+type GRPCConfig struct {
+	// GRPCAddr is the gRPC server address (host:port, no scheme)
+	GRPCAddr string
+	// Timeout for gRPC calls
+	Timeout time.Duration
+	// Logger for the client
+	Logger logging.Logger
+	// ServiceToken for service-to-service authentication (fallback when no user JWT)
+	ServiceToken string
+}
+
+// authInterceptor propagates authentication to gRPC metadata.
+// This reads user_id, tenant_id, and jwt_token from the Go context (set by Gateway middleware)
+// and adds them to outgoing gRPC metadata for downstream services.
+// If no user JWT is available, it falls back to the service token for service-to-service calls.
+func authInterceptor(serviceToken string) grpc.UnaryClientInterceptor {
+	return func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+		// Extract user context from Go context and add to gRPC metadata
+		md := metadata.MD{}
+
+		if userID, ok := ctx.Value("user_id").(string); ok && userID != "" {
+			md.Set("x-user-id", userID)
+		}
+		if tenantID, ok := ctx.Value("tenant_id").(string); ok && tenantID != "" {
+			md.Set("x-tenant-id", tenantID)
+		}
+
+		// Use user's JWT from context if available, otherwise fall back to service token
+		if jwtToken, ok := ctx.Value("jwt_token").(string); ok && jwtToken != "" {
+			md.Set("authorization", "Bearer "+jwtToken)
+		} else if serviceToken != "" {
+			md.Set("authorization", "Bearer "+serviceToken)
+		}
+
+		// Merge with existing outgoing metadata if any
+		if existingMD, ok := metadata.FromOutgoingContext(ctx); ok {
+			md = metadata.Join(existingMD, md)
+		}
+
+		ctx = metadata.NewOutgoingContext(ctx, md)
+		return invoker(ctx, method, req, reply, cc, opts...)
+	}
+}
+
+// NewGRPCClient creates a new gRPC client for Foghorn
+func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
+	if config.Timeout == 0 {
+		config.Timeout = 30 * time.Second
+	}
+
+	// Connect to gRPC server with auth interceptor for user context and service token fallback
+	conn, err := grpc.NewClient(
+		config.GRPCAddr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithDefaultCallOptions(grpc.WaitForReady(true)),
+		grpc.WithUnaryInterceptor(authInterceptor(config.ServiceToken)),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to Foghorn gRPC: %w", err)
+	}
+
+	return &GRPCClient{
+		conn:    conn,
+		clip:    pb.NewClipControlServiceClient(conn),
+		dvr:     pb.NewDVRControlServiceClient(conn),
+		viewer:  pb.NewViewerControlServiceClient(conn),
+		logger:  config.Logger,
+		timeout: config.Timeout,
+	}, nil
+}
+
+// Close closes the gRPC connection
+func (c *GRPCClient) Close() error {
+	if c.conn != nil {
+		return c.conn.Close()
+	}
+	return nil
+}
+
+// =============================================================================
+// CLIP OPERATIONS
+// =============================================================================
+
+// CreateClip creates a new clip from a stream
+func (c *GRPCClient) CreateClip(ctx context.Context, req *pb.CreateClipRequest) (*pb.CreateClipResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+
+	return c.clip.CreateClip(ctx, req)
+}
+
+// GetClips returns all clips for a tenant
+func (c *GRPCClient) GetClips(ctx context.Context, tenantID string, internalName *string, pagination *pb.CursorPaginationRequest) (*pb.GetClipsResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+
+	return c.clip.GetClips(ctx, &pb.GetClipsRequest{
+		TenantId:     tenantID,
+		InternalName: internalName,
+		Pagination:   pagination,
+	})
+}
+
+// GetClip returns a specific clip by hash
+func (c *GRPCClient) GetClip(ctx context.Context, clipHash string) (*pb.ClipInfo, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+
+	return c.clip.GetClip(ctx, &pb.GetClipRequest{
+		ClipHash: clipHash,
+	})
+}
+
+// GetClipURLs returns viewing URLs for a clip
+func (c *GRPCClient) GetClipURLs(ctx context.Context, clipHash string) (*pb.ClipViewingURLs, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+
+	return c.clip.GetClipURLs(ctx, &pb.GetClipURLsRequest{
+		ClipHash: clipHash,
+	})
+}
+
+// DeleteClip deletes a clip
+func (c *GRPCClient) DeleteClip(ctx context.Context, clipHash string) (*pb.DeleteClipResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+
+	return c.clip.DeleteClip(ctx, &pb.DeleteClipRequest{
+		ClipHash: clipHash,
+	})
+}
+
+// =============================================================================
+// DVR OPERATIONS
+// =============================================================================
+
+// StartDVR initiates DVR recording for a stream
+func (c *GRPCClient) StartDVR(ctx context.Context, req *pb.StartDVRRequest) (*pb.StartDVRResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+
+	return c.dvr.StartDVR(ctx, req)
+}
+
+// StopDVR stops an active DVR recording
+func (c *GRPCClient) StopDVR(ctx context.Context, dvrHash string, tenantID *string) (*pb.StopDVRResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+
+	req := &pb.StopDVRRequest{
+		DvrHash: dvrHash,
+	}
+	if tenantID != nil {
+		req.TenantId = *tenantID
+	}
+	return c.dvr.StopDVR(ctx, req)
+}
+
+// GetDVRStatus returns status of a DVR recording
+func (c *GRPCClient) GetDVRStatus(ctx context.Context, dvrHash string) (*pb.DVRInfo, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+
+	return c.dvr.GetDVRStatus(ctx, &pb.GetDVRStatusRequest{
+		DvrHash: dvrHash,
+	})
+}
+
+// ListDVRRecordings lists all DVR recordings for a tenant
+func (c *GRPCClient) ListDVRRecordings(ctx context.Context, tenantID string, internalName *string, pagination *pb.CursorPaginationRequest) (*pb.ListDVRRecordingsResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+
+	return c.dvr.ListDVRRecordings(ctx, &pb.ListDVRRecordingsRequest{
+		TenantId:     tenantID,
+		InternalName: internalName,
+		Pagination:   pagination,
+	})
+}
+
+// =============================================================================
+// VIEWER OPERATIONS
+// =============================================================================
+
+// ResolveViewerEndpoint resolves the best endpoint(s) for a viewer
+func (c *GRPCClient) ResolveViewerEndpoint(ctx context.Context, contentType, contentID string, viewerIP *string) (*pb.ViewerEndpointResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+
+	return c.viewer.ResolveViewerEndpoint(ctx, &pb.ViewerEndpointRequest{
+		ContentType: contentType,
+		ContentId:   contentID,
+		ViewerIp:    viewerIP,
+	})
+}
+
+// GetStreamMeta returns MistServer JSON meta for a stream
+func (c *GRPCClient) GetStreamMeta(ctx context.Context, req *pb.StreamMetaRequest) (*pb.StreamMetaResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+
+	return c.viewer.GetStreamMeta(ctx, req)
+}

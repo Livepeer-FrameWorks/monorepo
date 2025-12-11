@@ -6,18 +6,18 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"frameworks/api_analytics_ingest/internal/handlers"
-	qmapi "frameworks/pkg/api/quartermaster"
 	qmclient "frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/config"
 	"frameworks/pkg/database"
 	"frameworks/pkg/kafka"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/monitoring"
+	pb "frameworks/pkg/proto"
 	"frameworks/pkg/server"
 	"frameworks/pkg/version"
-	"time"
 )
 
 func main() {
@@ -29,7 +29,6 @@ func main() {
 
 	logger.Info("Starting Periscope-Ingest (Analytics Event Processing)")
 
-	dbURL := config.RequireEnv("DATABASE_URL")
 	clickhouseHost := config.RequireEnv("CLICKHOUSE_HOST")
 	clickhouseDB := config.RequireEnv("CLICKHOUSE_DB")
 	clickhouseUser := config.RequireEnv("CLICKHOUSE_USER")
@@ -37,13 +36,7 @@ func main() {
 	brokersEnv := config.RequireEnv("KAFKA_BROKERS")
 	clusterID := config.RequireEnv("KAFKA_CLUSTER_ID")
 	serviceToken := config.RequireEnv("SERVICE_TOKEN")
-	quartermasterURL := config.RequireEnv("QUARTERMASTER_URL")
-
-	// Database configuration
-	dbConfig := database.DefaultConfig()
-	dbConfig.URL = dbURL
-	yugaDB := database.MustConnect(dbConfig, logger)
-	defer yugaDB.Close()
+	quartermasterGRPCAddr := config.GetEnv("QUARTERMASTER_GRPC_ADDR", "quartermaster:19002")
 
 	// Connect to ClickHouse
 	chConfig := database.DefaultClickHouseConfig()
@@ -68,9 +61,9 @@ func main() {
 	// Create Kafka metrics
 	metrics.KafkaMessages, metrics.KafkaDuration, metrics.KafkaLag = metricsCollector.CreateKafkaMetrics()
 
-	// Initialize handlers with both databases
+	// Initialize handlers
 	analyticsHandler := handlers.NewAnalyticsHandler(clickhouse, logger, metrics)
-	eventHandler := kafka.NewAnalyticsEventHandler(yugaDB, analyticsHandler.HandleAnalyticsEvent, logger)
+	eventHandler := kafka.NewAnalyticsEventHandler(analyticsHandler.HandleAnalyticsEvent, logger)
 
 	// We'll add health checks after we have the consumer client
 
@@ -78,24 +71,22 @@ func main() {
 	brokers := strings.Split(brokersEnv, ",")
 	groupID := config.GetEnv("KAFKA_GROUP_ID", "periscope-ingest")
 	clientID := config.GetEnv("KAFKA_CLIENT_ID", "periscope-ingest")
-	topics := strings.Split(config.GetEnv("KAFKA_TOPICS", "analytics_events"), ",")
+	topics := strings.Split(config.GetEnv("ANALYTICS_KAFKA_TOPIC", "analytics_events"), ",")
 
-	consumer, err := kafka.NewConsumer(brokers, groupID, clusterID, clientID, logger, eventHandler)
+	consumer, err := kafka.NewConsumer(brokers, groupID, clusterID, clientID, logger)
 	if err != nil {
 		logger.WithError(err).Fatal("Failed to create Kafka consumer")
 	}
 
-	// Subscribe to topics
-	if err := consumer.Subscribe(topics); err != nil {
-		logger.WithError(err).Fatal("Failed to subscribe to topics")
+	// Subscribe to topics with the handler
+	for _, topic := range topics {
+		consumer.AddHandler(topic, eventHandler.HandleMessage)
 	}
 
 	// Now add health checks with all dependencies
-	healthChecker.AddCheck("postgres", monitoring.DatabaseHealthCheck(yugaDB))
 	healthChecker.AddCheck("clickhouse", monitoring.ClickHouseNativeHealthCheck(clickhouse))
 	healthChecker.AddCheck("kafka", monitoring.KafkaConsumerHealthCheck(consumer.GetClient()))
 	healthChecker.AddCheck("config", monitoring.ConfigurationHealthCheck(map[string]string{
-		"DATABASE_URL":    dbURL,
 		"CLICKHOUSE_HOST": clickhouseHost,
 		"KAFKA_BROKERS":   brokersEnv,
 		"KAFKA_GROUP_ID":  groupID,
@@ -116,12 +107,31 @@ func main() {
 
 	logger.Info("Periscope-Ingest started - consuming analytics events from Kafka")
 
-	// Best-effort service registration in Quartermaster
+	// Best-effort service registration in Quartermaster (using gRPC)
 	go func() {
-		qc := qmclient.NewClient(qmclient.Config{BaseURL: quartermasterURL, ServiceToken: serviceToken, Logger: logger})
+		qc, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
+			GRPCAddr:     quartermasterGRPCAddr,
+			Timeout:      10 * time.Second,
+			Logger:       logger,
+			ServiceToken: serviceToken,
+		})
+		if err != nil {
+			logger.WithError(err).Warn("Failed to create Quartermaster gRPC client")
+			return
+		}
+		defer qc.Close()
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if _, err := qc.BootstrapService(ctx, &qmapi.BootstrapServiceRequest{Type: "periscope_ingest", Version: version.Version, Protocol: "http", HealthEndpoint: func() *string { s := "/health"; return &s }(), Port: 18005}); err != nil {
+		healthEndpoint := "/health"
+		advertiseHost := config.GetEnv("PERISCOPE_INGEST_HOST", "periscope-ingest")
+		if _, err := qc.BootstrapService(ctx, &pb.BootstrapServiceRequest{
+			Type:           "periscope_ingest",
+			Version:        version.Version,
+			Protocol:       "http",
+			HealthEndpoint: &healthEndpoint,
+			Port:           18005,
+			AdvertiseHost:  &advertiseHost,
+		}); err != nil {
 			logger.WithError(err).Warn("Quartermaster bootstrap (periscope_ingest) failed")
 		} else {
 			logger.Info("Quartermaster bootstrap (periscope_ingest) ok")

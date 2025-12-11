@@ -1,0 +1,513 @@
+syntax = "proto3";
+
+package purser;
+
+option go_package = "frameworks/pkg/proto";
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
+import "google/protobuf/struct.proto";
+import "common.proto";
+
+// ============================================================================
+// PURSER CONTROL PLANE - BILLING & SUBSCRIPTION MANAGEMENT
+//
+// Called by:
+// - Gateway (user billing dashboard, tier selection, invoices)
+// - Periscope (usage data ingestion for metered billing)
+// - Commodore (check user limits, tier info)
+//
+// Field sources documented inline for verification.
+// ============================================================================
+
+// BillingService handles billing tiers, subscriptions, and invoices
+service BillingService {
+  // Billing tiers
+  rpc GetBillingTiers(GetBillingTiersRequest) returns (GetBillingTiersResponse);
+  rpc GetBillingTier(GetBillingTierRequest) returns (BillingTier);
+  rpc CreateBillingTier(CreateBillingTierRequest) returns (BillingTier);
+  rpc UpdateBillingTier(UpdateBillingTierRequest) returns (BillingTier);
+
+}
+
+// SubscriptionService handles tenant subscriptions
+service SubscriptionService {
+  rpc GetSubscription(GetSubscriptionRequest) returns (GetSubscriptionResponse);
+  rpc CreateSubscription(CreateSubscriptionRequest) returns (TenantSubscription);
+  rpc UpdateSubscription(UpdateSubscriptionRequest) returns (TenantSubscription);
+  rpc CancelSubscription(CancelSubscriptionRequest) returns (google.protobuf.Empty);
+}
+
+// InvoiceService handles invoice management
+service InvoiceService {
+  rpc GetInvoice(GetInvoiceRequest) returns (GetInvoiceResponse);
+  rpc ListInvoices(ListInvoicesRequest) returns (ListInvoicesResponse);
+}
+
+// PaymentService handles payment processing
+service PaymentService {
+  // Initiate payment for an invoice
+  // Source: pkg/api/purser/types.go:PaymentRequest (lines 243-249)
+  rpc CreatePayment(PaymentRequest) returns (PaymentResponse);
+
+  // Get available payment methods
+  rpc GetPaymentMethods(GetPaymentMethodsRequest) returns (PaymentMethodResponse);
+
+  // Get billing status for tenant
+  // Source: pkg/api/purser/types.go:BillingStatusResponse (lines 164-171)
+  rpc GetBillingStatus(GetBillingStatusRequest) returns (BillingStatusResponse);
+}
+
+// UsageService handles usage queries and user limit checks.
+// NOTE: Usage ingestion is handled via Kafka (billing.usage_reports topic),
+// consumed by Purser's JobManager. No gRPC ingestion endpoint needed.
+service UsageService {
+  // Get usage records for a tenant with filtering and cursor pagination
+  rpc GetUsageRecords(GetUsageRecordsRequest) returns (UsageRecordsResponse);
+
+  // Get aggregated tenant usage for a date range
+  rpc GetTenantUsage(TenantUsageRequest) returns (TenantUsageResponse);
+
+  // Check user limits for tenant (called by Commodore on registration)
+  rpc CheckUserLimit(CheckUserLimitRequest) returns (CheckUserLimitResponse);
+}
+
+// ============================================================================
+// BILLING TIER MESSAGES
+// ============================================================================
+
+message GetBillingTiersRequest {
+  bool include_inactive = 1;            // include inactive tiers (admin)
+  common.CursorPaginationRequest pagination = 2;
+}
+
+// Matches pkg/api/purser/types.go:GetBillingTiersResponse (lines 111-115)
+message GetBillingTiersResponse {
+  repeated BillingTier tiers = 1;       // json:"tiers"
+  repeated string payment_methods = 2;  // json:"payment_methods"
+  common.CursorPaginationResponse pagination = 3;
+}
+
+message GetBillingTierRequest {
+  string tier_id = 1;
+}
+
+// Matches pkg/models/billing.go:BillingTier (lines 169-204)
+message BillingTier {
+  string id = 1;                        // json:"id"
+  string tier_name = 2;                 // json:"tier_name"
+  string display_name = 3;              // json:"display_name"
+  string description = 4;               // json:"description"
+  double base_price = 5;                // json:"base_price"
+  string currency = 6;                  // json:"currency"
+  string billing_period = 7;            // json:"billing_period"
+  AllocationDetails bandwidth_allocation = 8; // json:"bandwidth_allocation"
+  AllocationDetails storage_allocation = 9;   // json:"storage_allocation"
+  AllocationDetails compute_allocation = 10;  // json:"compute_allocation"
+  BillingFeatures features = 11;        // json:"features"
+  string support_level = 12;            // json:"support_level"
+  string sla_level = 13;                // json:"sla_level"
+  bool metering_enabled = 14;           // json:"metering_enabled"
+  OverageRates overage_rates = 15;      // json:"overage_rates"
+  bool is_active = 16;                  // json:"is_active"
+  int32 sort_order = 17;                // json:"sort_order"
+  bool is_enterprise = 18;              // json:"is_enterprise"
+  google.protobuf.Timestamp created_at = 19; // json:"created_at"
+  google.protobuf.Timestamp updated_at = 20; // json:"updated_at"
+}
+
+// Matches pkg/models/billing.go:BillingFeatures (lines 12-19)
+message BillingFeatures {
+  bool recording = 1;                   // json:"recording"
+  bool analytics = 2;                   // json:"analytics"
+  bool custom_branding = 3;             // json:"custom_branding,omitempty"
+  bool api_access = 4;                  // json:"api_access,omitempty"
+  string support_level = 5;             // json:"support_level"
+  bool sla = 6;                         // json:"sla,omitempty"
+}
+
+// Matches pkg/models/billing.go:AllocationDetails (lines 24-28)
+message AllocationDetails {
+  optional double limit = 1;            // json:"limit" (nil = unlimited)
+  double unit_price = 2;                // json:"unit_price,omitempty"
+  string unit = 3;                      // json:"unit,omitempty"
+}
+
+// Matches pkg/models/billing.go:OverageRates (lines 31-35)
+message OverageRates {
+  AllocationDetails bandwidth = 1;      // json:"bandwidth,omitempty"
+  AllocationDetails storage = 2;        // json:"storage,omitempty"
+  AllocationDetails compute = 3;        // json:"compute,omitempty"
+}
+
+// Matches pkg/api/purser/types.go:CreateTierRequest (lines 176-193)
+message CreateBillingTierRequest {
+  string tier_name = 1;                 // json:"tier_name" required
+  string display_name = 2;              // json:"display_name" required
+  string description = 3;               // json:"description"
+  double base_price = 4;                // json:"base_price"
+  string currency = 5;                  // json:"currency"
+  string billing_period = 6;            // json:"billing_period"
+  AllocationDetails bandwidth_allocation = 7;
+  AllocationDetails storage_allocation = 8;
+  AllocationDetails compute_allocation = 9;
+  BillingFeatures features = 10;
+  string support_level = 11;            // json:"support_level"
+  string sla_level = 12;                // json:"sla_level"
+  bool metering_enabled = 13;           // json:"metering_enabled"
+  OverageRates overage_rates = 14;
+  int32 sort_order = 15;                // json:"sort_order"
+  bool is_enterprise = 16;              // json:"is_enterprise"
+}
+
+// Matches pkg/api/purser/types.go:UpdateTierRequest (lines 196-213)
+message UpdateBillingTierRequest {
+  string tier_id = 1;                   // target tier
+  optional string display_name = 2;     // json:"display_name,omitempty"
+  optional string description = 3;      // json:"description,omitempty"
+  optional double base_price = 4;       // json:"base_price,omitempty"
+  optional string currency = 5;         // json:"currency,omitempty"
+  optional string billing_period = 6;   // json:"billing_period,omitempty"
+  optional AllocationDetails bandwidth_allocation = 7;
+  optional AllocationDetails storage_allocation = 8;
+  optional AllocationDetails compute_allocation = 9;
+  optional BillingFeatures features = 10;
+  optional string support_level = 11;   // json:"support_level,omitempty"
+  optional string sla_level = 12;       // json:"sla_level,omitempty"
+  optional bool metering_enabled = 13;  // json:"metering_enabled,omitempty"
+  optional OverageRates overage_rates = 14;
+  optional int32 sort_order = 15;       // json:"sort_order,omitempty"
+  optional bool is_enterprise = 16;     // json:"is_enterprise,omitempty"
+  optional bool is_active = 17;         // json:"is_active,omitempty"
+}
+
+// ============================================================================
+// SUBSCRIPTION MESSAGES
+// ============================================================================
+
+message GetSubscriptionRequest {
+  string tenant_id = 1;
+}
+
+// Matches pkg/api/purser/types.go:GetSubscriptionResponse (lines 82-85)
+message GetSubscriptionResponse {
+  TenantSubscription subscription = 1;  // json:"subscription,omitempty"
+  string error = 2;                     // json:"error,omitempty"
+}
+
+// Matches pkg/models/billing.go:TenantSubscription (lines 207-238)
+message TenantSubscription {
+  string id = 1;                        // json:"id"
+  string tenant_id = 2;                 // json:"tenant_id"
+  string tier_id = 3;                   // json:"tier_id"
+  string status = 4;                    // json:"status"
+  string billing_email = 5;             // json:"billing_email"
+  google.protobuf.Timestamp started_at = 6; // json:"started_at"
+  optional google.protobuf.Timestamp trial_ends_at = 7; // json:"trial_ends_at,omitempty"
+  optional google.protobuf.Timestamp next_billing_date = 8; // json:"next_billing_date,omitempty"
+  optional google.protobuf.Timestamp cancelled_at = 9; // json:"cancelled_at,omitempty"
+  CustomPricing custom_pricing = 10;    // json:"custom_pricing"
+  BillingFeatures custom_features = 11; // json:"custom_features"
+  AllocationDetails custom_allocations = 12; // json:"custom_allocations"
+  optional string payment_method = 13;  // json:"payment_method,omitempty"
+  optional string payment_reference = 14; // json:"payment_reference,omitempty"
+  BillingAddress billing_address = 15;  // json:"billing_address"
+  optional string tax_id = 16;          // json:"tax_id,omitempty"
+  optional double tax_rate = 17;        // json:"tax_rate,omitempty"
+  google.protobuf.Timestamp created_at = 18; // json:"created_at"
+  google.protobuf.Timestamp updated_at = 19; // json:"updated_at"
+}
+
+// Matches pkg/models/billing.go:CustomPricing (lines 57-61)
+message CustomPricing {
+  double base_price = 1;                // json:"base_price,omitempty"
+  double discount_rate = 2;             // json:"discount_rate,omitempty"
+  OverageRates overage_rates = 3;       // json:"overage_rates,omitempty"
+}
+
+// Matches pkg/models/billing.go:BillingAddress (lines 47-54)
+message BillingAddress {
+  string street = 1;                    // json:"street"
+  string city = 2;                      // json:"city"
+  string state = 3;                     // json:"state,omitempty"
+  string postal_code = 4;               // json:"postal_code"
+  string country = 5;                   // json:"country"
+}
+
+// Matches pkg/api/purser/types.go:CreateSubscriptionRequest (lines 218-227)
+message CreateSubscriptionRequest {
+  string tenant_id = 1;                 // json:"tenant_id" required
+  string tier_id = 2;                   // json:"tier_id" required
+  string billing_email = 3;             // json:"billing_email" required
+  string payment_method = 4;            // json:"payment_method"
+  optional google.protobuf.Timestamp trial_ends_at = 5; // json:"trial_ends_at,omitempty"
+  CustomPricing custom_pricing = 6;     // json:"custom_pricing,omitempty"
+  BillingFeatures custom_features = 7;  // json:"custom_features,omitempty"
+  AllocationDetails custom_allocations = 8; // json:"custom_allocations,omitempty"
+}
+
+// Matches pkg/api/purser/types.go:UpdateSubscriptionRequest (lines 230-238)
+message UpdateSubscriptionRequest {
+  string tenant_id = 1;                 // target subscription
+  optional string tier_id = 2;          // json:"tier_id,omitempty"
+  optional string billing_email = 3;    // json:"billing_email,omitempty"
+  optional string payment_method = 4;   // json:"payment_method,omitempty"
+  optional string status = 5;           // json:"status,omitempty"
+  optional CustomPricing custom_pricing = 6;
+  optional BillingFeatures custom_features = 7;
+  optional AllocationDetails custom_allocations = 8;
+}
+
+message CancelSubscriptionRequest {
+  string tenant_id = 1;
+}
+
+// ============================================================================
+// INVOICE MESSAGES
+// ============================================================================
+
+message GetInvoiceRequest {
+  string invoice_id = 1;
+}
+
+// Matches pkg/api/purser/types.go:GetInvoiceResponse (lines 118-121)
+message GetInvoiceResponse {
+  Invoice invoice = 1;                  // json:"invoice"
+  BillingTier tier = 2;                 // json:"tier"
+}
+
+// Matches pkg/models/billing.go:Invoice (lines 253-266)
+message Invoice {
+  string id = 1;                        // json:"id"
+  string tenant_id = 2;                 // json:"tenant_id"
+  double amount = 3;                    // json:"amount"
+  double base_amount = 4;               // json:"base_amount"
+  double metered_amount = 5;            // json:"metered_amount"
+  string currency = 6;                  // json:"currency"
+  string status = 7;                    // json:"status"
+  google.protobuf.Timestamp due_date = 8; // json:"due_date"
+  optional google.protobuf.Timestamp paid_at = 9; // json:"paid_at"
+  google.protobuf.Struct usage_details = 10; // json:"usage_details"
+  google.protobuf.Timestamp created_at = 11; // json:"created_at"
+  google.protobuf.Timestamp updated_at = 12; // json:"updated_at"
+}
+
+// Matches pkg/api/purser/types.go:GetInvoicesRequest (lines 124-128)
+message ListInvoicesRequest {
+  string tenant_id = 1;                 // target tenant
+  optional string status = 2;           // json:"status,omitempty"
+  common.CursorPaginationRequest pagination = 3;
+}
+
+// Matches pkg/api/purser/types.go:GetInvoicesResponse (lines 137-140)
+message ListInvoicesResponse {
+  repeated Invoice invoices = 1;        // json:"invoices"
+  common.CursorPaginationResponse pagination = 2;
+}
+
+// ============================================================================
+// PAYMENT MESSAGES
+// ============================================================================
+
+// Matches pkg/api/purser/types.go:PaymentRequest (lines 243-249)
+message PaymentRequest {
+  string invoice_id = 1;                // json:"invoice_id" required
+  string method = 2;                    // json:"method" required (mollie, crypto_btc, etc.)
+  double amount = 3;                    // json:"amount" required
+  string currency = 4;                  // json:"currency" required
+  string return_url = 5;                // json:"return_url,omitempty"
+}
+
+// Matches pkg/api/purser/types.go:PaymentResponse (lines 252-261)
+message PaymentResponse {
+  string id = 1;                        // json:"id"
+  string payment_url = 2;               // json:"payment_url,omitempty" (traditional)
+  string wallet_address = 3;            // json:"wallet_address,omitempty" (crypto)
+  double amount = 4;                    // json:"amount"
+  string currency = 5;                  // json:"currency"
+  optional google.protobuf.Timestamp expires_at = 6; // json:"expires_at,omitempty"
+  string status = 7;                    // json:"status"
+  string qr_code = 8;                   // json:"qr_code,omitempty" (crypto)
+  string method = 9;                    // json:"method" (card, crypto, bank_transfer)
+  google.protobuf.Timestamp created_at = 10; // json:"created_at"
+}
+
+message GetPaymentMethodsRequest {
+  string tenant_id = 1;
+}
+
+// Matches pkg/api/purser/types.go:PaymentMethodResponse (lines 159-161)
+message PaymentMethodResponse {
+  repeated string methods = 1;          // json:"methods"
+}
+
+message GetBillingStatusRequest {
+  string tenant_id = 1;
+}
+
+// Full billing status response including subscription, tier, invoices, payments
+message BillingStatusResponse {
+  string tenant_id = 1;
+  TenantSubscription subscription = 2;   // Full subscription details
+  BillingTier tier = 3;                  // Current tier details
+  string billing_status = 4;             // "active", "trial", "past_due", "cancelled"
+  google.protobuf.Timestamp next_billing_date = 5;
+  double outstanding_amount = 6;
+  string currency = 7;
+  repeated Invoice pending_invoices = 8; // Pending invoices awaiting payment
+  repeated Payment recent_payments = 9;  // Last 5 payments
+  UsageSummary usage_summary = 10;       // Current month usage aggregation (typed)
+}
+
+// Payment record
+message Payment {
+  string id = 1;
+  string invoice_id = 2;
+  string method = 3;                     // stripe, mollie, crypto_btc, etc.
+  double amount = 4;
+  string currency = 5;
+  string tx_id = 6;                      // Transaction ID from payment provider
+  string status = 7;                     // pending, confirmed, failed
+  optional google.protobuf.Timestamp confirmed_at = 8;
+  google.protobuf.Timestamp created_at = 9;
+  google.protobuf.Timestamp updated_at = 10;
+}
+
+// ============================================================================
+// USAGE MESSAGES
+// ============================================================================
+
+// Matches pkg/api/purser/types.go:UsageIngestRequest (lines 97-101)
+message UsageIngestRequest {
+  repeated UsageSummary usage_summaries = 1; // json:"usage_summaries"
+  string source = 2;                    // json:"source"
+  int64 timestamp = 3;                  // json:"timestamp"
+}
+
+// CountryMetrics represents viewer metrics for a single country
+// Used in geo_breakdown for rich billing/email summaries
+message CountryMetrics {
+  string country_code = 1;              // ISO 2-letter country code
+  int32 viewer_count = 2;               // Unique viewers from this country
+  double viewer_hours = 3;              // Total viewer-hours from this country
+  double percentage = 4;                // Percentage of total viewers
+  double egress_gb = 5;                 // Bandwidth egress from this country
+}
+
+// Usage summary from Periscope (15-minute interval aggregations)
+// Matches pkg/models/service_types.go:UsageSummary
+message UsageSummary {
+  string tenant_id = 1;
+  string cluster_id = 2;
+  string period = 3;                    // e.g. "15m", "1h", "1d"
+  double stream_hours = 4;
+  double egress_gb = 5;
+  double recording_gb = 6;
+  double peak_bandwidth_mbps = 7;
+  string billing_month = 8;
+  google.protobuf.Timestamp timestamp = 9;
+  double transcoding_minutes = 29;      // Placeholder - returns 0 until Livepeer metering enabled
+
+  // Storage and clip lifecycle metrics
+  double storage_gb = 10;
+  double average_storage_gb = 11;
+  int32 clips_added = 12;
+  int32 clips_deleted = 13;
+  double clip_storage_added_gb = 14;
+  double clip_storage_deleted_gb = 15;
+
+  // Stream and viewer metrics
+  int32 total_streams = 16;
+  int32 total_viewers = 17;
+  double viewer_hours = 18;
+  int32 peak_viewers = 19;
+  int32 max_viewers = 20;
+  int32 unique_users = 21;
+
+  // Additional ClickHouse metrics
+  double avg_viewers = 22;
+  int32 unique_countries = 23;
+  int32 unique_cities = 24;
+  repeated CountryMetrics geo_breakdown = 25;  // Rich geo breakdown with viewers, hours, percentage
+  float avg_buffer_health = 26;
+  int32 avg_bitrate = 27;
+  float packet_loss_rate = 28;
+}
+
+// Matches pkg/api/purser/types.go:UsageIngestResponse (lines 104-108)
+message UsageIngestResponse {
+  int32 processed_count = 1;            // json:"processed_count"
+  bool success = 2;                     // json:"success"
+  string error = 3;                     // json:"error,omitempty"
+}
+
+message GetUsageRecordsRequest {
+  string tenant_id = 1;
+  string cluster_id = 2;                // filter by cluster
+  string usage_type = 3;                // filter by type
+  string billing_month = 4;             // filter by month
+  common.CursorPaginationRequest pagination = 5;
+}
+
+// Matches pkg/api/purser/types.go:UsageRecord (lines 278-288)
+message UsageRecord {
+  string id = 1;                        // json:"id"
+  string tenant_id = 2;                 // json:"tenant_id"
+  string cluster_id = 3;                // json:"cluster_id"
+  optional string cluster_name = 4;     // json:"cluster_name"
+  string usage_type = 5;                // json:"usage_type"
+  double usage_value = 6;               // json:"usage_value"
+  google.protobuf.Struct usage_details = 7; // json:"usage_details"
+  string billing_month = 8;             // json:"billing_month"
+  google.protobuf.Timestamp created_at = 9; // json:"created_at"
+}
+
+// Matches pkg/api/purser/types.go:UsageRecordsResponse (lines 291-296)
+message UsageRecordsResponse {
+  repeated UsageRecord usage_records = 1; // json:"usage_records"
+  string tenant_id = 2;                 // json:"tenant_id"
+  UsageFilters filters = 3;             // json:"filters"
+  common.CursorPaginationResponse pagination = 4;
+}
+
+// Matches pkg/api/purser/types.go:UsageFilters (lines 299-303)
+message UsageFilters {
+  string cluster_id = 1;                // json:"cluster_id"
+  string usage_type = 2;                // json:"usage_type"
+  string billing_month = 3;             // json:"billing_month"
+}
+
+// Matches pkg/api/purser/types.go:CheckUserLimitRequest (lines 22-25)
+message CheckUserLimitRequest {
+  string tenant_id = 1;                 // json:"tenant_id"
+  string email = 2;                     // json:"email"
+}
+
+// Matches pkg/api/purser/types.go:CheckUserLimitResponse (lines 28-33)
+message CheckUserLimitResponse {
+  bool allowed = 1;                     // json:"allowed"
+  int32 current_users = 2;              // json:"current_users,omitempty"
+  int32 max_users = 3;                  // json:"max_users,omitempty"
+  string error = 4;                     // json:"error,omitempty"
+}
+
+// ============================================================================
+// TENANT USAGE AGGREGATION
+// ============================================================================
+
+// Matches pkg/api/purser/types.go:TenantUsageRequest (lines 52-56)
+message TenantUsageRequest {
+  string tenant_id = 1;                 // json:"tenant_id"
+  string start_date = 2;                // json:"start_date"
+  string end_date = 3;                  // json:"end_date"
+}
+
+// Matches pkg/api/purser/types.go:TenantUsageResponse (lines 59-66)
+message TenantUsageResponse {
+  string tenant_id = 1;                 // json:"tenant_id"
+  string billing_period = 2;            // json:"billing_period"
+  map<string, double> usage = 3;        // json:"usage" (resource_type -> usage)
+  map<string, double> costs = 4;        // json:"costs" (resource_type -> cost)
+  double total_cost = 5;                // json:"total_cost"
+  string currency = 6;                  // json:"currency"
+}

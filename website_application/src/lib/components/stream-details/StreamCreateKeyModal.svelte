@@ -1,4 +1,4 @@
-<script>
+<script lang="ts">
   import { preventDefault } from "svelte/legacy";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
@@ -53,7 +53,7 @@
       <div class="space-y-2">
         <label
           for="keyName"
-          class="block text-sm font-medium text-tokyo-night-fg"
+          class="block text-sm font-medium text-foreground"
         >
           Key Name
         </label>
@@ -63,13 +63,13 @@
           bind:value={formData.keyName}
           placeholder="e.g., OBS Studio, Mobile App"
           required
-          class="transition-all focus:ring-2 focus:ring-tokyo-night-blue"
+          class="transition-all focus:ring-2 focus:ring-primary"
         />
       </div>
 
-      <div class="flex items-start space-x-2 p-3 rounded-lg bg-tokyo-night-bg-light/50">
+      <div class="flex items-start space-x-2 p-3 bg-card/50">
         <Checkbox id="keyActive" bind:checked={formData.isActive} />
-        <Label for="keyActive" class="text-sm text-tokyo-night-fg">
+        <Label for="keyActive" class="text-sm text-foreground">
           Active - Key can be used immediately after creation
         </Label>
       </div>

@@ -33,6 +33,10 @@ coverage/
 .env*
 !.env.example
 
+# Houdini (GraphQL client)
+$houdini/
+.houdini/
+
 # Go
 *.exe
 *.dll

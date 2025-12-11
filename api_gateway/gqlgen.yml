@@ -21,106 +21,218 @@ resolver:
 
 # Optional: turn on or off automatic camelCase marshaling for field names
 autobind:
-  - frameworks/pkg/models
+  - frameworks/pkg/proto
 
 # Map GraphQL types to existing Go models (comprehensive mapping)
+# NOTE: Using pb.* proto types for all analytics/streaming types
 models:
-  # Analytics types
+  # Analytics types - bound to proto types
   StreamAnalytics:
     model:
-      - frameworks/pkg/models.StreamAnalytics
+      - frameworks/pkg/proto.StreamAnalytics
   RoutingEvent:
     model:
-      - frameworks/pkg/models.AnalyticsRoutingEvent
+      - frameworks/pkg/proto.RoutingEvent
+  LoadBalancingMetric:
+    model:
+      - frameworks/pkg/proto.RoutingEvent
   ViewerMetric:
     model:
-      - frameworks/pkg/models.AnalyticsViewerSession
+      - frameworks/pkg/proto.ViewerSession
   ViewerMetrics5m:
     model:
-      - frameworks/pkg/models.AnalyticsViewerSession5m
+      - frameworks/pkg/proto.ViewerSession5M
   ConnectionEvent:
     model:
-      - frameworks/pkg/api/periscope.ConnectionEvent
+      - frameworks/pkg/proto.ConnectionEvent
   StreamHealthMetric:
     model:
-      - frameworks/pkg/api/periscope.StreamHealthMetric
+      - frameworks/pkg/proto.StreamHealthMetric
+  ViewerCountBucket:
+    model:
+      - frameworks/pkg/proto.ViewerCountBucket
+  CountryMetric:
+    model:
+      - frameworks/pkg/proto.CountryMetric
+  CountryMetrics:
+    model:
+      - frameworks/pkg/proto.CountryMetrics
+  CityMetric:
+    model:
+      - frameworks/pkg/proto.CityMetric
   PlatformOverview:
     model:
-      - frameworks/pkg/api/periscope.PlatformOverviewResponse
+      - frameworks/pkg/proto.GetPlatformOverviewResponse
   ViewerGeographic:
     model:
-      - frameworks/pkg/api/periscope.ConnectionEvent
+      - frameworks/pkg/proto.ConnectionEvent
   StreamEvent:
     model:
-      - frameworks/pkg/api/periscope.StreamEvent
+      - frameworks/pkg/proto.StreamEvent
+  # Query types - bound to periscope.proto types (analytics API responses)
   TrackListEvent:
     model:
-      - frameworks/pkg/api/periscope.AnalyticsTrackListEvent
-  StreamTrack:
-    model:
-      - frameworks/pkg/api/periscope.StreamTrack
+      - frameworks/pkg/proto.TrackListEvent
   ClipEvent:
     model:
-      - frameworks/pkg/api/periscope.ClipEvent
+      - frameworks/pkg/proto.ClipEvent
+  ArtifactState:
+    model:
+      - frameworks/pkg/proto.ArtifactState
+  StreamTrack:
+    model:
+      - frameworks/pkg/proto.StreamTrack
 
-  # Stream management types
+  # Pre-aggregated analytics types (Materialized Views)
+  StreamConnectionHourly:
+    model:
+      - frameworks/pkg/proto.StreamConnectionHourly
+  ClientMetrics5m:
+    model:
+      - frameworks/pkg/proto.ClientMetrics5M
+  QualityTierDaily:
+    model:
+      - frameworks/pkg/proto.QualityTierDaily
+  QualityChangesHourly:
+    model:
+      - frameworks/pkg/proto.QualityChangesHourly
+  StorageUsageRecord:
+    model:
+      - frameworks/pkg/proto.StorageUsageRecord
+
+  # Real-time subscription types - bound to ipc.proto types (raw Kafka events via Signalman)
+  ViewerMetrics:
+    model:
+      - frameworks/pkg/proto.ClientLifecycleUpdate
+  SystemHealthEvent:
+    model:
+      - frameworks/pkg/proto.NodeLifecycleUpdate
+  DVREvent:
+    model:
+      - frameworks/pkg/proto.DVRLifecycleData
+  TrackListUpdate:
+    model:
+      - frameworks/pkg/proto.StreamTrackListTrigger
+  ClipLifecycle:
+    model:
+      - frameworks/pkg/proto.ClipLifecycleData
+
+  # Stream management types - bound to proto types
   Stream:
     model:
-      - frameworks/pkg/models.Stream
+      - frameworks/pkg/proto.Stream
+  StreamMetrics:
+    model:
+      - frameworks/pkg/proto.StreamStatusResponse
   StreamKey:
     model:
-      - frameworks/pkg/models.StreamKey
+      - frameworks/pkg/proto.StreamKey
   Recording:
     model:
-      - frameworks/pkg/api/commodore.Recording
+      - frameworks/pkg/proto.Recording
   Clip:
     model:
-      - frameworks/pkg/api/commodore.ClipResponse
+      - frameworks/pkg/proto.ClipInfo
+  ClipViewingUrls:
+    model:
+      - frameworks/pkg/proto.ClipViewingURLs
+  DVRRequest:
+    model:
+      - frameworks/pkg/proto.DVRInfo
 
-  # Billing types
+  # Viewer endpoint resolution types - bound to proto types
+  ViewerEndpointResponse:
+    model:
+      - frameworks/pkg/proto.ViewerEndpointResponse
+  ViewerEndpoint:
+    model:
+      - frameworks/pkg/proto.ViewerEndpoint
+  PlaybackMetadata:
+    model:
+      - frameworks/pkg/proto.PlaybackMetadata
+  PlaybackTrack:
+    model:
+      - frameworks/pkg/proto.PlaybackTrack
+  PlaybackInstance:
+    model:
+      - frameworks/pkg/proto.PlaybackInstance
+
+  # Stream meta types - bound to proto types
+  StreamMetaResponse:
+    model:
+      - frameworks/pkg/proto.StreamMetaResponse
+  MetaSummary:
+    model:
+      - frameworks/pkg/proto.MetaSummary
+  TrackSummary:
+    model:
+      - frameworks/pkg/proto.TrackSummary
+
+  # Billing types - bound to proto types
   BillingStatus:
     model:
-      - frameworks/pkg/models.BillingStatus
+      - frameworks/pkg/proto.BillingStatusResponse
   BillingTier:
     model:
-      - frameworks/pkg/models.BillingTier
+      - frameworks/pkg/proto.BillingTier
+  BillingFeatures:
+    model:
+      - frameworks/pkg/proto.BillingFeatures
+  AllocationDetails:
+    model:
+      - frameworks/pkg/proto.AllocationDetails
+  OverageRates:
+    model:
+      - frameworks/pkg/proto.OverageRates
   Invoice:
     model:
-      - frameworks/pkg/models.Invoice
+      - frameworks/pkg/proto.Invoice
   Payment:
     model:
-      - frameworks/pkg/models.Payment
+      - frameworks/pkg/proto.PaymentResponse
   UsageRecord:
     model:
-      - frameworks/pkg/models.UsageRecord
+      - frameworks/pkg/proto.UsageRecord
+  UsageSummary:
+    model:
+      - frameworks/pkg/proto.UsageSummary
+  # TenantUsage, UsageEntry, CostEntry remain as model types
+  # because proto.TenantUsageResponse uses map<string, double>
+  # which doesn't map directly to GraphQL arrays
 
-  # Infrastructure types
+  # Infrastructure types - bound to proto types
   ServiceInstance:
     model:
-      - frameworks/pkg/models.ServiceInstance
+      - frameworks/pkg/proto.ServiceInstance
+  ServiceInstanceHealth:
+    model:
+      - frameworks/pkg/proto.ServiceInstanceHealth
   NodeMetric:
     model:
-      - frameworks/pkg/api/periscope.NodeMetric
+      - frameworks/pkg/proto.NodeMetric
+  TimeRange:
+    model:
+      - frameworks/pkg/proto.TimeRange
   Cluster:
     model:
-      - frameworks/pkg/models.InfrastructureCluster
+      - frameworks/pkg/proto.InfrastructureCluster
   Node:
     model:
-      - frameworks/pkg/models.InfrastructureNode
+      - frameworks/pkg/proto.InfrastructureNode
 
-  # Tenant types
+  # Tenant types - bound to proto types
   Tenant:
     model:
-      - frameworks/pkg/models.Tenant
+      - frameworks/pkg/proto.Tenant
   User:
     model:
-      - frameworks/pkg/models.User
+      - frameworks/pkg/proto.User
   DeveloperToken:
     model:
-      - frameworks/pkg/models.APIToken
+      - frameworks/pkg/proto.APITokenInfo
   BootstrapToken:
     model:
-      - frameworks/pkg/models.BootstrapToken
+      - frameworks/pkg/proto.BootstrapToken
 
   Money:
     model:
@@ -128,6 +240,7 @@ models:
   Currency:
     model:
       - github.com/99designs/gqlgen/graphql.String
+
 
 # Skip generation for these types (we'll implement them manually)
 skip_validation: true

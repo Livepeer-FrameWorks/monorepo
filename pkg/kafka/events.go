@@ -2,9 +2,8 @@ package kafka
 
 import (
 	"context"
+	"encoding/json"
 	"time"
-
-	"frameworks/pkg/database"
 
 	"github.com/sirupsen/logrus"
 )
@@ -37,28 +36,55 @@ type EventHandler interface {
 
 // AnalyticsEventHandler implements EventHandler to handle analytics events
 type AnalyticsEventHandler struct {
-	handler func(database.PostgresConn, AnalyticsEvent) error
+	handler func(AnalyticsEvent) error
 	logger  *logrus.Logger
-	yugaDB  database.PostgresConn
 }
 
 // NewAnalyticsEventHandler creates a new handler for analytics events
-func NewAnalyticsEventHandler(ydb database.PostgresConn, handler func(database.PostgresConn, AnalyticsEvent) error, logger *logrus.Logger) *AnalyticsEventHandler {
+func NewAnalyticsEventHandler(handler func(AnalyticsEvent) error, logger *logrus.Logger) *AnalyticsEventHandler {
 	return &AnalyticsEventHandler{
 		handler: handler,
 		logger:  logger,
-		yugaDB:  ydb,
 	}
 }
 
 // HandleEvent implements EventHandler by directly handling AnalyticsEvent
 func (h *AnalyticsEventHandler) HandleEvent(event AnalyticsEvent) error {
-	return h.handler(h.yugaDB, event)
+	return h.handler(event)
+}
+
+// HandleMessage adapts the generic Message handler signature to the typed AnalyticsEvent handler.
+// It unmarshals the message value into an AnalyticsEvent, maps headers, and calls HandleEvent.
+func (h *AnalyticsEventHandler) HandleMessage(ctx context.Context, msg Message) error {
+	var event AnalyticsEvent
+	// We assume the value is JSON-encoded AnalyticsEvent
+	// Note: In a high-throughput scenario, we might want to reuse a decoder.
+	if err := json.Unmarshal(msg.Value, &event); err != nil {
+		h.logger.WithError(err).Error("failed to unmarshal analytics event")
+		return nil // Return nil to avoid retrying malformed messages indefinitely
+	}
+
+	// Map headers to event fields if they exist and aren't already set
+	for k, v := range msg.Headers {
+		switch k {
+		case "source":
+			if event.Source == "" {
+				event.Source = v
+			}
+		case "tenant_id":
+			if event.TenantID == "" {
+				event.TenantID = v
+			}
+		}
+	}
+
+	// Delegate to the typed handler
+	return h.HandleEvent(event)
 }
 
 // ConsumerInterface defines the interface for Kafka consumers
 type ConsumerInterface interface {
-	Subscribe(topics []string) error
+	AddHandler(topic string, handler Handler)
 	Start(ctx context.Context) error
 	Close() error
 	GetMetrics() (map[string]interface{}, error)

@@ -1,0 +1,18 @@
+query GetClips($streamId: ID) {
+  clips(streamId: $streamId) @list(name: "AllClips") {
+    id
+    clipHash
+    streamName
+    title
+    description
+    startTime
+    duration
+    nodeId
+    storagePath
+    sizeBytes
+    status
+    accessCount
+    createdAt
+    updatedAt
+  }
+}

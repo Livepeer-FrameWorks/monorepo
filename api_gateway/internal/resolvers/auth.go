@@ -6,12 +6,12 @@ import (
 	"time"
 
 	"frameworks/api_gateway/internal/middleware"
-	commodore "frameworks/pkg/api/commodore"
-	"frameworks/pkg/models"
+	pb "frameworks/pkg/proto"
 )
 
 // DoLogin handles user authentication business logic
-func (r *Resolver) DoLogin(ctx context.Context, email, password string) (*commodore.AuthResponse, error) {
+// Note: Auth is typically handled via REST (/auth/login), not GraphQL
+func (r *Resolver) DoLogin(ctx context.Context, req *pb.LoginRequest) (*pb.AuthResponse, error) {
 	start := time.Now()
 	defer func() {
 		if r.Metrics != nil {
@@ -20,7 +20,7 @@ func (r *Resolver) DoLogin(ctx context.Context, email, password string) (*commod
 	}()
 
 	// Call Commodore login endpoint
-	authResp, err := r.Clients.Commodore.Login(ctx, email, password)
+	authResp, err := r.Clients.Commodore.Login(ctx, req)
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to authenticate user")
 		if r.Metrics != nil {
@@ -36,7 +36,7 @@ func (r *Resolver) DoLogin(ctx context.Context, email, password string) (*commod
 }
 
 // DoRegister handles user registration business logic
-func (r *Resolver) DoRegister(ctx context.Context, email, password, firstName, lastName string) (*commodore.AuthResponse, error) {
+func (r *Resolver) DoRegister(ctx context.Context, email, password, firstName, lastName string) (*pb.RegisterResponse, error) {
 	start := time.Now()
 	defer func() {
 		if r.Metrics != nil {
@@ -45,7 +45,12 @@ func (r *Resolver) DoRegister(ctx context.Context, email, password, firstName, l
 	}()
 
 	// Call Commodore register endpoint
-	authResp, err := r.Clients.Commodore.Register(ctx, email, password, firstName, lastName)
+	authResp, err := r.Clients.Commodore.Register(ctx, &pb.RegisterRequest{
+		Email:     email,
+		Password:  password,
+		FirstName: firstName,
+		LastName:  lastName,
+	})
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to register user")
 		if r.Metrics != nil {
@@ -61,7 +66,7 @@ func (r *Resolver) DoRegister(ctx context.Context, email, password, firstName, l
 }
 
 // DoGetMe retrieves current user information
-func (r *Resolver) DoGetMe(ctx context.Context) (*models.User, error) {
+func (r *Resolver) DoGetMe(ctx context.Context) (*pb.User, error) {
 	start := time.Now()
 	defer func() {
 		if r.Metrics != nil {
@@ -74,17 +79,17 @@ func (r *Resolver) DoGetMe(ctx context.Context) (*models.User, error) {
 		if r.Metrics != nil {
 			r.Metrics.Operations.WithLabelValues("getMe", "demo").Inc()
 		}
-		return &models.User{
-			ID:        "demo_user_developer",
+		return &pb.User{
+			Id:        "demo_user_developer",
 			Email:     "developer@frameworks.demo",
 			FirstName: "Demo",
 			LastName:  "Developer",
-			CreatedAt: time.Now().Add(-90 * 24 * time.Hour),
 		}, nil
 	}
 
-	// Extract JWT token from context (set by auth middleware)
-	userToken, ok := ctx.Value("jwt_token").(string)
+	// JWT token is in context, validated by middleware
+	// gRPC uses metadata from context, not explicit token param
+	_, ok := ctx.Value("jwt_token").(string)
 	if !ok {
 		if r.Metrics != nil {
 			r.Metrics.Operations.WithLabelValues("getMe", "auth_error").Inc()
@@ -93,7 +98,7 @@ func (r *Resolver) DoGetMe(ctx context.Context) (*models.User, error) {
 	}
 
 	// Get user info from Commodore
-	user, err := r.Clients.Commodore.GetMe(ctx, userToken)
+	user, err := r.Clients.Commodore.GetMe(ctx)
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to get user info")
 		if r.Metrics != nil {

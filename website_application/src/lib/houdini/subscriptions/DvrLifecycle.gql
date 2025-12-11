@@ -1,0 +1,15 @@
+subscription DvrLifecycle($stream: String!) {
+  dvrLifecycle(stream: $stream) {
+    status
+    dvrHash
+    requestId
+    manifestPath
+    startedAt
+    endedAt
+    sizeBytes
+    segmentCount
+    error
+    nodeId
+    internalName
+  }
+}

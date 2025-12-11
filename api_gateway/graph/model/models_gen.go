@@ -5,10 +5,127 @@ package model
 import (
 	"bytes"
 	"fmt"
+	"frameworks/pkg/proto"
 	"io"
 	"strconv"
 	"time"
 )
+
+type CreateBootstrapTokenResult interface {
+	IsCreateBootstrapTokenResult()
+}
+
+type CreateClipResult interface {
+	IsCreateClipResult()
+}
+
+type CreateDeveloperTokenResult interface {
+	IsCreateDeveloperTokenResult()
+}
+
+type CreatePaymentResult interface {
+	IsCreatePaymentResult()
+}
+
+type CreateStreamKeyResult interface {
+	IsCreateStreamKeyResult()
+}
+
+type CreateStreamResult interface {
+	IsCreateStreamResult()
+}
+
+type DeleteClipResult interface {
+	IsDeleteClipResult()
+}
+
+type DeleteStreamKeyResult interface {
+	IsDeleteStreamKeyResult()
+}
+
+type DeleteStreamResult interface {
+	IsDeleteStreamResult()
+}
+
+type Error interface {
+	IsError()
+	GetMessage() string
+	GetCode() *string
+}
+
+type RevokeBootstrapTokenResult interface {
+	IsRevokeBootstrapTokenResult()
+}
+
+type RevokeDeveloperTokenResult interface {
+	IsRevokeDeveloperTokenResult()
+}
+
+type StartDVRResult interface {
+	IsStartDVRResult()
+}
+
+type StopDVRResult interface {
+	IsStopDVRResult()
+}
+
+type UpdateStreamResult interface {
+	IsUpdateStreamResult()
+}
+
+type UpdateTenantResult interface {
+	IsUpdateTenantResult()
+}
+
+type ArtifactStateEdge struct {
+	Cursor string               `json:"cursor"`
+	Node   *proto.ArtifactState `json:"node"`
+}
+
+type ArtifactStatesConnection struct {
+	Edges      []*ArtifactStateEdge `json:"edges"`
+	PageInfo   *PageInfo            `json:"pageInfo"`
+	TotalCount int                  `json:"totalCount"`
+}
+
+type AuthError struct {
+	Message string  `json:"message"`
+	Code    *string `json:"code,omitempty"`
+}
+
+func (AuthError) IsError()                {}
+func (this AuthError) GetMessage() string { return this.Message }
+func (this AuthError) GetCode() *string   { return this.Code }
+
+func (AuthError) IsCreateStreamResult() {}
+
+func (AuthError) IsUpdateStreamResult() {}
+
+func (AuthError) IsDeleteStreamResult() {}
+
+func (AuthError) IsCreateClipResult() {}
+
+func (AuthError) IsDeleteClipResult() {}
+
+func (AuthError) IsCreateStreamKeyResult() {}
+
+func (AuthError) IsDeleteStreamKeyResult() {}
+
+func (AuthError) IsStartDVRResult() {}
+
+func (AuthError) IsStopDVRResult() {}
+
+func (AuthError) IsCreatePaymentResult() {}
+
+func (AuthError) IsUpdateTenantResult() {}
+
+func (AuthError) IsCreateDeveloperTokenResult() {}
+
+func (AuthError) IsRevokeDeveloperTokenResult() {}
+
+func (AuthError) IsCreateBootstrapTokenResult() {}
+
+func (AuthError) IsRevokeBootstrapTokenResult() {}
 
 type AvailableCluster struct {
 	ClusterID   string   `json:"clusterId"`
@@ -17,20 +134,37 @@ type AvailableCluster struct {
 	AutoEnroll  bool     `json:"autoEnroll"`
 }
 
-type CityMetric struct {
-	City        string   `json:"city"`
-	CountryCode *string  `json:"countryCode,omitempty"`
-	ViewerCount int      `json:"viewerCount"`
-	Percentage  float64  `json:"percentage"`
-	Latitude    *float64 `json:"latitude,omitempty"`
-	Longitude   *float64 `json:"longitude,omitempty"`
+type ClientMetrics5mConnection struct {
+	Edges      []*ClientMetrics5mEdge `json:"edges"`
+	PageInfo   *PageInfo              `json:"pageInfo"`
+	TotalCount int                    `json:"totalCount"`
 }
 
-type ClipViewingUrls struct {
-	Hls  *string `json:"hls,omitempty"`
-	Dash *string `json:"dash,omitempty"`
-	Mp4  *string `json:"mp4,omitempty"`
-	Webm *string `json:"webm,omitempty"`
+type ClientMetrics5mEdge struct {
+	Cursor string                 `json:"cursor"`
+	Node   *proto.ClientMetrics5M `json:"node"`
+}
+
+type ClipEdge struct {
+	Cursor string          `json:"cursor"`
+	Node   *proto.ClipInfo `json:"node"`
+}
+
+type ClipEventEdge struct {
+	Cursor string           `json:"cursor"`
+	Node   *proto.ClipEvent `json:"node"`
+}
+
+type ClipEventsConnection struct {
+	Edges      []*ClipEventEdge `json:"edges"`
+	PageInfo   *PageInfo        `json:"pageInfo"`
+	TotalCount int              `json:"totalCount"`
+}
+
+type ClipsConnection struct {
+	Edges      []*ClipEdge `json:"edges"`
+	PageInfo   *PageInfo   `json:"pageInfo"`
+	TotalCount int         `json:"totalCount"`
 }
 
 type ClusterAccess struct {
@@ -40,26 +174,31 @@ type ClusterAccess struct {
 	ResourceLimits *string `json:"resourceLimits,omitempty"`
 }
 
-type ContentMetadata struct {
-	ContentType   string  `json:"contentType"`
-	ContentID     string  `json:"contentId"`
-	TenantID      string  `json:"tenantId"`
-	Title         *string `json:"title,omitempty"`
-	Description   *string `json:"description,omitempty"`
-	Duration      *int    `json:"duration,omitempty"`
-	Status        string  `json:"status"`
-	IsLive        bool    `json:"isLive"`
-	ViewCount     *int    `json:"viewCount,omitempty"`
-	RecordingSize *int    `json:"recordingSize,omitempty"`
-	ClipSource    *string `json:"clipSource,omitempty"`
-	CreatedAt     *string `json:"createdAt,omitempty"`
+type ClusterEdge struct {
+	Cursor string                       `json:"cursor"`
+	Node   *proto.InfrastructureCluster `json:"node"`
 }
 
-type CountryMetric struct {
-	CountryCode string        `json:"countryCode"`
-	ViewerCount int           `json:"viewerCount"`
-	Percentage  float64       `json:"percentage"`
-	Cities      []*CityMetric `json:"cities,omitempty"`
+type ClustersConnection struct {
+	Edges      []*ClusterEdge `json:"edges"`
+	PageInfo   *PageInfo      `json:"pageInfo"`
+	TotalCount int            `json:"totalCount"`
+}
+
+type ConnectionEventEdge struct {
+	Cursor string                 `json:"cursor"`
+	Node   *proto.ConnectionEvent `json:"node"`
+}
+
+type ConnectionEventsConnection struct {
+	Edges      []*ConnectionEventEdge `json:"edges"`
+	PageInfo   *PageInfo              `json:"pageInfo"`
+	TotalCount int                    `json:"totalCount"`
+}
+
+type CostEntry struct {
+	ResourceType string  `json:"resourceType"`
+	Cost         float64 `json:"cost"`
 }
 
 type CountryTimeSeries struct {
@@ -107,37 +246,54 @@ type CreateStreamKeyInput struct {
 	Name string `json:"name"`
 }
 
-type DVRRequest struct {
-	DvrHash         string     `json:"dvrHash"`
-	InternalName    string     `json:"internalName"`
-	StorageNodeID   *string    `json:"storageNodeId,omitempty"`
-	Status          string     `json:"status"`
-	StartedAt       *time.Time `json:"startedAt,omitempty"`
-	EndedAt         *time.Time `json:"endedAt,omitempty"`
-	DurationSeconds *int       `json:"durationSeconds,omitempty"`
-	SizeBytes       *int       `json:"sizeBytes,omitempty"`
-	ManifestPath    *string    `json:"manifestPath,omitempty"`
-	ErrorMessage    *string    `json:"errorMessage,omitempty"`
-	CreatedAt       time.Time  `json:"createdAt"`
-	UpdatedAt       time.Time  `json:"updatedAt"`
+type DVRRecordingEdge struct {
+	Cursor string         `json:"cursor"`
+	Node   *proto.DVRInfo `json:"node"`
 }
 
-type DVRRequestList struct {
-	DvrRecordings []*DVRRequest `json:"dvrRecordings"`
-	Total         int           `json:"total"`
-	Page          int           `json:"page"`
-	Limit         int           `json:"limit"`
+type DVRRecordingsConnection struct {
+	Edges      []*DVRRecordingEdge `json:"edges"`
+	PageInfo   *PageInfo           `json:"pageInfo"`
+	TotalCount int                 `json:"totalCount"`
+}
+
+type DeleteSuccess struct {
+	Success   bool   `json:"success"`
+	DeletedID string `json:"deletedId"`
+}
+
+func (DeleteSuccess) IsDeleteStreamResult() {}
+
+func (DeleteSuccess) IsDeleteClipResult() {}
+
+func (DeleteSuccess) IsDeleteStreamKeyResult() {}
+
+func (DeleteSuccess) IsStopDVRResult() {}
+
+func (DeleteSuccess) IsRevokeDeveloperTokenResult() {}
+
+func (DeleteSuccess) IsRevokeBootstrapTokenResult() {}
+
+type DeveloperTokenEdge struct {
+	Cursor string              `json:"cursor"`
+	Node   *proto.APITokenInfo `json:"node"`
+}
+
+type DeveloperTokensConnection struct {
+	Edges      []*DeveloperTokenEdge `json:"edges"`
+	PageInfo   *PageInfo             `json:"pageInfo"`
+	TotalCount int                   `json:"totalCount"`
 }
 
 type GeographicDistribution struct {
-	TimeRange        *TimeRange           `json:"timeRange"`
-	Stream           *string              `json:"stream,omitempty"`
-	TopCountries     []*CountryMetric     `json:"topCountries"`
-	TopCities        []*CityMetric        `json:"topCities"`
-	UniqueCountries  int                  `json:"uniqueCountries"`
-	UniqueCities     int                  `json:"uniqueCities"`
-	TotalViewers     int                  `json:"totalViewers"`
-	ViewersByCountry []*CountryTimeSeries `json:"viewersByCountry"`
+	TimeRange        *proto.TimeRange       `json:"timeRange"`
+	Stream           *string                `json:"stream,omitempty"`
+	TopCountries     []*proto.CountryMetric `json:"topCountries"`
+	TopCities        []*proto.CityMetric    `json:"topCities"`
+	UniqueCountries  int                    `json:"uniqueCountries"`
+	UniqueCities     int                    `json:"uniqueCities"`
+	TotalViewers     int                    `json:"totalViewers"`
+	ViewersByCountry []*CountryTimeSeries   `json:"viewersByCountry"`
 }
 
 type LineItem struct {
@@ -147,40 +303,78 @@ type LineItem struct {
 	Total       float64 `json:"total"`
 }
 
-type LoadBalancingMetric struct {
-	Timestamp       time.Time `json:"timestamp"`
-	Stream          string    `json:"stream"`
-	SelectedNode    string    `json:"selectedNode"`
-	NodeID          *string   `json:"nodeId,omitempty"`
-	ClientIP        *string   `json:"clientIp,omitempty"`
-	ClientCountry   *string   `json:"clientCountry,omitempty"`
-	ClientLatitude  *float64  `json:"clientLatitude,omitempty"`
-	ClientLongitude *float64  `json:"clientLongitude,omitempty"`
-	NodeLatitude    *float64  `json:"nodeLatitude,omitempty"`
-	NodeLongitude   *float64  `json:"nodeLongitude,omitempty"`
-	NodeName        *string   `json:"nodeName,omitempty"`
-	Score           *int      `json:"score,omitempty"`
-	Status          string    `json:"status"`
-	Details         *string   `json:"details,omitempty"`
-	RoutingDistance *float64  `json:"routingDistance,omitempty"`
-	EventType       *string   `json:"eventType,omitempty"`
-	Source          *string   `json:"source,omitempty"`
-}
-
 type Mutation struct {
 }
 
-type NodeMetricHourly struct {
-	Timestamp         time.Time `json:"timestamp"`
-	NodeID            string    `json:"nodeId"`
-	AvgCPU            float64   `json:"avgCpu"`
-	PeakCPU           float64   `json:"peakCpu"`
-	AvgMemory         float64   `json:"avgMemory"`
-	PeakMemory        float64   `json:"peakMemory"`
-	TotalBandwidthIn  int       `json:"totalBandwidthIn"`
-	TotalBandwidthOut int       `json:"totalBandwidthOut"`
-	AvgHealthScore    float64   `json:"avgHealthScore"`
-	WasHealthy        bool      `json:"wasHealthy"`
+type NodeEdge struct {
+	Cursor string                    `json:"cursor"`
+	Node   *proto.InfrastructureNode `json:"node"`
+}
+
+type NodeMetricEdge struct {
+	Cursor string            `json:"cursor"`
+	Node   *proto.NodeMetric `json:"node"`
+}
+
+type NodeMetricHourlyEdge struct {
+	Cursor string                  `json:"cursor"`
+	Node   *proto.NodeMetricHourly `json:"node"`
+}
+
+type NodeMetrics1hConnection struct {
+	Edges      []*NodeMetricHourlyEdge `json:"edges"`
+	PageInfo   *PageInfo               `json:"pageInfo"`
+	TotalCount int                     `json:"totalCount"`
+}
+
+type NodeMetricsConnection struct {
+	Edges      []*NodeMetricEdge `json:"edges"`
+	PageInfo   *PageInfo         `json:"pageInfo"`
+	TotalCount int               `json:"totalCount"`
+}
+
+type NodesConnection struct {
+	Edges      []*NodeEdge `json:"edges"`
+	PageInfo   *PageInfo   `json:"pageInfo"`
+	TotalCount int         `json:"totalCount"`
+}
+
+type NotFoundError struct {
+	Message      string  `json:"message"`
+	Code         *string `json:"code,omitempty"`
+	ResourceType string  `json:"resourceType"`
+	ResourceID   string  `json:"resourceId"`
+}
+
+func (NotFoundError) IsError()                {}
+func (this NotFoundError) GetMessage() string { return this.Message }
+func (this NotFoundError) GetCode() *string   { return this.Code }
+
+func (NotFoundError) IsUpdateStreamResult() {}
+
+func (NotFoundError) IsDeleteStreamResult() {}
+
+func (NotFoundError) IsCreateClipResult() {}
+
+func (NotFoundError) IsDeleteClipResult() {}
+
+func (NotFoundError) IsCreateStreamKeyResult() {}
+
+func (NotFoundError) IsDeleteStreamKeyResult() {}
+
+func (NotFoundError) IsStartDVRResult() {}
+
+func (NotFoundError) IsStopDVRResult() {}
+
+func (NotFoundError) IsRevokeDeveloperTokenResult() {}
+
+func (NotFoundError) IsRevokeBootstrapTokenResult() {}
+
+type PageInfo struct {
+	StartCursor     *string `json:"startCursor,omitempty"`
+	EndCursor       *string `json:"endCursor,omitempty"`
+	HasNextPage     bool    `json:"hasNextPage"`
+	HasPreviousPage bool    `json:"hasPreviousPage"`
 }
 
 type PaginationInput struct {
@@ -188,8 +382,42 @@ type PaginationInput struct {
 	Offset *int `json:"offset,omitempty"`
 }
 
+type QualityChangesHourlyConnection struct {
+	Edges      []*QualityChangesHourlyEdge `json:"edges"`
+	PageInfo   *PageInfo                   `json:"pageInfo"`
+	TotalCount int                         `json:"totalCount"`
+}
+
+type QualityChangesHourlyEdge struct {
+	Cursor string                      `json:"cursor"`
+	Node   *proto.QualityChangesHourly `json:"node"`
+}
+
+type QualityTierDailyConnection struct {
+	Edges      []*QualityTierDailyEdge `json:"edges"`
+	PageInfo   *PageInfo               `json:"pageInfo"`
+	TotalCount int                     `json:"totalCount"`
+}
+
+type QualityTierDailyEdge struct {
+	Cursor string                  `json:"cursor"`
+	Node   *proto.QualityTierDaily `json:"node"`
+}
+
 type Query struct {
 }
+
+type RateLimitError struct {
+	Message    string  `json:"message"`
+	Code       *string `json:"code,omitempty"`
+	RetryAfter *int    `json:"retryAfter,omitempty"`
+}
+
+func (RateLimitError) IsError()                {}
+func (this RateLimitError) GetMessage() string { return this.Message }
+func (this RateLimitError) GetCode() *string   { return this.Code }
+
+func (RateLimitError) IsCreateDeveloperTokenResult() {}
 
 type RebufferingEvent struct {
 	Timestamp            time.Time   `json:"timestamp"`
@@ -199,121 +427,140 @@ type RebufferingEvent struct {
 	PreviousState        BufferState `json:"previousState"`
 	RebufferStart        bool        `json:"rebufferStart"`
 	RebufferEnd          bool        `json:"rebufferEnd"`
-	HealthScore          *float64    `json:"healthScore,omitempty"`
-	FrameJitterMs        *float64    `json:"frameJitterMs,omitempty"`
 	PacketLossPercentage *float64    `json:"packetLossPercentage,omitempty"`
 }
 
-type RecordingConfig struct {
-	Enabled         bool   `json:"enabled"`
-	RetentionDays   int    `json:"retentionDays"`
-	Format          string `json:"format"`
-	SegmentDuration int    `json:"segmentDuration"`
+type RecordingEdge struct {
+	Cursor string           `json:"cursor"`
+	Node   *proto.Recording `json:"node"`
 }
 
-type ServiceInstanceHealth struct {
-	InstanceID      string     `json:"instanceId"`
-	ServiceID       string     `json:"serviceId"`
-	ClusterID       string     `json:"clusterId"`
-	Protocol        string     `json:"protocol"`
-	Host            *string    `json:"host,omitempty"`
-	Port            int        `json:"port"`
-	HealthEndpoint  *string    `json:"healthEndpoint,omitempty"`
-	Status          string     `json:"status"`
-	LastHealthCheck *time.Time `json:"lastHealthCheck,omitempty"`
+type RecordingsConnection struct {
+	Edges      []*RecordingEdge `json:"edges"`
+	PageInfo   *PageInfo        `json:"pageInfo"`
+	TotalCount int              `json:"totalCount"`
 }
 
-type StreamHealthAlert struct {
-	Timestamp            time.Time     `json:"timestamp"`
-	Stream               string        `json:"stream"`
-	NodeID               string        `json:"nodeId"`
-	AlertType            AlertType     `json:"alertType"`
-	Severity             AlertSeverity `json:"severity"`
-	HealthScore          *float64      `json:"healthScore,omitempty"`
-	FrameJitterMs        *float64      `json:"frameJitterMs,omitempty"`
-	PacketLossPercentage *float64      `json:"packetLossPercentage,omitempty"`
-	IssuesDescription    *string       `json:"issuesDescription,omitempty"`
-	BufferState          *BufferState  `json:"bufferState,omitempty"`
-	QualityTier          *string       `json:"qualityTier,omitempty"`
+type RoutingEventEdge struct {
+	Cursor string              `json:"cursor"`
+	Node   *proto.RoutingEvent `json:"node"`
 }
 
-type StreamMetaResponse struct {
-	MetaSummary *StreamMetaSummary `json:"metaSummary"`
-	Raw         *string            `json:"raw,omitempty"`
+type RoutingEventsConnection struct {
+	Edges      []*RoutingEventEdge `json:"edges"`
+	PageInfo   *PageInfo           `json:"pageInfo"`
+	TotalCount int                 `json:"totalCount"`
 }
 
-type StreamMetaSummary struct {
-	IsLive         bool               `json:"isLive"`
-	BufferWindowMs int                `json:"bufferWindowMs"`
-	JitterMs       int                `json:"jitterMs"`
-	UnixOffsetMs   int                `json:"unixOffsetMs"`
-	NowMs          *int               `json:"nowMs,omitempty"`
-	LastMs         *int               `json:"lastMs,omitempty"`
-	Width          *int               `json:"width,omitempty"`
-	Height         *int               `json:"height,omitempty"`
-	Version        *int               `json:"version,omitempty"`
-	Type           *string            `json:"type,omitempty"`
-	Tracks         []*StreamMetaTrack `json:"tracks"`
+type ServiceInstanceEdge struct {
+	Cursor string                 `json:"cursor"`
+	Node   *proto.ServiceInstance `json:"node"`
 }
 
-type StreamMetaTrack struct {
-	ID         string `json:"id"`
-	Type       string `json:"type"`
-	Codec      string `json:"codec"`
-	Channels   *int   `json:"channels,omitempty"`
-	Rate       *int   `json:"rate,omitempty"`
-	Width      *int   `json:"width,omitempty"`
-	Height     *int   `json:"height,omitempty"`
-	BitrateBps *int   `json:"bitrateBps,omitempty"`
-	NowMs      *int   `json:"nowMs,omitempty"`
-	LastMs     *int   `json:"lastMs,omitempty"`
-	FirstMs    *int   `json:"firstMs,omitempty"`
+type ServiceInstancesConnection struct {
+	Edges      []*ServiceInstanceEdge `json:"edges"`
+	PageInfo   *PageInfo              `json:"pageInfo"`
+	TotalCount int                    `json:"totalCount"`
+}
+
+type StorageUsageConnection struct {
+	Edges      []*StorageUsageEdge `json:"edges"`
+	PageInfo   *PageInfo           `json:"pageInfo"`
+	TotalCount int                 `json:"totalCount"`
+}
+
+type StorageUsageEdge struct {
+	Cursor string                    `json:"cursor"`
+	Node   *proto.StorageUsageRecord `json:"node"`
+}
+
+type StreamConnectionHourlyConnection struct {
+	Edges      []*StreamConnectionHourlyEdge `json:"edges"`
+	PageInfo   *PageInfo                     `json:"pageInfo"`
+	TotalCount int                           `json:"totalCount"`
+}
+
+type StreamConnectionHourlyEdge struct {
+	Cursor string                        `json:"cursor"`
+	Node   *proto.StreamConnectionHourly `json:"node"`
+}
+
+type StreamEdge struct {
+	Cursor string        `json:"cursor"`
+	Node   *proto.Stream `json:"node"`
+}
+
+type StreamEventEdge struct {
+	Cursor string             `json:"cursor"`
+	Node   *proto.StreamEvent `json:"node"`
+}
+
+type StreamEventsConnection struct {
+	Edges      []*StreamEventEdge `json:"edges"`
+	PageInfo   *PageInfo          `json:"pageInfo"`
+	TotalCount int                `json:"totalCount"`
+}
+
+type StreamHealthMetricEdge struct {
+	Cursor string                    `json:"cursor"`
+	Node   *proto.StreamHealthMetric `json:"node"`
+}
+
+type StreamHealthMetricsConnection struct {
+	Edges      []*StreamHealthMetricEdge `json:"edges"`
+	PageInfo   *PageInfo                 `json:"pageInfo"`
+	TotalCount int                       `json:"totalCount"`
 }
 
 type StreamValidation struct {
-	Valid     bool    `json:"valid"`
-	StreamKey string  `json:"streamKey"`
-	Error     *string `json:"error,omitempty"`
+	Status    ValidationStatus `json:"status"`
+	StreamKey string           `json:"streamKey"`
+	Error     *string          `json:"error,omitempty"`
+}
+
+type StreamsConnection struct {
+	Edges      []*StreamEdge `json:"edges"`
+	PageInfo   *PageInfo     `json:"pageInfo"`
+	TotalCount int           `json:"totalCount"`
 }
 
 type Subscription struct {
 }
 
-type SystemHealthEvent struct {
-	Node        string     `json:"node"`
-	Cluster     string     `json:"cluster"`
-	Status      NodeStatus `json:"status"`
-	CPUUsage    float64    `json:"cpuUsage"`
-	MemoryUsage float64    `json:"memoryUsage"`
-	DiskUsage   float64    `json:"diskUsage"`
-	HealthScore float64    `json:"healthScore"`
-	Timestamp   time.Time  `json:"timestamp"`
+type TenantEvent struct {
+	Type              string                        `json:"type"`
+	Channel           string                        `json:"channel"`
+	Timestamp         time.Time                     `json:"timestamp"`
+	StreamEvent       *proto.StreamEvent            `json:"streamEvent,omitempty"`
+	ViewerMetrics     *proto.ClientLifecycleUpdate  `json:"viewerMetrics,omitempty"`
+	TrackListUpdate   *proto.StreamTrackListTrigger `json:"trackListUpdate,omitempty"`
+	ClipLifecycle     *proto.ClipLifecycleData      `json:"clipLifecycle,omitempty"`
+	DvrEvent          *proto.DVRLifecycleData       `json:"dvrEvent,omitempty"`
+	SystemHealthEvent *proto.NodeLifecycleUpdate    `json:"systemHealthEvent,omitempty"`
 }
 
-type TenantClusterAssignment struct {
-	ID                        string    `json:"id"`
-	TenantID                  string    `json:"tenantId"`
-	ClusterID                 string    `json:"clusterId"`
-	DeploymentTier            *string   `json:"deploymentTier,omitempty"`
-	Priority                  int       `json:"priority"`
-	IsPrimary                 bool      `json:"isPrimary"`
-	IsActive                  bool      `json:"isActive"`
-	MaxStreamsOnCluster       *int      `json:"maxStreamsOnCluster,omitempty"`
-	MaxViewersOnCluster       *int      `json:"maxViewersOnCluster,omitempty"`
-	MaxBandwidthMbpsOnCluster *int      `json:"maxBandwidthMbpsOnCluster,omitempty"`
-	FallbackWhenFull          bool      `json:"fallbackWhenFull"`
-	CreatedAt                 time.Time `json:"createdAt"`
-	UpdatedAt                 time.Time `json:"updatedAt"`
-}
-
-type TimeRange struct {
-	Start time.Time `json:"start"`
-	End   time.Time `json:"end"`
+type TenantUsage struct {
+	BillingPeriod string        `json:"billingPeriod"`
+	Usage         []*UsageEntry `json:"usage"`
+	Costs         []*CostEntry  `json:"costs"`
+	TotalCost     float64       `json:"totalCost"`
+	Currency      string        `json:"currency"`
 }
 
 type TimeRangeInput struct {
 	Start time.Time `json:"start"`
 	End   time.Time `json:"end"`
+}
+
+type TrackListEventEdge struct {
+	Cursor string                `json:"cursor"`
+	Node   *proto.TrackListEvent `json:"node"`
+}
+
+type TrackListEventsConnection struct {
+	Edges      []*TrackListEventEdge `json:"edges"`
+	PageInfo   *PageInfo             `json:"pageInfo"`
+	TotalCount int                   `json:"totalCount"`
 }
 
 type UpdateStreamInput struct {
@@ -327,152 +574,39 @@ type UpdateTenantInput struct {
 	Settings *string `json:"settings,omitempty"`
 }
 
-type ViewerEndpoint struct {
-	NodeID      string   `json:"nodeId"`
-	BaseURL     string   `json:"baseUrl"`
-	Protocol    string   `json:"protocol"`
-	URL         string   `json:"url"`
-	GeoDistance *float64 `json:"geoDistance,omitempty"`
-	LoadScore   *float64 `json:"loadScore,omitempty"`
-	HealthScore *float64 `json:"healthScore,omitempty"`
-	Outputs     *string  `json:"outputs,omitempty"`
+type UsageEntry struct {
+	ResourceType string  `json:"resourceType"`
+	Amount       float64 `json:"amount"`
 }
 
-type ViewerEndpointResponse struct {
-	Endpoints []*ViewerEndpoint `json:"endpoints"`
-	Metadata  *ContentMetadata  `json:"metadata,omitempty"`
+type ValidationError struct {
+	Message    string  `json:"message"`
+	Code       *string `json:"code,omitempty"`
+	Field      *string `json:"field,omitempty"`
+	Constraint *string `json:"constraint,omitempty"`
 }
 
-type ViewerMetrics struct {
-	Stream            string    `json:"stream"`
-	CurrentViewers    int       `json:"currentViewers"`
-	ViewerCount       int       `json:"viewerCount"`
-	PeakViewers       int       `json:"peakViewers"`
-	Bandwidth         float64   `json:"bandwidth"`
-	ConnectionQuality *float64  `json:"connectionQuality,omitempty"`
-	BufferHealth      *float64  `json:"bufferHealth,omitempty"`
-	Timestamp         time.Time `json:"timestamp"`
-}
+func (ValidationError) IsError()                {}
+func (this ValidationError) GetMessage() string { return this.Message }
+func (this ValidationError) GetCode() *string   { return this.Code }
 
-type AlertSeverity string
+func (ValidationError) IsCreateStreamResult() {}
 
-const (
-	AlertSeverityLow      AlertSeverity = "LOW"
-	AlertSeverityMedium   AlertSeverity = "MEDIUM"
-	AlertSeverityHigh     AlertSeverity = "HIGH"
-	AlertSeverityCritical AlertSeverity = "CRITICAL"
-)
+func (ValidationError) IsUpdateStreamResult() {}
 
-var AllAlertSeverity = []AlertSeverity{
-	AlertSeverityLow,
-	AlertSeverityMedium,
-	AlertSeverityHigh,
-	AlertSeverityCritical,
-}
+func (ValidationError) IsCreateClipResult() {}
 
-func (e AlertSeverity) IsValid() bool {
-	switch e {
-	case AlertSeverityLow, AlertSeverityMedium, AlertSeverityHigh, AlertSeverityCritical:
-		return true
-	}
-	return false
-}
+func (ValidationError) IsCreateStreamKeyResult() {}
 
-func (e AlertSeverity) String() string {
-	return string(e)
-}
+func (ValidationError) IsStartDVRResult() {}
 
-func (e *AlertSeverity) UnmarshalGQL(v any) error {
-	str, ok := v.(string)
-	if !ok {
-		return fmt.Errorf("enums must be strings")
-	}
+func (ValidationError) IsCreatePaymentResult() {}
 
-	*e = AlertSeverity(str)
-	if !e.IsValid() {
-		return fmt.Errorf("%s is not a valid AlertSeverity", str)
-	}
-	return nil
-}
+func (ValidationError) IsUpdateTenantResult() {}
 
-func (e AlertSeverity) MarshalGQL(w io.Writer) {
-	fmt.Fprint(w, strconv.Quote(e.String()))
-}
+func (ValidationError) IsCreateDeveloperTokenResult() {}
 
-func (e *AlertSeverity) UnmarshalJSON(b []byte) error {
-	s, err := strconv.Unquote(string(b))
-	if err != nil {
-		return err
-	}
-	return e.UnmarshalGQL(s)
-}
-
-func (e AlertSeverity) MarshalJSON() ([]byte, error) {
-	var buf bytes.Buffer
-	e.MarshalGQL(&buf)
-	return buf.Bytes(), nil
-}
-
-type AlertType string
-
-const (
-	AlertTypeHighJitter          AlertType = "HIGH_JITTER"
-	AlertTypeKeyframeInstability AlertType = "KEYFRAME_INSTABILITY"
-	AlertTypePacketLoss          AlertType = "PACKET_LOSS"
-	AlertTypeRebuffering         AlertType = "REBUFFERING"
-	AlertTypeQualityDegradation  AlertType = "QUALITY_DEGRADATION"
-)
-
-var AllAlertType = []AlertType{
-	AlertTypeHighJitter,
-	AlertTypeKeyframeInstability,
-	AlertTypePacketLoss,
-	AlertTypeRebuffering,
-	AlertTypeQualityDegradation,
-}
-
-func (e AlertType) IsValid() bool {
-	switch e {
-	case AlertTypeHighJitter, AlertTypeKeyframeInstability, AlertTypePacketLoss, AlertTypeRebuffering, AlertTypeQualityDegradation:
-		return true
-	}
-	return false
-}
-
-func (e AlertType) String() string {
-	return string(e)
-}
-
-func (e *AlertType) UnmarshalGQL(v any) error {
-	str, ok := v.(string)
-	if !ok {
-		return fmt.Errorf("enums must be strings")
-	}
-
-	*e = AlertType(str)
-	if !e.IsValid() {
-		return fmt.Errorf("%s is not a valid AlertType", str)
-	}
-	return nil
-}
-
-func (e AlertType) MarshalGQL(w io.Writer) {
-	fmt.Fprint(w, strconv.Quote(e.String()))
-}
-
-func (e *AlertType) UnmarshalJSON(b []byte) error {
-	s, err := strconv.Unquote(string(b))
-	if err != nil {
-		return err
-	}
-	return e.UnmarshalGQL(s)
-}
-
-func (e AlertType) MarshalJSON() ([]byte, error) {
-	var buf bytes.Buffer
-	e.MarshalGQL(&buf)
-	return buf.Bytes(), nil
-}
+func (ValidationError) IsCreateBootstrapTokenResult() {}
 
 type BootstrapTokenType string
 
@@ -1051,6 +1185,63 @@ func (e *StreamStatus) UnmarshalJSON(b []byte) error {
 }
 
 func (e StreamStatus) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type ValidationStatus string
+
+const (
+	ValidationStatusValid   ValidationStatus = "VALID"
+	ValidationStatusInvalid ValidationStatus = "INVALID"
+	ValidationStatusError   ValidationStatus = "ERROR"
+)
+
+var AllValidationStatus = []ValidationStatus{
+	ValidationStatusValid,
+	ValidationStatusInvalid,
+	ValidationStatusError,
+}
+
+func (e ValidationStatus) IsValid() bool {
+	switch e {
+	case ValidationStatusValid, ValidationStatusInvalid, ValidationStatusError:
+		return true
+	}
+	return false
+}
+
+func (e ValidationStatus) String() string {
+	return string(e)
+}
+
+func (e *ValidationStatus) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = ValidationStatus(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid ValidationStatus", str)
+	}
+	return nil
+}
+
+func (e ValidationStatus) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *ValidationStatus) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e ValidationStatus) MarshalJSON() ([]byte, error) {
 	var buf bytes.Buffer
 	e.MarshalGQL(&buf)
 	return buf.Bytes(), nil

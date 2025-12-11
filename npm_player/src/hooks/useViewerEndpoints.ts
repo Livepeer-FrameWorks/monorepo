@@ -1,6 +1,9 @@
 import { useEffect, useState, useRef } from 'react';
 import type { ContentEndpoints } from '../types';
 
+const MAX_RETRIES = 3;
+const INITIAL_DELAY_MS = 500;
+
 interface Params {
   gatewayUrl: string;
   contentType: 'live' | 'dvr' | 'clip';
@@ -8,14 +11,48 @@ interface Params {
   authToken?: string;
 }
 
+async function fetchWithRetry(
+  url: string,
+  options: RequestInit,
+  maxRetries: number = MAX_RETRIES,
+  initialDelay: number = INITIAL_DELAY_MS
+): Promise<Response> {
+  let lastError: Error | null = null;
+
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      const response = await fetch(url, options);
+      return response;
+    } catch (e) {
+      lastError = e instanceof Error ? e : new Error('Fetch failed');
+
+      // Don't retry on abort
+      if (options.signal?.aborted) {
+        throw lastError;
+      }
+
+      // Wait before retrying (exponential backoff)
+      if (attempt < maxRetries - 1) {
+        const delay = initialDelay * Math.pow(2, attempt);
+        console.warn(`[useViewerEndpoints] Retry ${attempt + 1}/${maxRetries - 1} after ${delay}ms`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+  }
+
+  throw lastError ?? new Error('Gateway unreachable after retries');
+}
+
 export function useViewerEndpoints({ gatewayUrl, contentType, contentId, authToken }: Params) {
   const [endpoints, setEndpoints] = useState<ContentEndpoints | null>(null);
   const [status, setStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
+  const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     if (!gatewayUrl || !contentType || !contentId) return;
     setStatus('loading');
+    setError(null);
     abortRef.current?.abort();
     const ac = new AbortController();
     abortRef.current = ac;
@@ -31,7 +68,7 @@ export function useViewerEndpoints({ gatewayUrl, contentType, contentId, authTok
             }
           }
         `;
-        const res = await fetch(graphqlEndpoint, {
+        const res = await fetchWithRetry(graphqlEndpoint, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -52,6 +89,9 @@ export function useViewerEndpoints({ gatewayUrl, contentType, contentId, authTok
         setStatus('ready');
       } catch (e) {
         if (ac.signal.aborted) return;
+        const message = e instanceof Error ? e.message : 'Unknown gateway error';
+        console.error('[useViewerEndpoints] Gateway resolution failed:', message);
+        setError(message);
         setStatus('error');
       }
     })();
@@ -59,7 +99,7 @@ export function useViewerEndpoints({ gatewayUrl, contentType, contentId, authTok
     return () => ac.abort();
   }, [gatewayUrl, contentType, contentId, authToken]);
 
-  return { endpoints, status };
+  return { endpoints, status, error };
 }
 
 export default useViewerEndpoints;

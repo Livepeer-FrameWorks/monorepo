@@ -140,17 +140,6 @@ export class VideoJsPlayerImpl extends BasePlayer {
     return mimeType.replace('html5/', '');
   }
 
-  // Optional helper to inject default skin CSS when controls are enabled
-  private ensureSkinCss() {
-    if (!document.getElementById('videojs-css')) {
-      const link = document.createElement('link');
-      link.rel = 'stylesheet';
-      link.href = 'https://vjs.zencdn.net/8.10.0/video-js.css';
-      link.id = 'videojs-css';
-      document.head.appendChild(link);
-    }
-  }
-
   setPlaybackRate(rate: number): void {
     super.setPlaybackRate(rate);
     try {

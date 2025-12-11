@@ -3,181 +3,28 @@ package models
 import (
 	"database/sql/driver"
 	"encoding/json"
-	"fmt"
 	"time"
 )
 
-// ResourceLimit represents a resource limit that can be either a number or unlimited
-type ResourceLimit struct {
-	IsUnlimited bool `json:"-"`
-	Value       int  `json:"-"`
-}
-
-// MarshalJSON implements json.Marshaler for ResourceLimit
-func (rl ResourceLimit) MarshalJSON() ([]byte, error) {
-	if rl.IsUnlimited {
-		return []byte(`"unlimited"`), nil
-	}
-	return json.Marshal(rl.Value)
-}
-
-// UnmarshalJSON implements json.Unmarshaler for ResourceLimit
-func (rl *ResourceLimit) UnmarshalJSON(data []byte) error {
-	var str string
-	if err := json.Unmarshal(data, &str); err == nil {
-		if str == "unlimited" {
-			rl.IsUnlimited = true
-			rl.Value = 0
-			return nil
-		}
-		return fmt.Errorf("invalid string value for ResourceLimit: %s", str)
-	}
-
-	var val int
-	if err := json.Unmarshal(data, &val); err == nil {
-		rl.IsUnlimited = false
-		rl.Value = val
-		return nil
-	}
-
-	return fmt.Errorf("ResourceLimit must be int or \"unlimited\"")
-}
-
-// NewResourceLimit creates a ResourceLimit with a specific value
-func NewResourceLimit(value int) ResourceLimit {
-	return ResourceLimit{IsUnlimited: false, Value: value}
-}
-
-// NewUnlimitedResource creates an unlimited ResourceLimit
-func NewUnlimitedResource() ResourceLimit {
-	return ResourceLimit{IsUnlimited: true, Value: 0}
-}
-
-// IsInt returns true if this is a numeric limit
-func (rl ResourceLimit) IsInt() bool {
-	return !rl.IsUnlimited
-}
-
-// GetInt returns the numeric value, or 0 if unlimited
-func (rl ResourceLimit) GetInt() int {
-	if rl.IsUnlimited {
-		return 0
-	}
-	return rl.Value
-}
-
 // BillingFeatures represents the features available in a billing tier
+// NOTE: Enforcement limits (max_streams, max_viewers, bandwidth caps) belong
+// in quartermaster.tenant_cluster_assignments, not here. This is billing only.
 type BillingFeatures struct {
-	MaxStreams     ResourceLimit `json:"max_streams"` // int or "unlimited"
-	MaxViewers     ResourceLimit `json:"max_viewers"` // int or "unlimited"
-	Recording      bool          `json:"recording"`
-	Analytics      bool          `json:"analytics"`
-	CustomBranding bool          `json:"custom_branding,omitempty"`
-	APIAccess      bool          `json:"api_access,omitempty"`
-	SupportLevel   string        `json:"support_level"` // "community", "email", "phone"
-	SLA            bool          `json:"sla,omitempty"`
-}
-
-// AllocationLimit represents a resource allocation limit that can be int, float64, or unlimited
-type AllocationLimit struct {
-	IsUnlimited bool    `json:"-"`
-	IntValue    int     `json:"-"`
-	FloatValue  float64 `json:"-"`
-	IsFloat     bool    `json:"-"`
-}
-
-// MarshalJSON implements json.Marshaler for AllocationLimit
-func (al AllocationLimit) MarshalJSON() ([]byte, error) {
-	if al.IsUnlimited {
-		return []byte(`"unlimited"`), nil
-	}
-	if al.IsFloat {
-		return json.Marshal(al.FloatValue)
-	}
-	return json.Marshal(al.IntValue)
-}
-
-// UnmarshalJSON implements json.Unmarshaler for AllocationLimit
-func (al *AllocationLimit) UnmarshalJSON(data []byte) error {
-	var str string
-	if err := json.Unmarshal(data, &str); err == nil {
-		if str == "unlimited" {
-			al.IsUnlimited = true
-			al.IntValue = 0
-			al.FloatValue = 0
-			al.IsFloat = false
-			return nil
-		}
-		return fmt.Errorf("invalid string value for AllocationLimit: %s", str)
-	}
-
-	var intVal int
-	if err := json.Unmarshal(data, &intVal); err == nil {
-		al.IsUnlimited = false
-		al.IntValue = intVal
-		al.FloatValue = float64(intVal)
-		al.IsFloat = false
-		return nil
-	}
-
-	var floatVal float64
-	if err := json.Unmarshal(data, &floatVal); err == nil {
-		al.IsUnlimited = false
-		al.IntValue = int(floatVal)
-		al.FloatValue = floatVal
-		al.IsFloat = true
-		return nil
-	}
-
-	return fmt.Errorf("AllocationLimit must be int, float64, or \"unlimited\"")
-}
-
-// NewAllocationLimitInt creates an AllocationLimit with an int value
-func NewAllocationLimitInt(value int) AllocationLimit {
-	return AllocationLimit{
-		IsUnlimited: false,
-		IntValue:    value,
-		FloatValue:  float64(value),
-		IsFloat:     false,
-	}
-}
-
-// NewAllocationLimitFloat creates an AllocationLimit with a float64 value
-func NewAllocationLimitFloat(value float64) AllocationLimit {
-	return AllocationLimit{
-		IsUnlimited: false,
-		IntValue:    int(value),
-		FloatValue:  value,
-		IsFloat:     true,
-	}
-}
-
-// NewUnlimitedAllocation creates an unlimited AllocationLimit
-func NewUnlimitedAllocation() AllocationLimit {
-	return AllocationLimit{IsUnlimited: true}
-}
-
-// GetInt returns the int value, or 0 if unlimited
-func (al AllocationLimit) GetInt() int {
-	if al.IsUnlimited {
-		return 0
-	}
-	return al.IntValue
-}
-
-// GetFloat returns the float64 value, or 0 if unlimited
-func (al AllocationLimit) GetFloat() float64 {
-	if al.IsUnlimited {
-		return 0
-	}
-	return al.FloatValue
+	Recording      bool   `json:"recording"`
+	Analytics      bool   `json:"analytics"`
+	CustomBranding bool   `json:"custom_branding,omitempty"`
+	APIAccess      bool   `json:"api_access,omitempty"`
+	SupportLevel   string `json:"support_level"` // "community", "basic", "priority", "enterprise", "dedicated"
+	SLA            bool   `json:"sla,omitempty"`
 }
 
 // AllocationDetails represents resource allocation for a billing tier
+// Used everywhere: BillingFeatures, OverageRates, etc.
+// Limit == nil means unlimited, otherwise it's the numeric limit
 type AllocationDetails struct {
-	Limit     AllocationLimit `json:"limit"` // int, float64, or "unlimited"
-	UnitPrice float64         `json:"unit_price,omitempty"`
-	Unit      string          `json:"unit,omitempty"`
+	Limit     *float64 `json:"limit"`
+	UnitPrice float64  `json:"unit_price,omitempty"`
+	Unit      string   `json:"unit,omitempty"`
 }
 
 // OverageRates represents overage pricing rates
@@ -431,6 +278,9 @@ type Payment struct {
 	CreatedAt   time.Time  `json:"created_at" db:"created_at"`
 	UpdatedAt   time.Time  `json:"updated_at" db:"updated_at"`
 }
+
+// GraphQL union type marker method for Payment
+func (Payment) IsCreatePaymentResult() {}
 
 // CryptoWallet represents a crypto payment wallet
 type CryptoWallet struct {

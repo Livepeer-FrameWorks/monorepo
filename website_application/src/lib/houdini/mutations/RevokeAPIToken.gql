@@ -1,0 +1,14 @@
+mutation RevokeAPIToken($id: ID!) {
+  revokeDeveloperToken(id: $id) {
+    __typename
+    ... on DeleteSuccess {
+      ...DeleteSuccessFields @mask_disable
+    }
+    ... on NotFoundError {
+      ...NotFoundErrorFields @mask_disable
+    }
+    ... on AuthError {
+      ...AuthErrorFields @mask_disable
+    }
+  }
+}

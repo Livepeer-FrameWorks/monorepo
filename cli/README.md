@@ -15,8 +15,16 @@ Planned (tracked in SCOPE.md): workspace mode and optional interface helpers.
 ## Installation
 
 ```bash
-# Download latest release
-curl -L https://github.com/frameworks/cli/releases/latest/download/frameworks -o frameworks
+# Download latest release (choose your platform)
+# Linux (amd64)
+curl -L https://github.com/Livepeer-FrameWorks/monorepo/releases/latest/download/frameworks-linux-amd64 -o frameworks
+# Linux (arm64)
+# curl -L https://github.com/Livepeer-FrameWorks/monorepo/releases/latest/download/frameworks-linux-arm64 -o frameworks
+# macOS (Apple Silicon)
+# curl -L https://github.com/Livepeer-FrameWorks/monorepo/releases/latest/download/frameworks-darwin-arm64 -o frameworks
+# macOS (Intel)
+# curl -L https://github.com/Livepeer-FrameWorks/monorepo/releases/latest/download/frameworks-darwin-amd64 -o frameworks
+
 chmod +x frameworks
 sudo mv frameworks /usr/local/bin/
 
@@ -86,6 +94,19 @@ frameworks
 ├── config          # Configuration helpers
 │   └── env         # Merge config/env layers into an env file (CLI reuse of configgen)
 │
+├── dns             # CloudFlare DNS & Load Balancer automation
+│   ├── create-pool         # Create load balancer pool
+│   ├── list-pools          # List all pools
+│   ├── delete-pool         # Delete pool
+│   ├── add-origin          # Add origin to pool
+│   ├── remove-origin       # Remove origin from pool
+│   ├── create-subdomain    # Create DNS subdomain (A/CNAME)
+│   ├── list-subdomains     # List DNS records
+│   ├── delete-subdomain    # Delete DNS record
+│   ├── health-check        # Configure health monitors
+│   ├── create-lb           # Create geo-routed load balancer
+│   └── list-lbs            # List load balancers
+│
 ├── login           # Store JWT/service token in context
 ├── admin           # Provider/admin operations
 │   ├── tokens              # Developer API tokens via Gateway (create/list/revoke)
@@ -102,7 +123,7 @@ frameworks
 ## Versioning
 
 - Platform SemVer: one tag (e.g., `v1.4.0`) defines the stack.
-- Release Manifest: generated at `releases/<version>.yaml` (see `make manifest`), lists images and optional digests.
+- Release Manifest: assembled by the GitHub Actions `manifest` job and attached to each GitHub Release (also mirrored to the GitOps repo as `releases/<version>.yaml`), listing images, digests, binaries, and interfaces.
 - Build Info: all binaries embed Version/GitCommit/BuildDate; `frameworks version` prints platform info.
 
 ## Configuration
@@ -120,6 +141,33 @@ frameworks context show
 Authentication methods:
 - JWT: `frameworks login --email you@example.com` stores a user token in the current context.
 - Service token: `frameworks login --service-token <TOKEN>` stores a provider token in the current context.
+
+### DNS Management
+
+The CLI includes CloudFlare DNS automation for managing load balancer pools and geo-routing:
+
+```bash
+# Set CloudFlare credentials (in shell or config/env/secrets.env)
+export CLOUDFLARE_API_TOKEN="your-token"
+export CLOUDFLARE_ZONE_ID="your-zone-id"
+export CLOUDFLARE_ACCOUNT_ID="your-account-id"
+
+# Or add to config/env/secrets.env and run: make env
+
+# Create a pool
+frameworks dns create-pool us-east-pool --description="US East origins"
+
+# Add origins
+frameworks dns add-origin <pool-id> --address=192.0.2.10 --name=edge-1
+
+# Configure health checks
+frameworks dns health-check <pool-id> --path=/health --port=443
+
+# Create tenant subdomain
+frameworks dns create-subdomain tenant1 --target=play.example.com
+```
+
+See the [DNS documentation](../website_docs/src/content/docs/operators/dns.mdx) for complete details.
 
 ## System Requirements
 

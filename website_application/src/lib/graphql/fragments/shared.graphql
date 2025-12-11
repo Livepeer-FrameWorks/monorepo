@@ -1,0 +1,226 @@
+# Shared GraphQL Fragments
+# These fragments can be imported and reused across queries and mutations
+
+# =============================================================================
+# Error Type Fragments
+# Used in mutation Result union types for consistent error handling
+# =============================================================================
+
+fragment ValidationErrorFields on ValidationError {
+  message
+  code
+  field
+  constraint
+}
+
+fragment AuthErrorFields on AuthError {
+  message
+  code
+}
+
+fragment NotFoundErrorFields on NotFoundError {
+  message
+  code
+  resourceType
+  resourceId
+}
+
+fragment RateLimitErrorFields on RateLimitError {
+  message
+  code
+  retryAfter
+}
+
+fragment DeleteSuccessFields on DeleteSuccess {
+  success
+  deletedId
+}
+
+# =============================================================================
+# Pagination Fragments
+# Used in Relay-style connection queries
+# =============================================================================
+
+fragment PageInfoFields on PageInfo {
+  hasNextPage
+  hasPreviousPage
+  startCursor
+  endCursor
+}
+
+# =============================================================================
+# Core Entity Fragments
+# Common field selections for domain types
+# =============================================================================
+
+fragment CoreStream on Stream {
+  id
+  name
+  description
+  streamKey
+  playbackId
+  metrics {
+    status
+  }
+  record
+  createdAt
+  updatedAt
+}
+
+fragment CoreStreamKey on StreamKey {
+  id
+  streamId
+  keyValue
+  keyName
+  isActive
+  lastUsedAt
+  createdAt
+}
+
+fragment CoreRecording on Recording {
+  id
+  streamId
+  title
+  duration
+  fileSizeBytes
+  playbackId
+  thumbnailUrl
+  startTime
+  endTime
+  status
+  createdAt
+  updatedAt
+}
+
+fragment CoreClip on Clip {
+  id
+  clipHash
+  streamName
+  title
+  description
+  startTime
+  duration
+  nodeId
+  storagePath
+  sizeBytes
+  status
+  accessCount
+  createdAt
+  updatedAt
+}
+
+fragment CoreDVRRequest on DVRRequest {
+  dvrHash
+  internalName
+  storageNodeId
+  status
+  startedAt
+  endedAt
+  durationSeconds
+  sizeBytes
+  manifestPath
+  errorMessage
+  createdAt
+  updatedAt
+}
+
+fragment CoreNode on Node {
+  id
+  nodeName
+  clusterId
+  nodeType
+  status
+  region
+  externalIp
+  lastHeartbeat
+  createdAt
+  latitude
+  longitude
+}
+
+fragment CoreCluster on Cluster {
+  id
+  clusterName
+  healthStatus
+  createdAt
+}
+
+fragment CoreTenant on Tenant {
+  id
+  name
+  cluster
+  createdAt
+}
+
+fragment CoreDeveloperToken on DeveloperToken {
+  id
+  tokenName
+  tokenValue
+  permissions
+  status
+  expiresAt
+  lastUsedAt
+  createdAt
+}
+
+fragment CoreBootstrapToken on BootstrapToken {
+  id
+  name
+  kind
+  usageLimit
+  usageCount
+  expiresAt
+  usedAt
+  createdAt
+}
+
+fragment CorePayment on Payment {
+  id
+  amount
+  currency
+  method
+  status
+  createdAt
+}
+
+# =============================================================================
+# Health & Metrics Fragments
+# =============================================================================
+
+fragment StreamHealthFields on StreamHealthMetric {
+  timestamp
+  stream
+  nodeId
+  issuesDescription
+  hasIssues
+  bitrate
+  fps
+  width
+  height
+  codec
+  profile
+  qualityTier
+  gopSize
+  packetsSent
+  packetsLost
+  packetLossPercentage
+  bufferState
+  bufferHealth
+  bufferSize
+  bufferUsed
+  audioChannels
+  audioSampleRate
+  audioCodec
+  audioBitrate
+}
+
+fragment NodeMetricFields on NodeMetric {
+  timestamp
+  nodeId
+  cpuUsage
+  memoryTotal
+  memoryUsed
+  diskTotal
+  diskUsed
+  status
+}

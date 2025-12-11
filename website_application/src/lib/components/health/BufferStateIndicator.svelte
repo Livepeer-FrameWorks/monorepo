@@ -1,20 +1,54 @@
 <script lang="ts">
-  import { healthService } from '$lib/graphql/services/health.js';
-
-  type BufferState = "FULL" | "EMPTY" | "DRY" | "RECOVER" | string;
+  type BufferState = "FULL" | "EMPTY" | "DRY" | "RECOVER" | string | null | undefined;
   type BufferSize = "sm" | "md" | "lg";
 
   interface Props {
     bufferState?: BufferState;
     bufferHealth?: number | null;
     size?: BufferSize;
+    compact?: boolean;
   }
 
-  let { bufferState = "EMPTY", bufferHealth = null, size = "md" }: Props = $props();
+  let { bufferState = "EMPTY", bufferHealth = null, size = "md", compact = false }: Props = $props();
 
-  let colorClass = $derived(healthService.getBufferStateColor(bufferState));
+  const normalizedState = $derived(
+    typeof bufferState === "string" && bufferState.length > 0 ? bufferState : "UNKNOWN"
+  );
+
+  function getBufferStateColor(state: string): string {
+    switch (state) {
+      case "FULL":
+        return "text-success";
+      case "EMPTY":
+        return "text-warning";
+      case "DRY":
+        return "text-error";
+      case "RECOVER":
+        return "text-accent";
+      default:
+        return "text-muted-foreground";
+    }
+  }
+
+  function getBufferBgColor(state: string): string {
+    switch (state) {
+      case "FULL":
+        return "bg-success";
+      case "EMPTY":
+        return "bg-warning";
+      case "DRY":
+        return "bg-error";
+      case "RECOVER":
+        return "bg-accent";
+      default:
+        return "bg-muted-foreground";
+    }
+  }
+
+  let colorClass = $derived(getBufferStateColor(normalizedState));
+  let bgClass = $derived(getBufferBgColor(normalizedState));
   let healthPercent = $derived(
-    typeof bufferHealth === "number"
+    bufferHealth != null
       ? Math.round(bufferHealth * 100)
       : null,
   );
@@ -42,49 +76,58 @@
     }
   }
 
-  function getStateIcon(state: BufferState): string {
+  // Filled dots based on state
+  function getFilledCount(state: BufferState): number {
     switch (state) {
       case "FULL":
-        return "●●●●";
+        return 4;
       case "EMPTY":
-        return "●●○○";
+        return 2;
       case "DRY":
-        return "●○○○";
+        return 1;
       case "RECOVER":
-        return "●●○○";
+        return 2;
       default:
-        return "○○○○";
+        return 0;
     }
   }
+
+  let filledCount = $derived(getFilledCount(normalizedState));
+  let normalizedStateLabel = $derived(normalizedState.toLowerCase());
 </script>
 
-<div class="flex items-center space-x-2">
-  <div class="flex items-center space-x-1">
-    <!-- Buffer state icon -->
-    <div class={`${colorClass} font-mono ${sizeClass} flex items-center justify-center`}>
-      <span class="text-xs">{getStateIcon(bufferState)}</span>
-    </div>
-    
-    <!-- State label -->
-    <div class="flex flex-col">
-      <span class={`font-medium ${colorClass} text-sm`}>
-        {bufferState}
-      </span>
-      {#if healthPercent !== null}
-        <span class="text-xs text-tokyo-night-comment">
-          {healthPercent}% healthy
-        </span>
-      {/if}
-    </div>
+{#if compact}
+  <!-- Compact mode: just dots indicator with tooltip -->
+  <div class="group relative flex items-center gap-1" title={getStateDescription(bufferState)}>
+    {#each Array(4) as _, i}
+      <div
+        class="w-1.5 h-1.5 rounded-full transition-colors {i < filledCount ? bgClass : 'bg-muted-foreground/30'}"
+      ></div>
+    {/each}
   </div>
+{:else}
+  <!-- Full mode: dots + label + optional health percent -->
+  <div class="flex items-center space-x-2">
+    <div class="flex items-center space-x-1.5">
+      <!-- Buffer state dots -->
+      <div class="flex items-center gap-0.5">
+        {#each Array(4) as _, i}
+          <div
+            class="w-1.5 h-1.5 rounded-full transition-colors {i < filledCount ? bgClass : 'bg-muted-foreground/30'}"
+          ></div>
+        {/each}
+      </div>
 
-  <!-- Tooltip with description -->
-  <div class="group relative">
-    <div class="w-4 h-4 rounded-full bg-tokyo-night-selection flex items-center justify-center cursor-help">
-      <span class="text-xs text-tokyo-night-comment">?</span>
+      <!-- State label -->
+      <span class={`font-medium ${colorClass} text-sm capitalize`}>
+        {normalizedStateLabel}
+      </span>
     </div>
-    <div class="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-2 py-1 bg-tokyo-night-surface text-tokyo-night-fg text-xs rounded shadow-lg opacity-0 group-hover:opacity-100 transition-opacity z-10 whitespace-nowrap">
-      {getStateDescription(bufferState)}
-    </div>
+
+    {#if healthPercent !== null}
+      <span class="text-xs text-muted-foreground">
+        ({healthPercent}%)
+      </span>
+    {/if}
   </div>
-</div>
+{/if}

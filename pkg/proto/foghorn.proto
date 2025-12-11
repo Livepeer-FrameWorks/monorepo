@@ -1,0 +1,47 @@
+syntax = "proto3";
+
+package foghorn;
+
+option go_package = "frameworks/pkg/proto";
+
+import "shared.proto";
+
+// =============================================================================
+// FOGHORN CONTROL PLANE SERVICES
+// These are control-plane operations exposed by Foghorn for Commodore to call.
+// Media-plane operations (MistServer control, stream state) remain in ipc.proto.
+// =============================================================================
+
+// ClipService handles clip creation and management
+service ClipControlService {
+  // CreateClip creates a new clip from a stream
+  rpc CreateClip(shared.CreateClipRequest) returns (shared.CreateClipResponse);
+  // GetClips returns all clips for a tenant
+  rpc GetClips(shared.GetClipsRequest) returns (shared.GetClipsResponse);
+  // GetClip returns a specific clip by hash
+  rpc GetClip(shared.GetClipRequest) returns (shared.ClipInfo);
+  // GetClipURLs returns viewing URLs for a clip
+  rpc GetClipURLs(shared.GetClipURLsRequest) returns (shared.ClipViewingURLs);
+  // DeleteClip deletes a clip
+  rpc DeleteClip(shared.DeleteClipRequest) returns (shared.DeleteClipResponse);
+}
+
+// DVRControlService handles DVR recording management
+service DVRControlService {
+  // StartDVR initiates DVR recording for a stream
+  rpc StartDVR(shared.StartDVRRequest) returns (shared.StartDVRResponse);
+  // StopDVR stops an active DVR recording
+  rpc StopDVR(shared.StopDVRRequest) returns (shared.StopDVRResponse);
+  // GetDVRStatus returns status of a DVR recording
+  rpc GetDVRStatus(shared.GetDVRStatusRequest) returns (shared.DVRInfo);
+  // ListDVRRecordings lists all DVR recordings for a tenant
+  rpc ListDVRRecordings(shared.ListDVRRecordingsRequest) returns (shared.ListDVRRecordingsResponse);
+}
+
+// ViewerControlService handles viewer endpoint resolution
+service ViewerControlService {
+  // ResolveViewerEndpoint resolves the best endpoint(s) for a viewer
+  rpc ResolveViewerEndpoint(shared.ViewerEndpointRequest) returns (shared.ViewerEndpointResponse);
+  // GetStreamMeta returns MistServer JSON meta for a stream
+  rpc GetStreamMeta(shared.StreamMetaRequest) returns (shared.StreamMetaResponse);
+}

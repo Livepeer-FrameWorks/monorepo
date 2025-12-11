@@ -58,9 +58,8 @@ type InfrastructureNode struct {
 	CPUCores           *int                   `json:"cpu_cores,omitempty" db:"cpu_cores"`
 	MemoryGB           *int                   `json:"memory_gb,omitempty" db:"memory_gb"`
 	DiskGB             *int                   `json:"disk_gb,omitempty" db:"disk_gb"`
-	Status             string                 `json:"status" db:"status"`
-	HealthScore        float64                `json:"health_score" db:"health_score"`
-	LastHeartbeat      *time.Time             `json:"last_heartbeat,omitempty" db:"last_heartbeat"`
+	Status        string     `json:"status" db:"status"`
+	LastHeartbeat *time.Time `json:"last_heartbeat,omitempty" db:"last_heartbeat"`
 	Tags               map[string]interface{} `json:"tags,omitempty" db:"tags"`
 	Metadata           map[string]interface{} `json:"metadata,omitempty" db:"metadata"`
 	CreatedAt          time.Time              `json:"created_at" db:"created_at"`

@@ -101,46 +101,12 @@ Scenario: 24/7 community with engagement rewards
 
 ## Technical Architecture
 
-### Room Ownership Model
-```go
-type Room struct {
-    ID         string
-    TenantID   string  // Owner/creator
-    ParentRoom *string // For sub-rooms
-    RoomType   string  // primary|sub|event|temporary
-    
-    // Economic state
-    Credits    CreditsConfig
-    Rewards    []Reward
-    
-    // Capabilities
-    Features   map[string]bool
-    
-    // Persistent state
-    State      RoomState
-    Metadata   map[string]interface{}
-}
-
-type CreditsConfig struct {
-    Enabled        bool
-    EarnRate       float64  // Credits per hour
-    StartingAmount int
-    Predictions    []ActivePrediction
-    RewardsStore   []RewardTier
-}
-```
-
 ### Broadcast Modes
-```go
-type BroadcastMode string
 
-const (
-    ModeSolo      = "solo"       // Traditional single streamer
-    ModeStage     = "stage"      // Multiple presenters to audience  
-    ModeGroup     = "group"      // Equal participants (Zoom-like)
-    ModeHybrid    = "hybrid"     // Mix of presenters and viewers
-)
-```
+- **Solo**: Traditional single streamer
+- **Stage**: Multiple presenters to audience
+- **Group**: Equal participants (Zoom-like)
+- **Hybrid**: Mix of presenters and viewers
 
 ### Integration Points
 

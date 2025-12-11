@@ -1,18 +1,28 @@
 # syntax=docker/dockerfile:1
 
-FROM golang:1.23-alpine AS builder
+FROM golang:1.24-alpine AS builder
 
 WORKDIR /workspace
 
 RUN apk add --no-cache git ca-certificates
 
 COPY pkg/ pkg/
+COPY api_forms/go.mod api_forms/go.sum api_forms/
+
+WORKDIR /workspace/api_forms
+
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    go mod download
+
+WORKDIR /workspace
 COPY api_forms/ api_forms/
 
 WORKDIR /workspace/api_forms
 
-RUN go mod download
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo \
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=linux go build \
     -ldflags="-s -w -X frameworks/pkg/version.Version=${VERSION:-dev} -X frameworks/pkg/version.GitCommit=${GIT_COMMIT:-unknown}" \
     -o /forms ./cmd/forms
 

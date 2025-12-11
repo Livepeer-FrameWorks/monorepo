@@ -2,14 +2,17 @@
 
 fragment ClipInfo on Clip {
   id
-  stream
+  clipHash
+  streamName
   title
   description
   startTime
-  endTime
   duration
-  playbackId
+  nodeId
+  storagePath
+  sizeBytes
   status
+  accessCount
   createdAt
   updatedAt
 }
@@ -17,6 +20,24 @@ fragment ClipInfo on Clip {
 query GetClips($streamId: ID) {
   clips(streamId: $streamId) {
     ...ClipInfo
+  }
+}
+
+query GetClipsConnection($streamId: ID, $first: Int = 50, $after: String) {
+  clipsConnection(streamId: $streamId, first: $first, after: $after) {
+    edges {
+      cursor
+      node {
+        ...ClipInfo
+      }
+    }
+    pageInfo {
+      hasNextPage
+      hasPreviousPage
+      startCursor
+      endCursor
+    }
+    totalCount
   }
 }
 
@@ -28,9 +49,7 @@ query GetClip($id: ID!) {
 
 query GetClipViewingUrls($clipId: ID!) {
   clipViewingUrls(clipId: $clipId) {
-    hls
-    dash
-    mp4
-    webm
+    urls
+    expiresAt
   }
 }

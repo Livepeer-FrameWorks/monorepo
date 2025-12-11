@@ -1,4 +1,4 @@
-<script>
+<script lang="ts">
   import { run } from 'svelte/legacy';
 
   import "../app.css";
@@ -7,6 +7,7 @@
   import { page } from "$app/stores";
   import { base, resolve } from "$app/paths";
   import { auth } from "$lib/stores/auth";
+  import { sidebarStore } from "$lib/stores/sidebar.svelte";
 import { getMarketingSiteUrl } from "$lib/config";
   import { getRouteInfo } from "$lib/navigation.js";
   import Sidebar from "$lib/components/Sidebar.svelte";
@@ -15,21 +16,25 @@ import { getMarketingSiteUrl } from "$lib/config";
   import ErrorBoundary from "$lib/components/ErrorBoundary.svelte";
   import BetaBadge from "$lib/components/BetaBadge.svelte";
   import { Button } from "$lib/components/ui/button";
-  /**
-   * @typedef {Object} Props
-   * @property {import('svelte').Snippet} [children]
-   */
+  interface User {
+    id: string;
+    email: string;
+    name?: string;
+    tenant_id?: string;
+    email_verified?: boolean;
+  }
 
-  /** @type {Props} */
-  let { children } = $props();
+  interface Props {
+    children?: import('svelte').Snippet;
+  }
+
+  let { children }: Props = $props();
 
   let isAuthenticated = $state(false);
-  /** @type {any} */
-  let user = $state(null);
+  let user = $state<User | null>(null);
   let loading = $state(true);
   let initialized = $state(false);
   let mobileMenuOpen = $state(false);
-  let sidebarCollapsed = $state(false);
 
   // Coming Soon Modal state
   let showComingSoonModal = $state(false);
@@ -41,6 +46,12 @@ const loginPath = resolve("/login");
 const loginIndexPath = resolve("/login/");
 const registerPath = resolve("/register");
 const registerIndexPath = resolve("/register/");
+const verifyEmailPath = resolve("/verify-email");
+const verifyEmailIndexPath = resolve("/verify-email/");
+const forgotPasswordPath = resolve("/forgot-password");
+const forgotPasswordIndexPath = resolve("/forgot-password/");
+const resetPasswordPath = resolve("/reset-password");
+const resetPasswordIndexPath = resolve("/reset-password/");
 const dashboardPath = resolve("/");
 
 const marketingBaseUrl = getMarketingSiteUrl();
@@ -50,28 +61,27 @@ const marketingContactUrl = new URL("/contact", marketingBaseUrl).toString();
 const marketingRootUrl = new URL("/", marketingBaseUrl).toString();
 const marketingPricingSectionUrl = new URL("/#pricing", marketingBaseUrl).toString();
 
-function openExternal(url) {
+function openExternal(url: string) {
   if (typeof window === "undefined") return;
   window.open(url, "_blank", "noreferrer");
 }
 
-  const publicRoutes = [loginPath, loginIndexPath, registerPath, registerIndexPath];
+  const publicRoutes = [loginPath, loginIndexPath, registerPath, registerIndexPath, verifyEmailPath, verifyEmailIndexPath, forgotPasswordPath, forgotPasswordIndexPath, resetPasswordPath, resetPasswordIndexPath];
 
   // Subscribe to auth store
   auth.subscribe((authState) => {
     isAuthenticated = authState.isAuthenticated;
-    // Fix: authState.user contains the full API response: { user: {...}, streams: [...] }
-    user = authState.user?.user || null;
+    user = authState.user || null;
     loading = authState.loading;
     initialized = authState.initialized;
   });
 
   // Get current page title from navigation config
-  let currentPageTitle = $derived((() => {
+  let currentPageTitle = $derived.by(() => {
     const currentPath = $page.url.pathname.replace(base, '') || '/';
     const routeInfo = getRouteInfo(currentPath);
     return routeInfo ? routeInfo.name : 'Page';
-  })());
+  });
 
   // Reactive statement to handle route protection
   run(() => {
@@ -99,10 +109,7 @@ function openExternal(url) {
     goto(loginPath);
   }
 
-  /**
-   * @param {CustomEvent} event
-   */
-  function handleComingSoon(event) {
+  function handleComingSoon(event: CustomEvent) {
     selectedFeature = event.detail.item;
     showComingSoonModal = true;
   }
@@ -117,13 +124,13 @@ function openExternal(url) {
   }
 
   function toggleSidebar() {
-    sidebarCollapsed = !sidebarCollapsed;
+    sidebarStore.toggleCollapsed();
   }
 </script>
 
 {#if loading && !initialized}
   <!-- Loading Screen -->
-  <div class="min-h-screen bg-tokyo-night-bg flex items-center justify-center">
+  <div class="min-h-screen bg-background flex items-center justify-center">
     <div class="text-center">
       <div class="inline-flex items-center">
         <img
@@ -132,11 +139,11 @@ function openExternal(url) {
           class="h-16 animate-pulse"
         />
       </div>
-      <div class="mt-4 text-tokyo-night-comment">Loading...</div>
+      <div class="mt-4 text-muted-foreground">Loading...</div>
     </div>
   </div>
 {:else}
-  <div class="min-h-screen bg-tokyo-night-bg text-tokyo-night-fg">
+  <div class="min-h-screen bg-background text-foreground">
     {#if isAuthenticated}
       <!-- Authenticated Layout with Sidebar -->
       <div class="flex flex-col h-screen">
@@ -149,11 +156,11 @@ function openExternal(url) {
               <!-- Sidebar Toggle -->
               <button
                 onclick={toggleSidebar}
-                class="p-2 rounded-lg text-tokyo-night-fg-dark hover:text-tokyo-night-fg hover:bg-tokyo-night-bg-dark/50 transition-colors"
+                class="p-2 rounded-lg text-muted-foreground hover:text-foreground hover:bg-background-dark/50 transition-colors"
                 title="Toggle Sidebar"
               >
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  {#if sidebarCollapsed}
+                  {#if sidebarStore.collapsed}
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
                   {:else}
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
@@ -177,15 +184,15 @@ function openExternal(url) {
               <BetaBadge />
 
               <!-- Page Title -->
-              <div class="text-tokyo-night-comment">•</div>
-              <h1 class="text-lg font-semibold text-tokyo-night-fg">
+              <div class="text-muted-foreground">•</div>
+              <h1 class="text-lg font-semibold text-foreground">
                 {currentPageTitle}
               </h1>
             </div>
 
             <div class="flex items-center space-x-4">
-              <span class="text-tokyo-night-fg-dark"
-                >Welcome, <span class="text-tokyo-night-blue"
+              <span class="text-foreground-dark"
+                >Welcome, <span class="text-primary"
                   >{user?.name || user?.email}</span
                 ></span
               >
@@ -197,23 +204,21 @@ function openExternal(url) {
         <!-- Main Content Area with Sidebar -->
         <div class="flex flex-1 overflow-hidden">
           <!-- Sidebar -->
-          <Sidebar 
-            on:comingSoon={handleComingSoon} 
-            collapsed={sidebarCollapsed}
+          <Sidebar
+            on:comingSoon={handleComingSoon}
+            collapsed={sidebarStore.collapsed}
           />
 
           <!-- Page Content -->
-          <main class="flex-1 overflow-y-auto bg-tokyo-night-bg p-6">
-            <div class="max-w-7xl mx-auto">
-              {@render children?.()}
-            </div>
+          <main class="flex-1 overflow-hidden bg-background">
+            {@render children?.()}
           </main>
         </div>
       </div>
     {:else}
       <!-- Unauthenticated Layout (Login/Register pages only) -->
       <div
-        class="min-h-screen bg-gradient-to-br from-tokyo-night-bg via-tokyo-night-bg-dark to-tokyo-night-bg"
+        class="h-screen flex flex-col bg-gradient-to-br from-background via-card to-background"
       >
         <!-- Marketing-style Navigation for auth pages -->
         <nav
@@ -243,7 +248,7 @@ function openExternal(url) {
                 <div class="flex items-center space-x-8">
                   <button
                     type="button"
-                    class="group relative inline-flex items-center gap-1 text-tokyo-night-fg-dark hover:text-tokyo-night-cyan transition-colors duration-200 font-medium after:content-[''] after:absolute after:left-0 after:right-0 after:bottom-[-4px] after:h-[2px] after:rounded-full after:bg-[linear-gradient(90deg,hsl(var(--primary)),hsl(var(--accent)))] after:scale-x-0 after:origin-left after:transition-transform after:duration-[250ms] after:ease-[ease] after:opacity-85 hover:after:scale-x-100"
+                    class="group relative inline-flex items-center gap-1 text-foreground-dark hover:text-info transition-colors duration-200 font-medium after:content-[''] after:absolute after:left-0 after:right-0 after:bottom-[-4px] after:h-[2px] after:rounded-full after:bg-[linear-gradient(90deg,hsl(var(--primary)),hsl(var(--accent)))] after:scale-x-0 after:origin-left after:transition-transform after:duration-[250ms] after:ease-[ease] after:opacity-85 hover:after:scale-x-100"
                     onclick={() => openExternal(marketingAboutUrl)}
                   >
                     Features
@@ -253,7 +258,7 @@ function openExternal(url) {
                   </button>
                   <button
                     type="button"
-                    class="group relative inline-flex items-center gap-1 text-tokyo-night-fg-dark hover:text-tokyo-night-cyan transition-colors duration-200 font-medium after:content-[''] after:absolute after:left-0 after:right-0 after:bottom-[-4px] after:h-[2px] after:rounded-full after:bg-[linear-gradient(90deg,hsl(var(--primary)),hsl(var(--accent)))] after:scale-x-0 after:origin-left after:transition-transform after:duration-[250ms] after:ease-[ease] after:opacity-85 hover:after:scale-x-100"
+                    class="group relative inline-flex items-center gap-1 text-foreground-dark hover:text-info transition-colors duration-200 font-medium after:content-[''] after:absolute after:left-0 after:right-0 after:bottom-[-4px] after:h-[2px] after:rounded-full after:bg-[linear-gradient(90deg,hsl(var(--primary)),hsl(var(--accent)))] after:scale-x-0 after:origin-left after:transition-transform after:duration-[250ms] after:ease-[ease] after:opacity-85 hover:after:scale-x-100"
                     onclick={() => openExternal(marketingPricingUrl)}
                   >
                     Pricing
@@ -263,7 +268,7 @@ function openExternal(url) {
                   </button>
                   <button
                     type="button"
-                    class="group relative inline-flex items-center gap-1 text-tokyo-night-fg-dark hover:text-tokyo-night-cyan transition-colors duration-200 font-medium after:content-[''] after:absolute after:left-0 after:right-0 after:bottom-[-4px] after:h-[2px] after:rounded-full after:bg-[linear-gradient(90deg,hsl(var(--primary)),hsl(var(--accent)))] after:scale-x-0 after:origin-left after:transition-transform after:duration-[250ms] after:ease-[ease] after:opacity-85 hover:after:scale-x-100"
+                    class="group relative inline-flex items-center gap-1 text-foreground-dark hover:text-info transition-colors duration-200 font-medium after:content-[''] after:absolute after:left-0 after:right-0 after:bottom-[-4px] after:h-[2px] after:rounded-full after:bg-[linear-gradient(90deg,hsl(var(--primary)),hsl(var(--accent)))] after:scale-x-0 after:origin-left after:transition-transform after:duration-[250ms] after:ease-[ease] after:opacity-85 hover:after:scale-x-100"
                     onclick={() => openExternal(marketingContactUrl)}
                   >
                     Contact
@@ -277,13 +282,13 @@ function openExternal(url) {
                 <div class="flex items-center space-x-8">
                   <a
                     href={loginPath}
-                    class="relative text-tokyo-night-fg-dark hover:text-tokyo-night-cyan transition-colors duration-200 font-medium after:content-[''] after:absolute after:left-0 after:right-0 after:bottom-[-4px] after:h-[2px] after:rounded-full after:bg-[linear-gradient(90deg,hsl(var(--primary)),hsl(var(--accent)))] after:origin-left after:transition-transform after:duration-[250ms] after:ease-[ease] after:opacity-85 {$page.url.pathname === loginIndexPath || $page.url.pathname === loginPath ? 'text-tokyo-night-cyan after:scale-x-100' : 'after:scale-x-0 hover:after:scale-x-100'}"
+                    class="relative text-foreground-dark hover:text-info transition-colors duration-200 font-medium after:content-[''] after:absolute after:left-0 after:right-0 after:bottom-[-4px] after:h-[2px] after:rounded-full after:bg-[linear-gradient(90deg,hsl(var(--primary)),hsl(var(--accent)))] after:origin-left after:transition-transform after:duration-[250ms] after:ease-[ease] after:opacity-85 {$page.url.pathname === loginIndexPath || $page.url.pathname === loginPath ? 'text-info after:scale-x-100' : 'after:scale-x-0 hover:after:scale-x-100'}"
                   >
                     Sign In
                   </a>
                   <a
                     href={registerPath}
-                    class="relative text-tokyo-night-fg-dark hover:text-tokyo-night-cyan transition-colors duration-200 font-medium after:content-[''] after:absolute after:left-0 after:right-0 after:bottom-[-4px] after:h-[2px] after:rounded-full after:bg-[linear-gradient(90deg,hsl(var(--primary)),hsl(var(--accent)))] after:origin-left after:transition-transform after:duration-[250ms] after:ease-[ease] after:opacity-85 {$page.url.pathname === registerIndexPath || $page.url.pathname === registerPath ? 'text-tokyo-night-cyan after:scale-x-100' : 'after:scale-x-0 hover:after:scale-x-100'}"
+                    class="relative text-foreground-dark hover:text-info transition-colors duration-200 font-medium after:content-[''] after:absolute after:left-0 after:right-0 after:bottom-[-4px] after:h-[2px] after:rounded-full after:bg-[linear-gradient(90deg,hsl(var(--primary)),hsl(var(--accent)))] after:origin-left after:transition-transform after:duration-[250ms] after:ease-[ease] after:opacity-85 {$page.url.pathname === registerIndexPath || $page.url.pathname === registerPath ? 'text-info after:scale-x-100' : 'after:scale-x-0 hover:after:scale-x-100'}"
                   >
                     Register
                   </a>
@@ -294,7 +299,7 @@ function openExternal(url) {
               <div class="lg:hidden">
                 <button
                   onclick={toggleMobileMenu}
-                  class="p-2 rounded-lg text-tokyo-night-fg-dark hover:text-tokyo-night-fg hover:bg-tokyo-night-bg-light/50 transition-colors duration-200"
+                  class="p-2 rounded-lg text-muted-foreground hover:text-foreground hover:bg-background-light/50 transition-colors duration-200"
                   aria-label="Toggle mobile menu"
                 >
                   <svg
@@ -326,14 +331,14 @@ function openExternal(url) {
             <!-- Mobile Menu -->
             {#if mobileMenuOpen}
               <div
-                class="lg:hidden border-t border-tokyo-night-fg-gutter bg-tokyo-night-bg/95 backdrop-blur-sm"
+                class="lg:hidden border-t border-border bg-background/95 backdrop-blur-sm"
               >
                 <div class="px-4 py-6 space-y-4">
                   <!-- Mobile Navigation Links -->
                   <div class="space-y-3">
                     <button
                       type="button"
-                      class="block text-tokyo-night-fg-dark hover:text-tokyo-night-cyan transition-colors duration-200 font-medium py-2 text-left w-full"
+                      class="block text-foreground-dark hover:text-info transition-colors duration-200 font-medium py-2 text-left w-full"
                       onclick={() => {
                         openExternal(marketingRootUrl);
                         mobileMenuOpen = false;
@@ -343,7 +348,7 @@ function openExternal(url) {
                     </button>
                     <button
                       type="button"
-                      class="block text-tokyo-night-fg-dark hover:text-tokyo-night-cyan transition-colors duration-200 font-medium py-2 text-left w-full"
+                      class="block text-foreground-dark hover:text-info transition-colors duration-200 font-medium py-2 text-left w-full"
                       onclick={() => {
                         openExternal(marketingPricingSectionUrl);
                         mobileMenuOpen = false;
@@ -353,7 +358,7 @@ function openExternal(url) {
                     </button>
                     <button
                       type="button"
-                      class="block text-tokyo-night-fg-dark hover:text-tokyo-night-cyan transition-colors duration-200 font-medium py-2 text-left w-full"
+                      class="block text-foreground-dark hover:text-info transition-colors duration-200 font-medium py-2 text-left w-full"
                       onclick={() => {
                         openExternal(marketingContactUrl);
                         mobileMenuOpen = false;
@@ -365,7 +370,7 @@ function openExternal(url) {
 
                   <!-- Mobile Auth Buttons -->
                   <div
-                    class="pt-4 border-t border-tokyo-night-fg-gutter space-y-3"
+                    class="pt-4 border-t border-border space-y-3"
                   >
                     <Button
                       href={loginPath}
@@ -391,14 +396,14 @@ function openExternal(url) {
         </nav>
 
         <!-- Auth Page Content -->
-        <main class="relative">
+        <main class="relative flex-1 overflow-y-auto">
           <!-- Background Effects -->
           <div class="absolute inset-0 overflow-hidden pointer-events-none">
             <div
-              class="absolute top-1/4 left-1/4 w-96 h-96 bg-tokyo-night-blue/5 rounded-full blur-3xl"
+              class="absolute top-1/4 left-1/4 w-96 h-96 bg-primary/5 rounded-full blur-3xl"
 ></div>
             <div
-              class="absolute bottom-1/4 right-1/4 w-96 h-96 bg-tokyo-night-cyan/5 rounded-full blur-3xl"
+              class="absolute bottom-1/4 right-1/4 w-96 h-96 bg-info/5 rounded-full blur-3xl"
 ></div>
           </div>
 

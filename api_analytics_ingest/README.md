@@ -1,13 +1,11 @@
 # Periscope‑Ingest (Analytics Write Path)
 
-Consumes analytics events from Kafka and writes time‑series to ClickHouse. When configured with `DATABASE_URL`, also reduces
-events into PostgreSQL (`stream_analytics`) for stream state tracking.
+Consumes analytics events from Kafka and writes time‑series data exclusively to ClickHouse.
 
 ## Responsibilities
-- Consume `analytics_events` with tenant headers
+- Consume `analytics_events` topic with tenant headers
 - Validate/normalize event payloads (Decklog already validates)
-- Insert into ClickHouse tables: `stream_events`, `connection_events`, `stream_health_metrics`, `track_list_events`, `node_metrics`, `usage_records`
-- Reduce stream state into PostgreSQL `stream_analytics`
+- Insert into ClickHouse tables: `stream_events`, `connection_events`, `stream_health_metrics`, `track_list_events`, `node_metrics`, `live_streams`, `live_nodes`, `live_artifacts`
 
 ## Event → table mapping
 - `stream-ingest`, `stream-view`, `stream-lifecycle`, `stream-buffer`, `stream-end` → `stream_events`
@@ -21,13 +19,7 @@ events into PostgreSQL (`stream_analytics`) for stream state tracking.
 - Start the full stack from repo root: `docker-compose up -d`
 - Or run just Periscope‑Ingest: `cd api_analytics_ingest && go run ./cmd/periscope`
 
-Configuration is provided via the repo-level env layers (`config/env/base.env` + `config/env/secrets.env`). Run `make env` or `frameworks config env generate` to build `.env`, then adjust `config/env/secrets.env` as needed. See `docs/configuration.md`. Do not commit secrets.
-
-## Related
-- Root `README.md` (ports, stack overview)
-- `docs/DATABASE.md` (schemas, MVs)
-
-Cross‑refs: docs/DATABASE.md (schemas, MVs); docs/IMPLEMENTATION.md (event headers/types).
+Configuration is provided via the repo-level env layers (`config/env/base.env` + `config/env/secrets.env`). Run `make env` or `frameworks config env generate` to build `.env`, then adjust `config/env/secrets.env` as needed. Do not commit secrets.
 
 ## Health & port
 - Health: `GET /health`

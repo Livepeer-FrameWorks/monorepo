@@ -52,9 +52,9 @@ const Navigation = () => {
             <Link to="/pricing" className={linkClasses('/pricing')}>
               Pricing
             </Link>
-            <Link to="/docs" className={linkClasses('/docs')}>
+            <a href={config.docsUrl} className={linkClasses(null)}>
               Docs
-            </Link>
+            </a>
             <Link to="/contact" className={linkClasses('/contact')}>
               Contact
             </Link>
@@ -109,7 +109,7 @@ const Navigation = () => {
                   <Link to="/pricing" className={linkClasses('/pricing', 'mobile')}>Pricing</Link>
                 </SheetClose>
                 <SheetClose asChild>
-                  <Link to="/docs" className={linkClasses('/docs', 'mobile')}>Documentation</Link>
+                  <a href={config.docsUrl} className={linkClasses(null, 'mobile')}>Documentation</a>
                 </SheetClose>
                 <SheetClose asChild>
                   <Link to="/contact" className={linkClasses('/contact', 'mobile')}>Contact</Link>
@@ -122,7 +122,7 @@ const Navigation = () => {
                       <Link to="/status" className={linkClasses('/status', 'mobile')}>Status</Link>
                     </SheetClose>
                     <SheetClose asChild>
-                      <Link to="/roadmap" className={linkClasses('/roadmap', 'mobile')}>Roadmap</Link>
+                      <a href={`${config.docsUrl.replace(/\/+$/, '')}/roadmap`} className={linkClasses(null, 'mobile')}>Roadmap</a>
                     </SheetClose>
                   </div>
                 </div>

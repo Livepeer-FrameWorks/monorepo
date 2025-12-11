@@ -3,45 +3,42 @@ package resolvers
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/demo"
 	"frameworks/api_gateway/internal/middleware"
-	"frameworks/pkg/api/purser"
-	"frameworks/pkg/models"
+	pb "frameworks/pkg/proto"
+
+	"google.golang.org/protobuf/types/known/structpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // DoGetBillingTiers returns available billing tiers
-func (r *Resolver) DoGetBillingTiers(ctx context.Context) ([]*models.BillingTier, error) {
+func (r *Resolver) DoGetBillingTiers(ctx context.Context) ([]*pb.BillingTier, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning synthetic billing tiers")
 		return demo.GenerateBillingTiers(), nil
 	}
 
-	// Check for demo mode
 	r.Logger.Info("Fetching billing tiers from Purser")
 
-	resp, err := r.Clients.Purser.GetBillingTiers(ctx)
+	resp, err := r.Clients.Purser.GetBillingTiers(ctx, false, nil)
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to load billing tiers from Purser")
 		return nil, fmt.Errorf("failed to load billing tiers: %w", err)
 	}
 
-	result := make([]*models.BillingTier, 0, len(resp.Tiers))
+	result := make([]*pb.BillingTier, len(resp.Tiers))
 	for i := range resp.Tiers {
-		tier := resp.Tiers[i]
-		// Create a copy per element to avoid pointer aliasing
-		copy := tier
-		result = append(result, &copy)
+		result[i] = resp.Tiers[i]
 	}
 
 	return result, nil
 }
 
 // DoGetInvoices returns tenant invoices
-func (r *Resolver) DoGetInvoices(ctx context.Context) ([]*models.Invoice, error) {
+func (r *Resolver) DoGetInvoices(ctx context.Context) ([]*pb.Invoice, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning synthetic invoices")
 		return demo.GenerateInvoices(), nil
@@ -54,24 +51,22 @@ func (r *Resolver) DoGetInvoices(ctx context.Context) ([]*models.Invoice, error)
 
 	r.Logger.WithField("tenant_id", tenantID).Info("Fetching invoices from Purser")
 
-	resp, err := r.Clients.Purser.GetInvoices(ctx, nil)
+	resp, err := r.Clients.Purser.ListInvoices(ctx, tenantID, nil, nil)
 	if err != nil {
 		r.Logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to load invoices")
 		return nil, fmt.Errorf("failed to load invoices: %w", err)
 	}
 
-	result := make([]*models.Invoice, 0, len(resp.Invoices))
+	result := make([]*pb.Invoice, len(resp.Invoices))
 	for i := range resp.Invoices {
-		inv := resp.Invoices[i]
-		copy := inv
-		result = append(result, &copy)
+		result[i] = resp.Invoices[i]
 	}
 
 	return result, nil
 }
 
 // DoGetInvoice returns a specific invoice by ID
-func (r *Resolver) DoGetInvoice(ctx context.Context, id string) (*models.Invoice, error) {
+func (r *Resolver) DoGetInvoice(ctx context.Context, id string) (*pb.Invoice, error) {
 	tenantID, ok := ctx.Value("tenant_id").(string)
 	if !ok {
 		return nil, fmt.Errorf("tenant context required")
@@ -79,34 +74,22 @@ func (r *Resolver) DoGetInvoice(ctx context.Context, id string) (*models.Invoice
 
 	r.Logger.WithField("tenant_id", tenantID).WithField("invoice_id", id).Info("Fetching invoice from Purser")
 
-	// Purser does not expose a dedicated invoice endpoint yet, fetch the current page and filter
-	limit := 100
-	offset := 0
-	for {
-		resp, err := r.Clients.Purser.GetInvoices(ctx, &purser.GetInvoicesRequest{Limit: &limit, Offset: &offset})
-		if err != nil {
-			r.Logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to load invoices")
-			return nil, fmt.Errorf("failed to load invoices: %w", err)
-		}
-
-		for i := range resp.Invoices {
-			inv := resp.Invoices[i]
-			if inv.ID == id {
-				return &inv, nil
-			}
-		}
-
-		if offset+limit >= resp.Total || len(resp.Invoices) == 0 {
-			break
-		}
-		offset += limit
+	// Get the specific invoice by ID
+	resp, err := r.Clients.Purser.GetInvoice(ctx, id)
+	if err != nil {
+		r.Logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to load invoice")
+		return nil, fmt.Errorf("failed to load invoice: %w", err)
 	}
 
-	return nil, fmt.Errorf("invoice not found")
+	if resp.Invoice == nil {
+		return nil, fmt.Errorf("invoice not found")
+	}
+
+	return resp.Invoice, nil
 }
 
 // DoGetBillingStatus returns current billing status for tenant
-func (r *Resolver) DoGetBillingStatus(ctx context.Context) (*models.BillingStatus, error) {
+func (r *Resolver) DoGetBillingStatus(ctx context.Context) (*pb.BillingStatusResponse, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning synthetic billing status")
 		return demo.GenerateBillingStatus(), nil
@@ -120,7 +103,7 @@ func (r *Resolver) DoGetBillingStatus(ctx context.Context) (*models.BillingStatu
 	r.Logger.WithField("tenant_id", tenantID).Info("Getting billing status")
 
 	// Get full billing status from Purser
-	status, err := r.Clients.Purser.GetBillingStatus(ctx)
+	status, err := r.Clients.Purser.GetBillingStatus(ctx, tenantID)
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to get billing status from Purser")
 		return nil, fmt.Errorf("failed to get billing status: %w", err)
@@ -130,73 +113,96 @@ func (r *Resolver) DoGetBillingStatus(ctx context.Context) (*models.BillingStatu
 		return nil, fmt.Errorf("failed to get billing status: empty response")
 	}
 
-	if status.TenantID == "" {
-		status.TenantID = tenantID
+	// Ensure tenant ID is set
+	if status.TenantId == "" {
+		status.TenantId = tenantID
 	}
 
-	// Ensure subscription metadata is complete
-	status.Subscription.TenantID = tenantID
-
-	// Normalize subscription status
-	if status.Status == "" {
-		status.Status = status.Subscription.Status
-	}
-	if status.Status == "" {
-		status.Status = "active"
+	// Normalize billing status
+	if status.BillingStatus == "" {
+		status.BillingStatus = "active"
 	}
 
-	// Normalize next billing date
-	if status.NextBillingDate == nil && status.Subscription.NextBillingDate != nil {
-		status.NextBillingDate = status.Subscription.NextBillingDate
-	}
-
-	if status.NextBillingDate == nil {
-		nextBilling := computeNextBillingDate(status.Subscription.StartedAt, status.Tier.BillingPeriod)
-		if nextBilling != nil {
-			status.NextBillingDate = nextBilling
-		}
-	}
-
-	if status.NextBillingDate == nil {
-		now := time.Now()
-		nextMonth := time.Date(now.Year(), now.Month()+1, 1, 0, 0, 0, 0, now.Location())
-		status.NextBillingDate = &nextMonth
-	}
+	// NextBillingDate is already in the response from Purser
 
 	return status, nil
 }
 
-func computeNextBillingDate(start time.Time, billingPeriod string) *time.Time {
-	if start.IsZero() {
-		return nil
+// DoGetTenantUsage returns full tenant usage with maps converted to arrays
+func (r *Resolver) DoGetTenantUsage(ctx context.Context, timeRange *model.TimeRangeInput) (*model.TenantUsage, error) {
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Demo mode: returning synthetic tenant usage")
+		return &model.TenantUsage{
+			BillingPeriod: time.Now().Format("2006-01"),
+			Usage: []*model.UsageEntry{
+				{ResourceType: "stream_hours", Amount: 42.5},
+				{ResourceType: "egress_gb", Amount: 15.2},
+				{ResourceType: "storage_gb", Amount: 5.0},
+			},
+			Costs: []*model.CostEntry{
+				{ResourceType: "stream_hours", Cost: 4.25},
+				{ResourceType: "egress_gb", Cost: 0.76},
+				{ResourceType: "storage_gb", Cost: 0.10},
+			},
+			TotalCost: 5.11,
+			Currency:  "EUR",
+		}, nil
 	}
 
-	period := strings.ToLower(strings.TrimSpace(billingPeriod))
-	if period == "" {
-		return nil
+	tenantID, ok := ctx.Value("tenant_id").(string)
+	if !ok {
+		return nil, fmt.Errorf("tenant context required")
 	}
 
-	next := start
-	now := time.Now()
+	r.Logger.WithField("tenant_id", tenantID).Info("Getting tenant usage")
 
-	switch period {
-	case "monthly", "month":
-		for !next.After(now) {
-			next = next.AddDate(0, 1, 0)
-		}
-	case "yearly", "annual", "annually":
-		for !next.After(now) {
-			next = next.AddDate(1, 0, 0)
-		}
-	default:
-		return nil
+	// Determine date range
+	var startDate, endDate string
+	if timeRange != nil {
+		startDate = timeRange.Start.Format("2006-01-02")
+		endDate = timeRange.End.Format("2006-01-02")
+	} else {
+		// Default to current month
+		now := time.Now()
+		startDate = time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC).Format("2006-01-02")
+		endDate = now.Format("2006-01-02")
 	}
 
-	return &next
+	// Get usage from Purser
+	usage, err := r.Clients.Purser.GetTenantUsage(ctx, tenantID, startDate, endDate)
+	if err != nil {
+		r.Logger.WithError(err).Error("Failed to get tenant usage")
+		return nil, fmt.Errorf("failed to get tenant usage: %w", err)
+	}
+
+	// Convert proto maps to model arrays
+	var usageEntries []*model.UsageEntry
+	for resourceType, amount := range usage.Usage {
+		usageEntries = append(usageEntries, &model.UsageEntry{
+			ResourceType: resourceType,
+			Amount:       amount,
+		})
+	}
+
+	var costEntries []*model.CostEntry
+	for resourceType, cost := range usage.Costs {
+		costEntries = append(costEntries, &model.CostEntry{
+			ResourceType: resourceType,
+			Cost:         cost,
+		})
+	}
+
+	return &model.TenantUsage{
+		BillingPeriod: usage.BillingPeriod,
+		Usage:         usageEntries,
+		Costs:         costEntries,
+		TotalCost:     usage.TotalCost,
+		Currency:      usage.Currency,
+	}, nil
 }
 
 // DoGetUsageRecords returns usage records for tenant
-func (r *Resolver) DoGetUsageRecords(ctx context.Context, timeRange *model.TimeRangeInput) ([]*models.UsageRecord, error) {
+func (r *Resolver) DoGetUsageRecords(ctx context.Context, timeRange *model.TimeRangeInput) ([]*pb.UsageRecord, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning synthetic usage records")
 		return demo.GenerateUsageRecords(), nil
@@ -209,52 +215,57 @@ func (r *Resolver) DoGetUsageRecords(ctx context.Context, timeRange *model.TimeR
 
 	r.Logger.WithField("tenant_id", tenantID).Info("Getting usage records")
 
-	// Build request for Purser
-	req := &purser.TenantUsageRequest{
-		TenantID: tenantID,
-	}
-
+	// Determine date range
+	var startDate, endDate string
 	if timeRange != nil {
-		req.StartDate = timeRange.Start.Format("2006-01-02")
-		req.EndDate = timeRange.End.Format("2006-01-02")
+		startDate = timeRange.Start.Format("2006-01-02")
+		endDate = timeRange.End.Format("2006-01-02")
 	} else {
 		// Default to last 30 days
 		now := time.Now()
-		req.EndDate = now.Format("2006-01-02")
-		req.StartDate = now.AddDate(0, 0, -30).Format("2006-01-02")
+		endDate = now.Format("2006-01-02")
+		startDate = now.AddDate(0, 0, -30).Format("2006-01-02")
 	}
 
 	// Get usage from Purser
-	usage, err := r.Clients.Purser.GetTenantUsage(ctx, req)
+	usage, err := r.Clients.Purser.GetTenantUsage(ctx, tenantID, startDate, endDate)
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to get usage records")
 		return nil, fmt.Errorf("failed to get usage records: %w", err)
 	}
 
-	// Convert usage map to UsageRecord models
-	var records []*models.UsageRecord
+	// Convert usage response to records
+	var records []*pb.UsageRecord
 	for resourceType, amount := range usage.Usage {
-		cost := 0.0
+		cost := float64(0)
 		if c, exists := usage.Costs[resourceType]; exists {
 			cost = c
 		}
 
-		record := &models.UsageRecord{
-			ID:           fmt.Sprintf("%s_%s_%s", tenantID, resourceType, usage.BillingPeriod),
-			TenantID:     tenantID,
+		record := &pb.UsageRecord{
+			Id:           fmt.Sprintf("%s_%s_%s", tenantID, resourceType, usage.BillingPeriod),
+			TenantId:     tenantID,
 			UsageType:    resourceType,
 			UsageValue:   amount,
 			BillingMonth: usage.BillingPeriod,
-			CreatedAt:    time.Now(),
 		}
 
-		// Store cost in usage details
-		record.UsageDetails = models.UsageDetails{
-			"cost": {
-				Quantity:  amount,
-				UnitPrice: cost / amount, // Calculate unit price
-				Unit:      usage.Currency,
-			},
+		// Store cost info in usage details via structpb
+		if cost > 0 {
+			unitPrice := float64(0)
+			if amount > 0 {
+				unitPrice = cost / amount
+			}
+			details := map[string]interface{}{
+				"cost": map[string]interface{}{
+					"quantity":   amount,
+					"unit_price": unitPrice,
+					"unit":       usage.Currency,
+				},
+			}
+			if detailsStruct, err := structpb.NewStruct(details); err == nil {
+				record.UsageDetails = detailsStruct
+			}
 		}
 
 		records = append(records, record)
@@ -264,20 +275,20 @@ func (r *Resolver) DoGetUsageRecords(ctx context.Context, timeRange *model.TimeR
 }
 
 // DoCreatePayment processes a payment
-func (r *Resolver) DoCreatePayment(ctx context.Context, input model.CreatePaymentInput) (*models.Payment, error) {
+func (r *Resolver) DoCreatePayment(ctx context.Context, input model.CreatePaymentInput) (*pb.PaymentResponse, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning synthetic payment")
 		cur := "EUR"
 		if input.Currency != nil {
-			cur = string(*input.Currency)
+			cur = *input.Currency
 		}
-		return &models.Payment{
-			ID:        "payment_demo_" + time.Now().Format("20060102150405"),
+		return &pb.PaymentResponse{
+			Id:        "payment_demo_" + time.Now().Format("20060102150405"),
 			Amount:    input.Amount,
 			Currency:  cur,
-			Method:    string(input.Method),
 			Status:    "completed",
-			CreatedAt: time.Now(),
+			Method:    string(input.Method),
+			CreatedAt: timestamppb.Now(),
 		}, nil
 	}
 
@@ -300,12 +311,12 @@ func (r *Resolver) DoCreatePayment(ctx context.Context, input model.CreatePaymen
 		returnURL = *input.ReturnURL
 	}
 
-	paymentReq := &purser.PaymentRequest{
-		InvoiceID: input.InvoiceID,
+	paymentReq := &pb.PaymentRequest{
+		InvoiceId: input.InvoiceID,
 		Method:    string(input.Method),
 		Amount:    input.Amount,
 		Currency:  cur,
-		ReturnURL: returnURL,
+		ReturnUrl: returnURL,
 	}
 
 	resp, err := r.Clients.Purser.CreatePayment(ctx, paymentReq)
@@ -317,20 +328,5 @@ func (r *Resolver) DoCreatePayment(ctx context.Context, input model.CreatePaymen
 		return nil, fmt.Errorf("failed to create payment: %w", err)
 	}
 
-	payment := &models.Payment{
-		ID:        resp.ID,
-		InvoiceID: input.InvoiceID,
-		Method:    string(input.Method),
-		Amount:    resp.Amount,
-		Currency:  resp.Currency,
-		Status:    resp.Status,
-		CreatedAt: time.Now(),
-	}
-
-	if resp.WalletAddress != "" {
-		payment.TxID = resp.WalletAddress
-	}
-	payment.UpdatedAt = payment.CreatedAt
-
-	return payment, nil
+	return resp, nil
 }

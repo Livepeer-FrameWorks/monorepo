@@ -2,20 +2,20 @@ package handlers
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"fmt"
-	"net/http"
+	"strings"
 	"time"
 
-	"frameworks/pkg/api/periscope"
-	"frameworks/pkg/api/purser"
-	pclient "frameworks/pkg/clients/purser"
 	qmclient "frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/config"
 	"frameworks/pkg/database"
+	"frameworks/pkg/kafka"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/models"
 
-	"github.com/gin-gonic/gin"
+	"github.com/sirupsen/logrus"
 )
 
 // BillingSummarizer handles usage summarization for billing
@@ -23,36 +23,44 @@ type BillingSummarizer struct {
 	yugaDB              database.PostgresConn
 	clickhouse          database.ClickHouseConn
 	logger              logging.Logger
-	purserClient        *pclient.Client
-	quartermasterClient *qmclient.Client
+	kafkaProducer       *kafka.KafkaProducer
+	quartermasterClient *qmclient.GRPCClient
+	billingTopic        string
 }
 
 // NewBillingSummarizer creates a new billing summarizer instance
 func NewBillingSummarizer(yugaDB database.PostgresConn, clickhouse database.ClickHouseConn, logger logging.Logger) *BillingSummarizer {
-	purserURL := config.RequireEnv("PURSER_URL")
-	quartermasterURL := config.RequireEnv("QUARTERMASTER_URL")
+	quartermasterGRPCAddr := config.GetEnv("QUARTERMASTER_GRPC_ADDR", "quartermaster:19002")
 	serviceToken := config.RequireEnv("SERVICE_TOKEN")
 
-	purserClient := pclient.NewClient(pclient.Config{
-		BaseURL:      purserURL,
-		ServiceToken: serviceToken,
-		Timeout:      30 * time.Second,
-		Logger:       logger,
-	})
+	// Initialize Kafka producer
+	brokers := strings.Split(config.RequireEnv("KAFKA_BROKERS"), ",")
+	billingTopic := config.GetEnv("BILLING_KAFKA_TOPIC", "billing.usage_reports")
+	// Assuming logger is compatible or creating a new one for the client
+	kLogger := logrus.New()
 
-	quartermasterClient := qmclient.NewClient(qmclient.Config{
-		BaseURL:      quartermasterURL,
+	kafkaProducer, err := kafka.NewKafkaProducer(brokers, billingTopic, "periscope-query", kLogger)
+	if err != nil {
+		logger.WithError(err).Fatal("Failed to create Kafka producer for billing")
+	}
+
+	quartermasterClient, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
+		GRPCAddr:     quartermasterGRPCAddr,
 		ServiceToken: serviceToken,
 		Timeout:      10 * time.Second,
 		Logger:       logger,
 	})
+	if err != nil {
+		logger.WithError(err).Fatal("Failed to create Quartermaster gRPC client for billing")
+	}
 
 	return &BillingSummarizer{
 		yugaDB:              yugaDB,
 		clickhouse:          clickhouse,
 		logger:              logger,
-		purserClient:        purserClient,
+		kafkaProducer:       kafkaProducer,
 		quartermasterClient: quartermasterClient,
+		billingTopic:        billingTopic,
 	}
 }
 
@@ -99,12 +107,24 @@ func (bs *BillingSummarizer) SummarizeUsageForPeriod(startTime, endTime time.Tim
 
 // getActiveTenants retrieves all active tenant IDs from the analytics data
 func (bs *BillingSummarizer) getActiveTenants() ([]string, error) {
-	// Query ClickHouse for active tenants
+	// Query ClickHouse for active tenants across all relevant tables
+	// We check stream_events (streaming), storage_snapshots (disk usage), and clip_events (activity)
 	rows, err := bs.clickhouse.QueryContext(context.Background(), `
-		SELECT DISTINCT tenant_id
-		FROM viewer_metrics
-		WHERE timestamp >= NOW() - INTERVAL 7 DAY
-		AND tenant_id IS NOT NULL
+		SELECT DISTINCT tenant_id FROM (
+			SELECT tenant_id FROM periscope.stream_events
+			WHERE timestamp >= NOW() - INTERVAL 7 DAY
+
+			UNION ALL
+
+			SELECT tenant_id FROM periscope.storage_snapshots
+			WHERE timestamp >= NOW() - INTERVAL 7 DAY
+
+			UNION ALL
+
+			SELECT tenant_id FROM periscope.clip_events
+			WHERE timestamp >= NOW() - INTERVAL 7 DAY
+		)
+		WHERE tenant_id IS NOT NULL
 		AND tenant_id != '00000000-0000-0000-0000-000000000000'
 		ORDER BY tenant_id
 	`)
@@ -138,17 +158,18 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 		clusterID = "global-primary" // Default fallback
 	}
 
-	// Derive viewer-based metrics from viewer_metrics
+	// Derive viewer-based metrics from stream_events (total_viewers from Foghorn state snapshots)
 	var maxViewers, totalStreams int
 	var streamHours float64
 	err = bs.clickhouse.QueryRowContext(ctx, `
-		SELECT 
-			COALESCE(max(viewer_count), 0) as max_viewers,
+		SELECT
+			COALESCE(max(total_viewers), 0) as max_viewers,
 			COALESCE(uniq(internal_name), 0) as total_streams,
 			COALESCE(countDistinct(concat(internal_name, toString(toStartOfHour(timestamp)))), 0) as stream_hours
-		FROM viewer_metrics 
-		WHERE tenant_id = $1 
-		AND timestamp BETWEEN $2 AND $3
+		FROM periscope.stream_events
+		WHERE tenant_id = ?
+		AND timestamp BETWEEN ? AND ?
+		AND total_viewers IS NOT NULL
 	`, tenantID, startTime, endTime).Scan(
 		&maxViewers, &totalStreams, &streamHours,
 	)
@@ -156,31 +177,61 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 		return nil, fmt.Errorf("failed to query viewer metrics from ClickHouse: %w", err)
 	}
 
-	// Derive bandwidth metrics from stream_health_metrics
-	var egressGB, peakBandwidth float64
+	// Derive egress and viewer metrics from tenant_viewer_daily (pre-aggregated from connection_events)
+	// Note: egress_gb comes from summed bytes_transferred in connection_events, not stream_health_metrics
+	var egressGB, viewerHours float64
+	var uniqueViewers int
 	err = bs.clickhouse.QueryRowContext(ctx, `
-		SELECT 
-			COALESCE(sum(bandwidth_out) / (1024*1024*1024), 0) as egress_gb,
-			COALESCE(max(bandwidth_out) / (1024*1024), 0) as peak_bandwidth_mbps
-		FROM stream_health_metrics 
-		WHERE tenant_id = $1 
-		AND timestamp BETWEEN $2 AND $3
-	`, tenantID, startTime, endTime).Scan(&egressGB, &peakBandwidth)
+		SELECT
+			COALESCE(sum(egress_gb), 0) as egress_gb,
+			COALESCE(sum(viewer_hours), 0) as viewer_hours,
+			COALESCE(sum(unique_viewers), 0) as unique_viewers
+		FROM periscope.tenant_viewer_daily
+		WHERE tenant_id = ?
+		AND day BETWEEN toDate(?) AND toDate(?)
+	`, tenantID, startTime, endTime).Scan(&egressGB, &viewerHours, &uniqueViewers)
 	if err != nil && err != database.ErrNoRows {
-		return nil, fmt.Errorf("failed to query health metrics from ClickHouse: %w", err)
+		return nil, fmt.Errorf("failed to query egress/viewer metrics from ClickHouse: %w", err)
 	}
 
-	// Query ClickHouse for unique users (from connection events)
+	// Derive peak bandwidth from client_metrics_5m (avg_bw_out is in bytes/sec)
+	var peakBandwidth float64
+	err = bs.clickhouse.QueryRowContext(ctx, `
+		SELECT COALESCE(max(avg_bw_out) / (1024*1024), 0) as peak_bandwidth_mbps
+		FROM periscope.client_metrics_5m
+		WHERE tenant_id = ?
+		AND timestamp BETWEEN ? AND ?
+	`, tenantID, startTime, endTime).Scan(&peakBandwidth)
+	if err != nil && err != database.ErrNoRows {
+		bs.logger.WithError(err).Debug("Failed to query peak bandwidth from client_metrics_5m, defaulting to 0")
+		peakBandwidth = 0
+	}
+
+	// Calculate Month-to-Date (MTD) Unique Users for correct MAX aggregation in Billing
+	firstOfMonth := time.Date(startTime.Year(), startTime.Month(), 1, 0, 0, 0, 0, startTime.Location())
 	var uniqueUsers int
 	err = bs.clickhouse.QueryRowContext(ctx, `
-		SELECT COALESCE(uniq(user_id), 0) as unique_users
+		SELECT COALESCE(uniq(session_id), 0) as unique_users
 		FROM connection_events 
 		WHERE tenant_id = $1 
 		AND timestamp BETWEEN $2 AND $3
-	`, tenantID, startTime, endTime).Scan(&uniqueUsers)
+	`, tenantID, firstOfMonth, endTime).Scan(&uniqueUsers)
 	if err != nil && err != database.ErrNoRows {
-		bs.logger.WithError(err).Warn("Failed to query unique users from ClickHouse, defaulting to 0")
+		bs.logger.WithError(err).Warn("Failed to query unique users (MTD) from ClickHouse, defaulting to 0")
 		uniqueUsers = 0
+	}
+
+	// Query ClickHouse for average storage usage (snapshots)
+	var avgStorageGB float64
+	err = bs.clickhouse.QueryRowContext(ctx, `
+		SELECT COALESCE(avg(total_bytes) / (1024*1024*1024), 0) as avg_storage_gb
+		FROM storage_snapshots
+		WHERE tenant_id = $1
+		AND timestamp BETWEEN $2 AND $3
+	`, tenantID, startTime, endTime).Scan(&avgStorageGB)
+	if err != nil && err != database.ErrNoRows {
+		bs.logger.WithError(err).Debug("Failed to query storage snapshots, defaulting to 0")
+		avgStorageGB = 0
 	}
 
 	// Derive clip storage additions from clip_events (stage='done')
@@ -219,6 +270,45 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 		recordingGB = 0
 	}
 
+	// Query ClickHouse for geo breakdown (top 10 countries with rich metrics)
+	// Returns: country_code, viewer_count, viewer_hours, egress_gb, percentage
+	var geoBreakdown []models.CountryMetrics
+	geoRows, err := bs.clickhouse.QueryContext(ctx, `
+		WITH totals AS (
+			SELECT sum(viewer_count) as total_viewers
+			FROM periscope.viewer_geo_hourly
+			WHERE tenant_id = ?
+			AND hour BETWEEN ? AND ?
+		)
+		SELECT
+			country_code,
+			sum(viewer_count) as viewer_count,
+			sum(viewer_hours) as viewer_hours,
+			sum(egress_gb) as egress_gb,
+			if((SELECT total_viewers FROM totals) > 0,
+			   sum(viewer_count) * 100.0 / (SELECT total_viewers FROM totals),
+			   0) as percentage
+		FROM periscope.viewer_geo_hourly
+		WHERE tenant_id = ?
+		AND hour BETWEEN ? AND ?
+		AND country_code != '' AND country_code != '--'
+		GROUP BY country_code
+		ORDER BY viewer_count DESC
+		LIMIT 10
+	`, tenantID, startTime, endTime, tenantID, startTime, endTime)
+
+	if err != nil && err != database.ErrNoRows {
+		bs.logger.WithError(err).Warn("Failed to query geo breakdown")
+	} else if err == nil {
+		defer geoRows.Close()
+		for geoRows.Next() {
+			var cm models.CountryMetrics
+			if err := geoRows.Scan(&cm.CountryCode, &cm.ViewerCount, &cm.ViewerHours, &cm.EgressGB, &cm.Percentage); err == nil {
+				geoBreakdown = append(geoBreakdown, cm)
+			}
+		}
+	}
+
 	// Skip if no usage data
 	if streamHours == 0 && egressGB == 0 && maxViewers == 0 && totalStreams == 0 {
 		bs.logger.WithField("tenant_id", tenantID).Debug("No usage data for tenant in period, skipping")
@@ -233,30 +323,36 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 		EgressGB:          egressGB,
 		MaxViewers:        maxViewers,
 		TotalStreams:      totalStreams,
+		TotalViewers:      uniqueViewers, // Unique viewers for the period from tenant_viewer_daily
 		PeakBandwidthMbps: peakBandwidth,
-		UniqueUsers:       uniqueUsers,
+		UniqueUsers:       uniqueUsers, // MTD unique sessions from connection_events
+		ViewerHours:       viewerHours,
 		RecordingGB:       recordingGB,
 		// Storage and clip lifecycle
 		StorageGB:            storageGB,
+		AverageStorageGB:     avgStorageGB,
 		ClipsAdded:           clipsAdded,
 		ClipsDeleted:         clipsDeleted,
 		ClipStorageAddedGB:   clipStorageAddedGB,
 		ClipStorageDeletedGB: clipStorageDeletedGB,
 		Timestamp:            time.Now(),
+		GeoBreakdown:         geoBreakdown,
 	}
 
 	bs.logger.WithFields(logging.Fields{
-		"tenant_id":     tenantID,
-		"stream_hours":  streamHours,
-		"egress_gb":     egressGB,
-		"max_viewers":   maxViewers,
-		"total_streams": totalStreams,
+		"tenant_id":      tenantID,
+		"stream_hours":   streamHours,
+		"egress_gb":      egressGB,
+		"viewer_hours":   viewerHours,
+		"unique_viewers": uniqueViewers,
+		"max_viewers":    maxViewers,
+		"total_streams":  totalStreams,
 	}).Debug("Generated usage summary for tenant")
 
 	return summary, nil
 }
 
-// getTenantPrimaryCluster gets tenant's primary cluster by calling Quartermaster API
+// getTenantPrimaryCluster gets tenant's primary cluster by calling Quartermaster gRPC API
 func (bs *BillingSummarizer) getTenantPrimaryCluster(tenantID string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -266,41 +362,60 @@ func (bs *BillingSummarizer) getTenantPrimaryCluster(tenantID string) (string, e
 		return "", fmt.Errorf("failed to call Quartermaster: %w", err)
 	}
 
-	if tenantResp.Error != "" {
-		return "", fmt.Errorf("Quartermaster returned error: %s", tenantResp.Error)
+	if tenantResp.GetError() != "" {
+		return "", fmt.Errorf("Quartermaster returned error: %s", tenantResp.GetError())
 	}
 
-	if tenantResp.Tenant != nil && tenantResp.Tenant.PrimaryClusterID != nil && *tenantResp.Tenant.PrimaryClusterID != "" {
-		return *tenantResp.Tenant.PrimaryClusterID, nil
+	pbTenant := tenantResp.GetTenant()
+	if pbTenant != nil && pbTenant.GetPrimaryClusterId() != "" {
+		return pbTenant.GetPrimaryClusterId(), nil
 	}
 
 	return "global-primary", nil // Default fallback when no primary cluster is set
 }
 
-// sendUsageToPurser sends usage summaries to the Purser billing service
+// sendUsageToPurser sends usage summaries to the Purser billing service via Kafka
 func (bs *BillingSummarizer) sendUsageToPurser(summaries []models.UsageSummary) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	req := &purser.UsageIngestRequest{
-		UsageSummaries: summaries,
-		Source:         "periscope",
-		Timestamp:      time.Now().Unix(),
+	if bs.kafkaProducer == nil {
+		return fmt.Errorf("kafka producer not initialized")
 	}
 
-	resp, err := bs.purserClient.IngestUsage(ctx, req)
-	if err != nil {
-		return fmt.Errorf("failed to send usage to Purser: %w", err)
-	}
+	successCount := 0
+	for _, summary := range summaries {
+		// Marshal summary to JSON
+		payload, err := json.Marshal(summary)
+		if err != nil {
+			bs.logger.WithError(err).WithField("tenant_id", summary.TenantID).Error("Failed to marshal usage summary")
+			continue
+		}
 
-	if !resp.Success {
-		return fmt.Errorf("Purser rejected usage data: %s", resp.Error)
+		// Produce to Kafka topic "billing.usage_reports"
+		// Key = TenantID (ensures ordering per tenant)
+		err = bs.kafkaProducer.ProduceMessage(
+			bs.billingTopic,
+			[]byte(summary.TenantID),
+			payload,
+			map[string]string{
+				"source": "periscope-query",
+				"type":   "usage_summary",
+			},
+		)
+
+		if err != nil {
+			bs.logger.WithError(err).WithField("tenant_id", summary.TenantID).Error("Failed to produce usage report to Kafka")
+			continue
+		}
+		successCount++
 	}
 
 	bs.logger.WithFields(logging.Fields{
 		"summary_count":   len(summaries),
-		"processed_count": resp.ProcessedCount,
-	}).Info("Successfully sent usage summaries to Purser")
+		"processed_count": successCount,
+	}).Info("Successfully produced usage summaries to Kafka")
+
+	if successCount < len(summaries) {
+		return fmt.Errorf("failed to send some summaries")
+	}
 
 	return nil
 }
@@ -335,200 +450,85 @@ func (bs *BillingSummarizer) RunDailyUsageSummary() error {
 	return bs.SummarizeUsageForPeriod(startTime, endTime)
 }
 
-// GetPlatformMetrics returns platform-wide metrics from ClickHouse
-func GetPlatformMetrics(c *gin.Context) {
-	tenantID := c.GetString("tenant_id")
-	if tenantID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Tenant context required"})
-		return
-	}
+// ProcessPendingUsage processes all pending usage since the last cursor
+func (bs *BillingSummarizer) ProcessPendingUsage(ctx context.Context) error {
+	bs.logger.Info("Processing pending usage for all tenants")
 
-	// Parse time range from query params
-	startTime := c.DefaultQuery("start_time", time.Now().Add(-24*time.Hour).Format(time.RFC3339))
-	endTime := c.DefaultQuery("end_time", time.Now().Format(time.RFC3339))
-
-	// Query ClickHouse for platform metrics
-	var metrics struct {
-		TotalStreamHours float64 `json:"total_stream_hours"`
-		TotalEgressGB    float64 `json:"total_egress_gb"`
-		TotalViewers     int     `json:"total_viewers"`
-		UniqueViewers    int     `json:"unique_viewers"`
-		PeakViewers      int     `json:"peak_viewers"`
-		AvgStreamHealth  float32 `json:"avg_stream_health"`
-		TotalStreams     int     `json:"total_streams"`
-		ActiveStreams    int     `json:"active_streams"`
-	}
-
-	err := clickhouse.QueryRowContext(c.Request.Context(), `
-        SELECT 
-            COALESCE(countDistinct(concat(internal_name, toString(toStartOfHour(timestamp)))), 0) as total_stream_hours,
-            COALESCE((SELECT sum(bandwidth_out) / (1024*1024*1024) FROM stream_health_metrics WHERE tenant_id = $1 AND timestamp BETWEEN $2 AND $3), 0) as total_egress_gb,
-            COALESCE(SUM(viewer_count), 0) as total_viewers,
-            COALESCE(uniq(user_id), 0) as unique_viewers,
-            COALESCE(MAX(viewer_count), 0) as peak_viewers,
-            COALESCE(AVG(buffer_health), 0) as avg_stream_health,
-            COALESCE(uniq(internal_name), 0) as total_streams,
-            COALESCE(uniqIf(internal_name, viewer_count > 0), 0) as active_streams
-        FROM viewer_metrics
-        WHERE tenant_id = $1
-        AND timestamp BETWEEN $2 AND $3
-    `, tenantID, startTime, endTime).Scan(
-		&metrics.TotalStreamHours,
-		&metrics.TotalEgressGB,
-		&metrics.TotalViewers,
-		&metrics.UniqueViewers,
-		&metrics.PeakViewers,
-		&metrics.AvgStreamHealth,
-		&metrics.TotalStreams,
-		&metrics.ActiveStreams,
-	)
-
+	// Get all active tenants
+	tenants, err := bs.getActiveTenants()
 	if err != nil {
-		logger.WithError(err).Error("Failed to fetch platform metrics from ClickHouse")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch platform metrics"})
-		return
+		return fmt.Errorf("failed to get active tenants: %w", err)
 	}
 
-	c.JSON(http.StatusOK, metrics)
+	for _, tenantID := range tenants {
+		if err := bs.processTenantPendingUsage(ctx, tenantID); err != nil {
+			bs.logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to process pending usage for tenant")
+			// Continue to next tenant
+		}
+	}
+	return nil
 }
 
-// GetPlatformEvents returns platform-wide events from ClickHouse
-func GetPlatformEvents(c *gin.Context) {
-	tenantID := c.GetString("tenant_id")
-	if tenantID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Tenant context required"})
-		return
+func (bs *BillingSummarizer) processTenantPendingUsage(ctx context.Context, tenantID string) error {
+	// Get last processed timestamp from cursor
+	var lastProcessed time.Time
+	err := bs.yugaDB.QueryRowContext(ctx, `
+		SELECT last_processed_at FROM periscope.billing_cursors WHERE tenant_id = $1
+	`, tenantID).Scan(&lastProcessed)
+
+	if err == sql.ErrNoRows {
+		// Default to 24 hours ago for new tenants/first run
+		// This avoids reprocessing history forever if we add a new tenant
+		lastProcessed = time.Now().Add(-24 * time.Hour)
+		// Insert initial cursor
+		_, err = bs.yugaDB.ExecContext(ctx, `
+			INSERT INTO periscope.billing_cursors (tenant_id, last_processed_at, updated_at)
+			VALUES ($1, $2, NOW())
+		`, tenantID, lastProcessed)
+		if err != nil {
+			return fmt.Errorf("failed to initialize cursor: %w", err)
+		}
+	} else if err != nil {
+		return fmt.Errorf("failed to query cursor: %w", err)
 	}
 
-	// Parse time range from query params
-	startTime := c.DefaultQuery("start_time", time.Now().Add(-24*time.Hour).Format(time.RFC3339))
-	endTime := c.DefaultQuery("end_time", time.Now().Format(time.RFC3339))
+	// Target end time is Now (truncated to minute for stability)
+	targetEnd := time.Now().Truncate(time.Minute)
 
-	// Query ClickHouse for platform events
-	rows, err := clickhouse.QueryContext(c.Request.Context(), `
-        SELECT 
-            timestamp,
-            internal_name,
-            node_id,
-            viewer_count,
-            connection_type,
-            buffer_health,
-            connection_quality,
-            country_code,
-            city
-        FROM viewer_metrics
-        WHERE tenant_id = $1
-        AND timestamp BETWEEN $2 AND $3
-        ORDER BY timestamp DESC
-        LIMIT 1000
-    `, tenantID, startTime, endTime)
+	// If no new data to process (e.g. run too frequent), skip
+	if targetEnd.Sub(lastProcessed) < 1*time.Minute {
+		return nil
+	}
 
+	// Generate summary for the incremental period
+	summary, err := bs.generateTenantUsageSummary(tenantID, lastProcessed, targetEnd)
 	if err != nil {
-		logger.WithError(err).Error("Failed to fetch platform events from ClickHouse")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch platform events"})
-		return
+		return fmt.Errorf("failed to generate summary: %w", err)
 	}
-	defer rows.Close()
 
-	var events []periscope.PlatformEvent
-	for rows.Next() {
-		var e periscope.PlatformEvent
-
-		if err := rows.Scan(
-			&e.Timestamp,
-			&e.InternalName,
-			&e.NodeID,
-			&e.ViewerCount,
-			&e.ConnectionType,
-			&e.BufferHealth,
-			&e.ConnectionQuality,
-			&e.CountryCode,
-			&e.City,
-		); err != nil {
-			logger.WithError(err).Error("Failed to scan platform event")
-			continue
+	if summary != nil {
+		// Send to Purser
+		// TODO: Switch to Kafka Producer here
+		if err := bs.sendUsageToPurser([]models.UsageSummary{*summary}); err != nil {
+			return fmt.Errorf("failed to send usage to Purser: %w", err)
 		}
 
-		events = append(events, e)
+		// Update cursor ONLY after successful send
+		_, err = bs.yugaDB.ExecContext(ctx, `
+			UPDATE periscope.billing_cursors 
+			SET last_processed_at = $1, updated_at = NOW()
+			WHERE tenant_id = $2
+		`, targetEnd, tenantID)
+		if err != nil {
+			return fmt.Errorf("failed to update cursor: %w", err)
+		}
+
+		bs.logger.WithFields(logging.Fields{
+			"tenant_id": tenantID,
+			"start":     lastProcessed,
+			"end":       targetEnd,
+		}).Info("Successfully processed pending usage")
 	}
 
-	response := periscope.PlatformEventsResponse{
-		Events: events,
-		Count:  len(events),
-	}
-	c.JSON(http.StatusOK, response)
-}
-
-// GetUsageSummary returns usage summary for the tenant
-func GetUsageSummary(c *gin.Context) {
-	tenantID := c.GetString("tenant_id")
-	if tenantID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Tenant context required"})
-		return
-	}
-
-	// Parse time range from query params
-	startTimeStr := c.DefaultQuery("start_time", time.Now().Add(-24*time.Hour).Format(time.RFC3339))
-	endTimeStr := c.DefaultQuery("end_time", time.Now().Format(time.RFC3339))
-
-	startTime, err := time.Parse(time.RFC3339, startTimeStr)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid start_time format"})
-		return
-	}
-
-	endTime, err := time.Parse(time.RFC3339, endTimeStr)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid end_time format"})
-		return
-	}
-
-	// Create billing summarizer
-	bs := NewBillingSummarizer(yugaDB, clickhouse, logger)
-
-	// Generate usage summary
-	summary, err := bs.generateTenantUsageSummary(tenantID, startTime, endTime)
-	if err != nil {
-		logger.WithError(err).Error("Failed to generate usage summary")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate usage summary"})
-		return
-	}
-
-	c.JSON(http.StatusOK, summary)
-}
-
-// TriggerHourlySummary triggers hourly usage summarization
-func TriggerHourlySummary(c *gin.Context) {
-	tenantID := c.GetString("tenant_id")
-	if tenantID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Tenant context required"})
-		return
-	}
-
-	bs := NewBillingSummarizer(yugaDB, clickhouse, logger)
-	if err := bs.RunHourlyUsageSummary(); err != nil {
-		logger.WithError(err).Error("Failed to run hourly usage summarization")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to run hourly summarization"})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{"message": "Hourly usage summarization completed"})
-}
-
-// TriggerDailySummary triggers daily usage summarization
-func TriggerDailySummary(c *gin.Context) {
-	tenantID := c.GetString("tenant_id")
-	if tenantID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Tenant context required"})
-		return
-	}
-
-	bs := NewBillingSummarizer(yugaDB, clickhouse, logger)
-	if err := bs.RunDailyUsageSummary(); err != nil {
-		logger.WithError(err).Error("Failed to run daily usage summarization")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to run daily summarization"})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{"message": "Daily usage summarization completed"})
+	return nil
 }

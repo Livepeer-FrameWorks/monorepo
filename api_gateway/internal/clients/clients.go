@@ -1,10 +1,10 @@
 package clients
 
 import (
+	"fmt"
 	"time"
 
 	"frameworks/pkg/cache"
-	"frameworks/pkg/clients"
 	"frameworks/pkg/clients/commodore"
 	"frameworks/pkg/clients/periscope"
 	"frameworks/pkg/clients/purser"
@@ -14,44 +14,26 @@ import (
 	"frameworks/pkg/logging"
 )
 
-// ServiceClients holds all downstream service clients
+// ServiceClients holds all downstream service gRPC clients
 type ServiceClients struct {
-	Commodore     *commodore.Client
-	Periscope     *periscope.Client
-	Purser        *purser.Client
-	Quartermaster *quartermaster.Client
-	Signalman     *signalman.Client
+	Commodore     *commodore.GRPCClient
+	Periscope     *periscope.GRPCClient
+	Purser        *purser.GRPCClient
+	Quartermaster *quartermaster.GRPCClient
+	Signalman     *signalman.GRPCClient
 }
 
 // Config represents the configuration for all service clients
 type Config struct {
-	ServiceToken         string
-	Timeout              time.Duration
-	Logger               logging.Logger
-	RetryConfig          *clients.RetryConfig
-	CircuitBreakerConfig *clients.CircuitBreakerConfig
+	ServiceToken string
+	Timeout      time.Duration
+	Logger       logging.Logger
 }
 
-// NewServiceClients creates and initializes all downstream service clients
-func NewServiceClients(cfg Config) *ServiceClients {
+// NewServiceClients creates and initializes all downstream service gRPC clients
+func NewServiceClients(cfg Config) (*ServiceClients, error) {
 	if cfg.Timeout == 0 {
 		cfg.Timeout = 30 * time.Second
-	}
-
-	// Default retry configuration
-	retryConfig := clients.DefaultRetryConfig()
-	if cfg.RetryConfig != nil {
-		retryConfig = *cfg.RetryConfig
-	}
-
-	// Default circuit breaker configuration
-	circuitBreakerConfig := &clients.CircuitBreakerConfig{
-		FailureThreshold: 5,
-		SuccessThreshold: 3,
-		Timeout:          60 * time.Second,
-	}
-	if cfg.CircuitBreakerConfig != nil {
-		circuitBreakerConfig = cfg.CircuitBreakerConfig
 	}
 
 	// Quartermaster cache
@@ -61,45 +43,103 @@ func NewServiceClients(cfg Config) *ServiceClients {
 	qmMax := config.GetEnvInt("QUARTERMASTER_CACHE_MAX", 10000)
 	qmCache := cache.New(cache.Options{TTL: qmTTL, StaleWhileRevalidate: qmSWR, NegativeTTL: qmNeg, MaxEntries: qmMax}, cache.MetricsHooks{})
 
-	return &ServiceClients{
-		Commodore: commodore.NewClient(commodore.Config{
-			BaseURL:              config.RequireEnv("COMMODORE_URL"),
-			ServiceToken:         cfg.ServiceToken,
-			Timeout:              cfg.Timeout,
-			Logger:               cfg.Logger,
-			RetryConfig:          &retryConfig,
-			CircuitBreakerConfig: circuitBreakerConfig,
-		}),
-		Periscope: periscope.NewClient(periscope.Config{
-			BaseURL:              config.RequireEnv("PERISCOPE_QUERY_URL"),
-			ServiceToken:         cfg.ServiceToken,
-			Timeout:              cfg.Timeout,
-			Logger:               cfg.Logger,
-			RetryConfig:          &retryConfig,
-			CircuitBreakerConfig: circuitBreakerConfig,
-		}),
-		Purser: purser.NewClient(purser.Config{
-			BaseURL:              config.RequireEnv("PURSER_URL"),
-			ServiceToken:         cfg.ServiceToken,
-			Timeout:              cfg.Timeout,
-			Logger:               cfg.Logger,
-			RetryConfig:          &retryConfig,
-			CircuitBreakerConfig: circuitBreakerConfig,
-		}),
-		Quartermaster: quartermaster.NewClient(quartermaster.Config{
-			BaseURL:              config.RequireEnv("QUARTERMASTER_URL"),
-			ServiceToken:         cfg.ServiceToken,
-			Timeout:              cfg.Timeout,
-			Logger:               cfg.Logger,
-			RetryConfig:          &retryConfig,
-			CircuitBreakerConfig: circuitBreakerConfig,
-			Cache:                qmCache,
-		}),
-		Signalman: signalman.NewClient(signalman.Config{
-			BaseURL:        config.RequireEnv("SIGNALMAN_WS_URL"),
-			Logger:         cfg.Logger,
-			ReconnectDelay: 5 * time.Second,
-			MaxReconnects:  5,
-		}),
+	// Initialize Commodore gRPC client
+	commodoreClient, err := commodore.NewGRPCClient(commodore.GRPCConfig{
+		GRPCAddr:     config.RequireEnv("COMMODORE_GRPC_ADDR"),
+		Timeout:      cfg.Timeout,
+		Logger:       cfg.Logger,
+		Cache:        qmCache, // Used for stream key validation caching
+		ServiceToken: cfg.ServiceToken,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Commodore gRPC client: %w", err)
 	}
+
+	// Initialize Periscope gRPC client
+	periscopeClient, err := periscope.NewGRPCClient(periscope.GRPCConfig{
+		GRPCAddr:     config.RequireEnv("PERISCOPE_GRPC_ADDR"),
+		Timeout:      cfg.Timeout,
+		Logger:       cfg.Logger,
+		ServiceToken: cfg.ServiceToken,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Periscope gRPC client: %w", err)
+	}
+
+	// Initialize Purser gRPC client
+	purserClient, err := purser.NewGRPCClient(purser.GRPCConfig{
+		GRPCAddr:     config.RequireEnv("PURSER_GRPC_ADDR"),
+		Timeout:      cfg.Timeout,
+		Logger:       cfg.Logger,
+		ServiceToken: cfg.ServiceToken,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Purser gRPC client: %w", err)
+	}
+
+	// Initialize Quartermaster gRPC client
+	quartermasterClient, err := quartermaster.NewGRPCClient(quartermaster.GRPCConfig{
+		GRPCAddr:     config.RequireEnv("QUARTERMASTER_GRPC_ADDR"),
+		Timeout:      cfg.Timeout,
+		Logger:       cfg.Logger,
+		ServiceToken: cfg.ServiceToken,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Quartermaster gRPC client: %w", err)
+	}
+
+	// Initialize Signalman gRPC client
+	signalmanClient, err := signalman.NewGRPCClient(signalman.GRPCConfig{
+		GRPCAddr:     config.RequireEnv("SIGNALMAN_GRPC_ADDR"),
+		Timeout:      cfg.Timeout,
+		Logger:       cfg.Logger,
+		ServiceToken: cfg.ServiceToken,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Signalman gRPC client: %w", err)
+	}
+
+	return &ServiceClients{
+		Commodore:     commodoreClient,
+		Periscope:     periscopeClient,
+		Purser:        purserClient,
+		Quartermaster: quartermasterClient,
+		Signalman:     signalmanClient,
+	}, nil
+}
+
+// Close closes all gRPC connections
+func (c *ServiceClients) Close() error {
+	var errs []error
+
+	if c.Commodore != nil {
+		if err := c.Commodore.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("commodore: %w", err))
+		}
+	}
+	if c.Periscope != nil {
+		if err := c.Periscope.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("periscope: %w", err))
+		}
+	}
+	if c.Purser != nil {
+		if err := c.Purser.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("purser: %w", err))
+		}
+	}
+	if c.Quartermaster != nil {
+		if err := c.Quartermaster.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("quartermaster: %w", err))
+		}
+	}
+	if c.Signalman != nil {
+		if err := c.Signalman.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("signalman: %w", err))
+		}
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("errors closing clients: %v", errs)
+	}
+	return nil
 }

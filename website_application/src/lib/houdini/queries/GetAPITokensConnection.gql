@@ -1,0 +1,26 @@
+query GetAPITokensConnection(
+  $first: Int = 50
+  $after: String
+) {
+  developerTokensConnection(first: $first, after: $after) @paginate {
+    edges {
+      cursor
+      node {
+        id
+        tokenName
+        permissions
+        status
+        lastUsedAt
+        expiresAt
+        createdAt
+      }
+    }
+    pageInfo {
+      hasNextPage
+      hasPreviousPage
+      startCursor
+      endCursor
+    }
+    totalCount
+  }
+}

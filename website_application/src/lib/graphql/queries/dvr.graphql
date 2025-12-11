@@ -14,34 +14,28 @@ fragment DVRRequestInfo on DVRRequest {
   updatedAt
 }
 
-fragment RecordingConfigInfo on RecordingConfig {
-  enabled
-  retentionDays
-  format
-  segmentDuration
-}
-
 query GetDVRRequests(
   $internalName: String
-  $status: String
-  $pagination: PaginationInput
+  $first: Int = 50
+  $after: String
 ) {
-  dvrRequests(
+  dvrRecordingsConnection(
     internalName: $internalName
-    status: $status
-    pagination: $pagination
+    first: $first
+    after: $after
   ) {
-    dvrRecordings {
-      ...DVRRequestInfo
+    edges {
+      cursor
+      node {
+        ...DVRRequestInfo
+      }
     }
-    total
-    page
-    limit
-  }
-}
-
-query GetRecordingConfig($internalName: String!) {
-  recordingConfig(internalName: $internalName) {
-    ...RecordingConfigInfo
+    pageInfo {
+      hasNextPage
+      hasPreviousPage
+      startCursor
+      endCursor
+    }
+    totalCount
   }
 }

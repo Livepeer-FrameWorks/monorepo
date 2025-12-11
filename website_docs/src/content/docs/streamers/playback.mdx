@@ -1,0 +1,277 @@
+---
+title: "Playback & Embedding"
+description: "Share your stream with viewers using the FrameWorks player or standard protocols."
+sidebar:
+  order: 3
+---
+
+Now that you're broadcasting, let's get your stream to your audience. FrameWorks provides versatile playback options, from a drop-in React component to raw protocol support for HLS, DASH, and WebRTC.
+
+## Where to Find Your Playback URLs
+
+You can find your **Playback ID** in the FrameWorks dashboard under the **Playback Info** card of your stream. This ID is public-safe and used to construct all viewer URLs.
+
+**Supported Protocols:**
+- **HLS (HTTP Live Streaming):** The industry standard for broad compatibility (browsers, mobile apps, smart TVs).
+- **DASH (Dynamic Adaptive Streaming over HTTP):** An alternative adaptive bitrate protocol often used on Android and specific set-top boxes.
+- **WebRTC (WHEP):** Ultra-low latency streaming for real-time interactivity.
+- **Direct Formats:** Raw streams like WebM, MKV, MP4, FLV, and TS for specialized use cases.
+
+:::note[Need another protocol?]
+FrameWorks is powered by MistServer, which supports nearly every video codec and container format. If you need a protocol that isn't exposed in the dashboard, [open an issue on GitHub](https://github.com/livepeer-frameworks/monorepo/issues) and we can add it.
+:::
+
+The URLs follow this pattern:
+```
+HLS:    %EDGE_URL%%HLS_PATH%/{playback-id}/index.m3u8
+WebRTC: %EDGE_URL%%WEBRTC_PATH%/{playback-id}
+```
+
+**Common URL paths:**
+| Protocol | Path |
+|----------|------|
+| HLS | `/hls/{playback-id}/index.m3u8` |
+| LL-HLS/CMAF | `/cmaf/{playback-id}/index.m3u8` |
+| DASH | `/cmaf/{playback-id}/index.mpd` |
+| WebRTC (WHEP) | `/webrtc/{playback-id}` |
+| MKV | `/mkv/{playback-id}` |
+
+Your playback ID is different from your stream key (which is secret and used for ingest only).
+
+## The FrameWorks Player
+
+The FrameWorks Player is a React component that wraps multiple open-source playback engines (hls.js, dash.js, Video.js) and implements its own native WebSocket-based playback stack. It provides tight integration with both MistServer and the FrameWorks platform.
+
+**Key features:**
+
+- **Multi-engine architecture** — Wraps hls.js, dash.js, Video.js, and the native MistPlayer, selecting the best engine for each browser and protocol combination
+- **Native WebSocket player** — Custom MSE-based player (`MewsWsPlayer`) for ultra-low-latency WebSocket streams directly from MistServer
+- **Intelligent protocol selection** — Ported from MistServer's MistMetaPlayer algorithm, scoring player/source combinations by codec support, browser compatibility, and source priority
+- **Adaptive bitrate (ABR)** — Built-in ABR controller with resize-aware and bitrate-aware modes that match quality to viewport size and network conditions
+- **Gateway integration** — Resolves optimal edge nodes via the FrameWorks Gateway GraphQL API, no manual URL construction needed
+- **Telemetry reporting** — Batched playback metrics (stalls, quality score, dropped frames) sent to your analytics endpoint with `sendBeacon()` for reliable page-unload reporting
+- **Lazy-loaded transports** — Heavy player bundles are loaded on-demand, keeping initial bundle size small
+
+### Installation
+
+```bash
+npm install @livepeer-frameworks/player
+```
+
+```tsx
+import '@livepeer-frameworks/player/player.css';
+```
+
+### Using the Player Component
+
+The simplest way to embed a stream is by passing your Playback ID. The player will automatically resolve the best available edge node.
+
+```tsx
+import { Player } from '@livepeer-frameworks/player';
+
+function LiveStream() {
+  return (
+    <Player
+      contentType="live"
+      contentId="<YOUR_PLAYBACK_ID>"  // Your stream's Playback ID
+      options={{
+        gatewayUrl: '%API_URL%',
+        autoplay: true,
+        muted: true,  // Required for autoplay in browsers
+      }}
+    />
+  );
+}
+```
+
+The player queries the Gateway to resolve the best edge node for your viewer's location.
+
+### For DVR and Clips
+
+Same component, different content type:
+
+```tsx
+// DVR recording
+<Player contentType="dvr" contentId="recording-hash" />
+
+// Clip
+<Player contentType="clip" contentId="clip-hash" />
+```
+
+### With Thumbnail/Poster
+
+```tsx
+<Player
+  contentType="live"
+  contentId="my-stream"
+  thumbnailUrl="https://your-cdn.com/poster.jpg"
+  options={{
+    gatewayUrl: '%API_URL%',
+    autoplay: false,  // Wait for user interaction
+  }}
+/>
+```
+
+### State Callbacks
+
+Track player lifecycle for UI feedback:
+
+```tsx
+<Player
+  contentType="live"
+  contentId="my-stream"
+  options={{ gatewayUrl: '%API_URL%' }}
+  onStateChange={(state, context) => {
+    // States: booting, gateway_loading, gateway_ready, gateway_error, no_endpoint,
+    //         selecting_player, connecting, buffering, playing, paused, ended, error, destroyed
+    console.log('Player state:', state, context);
+  }}
+/>
+```
+
+## Using Other Players
+
+### Using hls.js Directly
+
+If you need full control over the player:
+
+```html
+<script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+<video id="video" controls></video>
+
+<script>
+  const video = document.getElementById('video');
+  // Replace with your actual edge URL and playback ID
+  const hlsUrl = '%EDGE_URL%%HLS_PATH%/{playback-id}/index.m3u8';
+
+  if (Hls.isSupported()) {
+    const hls = new Hls();
+    hls.loadSource(hlsUrl);
+    hls.attachMedia(video);
+  } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+    // Safari plays HLS natively
+    video.src = hlsUrl;
+  }
+</script>
+```
+
+### Video.js
+
+```html
+<link href="https://vjs.zencdn.net/8.0.4/video-js.css" rel="stylesheet" />
+<script src="https://vjs.zencdn.net/8.0.4/video.min.js"></script>
+
+<video-js id="my-video" class="video-js" controls data-setup="{}">
+  <source
+    src="%EDGE_URL%%HLS_PATH%/{playback-id}/index.m3u8"
+    type="application/x-mpegURL"
+  />
+</video-js>
+```
+
+## Universal Playback URLs
+
+Instead of constructing URLs manually with edge hostnames, you can use **universal playback URLs** that automatically route viewers to the optimal edge node based on their location.
+
+### Simple Redirect URLs
+
+These URLs work directly with any player (VLC, ffmpeg, native `<video>` tags):
+
+```bash
+# HLS - redirects to nearest edge node
+https://play.example.com/play/{view-key}/hls
+https://play.example.com/play/{view-key}.m3u8
+https://play.example.com/play/{view-key}/index.m3u8
+
+# WebRTC (WHEP)
+https://play.example.com/play/{view-key}/webrtc
+https://play.example.com/play/{view-key}.webrtc
+
+# DASH
+https://play.example.com/play/{view-key}/dash
+https://play.example.com/play/{view-key}.mpd
+```
+
+The server returns an **HTTP 307 redirect** to the actual edge node URL, so your player follows the redirect automatically.
+
+**Examples:**
+```bash
+# Play in VLC
+vlc https://play.example.com/play/abc123def.m3u8
+
+# Embed in HTML (Safari, iOS)
+<video src="https://play.example.com/play/abc123def.m3u8" controls></video>
+
+# Record with ffmpeg
+ffmpeg -i https://play.example.com/play/abc123def/hls -c copy output.mp4
+```
+
+### JSON Response (for Custom Players)
+
+If you need all available protocols and fallback nodes, request the full JSON response:
+
+```bash
+curl https://play.example.com/play/{view-key}
+```
+
+Returns:
+```json
+{
+  "primary": {
+    "node_id": "edge-7",
+    "base_url": "https://edge-7.example.com",
+    "protocol": "hls",
+    "outputs": {
+      "HLS": {"url": "https://edge-7.example.com/hls/stream-id/index.m3u8"},
+      "DASH": {"url": "https://edge-7.example.com/cmaf/stream-id/index.mpd"},
+      "WebRTC": {"url": "https://edge-7.example.com/webrtc/stream-id"}
+    }
+  },
+  "fallbacks": [...]
+}
+```
+
+### Supported Protocols
+
+| URL Suffix | Protocol |
+|------------|----------|
+| `/hls` or `.m3u8` | HLS |
+| `/dash` or `.mpd` | DASH |
+| `/webrtc` or `.webrtc` | WebRTC/WHEP |
+| `/srt` | SRT |
+| `/rtmp` | RTMP |
+| `/mp4` | Progressive MP4 |
+| `/mkv` | Matroska |
+| `/ts` | MPEG-TS |
+| `/flv` | Flash Video |
+| `/webm` | WebM |
+| (none) | Full JSON |
+
+Common protocols (HLS, DASH, WebRTC) are explicitly normalized. Other formats like MP4, MKV, TS, FLV, and WebM are passed through to MistServer - they work if your stream is configured to expose those outputs.
+
+:::tip[When to use universal URLs vs. direct URLs]
+- **Universal URLs** (`play.example.com/play/...`) - Best for sharing with viewers. Handles geo-routing automatically.
+- **Direct URLs** (`edge-X.example.com/hls/...`) - Use when you've already resolved the optimal edge node (e.g., via the FrameWorks Player or GraphQL API).
+:::
+
+## Access Control
+
+### Stream Keys vs Playback IDs
+
+Your stream key is for *ingest* only; viewers don't need it. Playback URLs use a separate playback ID that's safe to share publicly.
+
+## Troubleshooting Playback
+
+**Stream Not Found Errors**
+- **Is the stream live?** HLS playlists and WHEP endpoints are only active while you are broadcasting.
+- **Check the ID:** Ensure you are using the **Playback ID**, not the Stream Key.
+
+**Buffering or Stuttering**
+- **Viewer Connection:** The viewer's internet might be insufficient for the source bitrate. HLS attempts to adapt, but a high-bitrate source can still cause issues.
+- **Source Bitrate:** Check if your encoder is pushing a bitrate that is too high for your upload speed or your viewers' download speed.
+
+**Autoplay Issues (No Audio)**
+- **Browser Policies:** Most modern browsers block autoplay with sound. Ensure your player is set to `muted={true}` for autoplay to work reliably. The FrameWorks Player automatically shows a "Click to Unmute" overlay when playing muted.
+
+**High Latency**
+- **Protocol Choice:** HLS naturally has 10-30 seconds of latency. If you require sub-second interaction, switch to using **WebRTC (WHEP)**.

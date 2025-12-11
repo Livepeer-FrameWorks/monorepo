@@ -39,7 +39,7 @@
             </networks>
             <access_management>1</access_management>
             <allow_databases>
-                <database>frameworks</database>
+                <database>periscope</database>
             </allow_databases>
         </frameworks>
         
@@ -52,7 +52,7 @@
                 <ip>::/0</ip>
             </networks>
             <allow_databases>
-                <database>frameworks</database>
+                <database>periscope</database>
             </allow_databases>
         </readonly_user>
     </users>

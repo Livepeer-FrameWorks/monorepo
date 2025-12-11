@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -9,9 +10,6 @@ import (
 
 	"frameworks/api_sidecar/internal/config"
 	"frameworks/api_sidecar/internal/control"
-	"frameworks/pkg/clients/commodore"
-	"frameworks/pkg/clients/foghorn"
-	"frameworks/pkg/geoip"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/mist"
 	pb "frameworks/pkg/proto"
@@ -29,79 +27,30 @@ type HandlerMetrics struct {
 }
 
 var (
-	logger          logging.Logger
-	metrics         *HandlerMetrics
-	apiBaseURL      string
-	clusterID       string
-	foghornURI      string
-	nodeName        string
-	serviceToken    string
-	commodoreClient *commodore.Client
-	foghornClient   *foghorn.Client
-	geoipReader     *geoip.Reader
+	logger   logging.Logger
+	metrics  *HandlerMetrics
+	nodeName string
 )
 
-// Init initializes the handlers with logger, metrics, and service URLs and cluster metadata
-func Init(log logging.Logger, m *HandlerMetrics) {
+// Init initializes the handlers with logger, metrics, and node identity.
+// nodeID should be passed from the config system to ensure consistency.
+func Init(log logging.Logger, m *HandlerMetrics, nodeID string) {
 	logger = log
 	metrics = m
-
-	apiBaseURL = os.Getenv("COMMODORE_URL")
-	if apiBaseURL == "" {
-		apiBaseURL = "http://localhost:18001"
-	}
-
-	clusterID = os.Getenv("CLUSTER_ID")
-	if clusterID == "" {
-		clusterID = "local-cluster"
-	}
-
-	foghornURI = os.Getenv("FOGHORN_URL")
-	if foghornURI == "" {
-		foghornURI = "http://localhost:18008"
-	}
-
-	nodeName = os.Getenv("NODE_ID")
-	if nodeName == "" {
-		nodeName = "local-mistserver"
-	}
-
-	serviceToken = os.Getenv("SERVICE_TOKEN")
-
-	// Initialize Commodore client
-	commodoreClient = commodore.NewClient(commodore.Config{
-		BaseURL:      apiBaseURL,
-		ServiceToken: serviceToken,
-		Timeout:      10 * time.Second,
-		Logger:       logger,
-	})
-
-	foghornClient = foghorn.NewClient(foghorn.Config{
-		BaseURL:      foghornURI,
-		ServiceToken: serviceToken,
-		Timeout:      10 * time.Second,
-		Logger:       logger,
-	})
-
-	// Initialize GeoIP reader
-	geoipPath := os.Getenv("GEOIP_MMDB_PATH")
-	if geoipPath != "" {
-		reader, err := geoip.NewReader(geoipPath)
-		if err != nil {
-			logger.WithFields(logging.Fields{
-				"geoip_path": geoipPath,
-				"error":      err,
-			}).Warn("Failed to initialize GeoIP reader, geo enrichment disabled")
-		} else {
-			geoipReader = reader
-			logger.WithField("geoip_path", geoipPath).Info("GeoIP reader initialized successfully")
-		}
-	} else {
-		logger.Debug("No GEOIP_MMDB_PATH provided, geo enrichment disabled")
-	}
+	nodeName = nodeID
 
 	// Initialize Prometheus monitoring
 	InitPrometheusMonitor(logger)
+
+	// Perform initial artifact scan
+	if storagePath := os.Getenv("HELMSMAN_STORAGE_LOCAL_PATH"); storagePath != "" {
+		count, total := scanLocalArtifacts(storagePath)
+		logger.WithFields(logging.Fields{
+			"storage_path": storagePath,
+			"artifacts":    count,
+			"bytes":        total,
+		}).Info("Initial artifact scan completed")
+	}
 
 	// Initialize Mist config manager
 	config.InitManager(logger)
@@ -111,13 +60,7 @@ func Init(log logging.Logger, m *HandlerMetrics) {
 		TriggerImmediatePoll()
 	})
 
-	logger.WithFields(logging.Fields{
-		"commodore_url": apiBaseURL,
-		"cluster_id":    clusterID,
-		"foghorn_uri":   foghornURI,
-		"node_name":     nodeName,
-		"geoip_enabled": geoipReader != nil,
-	}).Info("Handlers initialized")
+	logger.WithField("node_name", nodeName).Info("Handlers initialized")
 }
 
 // HealthCheck handles health check requests
@@ -258,15 +201,15 @@ func HandlePushRewrite(c *gin.Context) {
 	c.String(http.StatusOK, response)
 }
 
-// HandleDefaultStream handles the DEFAULT_STREAM trigger from MistServer
+// HandlePlayRewrite handles the PLAY_REWRITE trigger from MistServer
 // This is a critical blocking trigger - maps playback IDs to internal stream names for viewing (live streams)
 // or clip hashes to VOD streams for clip viewing
-func HandleDefaultStream(c *gin.Context) {
+func HandlePlayRewrite(c *gin.Context) {
 	start := time.Now()
 
 	// Track node operations
 	if metrics != nil {
-		metrics.NodeOperations.WithLabelValues("default_stream", "requested").Inc()
+		metrics.NodeOperations.WithLabelValues("play_rewrite", "requested").Inc()
 	}
 
 	// Read the raw body - MistServer sends parameters as raw text, not JSON
@@ -274,10 +217,10 @@ func HandleDefaultStream(c *gin.Context) {
 	if err != nil {
 		logger.WithFields(logging.Fields{
 			"error": err,
-		}).Error("Failed to read DEFAULT_STREAM body")
+		}).Error("Failed to read PLAY_REWRITE body")
 
 		if metrics != nil {
-			metrics.NodeOperations.WithLabelValues("default_stream", "error").Inc()
+			metrics.NodeOperations.WithLabelValues("play_rewrite", "error").Inc()
 		}
 
 		c.String(http.StatusOK, "") // Empty response uses default behavior
@@ -285,19 +228,19 @@ func HandleDefaultStream(c *gin.Context) {
 	}
 
 	logger.WithFields(logging.Fields{
-		"trigger_type": "DEFAULT_STREAM",
+		"trigger_type": "PLAY_REWRITE",
 		"payload_size": len(body),
-	}).Debug("Forwarding DEFAULT_STREAM trigger to Foghorn via gRPC")
+	}).Debug("Forwarding PLAY_REWRITE trigger to Foghorn via gRPC")
 
 	// Parse raw webhook data directly
-	mistTrigger, err := mist.ParseTriggerToProtobuf(mist.TriggerDefaultStream, body, control.GetCurrentNodeID(), logger)
+	mistTrigger, err := mist.ParseTriggerToProtobuf(mist.TriggerPlayRewrite, body, control.GetCurrentNodeID(), logger)
 	if err != nil {
 		logger.WithFields(logging.Fields{
 			"error": err,
-		}).Error("Failed to parse DEFAULT_STREAM trigger")
+		}).Error("Failed to parse PLAY_REWRITE trigger")
 
 		if metrics != nil {
-			metrics.NodeOperations.WithLabelValues("default_stream", "parse_error").Inc()
+			metrics.NodeOperations.WithLabelValues("play_rewrite", "parse_error").Inc()
 		}
 
 		c.String(http.StatusOK, "") // Empty response uses default behavior
@@ -309,10 +252,10 @@ func HandleDefaultStream(c *gin.Context) {
 	if err != nil {
 		logger.WithFields(logging.Fields{
 			"error": err,
-		}).Error("Failed to forward DEFAULT_STREAM to Foghorn")
+		}).Error("Failed to forward PLAY_REWRITE to Foghorn")
 
 		if metrics != nil {
-			metrics.NodeOperations.WithLabelValues("default_stream", "forwarding_error").Inc()
+			metrics.NodeOperations.WithLabelValues("play_rewrite", "forwarding_error").Inc()
 		}
 
 		c.String(http.StatusOK, "") // Empty response uses default behavior
@@ -322,10 +265,10 @@ func HandleDefaultStream(c *gin.Context) {
 	if shouldAbort {
 		logger.WithFields(logging.Fields{
 			"response": response,
-		}).Info("DEFAULT_STREAM aborted by Foghorn")
+		}).Info("PLAY_REWRITE aborted by Foghorn")
 
 		if metrics != nil {
-			metrics.NodeOperations.WithLabelValues("default_stream", "aborted").Inc()
+			metrics.NodeOperations.WithLabelValues("play_rewrite", "aborted").Inc()
 		}
 
 		c.String(http.StatusOK, "") // Empty response uses default behavior
@@ -334,11 +277,11 @@ func HandleDefaultStream(c *gin.Context) {
 
 	logger.WithFields(logging.Fields{
 		"response": response,
-	}).Info("DEFAULT_STREAM resolved by Foghorn")
+	}).Info("PLAY_REWRITE resolved by Foghorn")
 
 	// Track successful operation
 	if metrics != nil {
-		metrics.NodeOperations.WithLabelValues("default_stream", "success").Inc()
+		metrics.NodeOperations.WithLabelValues("play_rewrite", "success").Inc()
 		metrics.ResourceAllocationDuration.WithLabelValues("stream_resolution").Observe(time.Since(start).Seconds())
 		metrics.InfrastructureEvents.WithLabelValues("stream_resolved").Inc()
 	}
@@ -434,38 +377,6 @@ func HandleStreamSource(c *gin.Context) {
 
 	// Return Foghorn's response to MistServer
 	c.String(http.StatusOK, response)
-}
-
-// enrichEventWithClusterMetadata adds cluster and node metadata to events
-func enrichEventWithClusterMetadata(eventData map[string]interface{}) map[string]interface{} {
-	nodeID := getCurrentNodeID()
-
-	enriched := make(map[string]interface{})
-	for k, v := range eventData {
-		enriched[k] = v
-	}
-
-	enriched["cluster_id"] = clusterID
-	enriched["foghorn_uri"] = foghornURI
-	enriched["node_id"] = nodeID
-	enriched["node_name"] = nodeName
-
-	// Add geographic metadata from existing PrometheusMonitor
-	if prometheusMonitor != nil {
-		prometheusMonitor.mutex.RLock()
-		if prometheusMonitor.latitude != nil {
-			enriched["latitude"] = *prometheusMonitor.latitude
-		}
-		if prometheusMonitor.longitude != nil {
-			enriched["longitude"] = *prometheusMonitor.longitude
-		}
-		if prometheusMonitor.location != "" {
-			enriched["location"] = prometheusMonitor.location
-		}
-		prometheusMonitor.mutex.RUnlock()
-	}
-
-	return enriched
 }
 
 // getNodeID returns the current node ID for building triggers
@@ -880,34 +791,24 @@ func enrichStreamBufferTrigger(trigger *pb.StreamBufferTrigger) {
 	trackCount := int32(len(tracks))
 	trigger.TrackCount = &trackCount
 
-	// Calculate health score based on jitter and buffer metrics
-	healthScore := 100.0
+	// Detect issues from raw track signals (no derived health score)
 	hasIssues := false
 	var issuesDesc []string
 
 	for _, track := range tracks {
 		// Check for high jitter (>100ms is concerning)
 		if track.Jitter != nil && *track.Jitter > 100 {
-			healthScore -= 20
 			hasIssues = true
 			issuesDesc = append(issuesDesc, "High jitter on track "+track.TrackName)
 		}
 		// Check for low buffer (<50 is concerning)
 		if track.Buffer != nil && *track.Buffer < 50 {
-			healthScore -= 15
 			hasIssues = true
 			issuesDesc = append(issuesDesc, "Low buffer on track "+track.TrackName)
 		}
 	}
 
-	// Ensure health score doesn't go below 0
-	if healthScore < 0 {
-		healthScore = 0
-	}
-
-	// Set computed metrics
-	healthScoreFloat32 := float32(healthScore)
-	trigger.HealthScore = &healthScoreFloat32
+	// Set issue indicators
 	trigger.HasIssues = &hasIssues
 	if len(issuesDesc) > 0 {
 		issues := strings.Join(issuesDesc, "; ")
@@ -991,27 +892,88 @@ func enrichLiveTrackListTrigger(trigger *pb.StreamTrackListTrigger) {
 	}
 }
 
-// determineQualityTier determines quality tier based on video track resolution
+// determineQualityTier determines quality tier with rich format: "1080p60 H264 @ 6Mbps"
 func determineQualityTier(tracks []*pb.StreamTrack) string {
+	// Find primary video track (highest resolution)
+	var primaryVideo *pb.StreamTrack
 	maxHeight := int32(0)
 	for _, track := range tracks {
 		if track.TrackType == "video" && track.Height != nil {
 			if *track.Height > maxHeight {
 				maxHeight = *track.Height
+				primaryVideo = track
 			}
 		}
 	}
 
-	if maxHeight >= 2160 {
-		return "4K"
-	} else if maxHeight >= 1080 {
-		return "1080p"
-	} else if maxHeight >= 720 {
-		return "720p"
-	} else if maxHeight >= 480 {
-		return "480p"
-	} else if maxHeight > 0 {
-		return "SD"
+	if primaryVideo == nil || maxHeight == 0 {
+		return ""
 	}
-	return ""
+
+	// Resolution tier
+	var resolution string
+	if maxHeight >= 2160 {
+		resolution = "4K"
+	} else if maxHeight >= 1440 {
+		resolution = "1440p"
+	} else if maxHeight >= 1080 {
+		resolution = "1080p"
+	} else if maxHeight >= 720 {
+		resolution = "720p"
+	} else if maxHeight >= 480 {
+		resolution = "480p"
+	} else {
+		resolution = "SD"
+	}
+
+	// Append FPS if available (rounded to nearest integer)
+	if primaryVideo.Fps != nil && *primaryVideo.Fps > 0 {
+		fps := int(*primaryVideo.Fps + 0.5) // Round to nearest int
+		resolution = fmt.Sprintf("%s%d", resolution, fps)
+	}
+
+	// Build rich label with available data
+	parts := []string{resolution}
+
+	// Add codec if available
+	if primaryVideo.Codec != "" {
+		parts = append(parts, primaryVideo.Codec)
+	}
+
+	// Add bitrate if available (prefer kbps, format nicely)
+	if primaryVideo.BitrateKbps != nil && *primaryVideo.BitrateKbps > 0 {
+		bitrate := *primaryVideo.BitrateKbps
+		var bitrateStr string
+		if bitrate >= 1000 {
+			bitrateStr = fmt.Sprintf("%.1fMbps", float64(bitrate)/1000)
+		} else {
+			bitrateStr = fmt.Sprintf("%dkbps", bitrate)
+		}
+		parts = append(parts, "@", bitrateStr)
+	} else if primaryVideo.BitrateBps != nil && *primaryVideo.BitrateBps > 0 {
+		// Fallback to bps
+		bitrate := float64(*primaryVideo.BitrateBps) / 1000 // Convert to kbps
+		var bitrateStr string
+		if bitrate >= 1000 {
+			bitrateStr = fmt.Sprintf("%.1fMbps", bitrate/1000)
+		} else {
+			bitrateStr = fmt.Sprintf("%.0fkbps", bitrate)
+		}
+		parts = append(parts, "@", bitrateStr)
+	}
+
+	// Join parts: "1080p60 H264 @ 6.0Mbps"
+	// Handle the "@" as a separator properly
+	result := parts[0]
+	for i := 1; i < len(parts); i++ {
+		if parts[i] == "@" {
+			result += " @"
+		} else if i > 0 && parts[i-1] == "@" {
+			result += " " + parts[i]
+		} else {
+			result += " " + parts[i]
+		}
+	}
+
+	return result
 }

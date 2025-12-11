@@ -1,0 +1,28 @@
+query GetCurrentStreamHealth($stream: String!) {
+  currentStreamHealth(stream: $stream) {
+    timestamp
+    stream
+    nodeId
+    issuesDescription
+    hasIssues
+    bitrate
+    fps
+    width
+    height
+    codec
+    profile
+    qualityTier
+    gopSize
+    packetsSent
+    packetsLost
+    packetLossPercentage
+    bufferState
+    bufferHealth
+    bufferSize
+    bufferUsed
+    audioChannels
+    audioSampleRate
+    audioCodec
+    audioBitrate
+  }
+}

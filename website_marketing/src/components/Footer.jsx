@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom'
+import config from '../config'
 
 const Footer = () => {
   return (
@@ -18,9 +19,9 @@ const Footer = () => {
           <div>
             <h3 className="mb-3 text-sm font-semibold text-foreground">Resources</h3>
             <div className="flex flex-col gap-2">
-              <Link to="/docs" className="text-sm text-muted-foreground transition-colors hover:text-foreground">Documentation</Link>
+              <a href={config.docsUrl} className="text-sm text-muted-foreground transition-colors hover:text-foreground">Documentation</a>
               <Link to="/status" className="text-sm text-muted-foreground transition-colors hover:text-foreground">Status</Link>
-              <Link to="/roadmap" className="text-sm text-muted-foreground transition-colors hover:text-foreground">Roadmap</Link>
+              <a href={`${config.docsUrl.replace(/\/+$/, '')}/roadmap`} className="text-sm text-muted-foreground transition-colors hover:text-foreground">Roadmap</a>
               {/* <Link to="/changelog" className="text-sm text-muted-foreground transition-colors hover:text-foreground">Changelog</Link> */}
             </div>
           </div>

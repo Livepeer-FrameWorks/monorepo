@@ -1,20 +1,33 @@
 # Clip management mutations
+# Uses shared fragments from fragments/shared.graphql
+
 mutation CreateClip($input: CreateClipInput!) {
   createClip(input: $input) {
-    id
-    stream
-    title
-    description
-    startTime
-    endTime
-    duration
-    playbackId
-    status
-    createdAt
-    updatedAt
+    ... on Clip {
+      ...CoreClip
+    }
+    ... on ValidationError {
+      ...ValidationErrorFields
+    }
+    ... on NotFoundError {
+      ...NotFoundErrorFields
+    }
+    ... on AuthError {
+      ...AuthErrorFields
+    }
   }
 }
 
 mutation DeleteClip($id: ID!) {
-  deleteClip(id: $id)
+  deleteClip(id: $id) {
+    ... on DeleteSuccess {
+      ...DeleteSuccessFields
+    }
+    ... on NotFoundError {
+      ...NotFoundErrorFields
+    }
+    ... on AuthError {
+      ...AuthErrorFields
+    }
+  }
 }

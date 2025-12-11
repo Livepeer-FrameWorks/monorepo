@@ -2,6 +2,7 @@
 const config = {
   // Application URLs
   appUrl: import.meta.env.VITE_APP_URL || 'http://localhost:18090/app',
+  docsUrl: import.meta.env.VITE_DOCS_URL || '/docs',
   contactApiUrl: import.meta.env.VITE_CONTACT_API_URL || 'http://localhost:18032',
 
   // External URLs

@@ -253,15 +253,34 @@ func computeDerived(env map[string]string) error {
 		return err
 	}
 
-	signalmanHost, err := require(env, "SIGNALMAN_HOST")
+	// Navigator gRPC URL (no scheme, just host:port)
+	navHost, err := require(env, "NAVIGATOR_HOST")
 	if err != nil {
 		return err
 	}
-	signalmanPort, err := require(env, "SIGNALMAN_PORT")
+	navGRPCPort, err := require(env, "NAVIGATOR_GRPC_PORT")
 	if err != nil {
 		return err
 	}
-	env["SIGNALMAN_WS_URL"] = fmt.Sprintf("ws://%s:%s", signalmanHost, signalmanPort)
+	env["NAVIGATOR_URL"] = fmt.Sprintf("%s:%s", navHost, navGRPCPort)
+
+	// Control Plane gRPC addresses (host:port, no scheme)
+	// These are used for internal service-to-service communication
+	if err := setGRPCAddr(env, "COMMODORE_GRPC_ADDR", "COMMODORE_HOST", "COMMODORE_GRPC_PORT"); err != nil {
+		return err
+	}
+	if err := setGRPCAddr(env, "QUARTERMASTER_GRPC_ADDR", "QUARTERMASTER_HOST", "QUARTERMASTER_GRPC_PORT"); err != nil {
+		return err
+	}
+	if err := setGRPCAddr(env, "PURSER_GRPC_ADDR", "PURSER_HOST", "PURSER_GRPC_PORT"); err != nil {
+		return err
+	}
+	if err := setGRPCAddr(env, "PERISCOPE_GRPC_ADDR", "PERISCOPE_QUERY_HOST", "PERISCOPE_QUERY_GRPC_PORT"); err != nil {
+		return err
+	}
+	if err := setGRPCAddr(env, "SIGNALMAN_GRPC_ADDR", "SIGNALMAN_HOST", "SIGNALMAN_GRPC_PORT"); err != nil {
+		return err
+	}
 
 	foghornControlPort, err := require(env, "FOGHORN_CONTROL_PORT")
 	if err != nil {
@@ -313,6 +332,9 @@ func computeViteVariables(env map[string]string) error {
 	marketingPublicURL := valueOrDefault(env, "MARKETING_PUBLIC_URL", "http://localhost:18031")
 	env["VITE_MARKETING_SITE_URL"] = marketingPublicURL
 
+	docsPublicURL := valueOrDefault(env, "DOCS_PUBLIC_URL", "http://localhost:18090/docs")
+	env["VITE_DOCS_SITE_URL"] = docsPublicURL
+
 	// Contact API URL - Read from base.env
 	formsPublicURL, err := require(env, "FORMS_PUBLIC_URL")
 	if err != nil {
@@ -320,35 +342,20 @@ func computeViteVariables(env map[string]string) error {
 	}
 	env["VITE_CONTACT_API_URL"] = formsPublicURL
 
-	// 3. STREAMING - INGEST (Parse STREAMING_INGEST_URL for RTMP)
-	streamingIngestURL := valueOrDefault(env, "STREAMING_INGEST_URL", "rtmp://localhost:1935/live")
+	// 3. STREAMING - Pass through raw base.env values, let apps construct protocol-specific URLs
+	// Apps parse these to derive hostname and construct rtmp://, srt://, https:// URLs as needed
+	env["VITE_STREAMING_INGEST_URL"] = valueOrDefault(env, "STREAMING_INGEST_URL", "http://localhost:8080")
+	env["VITE_STREAMING_EDGE_URL"] = valueOrDefault(env, "STREAMING_EDGE_URL", "http://localhost:8080")
 
-	rtmpHost, err := extractHostFromURL(streamingIngestURL)
-	if err != nil {
-		return fmt.Errorf("extract host from streaming ingest URL: %w", err)
-	}
-	env["VITE_RTMP_DOMAIN"] = rtmpHost
-
-	rtmpPath, err := extractPathFromURL(streamingIngestURL)
-	if err != nil {
-		return fmt.Errorf("extract path from streaming ingest URL: %w", err)
-	}
-	env["VITE_RTMP_PATH"] = rtmpPath
-
-	// 4. STREAMING - EDGE/DELIVERY (Parse STREAMING_EDGE_URL for HTTP)
-	streamingEdgeURL := valueOrDefault(env, "STREAMING_EDGE_URL", "http://localhost:18090/view")
-
-	edgeHost, err := extractHostFromURL(streamingEdgeURL)
-	if err != nil {
-		return fmt.Errorf("extract host from streaming edge URL: %w", err)
-	}
-	env["VITE_HTTP_DOMAIN"] = edgeHost
-	env["VITE_CDN_DOMAIN"] = edgeHost
+	// Streaming ports for protocols that need explicit ports (SRT, RTMP)
+	env["VITE_STREAMING_RTMP_PORT"] = valueOrDefault(env, "STREAMING_RTMP_PORT", "1935")
+	env["VITE_STREAMING_SRT_PORT"] = valueOrDefault(env, "STREAMING_SRT_PORT", "8889")
 
 	// Streaming paths from base.env
-	env["VITE_HLS_PATH"] = valueOrDefault(env, "STREAMING_HLS_PATH", "/hls")
-	env["VITE_WEBRTC_PATH"] = valueOrDefault(env, "STREAMING_WEBRTC_PATH", "/webrtc")
-	env["VITE_EMBED_PATH"] = valueOrDefault(env, "STREAMING_EMBED_PATH", "/")
+	env["VITE_STREAMING_HLS_PATH"] = valueOrDefault(env, "STREAMING_HLS_PATH", "/hls")
+	env["VITE_STREAMING_WEBRTC_PATH"] = valueOrDefault(env, "STREAMING_WEBRTC_PATH", "/webrtc")
+	env["VITE_STREAMING_RTMP_PATH"] = valueOrDefault(env, "STREAMING_RTMP_PATH", "/live")
+	env["VITE_STREAMING_EMBED_PATH"] = valueOrDefault(env, "STREAMING_EMBED_PATH", "/")
 
 	// 5. BRANDING - Passthrough from base.env
 	env["VITE_COMPANY_NAME"] = valueOrDefault(env, "BRAND_NAME", "FrameWorks")
@@ -378,6 +385,14 @@ func computeViteVariables(env map[string]string) error {
 	}
 	env["BASE_PATH"] = webappPath
 
+	// 9. DOCS CONFIG - Extract DOCS_BASE_PATH from DOCS_PUBLIC_URL
+	var docsPath string
+	docsPath, err = extractPathFromURL(docsPublicURL)
+	if err != nil {
+		return fmt.Errorf("extract path from docs URL: %w", err)
+	}
+	env["DOCS_BASE_PATH"] = docsPath
+
 	return nil
 }
 
@@ -391,6 +406,20 @@ func setHTTPURL(env map[string]string, targetKey, hostKey, portKey string) error
 		return err
 	}
 	env[targetKey] = fmt.Sprintf("http://%s:%s", host, port)
+	return nil
+}
+
+// setGRPCAddr derives a gRPC address (host:port, no scheme) from host and port env vars
+func setGRPCAddr(env map[string]string, targetKey, hostKey, portKey string) error {
+	host, err := require(env, hostKey)
+	if err != nil {
+		return err
+	}
+	port, err := require(env, portKey)
+	if err != nil {
+		return err
+	}
+	env[targetKey] = fmt.Sprintf("%s:%s", host, port)
 	return nil
 }
 

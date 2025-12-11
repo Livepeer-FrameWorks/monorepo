@@ -1,0 +1,6 @@
+query GetClipViewingUrls($clipId: ID!) {
+  clipViewingUrls(clipId: $clipId) {
+    urls
+    expiresAt
+  }
+}

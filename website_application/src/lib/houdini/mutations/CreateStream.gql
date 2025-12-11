@@ -1,0 +1,34 @@
+mutation CreateStream($input: CreateStreamInput!) {
+  createStream(input: $input) {
+    __typename
+    ... on Stream {
+      id
+      name
+      description
+      streamKey
+      playbackId
+      record
+      createdAt
+      updatedAt
+      metrics {
+        status
+        isLive
+        currentViewers
+        peakViewers
+        totalViews
+        startedAt
+        endedAt
+        duration
+        lastEventAt
+        lastEventType
+      }
+      ...AllStreams_insert @prepend
+    }
+    ... on ValidationError {
+      ...ValidationErrorFields @mask_disable
+    }
+    ... on AuthError {
+      ...AuthErrorFields @mask_disable
+    }
+  }
+}

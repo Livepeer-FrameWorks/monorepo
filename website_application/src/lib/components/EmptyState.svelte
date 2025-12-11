@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { getIconComponent } from '$lib/iconUtils';
+  import { cn } from "$lib/utils";
+  import { getIconComponent } from "$lib/iconUtils";
   import { Button } from "$lib/components/ui/button";
   import type { Snippet } from "svelte";
 
@@ -11,7 +12,13 @@
     onAction?: () => void;
     size?: "sm" | "md" | "lg";
     variant?: "default" | "accent" | "subtle";
-    buttonVariant?: "default" | "cta" | "outline" | "ghost" | "secondary" | "destructive";
+    buttonVariant?:
+      | "default"
+      | "cta"
+      | "outline"
+      | "ghost"
+      | "secondary"
+      | "destructive";
     class?: string;
     showAction?: boolean;
     children?: Snippet;
@@ -26,7 +33,7 @@
     size = "md",
     variant = "default",
     buttonVariant = "cta",
-    class: className = "",
+    class: className,
     showAction = true,
     children,
   }: Props = $props();
@@ -59,18 +66,17 @@
 
   const variantClasses = {
     default: {
-      iconWrapper:
-        "bg-tokyo-night-bg-highlight border border-tokyo-night-fg-gutter",
-      icon: "text-tokyo-night-fg-dark",
+      iconWrapper: "bg-card border border-border",
+      icon: "text-muted-foreground",
     },
     accent: {
       iconWrapper:
-        "bg-gradient-to-br from-tokyo-night-blue/20 to-tokyo-night-cyan/20 border border-tokyo-night-blue/30",
-      icon: "text-tokyo-night-cyan",
+        "bg-gradient-to-br from-primary/20 to-info/20 border border-primary/30",
+      icon: "text-info",
     },
     subtle: {
-      iconWrapper: "bg-tokyo-night-bg-dark border border-tokyo-night-fg-gutter/50",
-      icon: "text-tokyo-night-comment",
+      iconWrapper: "bg-background border border-border/50",
+      icon: "text-muted-foreground",
     },
   };
 
@@ -79,22 +85,26 @@
   const SvelteComponent = $derived(iconComponent);
 </script>
 
-<div class="text-center {classes.container} {className}">
+<div class={cn("text-center", classes.container, className)}>
   <!-- Icon with styled wrapper -->
   <div
-    class="mx-auto flex items-center justify-center rounded-2xl {classes.iconWrapper} {variantClass.iconWrapper}"
+    class={cn(
+      "mx-auto flex items-center justify-center",
+      classes.iconWrapper,
+      variantClass.iconWrapper
+    )}
   >
-    <SvelteComponent class="{classes.icon} {variantClass.icon}" />
+    <SvelteComponent class={cn(classes.icon, variantClass.icon)} />
   </div>
 
   <!-- Title -->
-  <h3 class="text-tokyo-night-fg {classes.title}">
+  <h3 class={cn("text-foreground", classes.title)}>
     {title}
   </h3>
 
   <!-- Description -->
   {#if description}
-    <p class="text-tokyo-night-fg-dark {classes.description} max-w-md mx-auto">
+    <p class={cn("text-muted-foreground max-w-md mx-auto", classes.description)}>
       {description}
     </p>
   {/if}

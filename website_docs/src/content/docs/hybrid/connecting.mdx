@@ -1,0 +1,150 @@
+---
+title: "Connecting to the Network"
+description: "Enroll your edge node with the FrameWorks control plane."
+draft: true
+sidebar:
+  order: 3
+---
+
+Connecting your edge node is the final step in the setup process. Enrollment establishes a secure identity for your node, allowing it to receive traffic and report telemetry to the control plane.
+
+## Get an Enrollment Token
+
+You need a bootstrap token from an admin or from your tenant's dashboard.
+
+**Via Dashboard:**
+1. Go to **Infrastructure → Nodes**
+2. Click **Add Node**
+3. Copy the enrollment token
+
+**Via CLI (admin):**
+```bash
+frameworks admin bootstrap-tokens create --name "edge-node-1"
+```
+
+The token is a one-time-use credential that proves you're authorized to add nodes.
+
+## Enroll the Node
+
+First, add the enrollment token to your `.edge.env`:
+
+```bash
+# In .edge.env
+EDGE_ENROLLMENT_TOKEN=your-enrollment-token
+```
+
+Then start the stack:
+
+```bash
+frameworks edge enroll --dir /opt/frameworks-edge
+```
+
+This:
+1. Starts the MistServer, Helmsman, and Caddy containers
+2. Waits for HTTPS to become available
+3. Helmsman contacts Quartermaster with the bootstrap token
+4. Once enrolled, the node receives traffic from Foghorn
+
+After enrollment, your node appears in the dashboard under **Infrastructure → Nodes**.
+
+## Verify Connection
+
+Check that your node is talking to the network:
+
+```bash
+frameworks edge status
+```
+
+This shows:
+- **Docker container status** for MistServer, Helmsman, and edge-proxy
+- **HTTPS health check** against your configured `EDGE_DOMAIN`
+
+For enrollment and heartbeat status, check the dashboard—your node should appear under **Infrastructure → Nodes** once enrolled.
+
+## How Traffic Gets Routed
+
+Once enrolled, Foghorn (the load balancer) knows about your node. When a viewer requests a stream:
+
+1. **Foghorn** checks which nodes have the stream
+2. **GeoIP** determines the viewer's location
+3. **Scoring** weighs node load, viewer proximity, and stream availability
+4. **Redirect** sends the viewer to the best node (possibly yours)
+
+Your node will receive traffic when:
+- A stream is ingesting to your node
+- Viewers are geographically closer to you than other edges
+- Other edges are overloaded
+
+## Ingesting to Your Node
+
+Streamers can push directly to your node instead of the default ingest:
+
+```
+rtmp://stream.yourdomain.com/live/{stream-key}
+```
+
+Or use the network's default ingest and let Foghorn route:
+```
+%RTMP_URL%/{stream-key}
+```
+
+Both work. Direct ingest means lower latency to your node; network ingest means Foghorn picks the best ingest point.
+
+## Capacity and Capabilities
+
+Your node advertises what it can do:
+
+```bash
+# In .edge.env
+HELMSMAN_CAP_INGEST=true    # Can receive RTMP/SRT streams
+HELMSMAN_CAP_EDGE=true      # Can serve viewers
+HELMSMAN_CAP_STORAGE=true   # Can store recordings
+HELMSMAN_CAP_PROCESSING=true # Can transcode
+```
+
+Disable capabilities you don't want:
+```bash
+# Viewer-only node (no ingest)
+HELMSMAN_CAP_INGEST=false
+
+# Ingest-only node (no viewers)
+HELMSMAN_CAP_EDGE=false
+```
+
+## Removing a Node from the Network
+
+To stop receiving network traffic:
+
+```bash
+cd /opt/frameworks-edge
+docker compose -f docker-compose.edge.yml down
+```
+
+When Helmsman stops, Foghorn automatically removes it from the load balancer registry. After 90 seconds without heartbeats, the node is marked stale and excluded from all routing decisions.
+
+## Troubleshooting Enrollment
+
+**"Invalid token"**
+
+The token was already used or expired. Get a fresh one.
+
+**"Network unreachable"**
+
+Your server can't reach the control plane. Check firewalls, DNS, and outbound HTTPS.
+
+**"Node already enrolled"**
+
+This node was enrolled before. Edit `.edge.env` and clear the existing `HELMSMAN_CLUSTER_ID` and `HELMSMAN_NODE_ID` values, then try again.
+
+**Node shows offline in dashboard**
+
+Helmsman isn't sending heartbeats.
+
+```bash
+# Check Helmsman logs
+frameworks edge logs helmsman --tail 50
+```
+
+## Next Steps
+
+Your node is connected. Learn how to [manage it day-to-day](/hybrid/node-cli).

@@ -1,93 +1,98 @@
-<script>
-  import { run } from "svelte/legacy";
-
-  // @ts-check
+<script lang="ts">
   import { page } from "$app/stores";
   import { goto } from "$app/navigation";
-  import { resolve } from "$app/paths";
-  import { navigationConfig } from "../navigation.js";
+  import { base } from "$app/paths";
+  import { navigationConfig, type NavigationItem } from "../navigation.js";
   import { createEventDispatcher } from "svelte";
   import { getIconComponent } from "../iconUtils";
+  import { sidebarStore } from "../stores/sidebar.svelte";
 
-  /**
-   * @typedef {Object} Props
-   * @property {boolean} [collapsed]
-   */
+  interface Props {
+    collapsed?: boolean;
+  }
 
-  /** @type {Props} */
-  let { collapsed = false } = $props();
+  let { collapsed = false }: Props = $props();
 
   const dispatch = createEventDispatcher();
 
-  // Start with all sections collapsed, expand only the current section
-  /** @type {Set<string>} */
-  let expandedSections = $state(new Set());
-  /** @type {Set<string>} */
-  let manuallyExpanded = $state(new Set());
-  /** @type {Set<string>} */
-  let manuallyCollapsed = $state(new Set());
+  // Track sections that were auto-expanded for the current route
+  // These should not be persisted, just displayed
+  let autoExpandedSections = $state<Set<string>>(new Set());
 
   // Track current child index for cycling when collapsed
-  /** @type {Record<string, number>} */
-  let sectionChildIndex = {};
+  let sectionChildIndex: Record<string, number> = {};
 
   let currentPath = $derived($page.url.pathname);
 
-  // Auto-expand the section containing the current page, but only if not manually collapsed
-  run(() => {
-    // eslint-disable-next-line svelte/prefer-svelte-reactivity
-    const newExpandedSections = new Set(manuallyExpanded);
+  // Helper to resolve hrefs safely - prepend base path if configured
+  function safeResolve(href: string | undefined): string {
+    if (!href) return '';
+    // Simply prepend base path (empty string by default, or configured base path)
+    return base + href;
+  }
+
+  // Helper to get active children info for dot indicators in collapsed mode
+  function getActiveChildrenInfo(sectionKey: string): { count: number; currentIndex: number; isCurrentSection: boolean } {
+    const section = navigationConfig[sectionKey];
+    if (!section?.children) return { count: 0, currentIndex: -1, isCurrentSection: false };
+
+    const activeChildren = Object.values(section.children).filter(
+      (child) => child.active === true
+    );
+
+    const currentIndex = activeChildren.findIndex(
+      (child) => safeResolve(child.href) === currentPath
+    );
+
+    // Check if we're currently in this section (any child matches)
+    const isCurrentSection = currentIndex !== -1;
+
+    return { count: activeChildren.length, currentIndex, isCurrentSection };
+  }
+
+  // Check if a section has any active children
+  function sectionHasActiveChildren(sectionKey: string): boolean {
+    const section = navigationConfig[sectionKey];
+    if (!section?.children) return false;
+    return Object.values(section.children).some((child) => child.active === true);
+  }
+
+  // Compute which section contains the current path for auto-expansion
+  $effect(() => {
+    const newAutoExpanded = new Set<string>();
 
     // Find which section contains the current path
     for (const [sectionKey, section] of Object.entries(navigationConfig)) {
       if (sectionKey !== "dashboard" && section.children) {
         for (const [_childKey, child] of Object.entries(section.children)) {
-          if (resolve(child.href) === currentPath) {
-            // Only auto-expand if user hasn't manually collapsed this section
-            if (!manuallyCollapsed.has(sectionKey)) {
-              newExpandedSections.add(sectionKey);
-            }
+          if (safeResolve(child.href) === currentPath) {
+            newAutoExpanded.add(sectionKey);
             break;
           }
         }
       }
     }
 
-    expandedSections = newExpandedSections;
+    autoExpandedSections = newAutoExpanded;
   });
 
-  /**
-   * @param {string} sectionKey
-   */
-  function toggleSection(sectionKey) {
+  // Helper to check if a section should appear expanded
+  // Section is expanded if: user explicitly expanded it OR it contains the current route
+  function isSectionExpanded(sectionKey: string): boolean {
+    return sidebarStore.expandedSections.has(sectionKey) || autoExpandedSections.has(sectionKey);
+  }
+
+  function toggleSection(sectionKey: string) {
     if (collapsed) {
       // When collapsed, cycle through the section's children
       cycleToNextChild(sectionKey);
     } else {
-      // Normal toggle behavior when expanded
-      const newExpanded = new Set(manuallyExpanded);
-      const newCollapsed = new Set(manuallyCollapsed);
-
-      if (expandedSections.has(sectionKey)) {
-        // Currently expanded - collapse it and mark as manually collapsed
-        newExpanded.delete(sectionKey);
-        newCollapsed.add(sectionKey);
-      } else {
-        // Currently collapsed - expand it and remove from manually collapsed
-        newCollapsed.delete(sectionKey);
-        newExpanded.add(sectionKey);
-      }
-
-      manuallyExpanded = newExpanded;
-      manuallyCollapsed = newCollapsed;
+      // Normal toggle behavior when expanded - use the store
+      sidebarStore.toggleSection(sectionKey);
     }
   }
 
-  /**
-   * Cycle to the next child in a section when sidebar is collapsed
-   * @param {string} sectionKey
-   */
-  function cycleToNextChild(sectionKey) {
+  function cycleToNextChild(sectionKey: string) {
     const section = navigationConfig[sectionKey];
     if (!section?.children) return;
 
@@ -105,7 +110,7 @@
 
     // Find current page index if we're already in this section
     const currentChildIndex = activeChildren.findIndex(
-      ([, child]) => resolve(child.href) === currentPath,
+      ([, child]) => safeResolve(child.href) === currentPath,
     );
 
     if (currentChildIndex !== -1) {
@@ -124,10 +129,7 @@
     }
   }
 
-  /**
-   * @param {NavigationItem} item
-   */
-  function handleNavigation(item) {
+  function handleNavigation(item: NavigationItem) {
     if (item.active === "soon") {
       dispatch("comingSoon", { item });
       return;
@@ -145,16 +147,11 @@
     }
     // Navigate to active routes using SvelteKit client-side routing
     if (item.href && item.active === true) {
-      goto(resolve(item.href));
+      goto(safeResolve(item.href));
     }
   }
 
-  /**
-   * @param {NavigationItem} item
-   * @param {boolean} [isChild]
-   * @param {string} [currentPath]
-   */
-  function getItemClass(item, isChild = false, currentPath = "") {
+  function getItemClass(item: NavigationItem, isChild = false, currentPath = "") {
     const baseClass = "nav-item";
     const childPadding = isChild ? "pl-8" : "";
 
@@ -164,7 +161,7 @@
     if (item.active === "disabled") {
       return `${baseClass} disabled ${childPadding}`;
     }
-    if (item.href && resolve(item.href) === currentPath) {
+    if (item.href && safeResolve(item.href) === currentPath) {
       return `${baseClass} active ${childPadding}`;
     }
     return `${baseClass} ${childPadding}`;
@@ -178,7 +175,7 @@
 <div
   class="{collapsed
     ? 'w-16'
-    : 'w-64'} bg-tokyo-night-bg-light border-r border-tokyo-night-fg-gutter h-full overflow-y-auto transition-all duration-300 select-none"
+    : 'w-64'} bg-sidebar border-r border-sidebar-border h-full overflow-y-auto transition-all duration-300 select-none"
 >
   <!-- Navigation -->
   <nav class="{collapsed ? 'p-2' : 'p-4'} space-y-2">
@@ -190,20 +187,12 @@
           navigationConfig.dashboard,
           false,
           currentPath,
-        )} w-full {collapsed ? 'justify-center' : ''}"
+        )} w-full {collapsed ? 'justify-center relative' : ''}"
         title={collapsed ? navigationConfig.dashboard.name : ""}
       >
         <SvelteComponent class="w-5 h-5 flex-shrink-0 {collapsed ? '' : 'mr-3'}" />
         {#if !collapsed}
-          <span class="flex-1 text-left">{navigationConfig.dashboard.name}</span
-          >
-          {#if resolve(navigationConfig.dashboard.href) === currentPath}
-            <div class="w-2 h-2 bg-tokyo-night-blue rounded-full"></div>
-          {/if}
-        {:else if resolve(navigationConfig.dashboard.href) === currentPath}
-          <div
-            class="absolute right-1 w-2 h-2 bg-tokyo-night-blue rounded-full"
-          ></div>
+          <span class="flex-1 text-left">{navigationConfig.dashboard.name}</span>
         {/if}
       </button>
     </div>
@@ -212,13 +201,15 @@
     {#each Object.entries(navigationConfig) as [sectionKey, section] (sectionKey)}
       {#if sectionKey !== "dashboard" && section.children}
         {@const SvelteComponent_1 = getIconComponent(section.icon)}
+        {@const hasActiveChildren = sectionHasActiveChildren(sectionKey)}
+        {@const childInfo = getActiveChildrenInfo(sectionKey)}
         <div class="mb-4">
           <!-- Section Header -->
           <button
             onclick={() => toggleSection(sectionKey)}
             class="nav-item w-full {collapsed
-              ? 'justify-center'
-              : 'justify-between'}"
+              ? 'flex-col items-center justify-center'
+              : 'justify-between'} {!hasActiveChildren ? 'disabled' : ''} {collapsed && childInfo.isCurrentSection ? 'active' : ''}"
             title={collapsed ? section.name : ""}
           >
             <div class="flex items-center {collapsed ? '' : 'space-x-3'}">
@@ -229,9 +220,7 @@
             </div>
             {#if !collapsed}
               <svg
-                class="w-4 h-4 transform transition-transform duration-200 {expandedSections.has(
-                  sectionKey,
-                )
+                class="w-4 h-4 transform transition-transform duration-200 {isSectionExpanded(sectionKey)
                   ? 'rotate-90'
                   : ''}"
                 fill="none"
@@ -245,11 +234,33 @@
                   d="M9 5l7 7-7 7"
                 />
               </svg>
+            {:else}
+              <!-- Dot indicators for collapsed mode -->
+              {#if childInfo.count > 1}
+                <div class="flex justify-center gap-1 mt-1.5">
+                  {#each Array(childInfo.count) as _, i}
+                    <div
+                      class="w-1.5 h-1.5 rounded-full transition-colors {i === childInfo.currentIndex
+                        ? 'bg-primary'
+                        : 'bg-muted-foreground/30'}"
+                    ></div>
+                  {/each}
+                </div>
+              {:else if childInfo.count === 1}
+                <!-- Single active child - show one dot when active -->
+                <div class="flex justify-center mt-1.5">
+                  <div
+                    class="w-1.5 h-1.5 rounded-full transition-colors {childInfo.isCurrentSection
+                      ? 'bg-primary'
+                      : 'bg-muted-foreground/30'}"
+                  ></div>
+                </div>
+              {/if}
             {/if}
           </button>
 
           <!-- Section Items -->
-          {#if expandedSections.has(sectionKey) && !collapsed}
+          {#if isSectionExpanded(sectionKey) && !collapsed}
             <div class="mt-2 space-y-1">
               {#each Object.entries(section.children) as [_childKey, child] (_childKey)}
                 {@const SvelteComponent_2 = getIconComponent(child.icon)}
@@ -271,12 +282,6 @@
                     <span class="badge badge-danger text-xs">{child.tier}</span>
                   {/if}
 
-                  <!-- Active indicator -->
-                  {#if resolve(child.href) === currentPath}
-                    <div
-                      class="w-2 h-2 bg-tokyo-night-blue rounded-full ml-2"
-                    ></div>
-                  {/if}
                 </button>
               {/each}
             </div>

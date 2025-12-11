@@ -1,0 +1,62 @@
+query GetNodeEfficiency(
+  $nodeId: String!
+  $timeRange: TimeRangeInput
+  $first: Int = 100
+  $after: String
+  $noCache: Boolean = false
+) {
+  nodeMetricsConnection(
+    nodeId: $nodeId
+    timeRange: $timeRange
+    first: $first
+    after: $after
+    noCache: $noCache
+  ) @paginate {
+    edges {
+      cursor
+      node {
+        timestamp
+        nodeId
+        cpuUsage
+        memoryTotal
+        memoryUsed
+        diskTotal
+        diskUsed
+        shmTotal
+        shmUsed
+        networkRx
+        networkTx
+        status
+      }
+    }
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+    totalCount
+  }
+
+  routingEventsConnection(
+    timeRange: $timeRange
+    first: $first
+    after: $after
+    noCache: $noCache
+  ) {
+    edges {
+      cursor
+      node {
+        timestamp
+        streamName
+        selectedNode
+        score
+        status
+        clientCountry
+      }
+    }
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+    totalCount
+  }
+}

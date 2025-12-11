@@ -1,0 +1,11 @@
+query GetUsageRecords($timeRange: TimeRangeInput) {
+  usageRecords(timeRange: $timeRange) {
+    id
+    clusterId
+    clusterName
+    usageType
+    usageValue
+    billingMonth
+    createdAt
+  }
+}

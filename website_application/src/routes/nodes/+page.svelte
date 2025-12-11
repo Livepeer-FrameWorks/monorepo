@@ -1,19 +1,13 @@
-<script>
-  import { onMount, onDestroy } from "svelte";
+<script lang="ts">
+  import { onMount, onDestroy, untrack } from "svelte";
   import { auth } from "$lib/stores/auth";
-  import { infrastructureService } from "$lib/graphql/services/infrastructure.js";
+  import { GetNodesConnectionStore, SystemHealthStore } from "$houdini";
+  import type { SystemHealth$result } from "$houdini";
   import { toast } from "$lib/stores/toast.js";
   import LoadingCard from "$lib/components/LoadingCard.svelte";
   import SkeletonLoader from "$lib/components/SkeletonLoader.svelte";
   import EmptyState from "$lib/components/EmptyState.svelte";
   import { getIconComponent } from "$lib/iconUtils";
-  import {
-    Card,
-    CardContent,
-    CardHeader,
-    CardTitle,
-    CardDescription,
-  } from "$lib/components/ui/card";
   import { Input } from "$lib/components/ui/input";
   import { Button } from "$lib/components/ui/button";
   import {
@@ -23,21 +17,46 @@
     SelectItem,
   } from "$lib/components/ui/select";
 
-  let isAuthenticated = false;
-  let loading = $state(true);
+  // Icons
+  const ServerIcon = getIconComponent("Server");
+  const HardDriveIcon = getIconComponent("HardDrive");
+  const SearchIcon = getIconComponent("Search");
+  const RefreshCwIcon = getIconComponent("RefreshCw");
 
-  // Node management data
-  let nodes = $state([]);
-  let systemHealthSubscription = null;
-  let systemHealth = $state({});
+  // Houdini stores
+  const nodesStore = new GetNodesConnectionStore();
+  const systemHealthSub = new SystemHealthStore();
+
+  // Pagination state
+  let loadingMore = $state(false);
+
+  // System health type from subscription
+  type SystemHealthEvent = NonNullable<SystemHealth$result["systemHealth"]>;
+  type SystemHealthWithTimestamp = Omit<SystemHealthEvent, 'timestamp'> & { timestamp: Date };
+
+  let isAuthenticated = false;
+
+  // Derived state from Houdini stores
+  let loading = $derived($nodesStore.fetching);
+  let nodes = $derived(
+    $nodesStore.data?.nodesConnection?.edges?.map(e => e.node) ?? []
+  );
+  let hasMoreNodes = $derived(
+    $nodesStore.data?.nodesConnection?.pageInfo?.hasNextPage ?? false
+  );
+  let totalNodeCount = $derived(
+    $nodesStore.data?.nodesConnection?.totalCount ?? 0
+  );
+  let systemHealth = $state<Record<string, SystemHealthWithTimestamp>>({});
 
   // Filters and search
   let searchTerm = $state("");
   let statusFilter = $state("all");
   let clusterFilter = $state("all");
-  let sortBy = $state("name");
-  let sortOrder = $state("asc");
-  const statusFilterLabels = {
+  let sortBy = $state<"nodeName" | "clusterId" | "region" | "status" | "health">("nodeName");
+  let sortOrder = $state<"asc" | "desc">("asc");
+
+  const statusFilterLabels: Record<string, string> = {
     all: "All Status",
     healthy: "Healthy",
     degraded: "Degraded",
@@ -55,87 +74,121 @@
       await auth.checkAuth();
     }
     await loadNodeData();
-    startSystemHealthSubscription();
+    systemHealthSub.listen();
   });
 
   onDestroy(() => {
-    if (systemHealthSubscription) {
-      systemHealthSubscription.unsubscribe();
-    }
+    systemHealthSub.unlisten();
   });
 
   async function loadNodeData() {
     try {
-      loading = true;
+      await nodesStore.fetch();
 
-      const nodesData = await infrastructureService.getNodes().catch(() => []);
-
-      nodes = nodesData || [];
+      if ($nodesStore.errors?.length) {
+        console.error("Failed to load node data:", $nodesStore.errors);
+        toast.error("Failed to load node data. Please refresh the page.");
+      }
     } catch (error) {
       console.error("Failed to load node data:", error);
       toast.error("Failed to load node data. Please refresh the page.");
-    } finally {
-      loading = false;
     }
   }
 
-  function startSystemHealthSubscription() {
-    systemHealthSubscription = infrastructureService.subscribeToSystemHealth({
-      onSystemHealth: (healthData) => {
-        systemHealth[healthData.nodeId] = {
-          ...healthData,
-          timestamp: new Date(healthData.timestamp),
-        };
-        systemHealth = { ...systemHealth };
-      },
-      onError: (error) => {
-        console.error("System health subscription failed:", error);
-        toast.warning(
-          "Real-time monitoring disconnected. Data may be outdated.",
-        );
-      },
-    });
+  async function loadMoreNodes() {
+    if (!hasMoreNodes || loadingMore) return;
+
+    loadingMore = true;
+    try {
+      await nodesStore.loadNextPage();
+    } catch (err) {
+      console.error("Failed to load more nodes:", err);
+      toast.error("Failed to load more nodes");
+    } finally {
+      loadingMore = false;
+    }
   }
+
+  // Effect to handle system health subscription errors
+  $effect(() => {
+    const errors = $systemHealthSub.errors;
+    if (errors?.length) {
+      console.warn("System health subscription error:", errors);
+      // Non-fatal: page still works, just without real-time updates
+    }
+  });
+
+  // Effect to handle system health subscription updates
+  // Use untrack to prevent effect loops when mutating state
+  $effect(() => {
+    const healthData = $systemHealthSub.data?.systemHealth;
+    if (healthData) {
+      untrack(() => {
+        const nodeId = healthData.node;
+        if (nodeId) {
+          systemHealth[nodeId] = {
+            ...healthData,
+            timestamp: new Date(healthData.timestamp),
+          };
+          systemHealth = { ...systemHealth };
+        }
+      });
+    }
+  });
 
   // Helper functions
-  function getNodeStatus(nodeId) {
+  function getNodeStatus(nodeId: string) {
+    // First check real-time subscription data
     const health = systemHealth[nodeId];
-    if (!health) return "UNKNOWN";
-    return health.status;
+    if (health) return health.status;
+
+    // Fallback to database status from the node record
+    const node = nodes.find((n) => n.id === nodeId);
+    if (node?.status) {
+      // Normalize database status to match subscription format
+      const dbStatus = node.status.toLowerCase();
+      if (dbStatus === "active" || dbStatus === "online") return "HEALTHY";
+      if (dbStatus === "degraded") return "DEGRADED";
+      if (dbStatus === "inactive" || dbStatus === "offline") return "UNHEALTHY";
+      return node.status.toUpperCase();
+    }
+
+    return "UNKNOWN";
   }
 
-  function getNodeHealthScore(nodeId) {
+  function getNodeHealthScore(nodeId: string) {
     const health = systemHealth[nodeId];
     if (!health) return 0;
-    return Math.round(health.healthScore * 100);
+    return health.isHealthy ? 100 : 0;
   }
 
-  function formatCpuUsage(nodeId) {
+  function formatCpuUsage(nodeId: string) {
     const health = systemHealth[nodeId];
     if (!health) return "0%";
-    return `${Math.round(health.cpuUsage)}%`;
+    return `${(health.cpuTenths / 10).toFixed(1)}%`;
   }
 
-  function formatMemoryUsage(nodeId) {
+  function formatMemoryUsage(nodeId: string) {
     const health = systemHealth[nodeId];
-    if (!health) return "0%";
-    return `${Math.round(health.memoryUsage)}%`;
+    if (!health || !health.ramMax) return "0%";
+    const percent = (health.ramCurrent! / health.ramMax) * 100;
+    return `${Math.round(percent)}%`;
   }
 
-  function getStatusColor(status) {
+  function getStatusColor(status: string | undefined) {
     switch (status?.toLowerCase()) {
       case "healthy":
-        return "text-green-500 bg-green-500/20";
+        return "text-success bg-success/20";
       case "degraded":
-        return "text-yellow-500 bg-yellow-500/20";
+        return "text-warning bg-warning/20";
       case "unhealthy":
-        return "text-red-500 bg-red-500/20";
+        return "text-error bg-error/20";
       default:
-        return "text-gray-500 bg-gray-500/20";
+        return "text-muted-foreground bg-muted";
     }
   }
 
-  function getStatusIcon(status) {
+  function getStatusIcon(status: string | undefined) {
     switch (status?.toLowerCase()) {
       case "healthy":
         return "CheckCircle";
@@ -154,26 +207,26 @@
       .filter((node) => {
         const matchesSearch =
           searchTerm === "" ||
-          node.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+          node.nodeName.toLowerCase().includes(searchTerm.toLowerCase()) ||
           node.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          (node.ipAddress && node.ipAddress.includes(searchTerm));
+          (node.externalIp && node.externalIp.includes(searchTerm));
 
         const matchesStatus =
           statusFilter === "all" ||
           getNodeStatus(node.id).toLowerCase() === statusFilter;
 
         const matchesCluster =
-          clusterFilter === "all" || node.cluster === clusterFilter;
+          clusterFilter === "all" || node.clusterId === clusterFilter;
 
         return matchesSearch && matchesStatus && matchesCluster;
       })
       .sort((a, b) => {
-        let aVal, bVal;
+        let aVal: string | number | undefined, bVal: string | number | undefined;
 
         switch (sortBy) {
-          case "name":
-            aVal = a.name;
-            bVal = b.name;
+          case "nodeName":
+            aVal = a.nodeName;
+            bVal = b.nodeName;
             break;
           case "status":
             aVal = getNodeStatus(a.id);
@@ -183,18 +236,18 @@
             aVal = getNodeHealthScore(a.id);
             bVal = getNodeHealthScore(b.id);
             break;
-          case "cluster":
-            aVal = a.cluster || "";
-            bVal = b.cluster || "";
+          case "clusterId":
+            aVal = a.clusterId || "";
+            bVal = b.clusterId || "";
             break;
           case "region":
             aVal = a.region || "";
             bVal = b.region || "";
             break;
-          default:
-            aVal = a[sortBy];
-            bVal = b[sortBy];
         }
+
+        if (aVal === undefined) aVal = "";
+        if (bVal === undefined) bVal = "";
 
         if (sortOrder === "asc") {
           return aVal < bVal ? -1 : aVal > bVal ? 1 : 0;
@@ -203,10 +256,12 @@
         }
       }),
   );
+
   // Get unique clusters for filter
   let uniqueClusters = $derived([
-    ...new Set(nodes.map((n) => n.cluster).filter(Boolean)),
+    ...new Set(nodes.map((n) => n.clusterId).filter(Boolean)),
   ]);
+
   // Stats
   let nodeStats = $derived({
     total: nodes.length,
@@ -223,202 +278,221 @@
       (n) => getNodeStatus(n.id).toLowerCase() === "unknown",
     ).length,
   });
+
+  // Sort icon
+  let SortIcon = $derived(getIconComponent(sortOrder === "asc" ? "ArrowUp" : "ArrowDown"));
 </script>
 
 <svelte:head>
   <title>Node Management - FrameWorks</title>
 </svelte:head>
 
-<div class="min-h-screen bg-tokyo-night-bg text-tokyo-night-fg">
-  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-    <!-- Header -->
-    <div class="mb-8">
-      <h1 class="text-3xl font-bold text-tokyo-night-blue mb-2">
-        Node Management
-      </h1>
-      <p class="text-tokyo-night-comment">
-        Monitor and manage your Edge nodes worldwide
-      </p>
-    </div>
-
-    {#if loading}
-      <!-- Loading state -->
-      <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
-        {#each Array.from({ length: 4 }) as _, index (index)}
-          <div class="bg-tokyo-night-surface rounded-lg p-4">
-            <SkeletonLoader type="text" className="w-16 mb-2" />
-            <SkeletonLoader type="text-lg" className="w-8" />
-          </div>
-        {/each}
+<div class="h-full flex flex-col">
+  <!-- Fixed Page Header -->
+  <div class="px-4 sm:px-6 lg:px-8 py-4 border-b border-border shrink-0">
+    <div class="flex items-center gap-3">
+      <HardDriveIcon class="w-5 h-5 text-primary" />
+      <div>
+        <h1 class="text-xl font-bold text-foreground">Nodes</h1>
+        <p class="text-sm text-muted-foreground">
+          Monitor and manage your Edge nodes worldwide
+        </p>
       </div>
+    </div>
+  </div>
 
-      <div class="bg-tokyo-night-surface rounded-lg p-6">
-        <SkeletonLoader type="text-lg" className="w-32 mb-4" />
-        <div class="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
-          {#each Array.from({ length: 6 }) as _, index (index)}
-            <LoadingCard variant="infrastructure" />
-          {/each}
+  <!-- Scrollable Content -->
+  <div class="flex-1 overflow-y-auto">
+  {#if loading}
+    <!-- Loading state -->
+    <div class="dashboard-grid">
+      <div class="slab col-span-full">
+        <div class="slab-header">
+          <SkeletonLoader type="text-lg" class="w-32" />
+        </div>
+        <div class="slab-body--padded">
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+            {#each Array.from({ length: 4 }) as _, index (index)}
+              <div class="p-4 border border-border/50">
+                <SkeletonLoader type="text" class="w-16 mb-2" />
+                <SkeletonLoader type="text-lg" class="w-8" />
+              </div>
+            {/each}
+          </div>
+          <div class="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
+            {#each Array.from({ length: 6 }) as _, index (index)}
+              <LoadingCard variant="infrastructure" />
+            {/each}
+          </div>
         </div>
       </div>
-    {:else}
+    </div>
+  {:else}
+    <div class="dashboard-grid">
       <!-- Stats Cards -->
-      <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-        <Card class="border border-tokyo-night-selection">
-          <CardContent class="p-4">
-            <div class="text-2xl font-bold text-tokyo-night-blue mb-1">
-              {nodeStats.total}
+      <div class="slab col-span-full">
+        <div class="slab-header">
+          <div class="flex items-center gap-2">
+            <ServerIcon class="w-4 h-4 text-info" />
+            <h3>Node Overview</h3>
+          </div>
+        </div>
+        <div class="slab-body--padded">
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div class="p-4 border border-border/50">
+              <div class="text-2xl font-bold text-primary mb-1">
+                {nodeStats.total}
+              </div>
+              <p class="text-sm text-muted-foreground">Total Nodes</p>
             </div>
-            <CardDescription>Total Nodes</CardDescription>
-          </CardContent>
-        </Card>
-        <Card class="border border-tokyo-night-selection">
-          <CardContent class="p-4">
-            <div class="text-2xl font-bold text-green-500 mb-1">
-              {nodeStats.healthy}
+            <div class="p-4 border border-border/50">
+              <div class="text-2xl font-bold text-success mb-1">
+                {nodeStats.healthy}
+              </div>
+              <p class="text-sm text-muted-foreground">Healthy</p>
             </div>
-            <CardDescription>Healthy</CardDescription>
-          </CardContent>
-        </Card>
-        <Card class="border border-tokyo-night-selection">
-          <CardContent class="p-4">
-            <div class="text-2xl font-bold text-yellow-500 mb-1">
-              {nodeStats.degraded}
+            <div class="p-4 border border-border/50">
+              <div class="text-2xl font-bold text-warning mb-1">
+                {nodeStats.degraded}
+              </div>
+              <p class="text-sm text-muted-foreground">Degraded</p>
             </div>
-            <CardDescription>Degraded</CardDescription>
-          </CardContent>
-        </Card>
-        <Card class="border border-tokyo-night-selection">
-          <CardContent class="p-4">
-            <div class="text-2xl font-bold text-red-500 mb-1">
-              {nodeStats.unhealthy + nodeStats.unknown}
+            <div class="p-4 border border-border/50">
+              <div class="text-2xl font-bold text-destructive mb-1">
+                {nodeStats.unhealthy + nodeStats.unknown}
+              </div>
+              <p class="text-sm text-muted-foreground">Issues</p>
             </div>
-            <CardDescription>Issues</CardDescription>
-          </CardContent>
-        </Card>
+          </div>
+        </div>
       </div>
 
       <!-- Filters and Search -->
-      {@const SvelteComponent = getIconComponent("Search")}
-      {@const SvelteComponent_1 = getIconComponent(
-        sortOrder === "asc" ? "ArrowUp" : "ArrowDown",
-      )}
-      <div class="bg-tokyo-night-surface rounded-lg p-6 mb-8">
-        <div class="grid grid-cols-1 md:grid-cols-5 gap-4">
-          <!-- Search -->
-          <div class="md:col-span-2">
-            <label
-              for="node-search"
-              class="block text-sm font-medium text-tokyo-night-comment mb-1"
-            >
-              Search Nodes
-            </label>
-            <div class="relative">
-              <Input
-                id="node-search"
-                type="text"
-                bind:value={searchTerm}
-                placeholder="Name, ID, or IP address..."
-                class="pl-10"
-              />
-              <SvelteComponent
-                class="absolute left-3 top-2.5 w-4 h-4 text-tokyo-night-comment"
-              />
+      <div class="slab col-span-full">
+        <div class="slab-header">
+          <div class="flex items-center gap-2">
+            <SearchIcon class="w-4 h-4 text-muted-foreground" />
+            <h3>Filters</h3>
+          </div>
+        </div>
+        <div class="slab-body--padded">
+          <div class="grid grid-cols-1 md:grid-cols-5 gap-4">
+            <!-- Search -->
+            <div class="md:col-span-2">
+              <label
+                for="node-search"
+                class="block text-sm font-medium text-muted-foreground mb-1"
+              >
+                Search Nodes
+              </label>
+              <div class="relative">
+                <Input
+                  id="node-search"
+                  type="text"
+                  bind:value={searchTerm}
+                  placeholder="Name, ID, or IP address..."
+                  class="pl-10"
+                />
+                <SearchIcon
+                  class="absolute left-3 top-2.5 w-4 h-4 text-muted-foreground"
+                />
+              </div>
             </div>
-          </div>
 
-          <!-- Status Filter -->
-          <div>
-            <label
-              for="status-filter"
-              class="block text-sm font-medium text-tokyo-night-comment mb-1"
-            >
-              Status
-            </label>
-            <Select bind:value={statusFilter}>
-              <SelectTrigger class="w-full" id="status-filter">
-                {statusFilterLabels[statusFilter] ?? "All Status"}
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Status</SelectItem>
-                <SelectItem value="healthy">Healthy</SelectItem>
-                <SelectItem value="degraded">Degraded</SelectItem>
-                <SelectItem value="unhealthy">Unhealthy</SelectItem>
-                <SelectItem value="unknown">Unknown</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-
-          <!-- Cluster Filter -->
-          <div>
-            <label
-              for="cluster-filter"
-              class="block text-sm font-medium text-tokyo-night-comment mb-1"
-            >
-              Cluster
-            </label>
-            <Select bind:value={clusterFilter}>
-              <SelectTrigger class="w-full" id="cluster-filter">
-                {clusterFilter === "all" ? "All Clusters" : clusterFilter}
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Clusters</SelectItem>
-                {#each uniqueClusters as cluster (cluster)}
-                  <SelectItem value={cluster}>{cluster}</SelectItem>
-                {/each}
-              </SelectContent>
-            </Select>
-          </div>
-
-          <!-- Sort -->
-          <div>
-            <label
-              for="sort-select"
-              class="block text-sm font-medium text-tokyo-night-comment mb-1"
-            >
-              Sort By
-            </label>
-            <div class="flex gap-1">
-              <select
-                id="sort-select"
-                bind:value={sortBy}
-                class="flex-1 px-3 py-2 bg-tokyo-night-bg border border-tokyo-night-selection rounded-lg text-sm focus:border-tokyo-night-blue focus:ring-1 focus:ring-tokyo-night-blue"
+            <!-- Status Filter -->
+            <div>
+              <label
+                for="status-filter"
+                class="block text-sm font-medium text-muted-foreground mb-1"
               >
-                <option value="name">Name</option>
-                <option value="status">Status</option>
-                <option value="health">Health</option>
-                <option value="cluster">Cluster</option>
-                <option value="region">Region</option>
-              </select>
-              <button
-                onclick={() =>
-                  (sortOrder = sortOrder === "asc" ? "desc" : "asc")}
-                class="px-2 py-2 bg-tokyo-night-bg border border-tokyo-night-selection rounded-lg hover:bg-tokyo-night-selection transition-colors"
-                title={sortOrder === "asc"
-                  ? "Sort descending"
-                  : "Sort ascending"}
+                Status
+              </label>
+              <Select bind:value={statusFilter} type="single">
+                <SelectTrigger class="w-full" id="status-filter">
+                  {statusFilterLabels[statusFilter] ?? "All Status"}
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Status</SelectItem>
+                  <SelectItem value="healthy">Healthy</SelectItem>
+                  <SelectItem value="degraded">Degraded</SelectItem>
+                  <SelectItem value="unhealthy">Unhealthy</SelectItem>
+                  <SelectItem value="unknown">Unknown</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <!-- Cluster Filter -->
+            <div>
+              <label
+                for="cluster-filter"
+                class="block text-sm font-medium text-muted-foreground mb-1"
               >
-                <SvelteComponent_1 class="w-4 h-4" />
-              </button>
+                Cluster
+              </label>
+              <Select bind:value={clusterFilter} type="single">
+                <SelectTrigger class="w-full" id="cluster-filter">
+                  {clusterFilter === "all" ? "All Clusters" : clusterFilter}
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Clusters</SelectItem>
+                  {#each uniqueClusters as cluster (cluster)}
+                    <SelectItem value={cluster}>{cluster}</SelectItem>
+                  {/each}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <!-- Sort -->
+            <div>
+              <label
+                for="sort-select"
+                class="block text-sm font-medium text-muted-foreground mb-1"
+              >
+                Sort By
+              </label>
+              <div class="flex gap-1">
+                <select
+                  id="sort-select"
+                  bind:value={sortBy}
+                  class="flex-1 px-3 py-2 bg-background border border-border/50 text-sm focus:border-primary focus:ring-1 focus:ring-primary"
+                >
+                  <option value="nodeName">Name</option>
+                  <option value="status">Status</option>
+                  <option value="health">Health</option>
+                  <option value="clusterId">Cluster</option>
+                  <option value="region">Region</option>
+                </select>
+                <button
+                  onclick={() =>
+                    (sortOrder = sortOrder === "asc" ? "desc" : "asc")}
+                  class="px-2 py-2 bg-background border border-border/50 hover:bg-muted/50 transition-colors"
+                  title={sortOrder === "asc"
+                    ? "Sort descending"
+                    : "Sort ascending"}
+                >
+                  <SortIcon class="w-4 h-4" />
+                </button>
+              </div>
             </div>
           </div>
         </div>
       </div>
 
       <!-- Nodes Grid -->
-      {@const SvelteComponent_2 = getIconComponent("RefreshCw")}
-      <Card class="bg-tokyo-night-surface">
-        <CardHeader class="pb-0">
-          <div class="flex items-center justify-between">
-            <CardTitle class="text-tokyo-night-cyan text-xl">
-              Nodes ({filteredNodes.length})
-            </CardTitle>
-            <Button class="gap-2" on:click={loadNodeData} disabled={loading}>
-              <SvelteComponent_2 class="w-4 h-4" />
+      <div class="slab col-span-full">
+        <div class="slab-header">
+          <div class="flex items-center justify-between w-full">
+            <div class="flex items-center gap-2">
+              <ServerIcon class="w-4 h-4 text-info" />
+              <h3>Nodes ({filteredNodes.length}{#if hasMoreNodes} of {totalNodeCount}+{:else if totalNodeCount > 0} of {totalNodeCount}{/if})</h3>
+            </div>
+            <Button class="gap-2" onclick={loadNodeData} disabled={loading}>
+              <RefreshCwIcon class="w-4 h-4" />
               Refresh
             </Button>
           </div>
-        </CardHeader>
-        <CardContent class="mt-6">
+        </div>
+        <div class="slab-body--padded">
           {#if filteredNodes.length === 0}
             <EmptyState
               title={nodes.length === 0
@@ -430,136 +504,125 @@
               size="md"
               showAction={false}
             >
-              {@const SvelteComponent_3 = getIconComponent("Server")}
-              <SvelteComponent_3
-                class="w-12 h-12 text-tokyo-night-fg-dark mx-auto mb-4"
-              />
+              <ServerIcon class="w-6 h-6 text-muted-foreground mx-auto mb-4" />
             </EmptyState>
           {:else}
-            <div class="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
-              {#each filteredNodes as node (node.id ?? node.name ?? node.ipAddress)}
-                {@const SvelteComponent_4 = getIconComponent("Server")}
-                {@const SvelteComponent_5 = getIconComponent(
-                  getStatusIcon(getNodeStatus(node.id)),
-                )}
-                {@const SvelteComponent_6 = getIconComponent("Settings")}
-                {@const SvelteComponent_7 = getIconComponent("MoreHorizontal")}
-                <Card
-                  class="bg-tokyo-night-bg border border-tokyo-night-selection hover:border-tokyo-night-blue/50 transition-colors"
-                >
-                  <CardContent class="p-6 space-y-4">
-                    <!-- Node Header -->
-                    <div class="flex items-center justify-between mb-4">
-                      <div class="flex items-center gap-3">
-                        <div
-                          class="w-10 h-10 bg-tokyo-night-surface rounded-lg flex items-center justify-center"
-                        >
-                          <SvelteComponent_4
-                            class="w-5 h-5 text-tokyo-night-blue"
-                          />
-                        </div>
-                        <div>
-                          <h3 class="font-semibold text-tokyo-night-fg">
-                            {node.name}
-                          </h3>
-                          <p class="text-sm text-tokyo-night-comment">
-                            {node.type}
-                          </p>
-                        </div>
+            <div class="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
+              {#each filteredNodes as node (node.id ?? node.nodeName ?? node.externalIp)}
+                {@const StatusIcon = getIconComponent(getStatusIcon(getNodeStatus(node.id)))}
+                <div class="border border-border/50 p-4">
+                  <!-- Node Header -->
+                  <div class="flex items-center justify-between mb-4">
+                    <div class="flex items-center gap-3">
+                      <div
+                        class="w-10 h-10 border border-border/50 flex items-center justify-center"
+                      >
+                        <ServerIcon class="w-5 h-5 text-primary" />
                       </div>
-                      <div class="flex items-center gap-2">
-                        <span
-                          class="px-2 py-1 text-xs rounded-full {getStatusColor(
-                            getNodeStatus(node.id),
-                          )} flex items-center gap-1"
-                        >
-                          <SvelteComponent_5 class="w-3 h-3" />
-                          {getNodeStatus(node.id)}
-                        </span>
+                      <div>
+                        <h3 class="font-semibold text-foreground">
+                          {node.nodeName}
+                        </h3>
+                        <p class="text-sm text-muted-foreground">
+                          {node.nodeType}
+                        </p>
+                      </div>
+                    </div>
+                    <div class="flex items-center gap-2">
+                      <span
+                        class="px-2 py-1 text-xs {getStatusColor(getNodeStatus(node.id))} flex items-center gap-1"
+                      >
+                        <StatusIcon class="w-3 h-3" />
+                        {getNodeStatus(node.id)}
+                      </span>
+                    </div>
+                  </div>
+
+                  <!-- Node Details -->
+                  <div class="space-y-3">
+                    <div class="grid grid-cols-2 gap-4 text-sm">
+                      <div>
+                        <p class="text-muted-foreground">Region</p>
+                        <p class="font-medium">{node.region || "N/A"}</p>
+                      </div>
+                      <div>
+                        <p class="text-muted-foreground">Cluster</p>
+                        <p class="font-medium">{node.clusterId || "N/A"}</p>
+                      </div>
+                      <div>
+                        <p class="text-muted-foreground">IP Address</p>
+                        <p class="font-mono text-xs">
+                          {node.externalIp || "N/A"}
+                        </p>
+                      </div>
+                      <div>
+                        <p class="text-muted-foreground">Last Seen</p>
+                        <p class="text-xs">
+                          {node.lastHeartbeat ? new Date(node.lastHeartbeat).toLocaleString() : "N/A"}
+                        </p>
                       </div>
                     </div>
 
-                    <!-- Node Details -->
-                    <div class="space-y-3 mb-4">
-                      <div class="grid grid-cols-2 gap-4 text-sm">
-                        <div>
-                          <p class="text-tokyo-night-comment">Region</p>
-                          <p class="font-medium">{node.region || "N/A"}</p>
-                        </div>
-                        <div>
-                          <p class="text-tokyo-night-comment">Cluster</p>
-                          <p class="font-medium">{node.cluster || "N/A"}</p>
-                        </div>
-                        <div>
-                          <p class="text-tokyo-night-comment">IP Address</p>
-                          <p class="font-mono text-xs">
-                            {node.ipAddress || "N/A"}
-                          </p>
-                        </div>
-                        <div>
-                          <p class="text-tokyo-night-comment">Last Seen</p>
-                          <p class="text-xs">
-                            {new Date(node.lastSeen).toLocaleString()}
-                          </p>
-                        </div>
-                      </div>
-
-                      {#if systemHealth[node.id]}
-                        <!-- Real-time Metrics -->
-                        <div class="pt-3 border-t border-tokyo-night-selection">
-                          <div class="grid grid-cols-3 gap-4 text-sm">
-                            <div>
-                              <p class="text-tokyo-night-comment">CPU</p>
-                              <p class="font-medium">
-                                {formatCpuUsage(node.id)}
-                              </p>
-                            </div>
-                            <div>
-                              <p class="text-tokyo-night-comment">Memory</p>
-                              <p class="font-medium">
-                                {formatMemoryUsage(node.id)}
-                              </p>
-                            </div>
-                            <div>
-                              <p class="text-tokyo-night-comment">Health</p>
-                              <p class="font-medium">
-                                {getNodeHealthScore(node.id)}%
-                              </p>
-                            </div>
+                    {#if systemHealth[node.id]}
+                      <!-- Real-time Metrics -->
+                      <div class="pt-3 border-t border-border">
+                        <div class="grid grid-cols-3 gap-4 text-sm">
+                          <div>
+                            <p class="text-muted-foreground">CPU</p>
+                            <p class="font-medium">
+                              {formatCpuUsage(node.id)}
+                            </p>
                           </div>
-
-                          {#if systemHealth[node.id].diskUsage !== undefined}
-                            <div class="mt-2 text-xs text-tokyo-night-comment">
-                              Disk: {Math.round(
-                                systemHealth[node.id].diskUsage,
-                              )}% • Updated: {systemHealth[
-                                node.id
-                              ].timestamp?.toLocaleTimeString()}
-                            </div>
-                          {/if}
+                          <div>
+                            <p class="text-muted-foreground">Memory</p>
+                            <p class="font-medium">
+                              {formatMemoryUsage(node.id)}
+                            </p>
+                          </div>
+                          <div>
+                            <p class="text-muted-foreground">Health</p>
+                            <p class="font-medium">
+                              {getNodeHealthScore(node.id)}%
+                            </p>
+                          </div>
                         </div>
-                      {/if}
-                    </div>
 
-                    <!-- Node Actions -->
-                    <div class="flex gap-2">
-                      <Button class="flex-1" variant="outline">
-                        View Details
-                      </Button>
-                      <Button variant="outline" size="icon">
-                        <SvelteComponent_6 class="w-4 h-4" />
-                      </Button>
-                      <Button variant="outline" size="icon">
-                        <SvelteComponent_7 class="w-4 h-4" />
-                      </Button>
-                    </div>
-                  </CardContent>
-                </Card>
+                        {#if systemHealth[node.id].diskTotalBytes}
+                          <div class="mt-2 text-xs text-muted-foreground">
+                            Disk: {Math.round(
+                              (systemHealth[node.id].diskUsedBytes! / systemHealth[node.id].diskTotalBytes!) * 100,
+                            )}% • Updated: {systemHealth[
+                              node.id
+                            ].timestamp?.toLocaleTimeString()}
+                          </div>
+                        {/if}
+                      </div>
+                    {/if}
+                  </div>
+                </div>
               {/each}
             </div>
+
+            <!-- Load More Nodes -->
+            {#if hasMoreNodes}
+              <div class="flex justify-center py-6">
+                <Button
+                  variant="outline"
+                  onclick={loadMoreNodes}
+                  disabled={loadingMore}
+                >
+                  {#if loadingMore}
+                    Loading...
+                  {:else}
+                    Load More Nodes
+                  {/if}
+                </Button>
+              </div>
+            {/if}
           {/if}
-        </CardContent>
-      </Card>
-    {/if}
+        </div>
+      </div>
+    </div>
+  {/if}
   </div>
 </div>

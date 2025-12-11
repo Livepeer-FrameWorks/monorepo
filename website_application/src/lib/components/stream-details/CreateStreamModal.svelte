@@ -53,7 +53,7 @@
       <div>
         <label
           for="stream-title"
-          class="block text-sm font-medium text-tokyo-night-fg-dark mb-2"
+          class="block text-sm font-medium text-muted-foreground mb-2"
         >
           Stream Title *
         </label>
@@ -71,7 +71,7 @@
       <div>
         <label
           for="stream-description"
-          class="block text-sm font-medium text-tokyo-night-fg-dark mb-2"
+          class="block text-sm font-medium text-muted-foreground mb-2"
         >
           Description (Optional)
         </label>
@@ -93,11 +93,11 @@
         <div>
           <Label
             for="create-stream-record"
-            class="text-sm font-medium text-tokyo-night-fg"
+            class="text-sm font-medium text-foreground"
           >
             Enable Recording
           </Label>
-          <p class="text-xs text-tokyo-night-comment">
+          <p class="text-xs text-muted-foreground">
             Automatically record your stream to create VOD content
           </p>
         </div>

@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	sidecarcfg "frameworks/api_sidecar/internal/config"
@@ -1534,40 +1535,58 @@ func convertNodeAPIToMistTrigger(nodeID string, jsonData map[string]interface{},
 	}
 
 	if jsonData != nil {
-		// Extract CPU usage (tenths of percentage)
+		// Extract CPU usage (Mist provides integer percentage 0-100 or more)
 		if cpu, ok := jsonData["cpu"].(float64); ok {
-			nodeUpdate.CpuTenths = uint32(cpu * 10)
-		} else {
-			nodeUpdate.CpuTenths = 1000 // Default to 100%
+			nodeUpdate.CpuTenths = uint32(cpu * 10) // Convert % to tenths (e.g. 14% -> 140)
 		}
 
-		// Extract RAM info
-		if ram, ok := jsonData["ram"].(map[string]interface{}); ok {
+		// Extract RAM info (Mist provides bytes)
+		if memTotal, ok := jsonData["mem_total"].(float64); ok {
+			nodeUpdate.RamMax = uint64(memTotal) // Bytes
+		} else if ram, ok := jsonData["ram"].(map[string]interface{}); ok {
+			// Fallback to old 'ram' object if 'mem_total' missing
 			if max, ok := ram["max"].(float64); ok {
 				nodeUpdate.RamMax = uint64(max)
-			} else {
-				nodeUpdate.RamMax = 8 * 1024 * 1024 * 1024 // Default 8GB
 			}
+		}
+
+		if memUsed, ok := jsonData["mem_used"].(float64); ok {
+			nodeUpdate.RamCurrent = uint64(memUsed) // Bytes
+		} else if ram, ok := jsonData["ram"].(map[string]interface{}); ok {
+			// Fallback
 			if current, ok := ram["current"].(float64); ok {
 				nodeUpdate.RamCurrent = uint64(current)
-			} else {
-				nodeUpdate.RamCurrent = 4 * 1024 * 1024 * 1024 // Default 4GB
 			}
+		}
+
+		// Extract Shared Memory info
+		if shmTotal, ok := jsonData["shm_total"].(float64); ok {
+			nodeUpdate.ShmTotalBytes = uint64(shmTotal)
+		}
+		if shmUsed, ok := jsonData["shm_used"].(float64); ok {
+			nodeUpdate.ShmUsedBytes = uint64(shmUsed)
 		}
 
 		// Extract bandwidth info
-		if bw, ok := jsonData["bandwidth"].(map[string]interface{}); ok {
-			if up, ok := bw["up"].(float64); ok {
+		if bw, ok := jsonData["bw"].([]interface{}); ok && len(bw) >= 2 {
+			if up, ok := bw[0].(float64); ok {
 				nodeUpdate.UpSpeed = uint64(up)
 			}
-			if down, ok := bw["down"].(float64); ok {
+			if down, ok := bw[1].(float64); ok {
 				nodeUpdate.DownSpeed = uint64(down)
 			}
-			if limit, ok := bw["limit"].(float64); ok {
-				nodeUpdate.BwLimit = uint64(limit)
-			} else {
-				nodeUpdate.BwLimit = 128 * 1024 * 1024 // Default 1Gbps
+		} else if bandwidth, ok := jsonData["bandwidth"].(map[string]interface{}); ok {
+			// Fallback to old 'bandwidth' object
+			if up, ok := bandwidth["up"].(float64); ok {
+				nodeUpdate.UpSpeed = uint64(up)
 			}
+			if down, ok := bandwidth["down"].(float64); ok {
+				nodeUpdate.DownSpeed = uint64(down)
+			}
+		}
+
+		if limit, ok := jsonData["bwlimit"].(float64); ok {
+			nodeUpdate.BwLimit = uint64(limit)
 		}
 
 		// Extract location data
@@ -1591,6 +1610,48 @@ func convertNodeAPIToMistTrigger(nodeID string, jsonData map[string]interface{},
 		}
 	}
 
+	// Get Disk Usage from OS
+	// Default to /var/lib/mistserver or / if env not set
+	storagePath := os.Getenv("HELMSMAN_STORAGE_LOCAL_PATH")
+	if storagePath == "" {
+		storagePath = "/var/lib/mistserver"
+	}
+	// Ensure path exists or fallback to root
+	if _, err := os.Stat(storagePath); os.IsNotExist(err) {
+		storagePath = "/"
+	}
+
+	if total, used, err := getDiskUsage(storagePath); err == nil {
+		nodeUpdate.DiskTotalBytes = total
+		nodeUpdate.DiskUsedBytes = used
+	} else {
+		logger.WithError(err).Warn("Failed to get disk usage")
+	}
+
+	// Determine node health based on resource utilization thresholds
+	// Matches MistUtilHealth logic: CPU > 90%, RAM > 90%, SHM > 90% = degraded
+	cpuPercent := float64(nodeUpdate.CpuTenths) / 10.0
+	memPercent := float64(0)
+	if nodeUpdate.RamMax > 0 {
+		memPercent = float64(nodeUpdate.RamCurrent) / float64(nodeUpdate.RamMax) * 100
+	}
+	shmPercent := float64(0)
+	if nodeUpdate.ShmTotalBytes > 0 {
+		shmPercent = float64(nodeUpdate.ShmUsedBytes) / float64(nodeUpdate.ShmTotalBytes) * 100
+	}
+
+	// Node is healthy if: we got MistServer data AND CPU <= 90% AND RAM <= 90% AND SHM <= 90%
+	isHealthy := jsonData != nil && cpuPercent <= 90 && memPercent <= 90 && shmPercent <= 90
+	nodeUpdate.IsHealthy = isHealthy
+
+	logger.WithFields(logging.Fields{
+		"node_id":     nodeID,
+		"cpu_percent": cpuPercent,
+		"mem_percent": memPercent,
+		"shm_percent": shmPercent,
+		"is_healthy":  isHealthy,
+	}).Debug("Node health determination")
+
 	return &pb.MistTrigger{
 		TriggerType: "NODE_LIFECYCLE_UPDATE",
 		NodeId:      nodeID,
@@ -1601,6 +1662,21 @@ func convertNodeAPIToMistTrigger(nodeID string, jsonData map[string]interface{},
 			NodeLifecycleUpdate: nodeUpdate,
 		},
 	}
+}
+
+// getDiskUsage returns total and used bytes for the file system containing path
+func getDiskUsage(path string) (total, used uint64, err error) {
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(path, &stat); err != nil {
+		return 0, 0, err
+	}
+
+	// Available blocks * size per block = available space in bytes
+	// Total blocks * size per block = total space in bytes
+	total = stat.Blocks * uint64(stat.Bsize)
+	free := stat.Bfree * uint64(stat.Bsize)
+	used = total - free
+	return total, used, nil
 }
 
 // enrichNodeLifecycleTrigger enriches node lifecycle trigger with Helmsman-specific data
@@ -1710,6 +1786,8 @@ func convertStreamAPIToMistTrigger(nodeID, streamName, internalName string, stre
 	var qualityTier string
 	var primaryWidth, primaryHeight int32
 	var primaryFPS float64
+	var primaryBitrate int32
+	var primaryCodec string
 
 	if len(trackDetails) > 0 {
 		for _, track := range trackDetails {
@@ -1723,18 +1801,49 @@ func convertStreamAPIToMistTrigger(nodeID, streamName, internalName string, stre
 				if fps, ok := track["fps"].(float64); ok {
 					primaryFPS = fps
 				}
-				// Determine quality tier based on resolution
-				if primaryWidth > 0 && primaryHeight > 0 {
+				if bitrate, ok := track["bitrate_kbps"].(int); ok {
+					primaryBitrate = int32(bitrate)
+				}
+				if codec, ok := track["codec"].(string); ok {
+					primaryCodec = codec
+				}
+				// Build rich quality tier label: "1080p60 H264 @ 6Mbps"
+				if primaryHeight > 0 {
+					// Resolution tier
+					var resolution string
 					if primaryHeight >= 2160 {
-						qualityTier = "4K"
+						resolution = "4K"
+					} else if primaryHeight >= 1440 {
+						resolution = "1440p"
 					} else if primaryHeight >= 1080 {
-						qualityTier = "1080p"
+						resolution = "1080p"
 					} else if primaryHeight >= 720 {
-						qualityTier = "720p"
+						resolution = "720p"
 					} else if primaryHeight >= 480 {
-						qualityTier = "480p"
+						resolution = "480p"
 					} else {
-						qualityTier = "SD"
+						resolution = "SD"
+					}
+
+					// Append FPS if available
+					if primaryFPS > 0 {
+						resolution = fmt.Sprintf("%s%d", resolution, int(primaryFPS+0.5))
+					}
+
+					qualityTier = resolution
+
+					// Add codec if available
+					if primaryCodec != "" {
+						qualityTier += " " + primaryCodec
+					}
+
+					// Add bitrate if available
+					if primaryBitrate > 0 {
+						if primaryBitrate >= 1000 {
+							qualityTier += fmt.Sprintf(" @ %.1fMbps", float64(primaryBitrate)/1000)
+						} else {
+							qualityTier += fmt.Sprintf(" @ %dkbps", primaryBitrate)
+						}
 					}
 				}
 				break
@@ -1742,8 +1851,7 @@ func convertStreamAPIToMistTrigger(nodeID, streamName, internalName string, stre
 		}
 	}
 
-	// Calculate health score based on track quality
-	healthScore := 100.0
+	// Detect issues from raw signals (no derived health score)
 	hasIssues := false
 	var issuesDesc []string
 
@@ -1755,39 +1863,27 @@ func convertStreamAPIToMistTrigger(nodeID, streamName, internalName string, stre
 		}
 	}
 
-	// Factor in packet loss
+	// Check for high packet loss
 	if packetLossRatio > 0.05 {
-		healthScore -= 30
 		hasIssues = true
 		issuesDesc = append(issuesDesc, fmt.Sprintf("High packet loss: %.2f%%", packetLossRatio*100))
 	} else if packetLossRatio > 0.01 {
-		healthScore -= 10
 		hasIssues = true
 		issuesDesc = append(issuesDesc, fmt.Sprintf("Moderate packet loss: %.2f%%", packetLossRatio*100))
 	}
 
 	for _, track := range trackDetails {
 		if jitter, ok := track["jitter"].(int); ok && jitter > 100 {
-			healthScore -= 20
 			hasIssues = true
 			issuesDesc = append(issuesDesc, fmt.Sprintf("High jitter on track %v", track["track_name"]))
 		}
 		if buffer, ok := track["buffer"].(int); ok && buffer < 50 {
-			healthScore -= 15
 			hasIssues = true
 			issuesDesc = append(issuesDesc, fmt.Sprintf("Low buffer on track %v", track["track_name"]))
 		}
 	}
 
-	if healthScore < 0 {
-		healthScore = 0
-	}
-
-	// Set quality and health fields
-	if healthScore > 0 {
-		healthScoreFloat32 := float32(healthScore)
-		streamLifecycleUpdate.HealthScore = &healthScoreFloat32
-	}
+	// Set issue indicators
 	streamLifecycleUpdate.HasIssues = &hasIssues
 	if len(issuesDesc) > 0 {
 		issues := strings.Join(issuesDesc, "; ")
@@ -1805,6 +1901,9 @@ func convertStreamAPIToMistTrigger(nodeID, streamName, internalName string, stre
 	if primaryFPS > 0 {
 		primaryFPSFloat32 := float32(primaryFPS)
 		streamLifecycleUpdate.PrimaryFps = &primaryFPSFloat32
+	}
+	if primaryBitrate > 0 {
+		streamLifecycleUpdate.PrimaryBitrate = &primaryBitrate
 	}
 
 	return &pb.MistTrigger{

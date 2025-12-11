@@ -16,7 +16,8 @@ function createToastStore() {
     subscribe,
 
     add(type: ToastType, message: string, duration: number = 5000): string {
-      const id = Date.now().toString() + Math.random().toString(36).substr(2, 9);
+      const id =
+        Date.now().toString() + Math.random().toString(36).substr(2, 9);
       const toast: Toast = { id, type, message, duration };
 
       update((toasts) => [...toasts, toast]);

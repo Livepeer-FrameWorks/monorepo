@@ -1,9 +1,89 @@
 # Infrastructure management queries
+
+# Fragments for reusable field selections
+fragment NodeFields on Node {
+  id
+  nodeName
+  clusterId
+  nodeType
+  status
+  region
+  externalIp
+  internalIp
+  wireguardIp
+  availabilityZone
+  cpuCores
+  memoryGb
+  diskGb
+  lastHeartbeat
+  createdAt
+  latitude
+  longitude
+}
+
+fragment ClusterFields on Cluster {
+  id
+  clusterId
+  clusterName
+  healthStatus
+  createdAt
+  isDefaultCluster
+  isSubscribed
+}
+
+fragment NodeMetricHourlyFields on NodeMetricHourly {
+  timestamp
+  nodeId
+  avgCpu
+  peakCpu
+  avgMemory
+  peakMemory
+  avgDisk
+  peakDisk
+  totalBandwidthIn
+  totalBandwidthOut
+  wasHealthy
+}
+
+# Combined query for infrastructure dashboard - fetches all data in one request
+query GetInfrastructureOverview($timeRange: TimeRangeInput, $first: Int = 100, $noCache: Boolean = false) {
+  tenant {
+    id
+    name
+    cluster
+    createdAt
+  }
+
+  clusters {
+    ...ClusterFields
+    nodes {
+      ...NodeFields
+    }
+  }
+
+  nodes {
+    ...NodeFields
+  }
+
+  # Node metrics for performance data (1-hour aggregates)
+  nodeMetrics1hConnection(timeRange: $timeRange, first: $first, noCache: $noCache) {
+    edges {
+      node {
+        ...NodeMetricHourlyFields
+      }
+    }
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+    totalCount
+  }
+}
+
 query GetTenant {
   tenant {
     id
     name
-    settings
     cluster
     createdAt
   }
@@ -11,82 +91,96 @@ query GetTenant {
 
 query GetClusters {
   clusters {
-    id
-    name
-    region
-    status
-    createdAt
+    ...ClusterFields
     nodes {
       id
-      name
-      type
+      nodeName
+      clusterId
+      nodeType
       status
       region
-      ipAddress
-      lastSeen
+      externalIp
+      lastHeartbeat
       createdAt
       latitude
       longitude
-      location
     }
   }
 }
 
 query GetCluster($id: ID!) {
   cluster(id: $id) {
-    id
-    name
-    region
-    status
-    createdAt
+    ...ClusterFields
     nodes {
       id
-      name
-      cluster
-      type
+      nodeName
+      clusterId
+      nodeType
       status
       region
-      ipAddress
-      lastSeen
+      externalIp
+      lastHeartbeat
       createdAt
       latitude
       longitude
-      location
     }
+  }
+}
+
+query GetClustersAvailable {
+  clustersAvailable {
+    clusterId
+    clusterName
+    tiers
+    autoEnroll
+  }
+}
+
+# Clusters the current tenant can access (owner or subscriber)
+query GetClustersAccess {
+  clustersAccess {
+    clusterId
+    clusterName
+    accessLevel
+    resourceLimits
+  }
+}
+
+query GetMySubscriptions {
+  mySubscriptions {
+    ...ClusterFields
   }
 }
 
 query GetNodes {
   nodes {
     id
-    name
-    cluster
-    type
+    nodeName
+    clusterId
+    nodeType
     status
     region
-    ipAddress
-    lastSeen
+    externalIp
+    lastHeartbeat
     createdAt
     latitude
     longitude
-    location
   }
 }
 
 query GetNode($id: ID!) {
   node(id: $id) {
     id
-    name
-    cluster
-    type
+    nodeName
+    clusterId
+    nodeType
     status
     region
-    ipAddress
-    lastSeen
+    externalIp
+    lastHeartbeat
     createdAt
     latitude
     longitude
-    location
   }
 }
 
@@ -111,28 +205,5 @@ fragment ServiceInstanceInfo on ServiceInstance {
 query GetServiceInstances($clusterId: String) {
   serviceInstances(clusterId: $clusterId) {
     ...ServiceInstanceInfo
-  }
-}
-
-# Tenant Cluster Assignments queries
-fragment TenantClusterAssignmentInfo on TenantClusterAssignment {
-  id
-  tenantId
-  clusterId
-  deploymentTier
-  priority
-  isPrimary
-  isActive
-  maxStreamsOnCluster
-  maxViewersOnCluster
-  maxBandwidthMbpsOnCluster
-  fallbackWhenFull
-  createdAt
-  updatedAt
-}
-
-query GetTenantClusterAssignments {
-  tenantClusterAssignments {
-    ...TenantClusterAssignmentInfo
   }
 }

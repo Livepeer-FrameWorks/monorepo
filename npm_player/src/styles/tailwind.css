@@ -2,31 +2,57 @@
 @import "./animations.css";
 
 :root {
-  --background: 210 20% 4%;
-  --foreground: 210 20% 98%;
-  --card: 222.2 47.4% 11.2%;
-  --card-foreground: 210 20% 98%;
-  --popover: 222.2 47.4% 11.2%;
-  --popover-foreground: 210 20% 98%;
-  --primary: 221.2 83.2% 53.3%;
-  --primary-foreground: 210 20% 98%;
-  --secondary: 210 40% 96.1%;
-  --secondary-foreground: 222.2 47.4% 11.2%;
-  --muted: 210 40% 96.1%;
-  --muted-foreground: 215.4 16.3% 46.9%;
-  --accent: 210 40% 96.1%;
-  --accent-foreground: 222.2 47.4% 11.2%;
-  --destructive: 0 84.2% 60.2%;
-  --destructive-foreground: 0 0% 98%;
-  --border: 215 27.9% 16.9%;
-  --input: 215 27.9% 16.9%;
-  --ring: 221.2 83.2% 53.3%;
-  --radius: 0.75rem;
+  /* Tokyo Night color palette */
+  --tn-bg-dark: 235 21% 11%;      /* #1a1b26 - Darkest (slab backgrounds) */
+  --tn-bg: 233 23% 17%;            /* #24283b - Main background */
+  --tn-bg-highlight: 233 23% 21%;  /* #292e42 - Elevated surfaces */
+  --tn-bg-visual: 232 27% 25%;     /* #33395e - Selection/active states */
+
+  /* Text hierarchy */
+  --tn-fg: 223 27% 76%;            /* #a9b1d6 - Primary text */
+  --tn-fg-dark: 224 16% 53%;       /* #787c99 - Secondary text (muted) */
+  --tn-fg-gutter: 228 15% 45%;     /* #5a607f - Borders, seams */
+
+  /* Accent colors (semantic) */
+  --tn-blue: 218 79% 73%;          /* #7aa2f7 - Primary actions */
+  --tn-green: 95 53% 55%;          /* #9ece6a - Success */
+  --tn-red: 348 74% 64%;           /* #f7768e - Destructive, live */
+  --tn-yellow: 35 79% 64%;         /* #e0af68 - Warnings */
+  --tn-purple: 267 82% 77%;        /* #bb9af7 - Secondary accent */
+  --tn-cyan: 178 64% 63%;          /* #7dcfff - Info */
+  --tn-teal: 162 66% 62%;          /* #73daca - Terminal green */
+
+  /* Legacy variables (mapped to Tokyo Night) */
+  --background: var(--tn-bg);
+  --foreground: var(--tn-fg);
+  --card: var(--tn-bg-highlight);
+  --card-foreground: var(--tn-fg);
+  --popover: var(--tn-bg-highlight);
+  --popover-foreground: var(--tn-fg);
+  --primary: var(--tn-blue);
+  --primary-foreground: var(--tn-bg-dark);
+  --secondary: var(--tn-bg-visual);
+  --secondary-foreground: var(--tn-fg);
+  --muted: var(--tn-bg-highlight);
+  --muted-foreground: var(--tn-fg-dark);
+  --accent: var(--tn-bg-visual);
+  --accent-foreground: var(--tn-fg);
+  --destructive: var(--tn-red);
+  --destructive-foreground: var(--tn-bg-dark);
+  --border: var(--tn-fg-gutter);
+  --input: var(--tn-bg-highlight);
+  --ring: var(--tn-blue);
+  --radius: 0;
 }
 
+/* =====================================================
+   SLAB SYSTEM - Player Controls & Overlays
+   ===================================================== */
+
 .fw-player-surface {
-  --fw-controls-bg: rgba(9, 9, 11, 0.65);
-  --fw-controls-fg: rgba(255, 255, 255, 0.95);
+  --fw-controls-bg: hsl(var(--tn-bg-dark) / 0.85);
+  --fw-controls-fg: hsl(var(--tn-fg));
+  --fw-seam: hsl(var(--tn-fg-gutter) / 0.3);
   color: var(--fw-controls-fg);
 }
 
@@ -34,43 +60,130 @@
   font: inherit;
 }
 
+/* Slab base - solid structural block */
+.fw-slab {
+  background: var(--fw-controls-bg);
+  border: 1px solid var(--fw-seam);
+}
+
+/* Slab header - uppercase, padded */
+.fw-slab-header {
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid var(--fw-seam);
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: hsl(var(--tn-fg-dark));
+}
+
+/* Slab body - padded content area */
+.fw-slab-body {
+  padding: 1rem;
+}
+
+/* Slab actions - flush buttons, seams between */
+.fw-slab-actions {
+  display: flex;
+  border-top: 1px solid var(--fw-seam);
+}
+
+.fw-slab-actions > * {
+  flex: 1;
+  border-radius: 0 !important;
+}
+
+.fw-slab-actions > * + * {
+  border-left: 1px solid var(--fw-seam);
+}
+
+/* Control bar - horizontal slab */
+.fw-control-bar {
+  display: flex;
+  align-items: center;
+  background: var(--fw-controls-bg);
+  border-top: 1px solid var(--fw-seam);
+  backdrop-filter: blur(8px);
+}
+
+/* Control group - seamed sections within bar */
+.fw-control-group {
+  display: flex;
+  align-items: center;
+  padding: 0.5rem;
+}
+
+.fw-control-group + .fw-control-group {
+  border-left: 1px solid var(--fw-seam);
+}
+
+/* Flush button - fills space, no radius */
+.fw-btn-flush {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.5rem 0.75rem;
+  border-radius: 0;
+  background: transparent;
+  color: hsl(var(--tn-fg));
+  transition: background-color 0.15s, color 0.15s;
+}
+
+.fw-btn-flush:hover {
+  background: hsl(var(--tn-bg-visual) / 0.5);
+}
+
+.fw-btn-flush:active {
+  background: hsl(var(--tn-bg-visual));
+}
+
+/* Status indicators */
+.fw-status-online { color: hsl(var(--tn-green)); }
+.fw-status-offline { color: hsl(var(--tn-red)); }
+.fw-status-warning { color: hsl(var(--tn-yellow)); }
+.fw-status-info { color: hsl(var(--tn-cyan)); }
+
 .animate-spin-slow {
   animation: spin-slow 18s linear infinite;
 }
 
-/* Player-specific component styles */
+/* =====================================================
+   PLAYER CONTAINER STYLES (Slab-based)
+   ===================================================== */
+
 .fw-player-root {
   position: relative;
   height: 100%;
   width: 100%;
   overflow: hidden;
-  border-radius: 0.75rem;
-  background-color: rgb(0 0 0);
+  border-radius: 0;  /* Slabs don't have rounded corners */
+  background-color: hsl(var(--tn-bg-dark));
+  border: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
 }
 
 .fw-player-container {
   height: 100%;
   width: 100%;
   overflow: hidden;
-  border-radius: 0.75rem;
-  background-color: rgb(0 0 0);
+  border-radius: 0;
+  background-color: hsl(var(--tn-bg-dark));
 }
 
 .fw-player-video {
   height: 100%;
   width: 100%;
-  border-radius: 0.75rem;
+  border-radius: 0;
   object-fit: contain;
-  background-color: rgb(0 0 0);
+  background-color: hsl(var(--tn-bg-dark));
 }
 
 .fw-player-embed {
   height: 100%;
   width: 100%;
   min-height: 300px;
-  border-radius: 0.75rem;
+  border-radius: 0;
   border-width: 0;
-  background-color: rgb(0 0 0);
+  background-color: hsl(var(--tn-bg-dark));
 }
 
 .fw-player-dvd {

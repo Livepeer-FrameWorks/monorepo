@@ -1,7 +1,7 @@
 import { motion } from 'framer-motion'
 // Demo player wrapper with status/health integration
 import { Player as FrameworksPlayer } from '@livepeer-frameworks/player'
-import InfoTooltip from '../shared/InfoTooltip'
+import StatusTag from '../shared/StatusTag'
 import {
   MarketingIconBadge,
   MarketingFinalCTA,
@@ -31,7 +31,6 @@ import {
   ServerStackIcon,
   ArrowPathIcon,
 } from '@heroicons/react/24/outline'
-import { Badge } from '@/components/ui/badge'
 
 const LandingPage = () => {
   const [showDemo, setShowDemo] = useState(false)
@@ -74,8 +73,8 @@ const LandingPage = () => {
       icon: VideoCameraIcon,
       tone: 'accent',
       badge: 'Industry First',
-      beta: true,
-      betaNote: 'Feature available with limits during beta; see Roadmap for scope and timeline.',
+      status: 'pipeline',
+      statusNote: 'In pipeline: shipping to alpha cohorts; discovery matrix still expanding.',
     },
     {
       title: 'Multi-stream Compositing',
@@ -84,8 +83,8 @@ const LandingPage = () => {
       icon: FilmIcon,
       tone: 'purple',
       badge: 'Advanced Feature',
-      beta: true,
-      betaNote: 'Advanced compositing available with limited capacity in beta.',
+      status: 'pipeline',
+      statusNote: 'In pipeline: limited internal demos; capacity and UX hardening underway.',
     },
     {
       title: 'Hybrid Cloud + Self-hosted',
@@ -94,6 +93,8 @@ const LandingPage = () => {
       icon: GlobeAltIcon,
       tone: 'green',
       badge: 'Unique Model',
+      status: 'pipeline',
+      statusNote: 'Invite-only: attaching your own edge nodes is being rolled out to pilots.',
     },
     {
       title: 'Public Domain Licensed',
@@ -112,16 +113,8 @@ const LandingPage = () => {
     badge: feature.badge,
     title: feature.title,
     description: feature.description,
-    meta: feature.beta ? (
-      <>
-        <Badge variant="outline" className="tracking-[0.18em] uppercase text-[0.65rem]">
-          Beta
-        </Badge>
-        <InfoTooltip className="ml-1" position="left">
-          {feature.betaNote ||
-            'Feature available with limits during beta; see Roadmap for scope and timeline.'}
-        </InfoTooltip>
-      </>
+    meta: feature.status ? (
+      <StatusTag status={feature.status} note={feature.statusNote} className="justify-end" />
     ) : null,
     hover: 'subtle',
     stripe: true,
@@ -265,7 +258,7 @@ const LandingPage = () => {
         className="landing-hero"
         surface="gradient"
         accents={landingHeroAccents}
-        title="Full-Stack Video Infrastructure"
+        title="Full-Stack Video Services"
         description="Most streaming platforms lock you into their ecosystem. We give you the keys."
         support="Open source stack • Permissive licenses • No cloud dependencies • Scales globally"
         primaryAction={{
@@ -592,7 +585,7 @@ const LandingPage = () => {
               <HeadlineStack
                 eyebrow="Platform"
                 title="Key Platform Features"
-                subtitle="Advanced streaming capabilities with hybrid deployment and self-hosting freedom."
+                subtitle="Advanced streaming capabilities with hybrid deployment and full self-hosting support."
                 align="left"
                 underlineAlign="start"
                 actionsPlacement="inline"
@@ -626,7 +619,7 @@ const LandingPage = () => {
                     Pricing
                   </>
                 }
-                subtitle="Start free with self-hosting. Upgrade for GPU features, hosted services, and enterprise support when you need more firepower."
+                subtitle="Start free with self-hosting. Upgrade for GPU features, hosted services, and enterprise support when you need more."
                 align="left"
                 underlineAlign="start"
                 actionsPlacement="inline"
@@ -748,8 +741,8 @@ const LandingPage = () => {
           >
             <MarketingFinalCTA
               eyebrow="Next steps"
-              title="Ready to transform your streaming?"
-              description="Take complete control of your streaming infrastructure. Start on your own hardware, or partner with us for managed deployments and support. Deploy in minutes."
+              title="Ready to get started?"
+              description="Full SaaS when you want it easy. Full self-hosting when you want control. Your call."
               variant="band"
               primaryAction={{
                 label: 'Start Free',

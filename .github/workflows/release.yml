@@ -31,6 +31,7 @@ jobs:
           - { name: signalman,         context: api_realtime,           dockerfile: api_realtime/Dockerfile }
           - { name: helmsman,          context: api_sidecar,            dockerfile: api_sidecar/Dockerfile }
           - { name: forms,             context: api_forms,              dockerfile: api_forms/Dockerfile }
+          - { name: navigator,         context: api_dns,                dockerfile: api_dns/Dockerfile }
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -116,6 +117,7 @@ jobs:
         webapp:
           - { name: webapp, context: website_application, env_prefix: VITE, build_dir: build }
           - { name: website, context: website_marketing, env_prefix: VITE, build_dir: dist }
+          - { name: docs, context: website_docs, env_prefix: VITE, build_dir: dist }
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -154,6 +156,7 @@ jobs:
           VITE_WEBRTC_PATH: ${{ secrets.VITE_WEBRTC_PATH }}
           VITE_EMBED_PATH: ${{ secrets.VITE_EMBED_PATH }}
           VITE_MARKETING_SITE_URL: ${{ secrets.VITE_MARKETING_SITE_URL }}
+          VITE_DOCS_SITE_URL: ${{ secrets.VITE_DOCS_SITE_URL }}
           VITE_TURNSTILE_AUTH_SITE_KEY: ${{ secrets.VITE_TURNSTILE_AUTH_SITE_KEY }}
           # website (website_marketing) variables
           VITE_APP_URL: ${{ secrets.VITE_APP_URL }}
@@ -303,6 +306,8 @@ jobs:
           - { name: signalman,         context: api_realtime,           cmd_path: ./cmd/signalman }
           - { name: helmsman,          context: api_sidecar,            cmd_path: ./cmd/helmsman }
           - { name: forms,             context: api_forms,              cmd_path: ./cmd/forms }
+          - { name: navigator,         context: api_dns,                cmd_path: ./cmd/navigator }
+          - { name: privateer,         context: api_mesh,               cmd_path: ./cmd/privateer }
         arch:
           - { goos: linux, goarch: amd64 }
           - { goos: linux, goarch: arm64 }
@@ -416,8 +421,8 @@ jobs:
           echo "services:" >> dist/manifest.yaml
           for f in dist/digests/*.json; do
             name=$(jq -r .name "$f")
-            # Skip webapp/website - they go in interfaces section
-            if [[ "$name" == "webapp" || "$name" == "website" ]]; then
+            # Skip webapp/website/docs - they go in interfaces section
+            if [[ "$name" == "webapp" || "$name" == "website" || "$name" == "docs" ]]; then
               continue
             fi
 
@@ -438,8 +443,8 @@ jobs:
           echo "native_binaries:" >> dist/manifest.yaml
           for f in dist/digests/*.json; do
             name=$(jq -r .name "$f")
-            # Skip webapp/website - they don't have native binaries
-            if [[ "$name" == "webapp" || "$name" == "website" ]]; then
+            # Skip webapp/website/docs - they don't have native binaries
+            if [[ "$name" == "webapp" || "$name" == "website" || "$name" == "docs" ]]; then
               continue
             fi
 
@@ -453,13 +458,13 @@ jobs:
           YAML
           done
 
-          # Interfaces (webapp/website reference implementations)
+          # Interfaces (webapp/website/docs reference implementations)
           echo "" >> dist/manifest.yaml
           echo "interfaces:" >> dist/manifest.yaml
           for f in dist/digests/*.json; do
             name=$(jq -r .name "$f")
-            # Only include webapp/website
-            if [[ "$name" != "webapp" && "$name" != "website" ]]; then
+            # Only include webapp/website/docs
+            if [[ "$name" != "webapp" && "$name" != "website" && "$name" != "docs" ]]; then
               continue
             fi
 
@@ -469,8 +474,10 @@ jobs:
             # Determine build dir and bundle name
             if [[ "$name" == "webapp" ]]; then
               bundle="webapp-build.tar.gz"
-            else
+            elif [[ "$name" == "website" ]]; then
               bundle="website-build.tar.gz"
+            else
+              bundle="docs-build.tar.gz"
             fi
 
             cat >> dist/manifest.yaml <<YAML
@@ -494,8 +501,8 @@ jobs:
 
           mist_assets='${{ steps.mistserver.outputs.assets }}'
           if [[ -n "$mist_assets" && "$mist_assets" != "null" && "$mist_assets" != "[]" ]]; then
-            echo "              binaries:" >> dist/manifest.yaml
-            echo "$mist_assets" | jq -r '.[] | "                - name: \(.name)\n                  url: \(.url)" + (if .size then "\n                  size_bytes: \(.size)" else "" end)' >> dist/manifest.yaml
+            echo "    binaries:" >> dist/manifest.yaml
+            echo "$mist_assets" | jq -r '.[] | "      - name: \(.name)\n        url: \(.url)" + (if .size then "\n        size_bytes: \(.size)" else "" end)' >> dist/manifest.yaml
           fi
 
           # Infrastructure Requirements (from config/infrastructure.yaml)
@@ -528,6 +535,11 @@ jobs:
         with:
           name: website-bundle
           path: dist/
+      - name: Download docs bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: docs-bundle
+          path: dist/
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -540,8 +552,7 @@ jobs:
             dist/binaries/*.tar.gz
             dist/webapp-build.tar.gz
             dist/website-build.tar.gz
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            dist/docs-build.tar.gz
 
   update-env:
     name: Update GitOps Environment Repo
@@ -573,7 +584,7 @@ jobs:
 
           # Update channel pointer
           channel="stable"
-          if [[ "${{ github.ref_name }}" == *"-rc."* ]]; then channel="rc"; fi
+          if [[ "${{ github.ref_name }}" =~ -rc($|([.-]?[0-9]+)$) ]]; then channel="rc"; fi
           mkdir -p channels
           cat > channels/${channel}.yaml <<YAML
           platform_version: ${{ github.ref_name }}

@@ -35,7 +35,7 @@ const About = () => {
       name: 'MistServer Team',
       role: 'Video Infrastructure Pioneers',
       description:
-        'The team behind MistServer - the battle-tested media server powering streaming infrastructure worldwide. Decades of experience building rock-solid video technology at scale.',
+        'The team behind MistServer, the media server powering streaming infrastructure worldwide. Over a decade of experience building reliable video technology.',
       avatar: '/mist.svg',
       href: 'https://www.mistserver.com/',
     },
@@ -43,7 +43,7 @@ const About = () => {
       name: 'Livepeer Network',
       role: 'Decentralized Video Infrastructure',
       description:
-        "The world's largest decentralized video network, processing millions of minutes of video daily. Their treasury backing enables FrameWorks to offer a free tier and feature-rich supporter tier.",
+        "A decentralized video network processing millions of minutes daily. Their backing enables FrameWorks to offer a free tier and feature-rich supporter tier.",
       avatar: '/livepeer-light.svg',
       href: 'https://livepeer.org/',
     },
@@ -121,7 +121,7 @@ const About = () => {
     },
     {
       title: 'B2B Focus',
-      description: 'Custom integrations, compliance, and enterprise-grade support for mission critical video.',
+      description: 'Custom integrations, compliance, and enterprise support for production video workloads.',
       icon: ChartBarIcon,
       tone: 'yellow',
     },
@@ -135,7 +135,7 @@ const About = () => {
 
   const missionStoryCopy = [
     "We're building the streaming infrastructure that doesn't lock you in. Need custom features? Build them yourself or let us help. Switch providers? Your infrastructure comes with you. Cloud bills spiraling? Run it yourself with our open source stack.",
-    'Built by the MistServer team and subsidized by the Livepeer treasury, we\'re on a mission to democratize video infrastructure by leveraging decentralized protocols and open source technology.',
+    'Built by the MistServer team and backed by Livepeer, we\'re making enterprise-grade video accessible to everyone without surrendering control to cloud vendors.',
     'Run it yourself, use our hosted services, or mix and match. Uncloud your infrastructure.',
   ]
 
@@ -146,7 +146,7 @@ const About = () => {
       icon: VideoCameraIcon,
       tone: 'accent',
       description:
-        "Subsidized by the Livepeer treasury and powered by the world's largest decentralized video network for transcoding and AI processing.",
+        "Subsidized by the Livepeer treasury and powered by a decentralized video network for transcoding and AI processing.",
     },
     {
       title: 'Auto-Discovery App',
@@ -370,7 +370,7 @@ const About = () => {
               <HeadlineStack
                 eyebrow="Differentiators"
                 title="What makes FrameWorks different?"
-                subtitle="Platform-level differentiators that bind ingest, orchestration, and AI into one system."
+                subtitle="What sets FrameWorks apart from other streaming platforms."
                 align="left"
                 underlineAlign="start"
                 actionsPlacement="inline"
@@ -402,8 +402,7 @@ const About = () => {
                 actionsPlacement="inline"
               >
                 <p className="marketing-tech__intro">
-                  Production-ready components that scale with you—from ingest through analytics. Every layer is battle-tested by
-                  MistServer operators and Livepeer&apos;s decentralized network.
+                  Production-ready components that scale with you, from ingest through analytics. Proven by MistServer operators and the Livepeer network.
                 </p>
               </HeadlineStack>
               <MarketingGridSeam columns={3} stackAt="lg" className="marketing-tech-grid">
@@ -451,7 +450,7 @@ const About = () => {
               surface="panel"
               eyebrow="Timeline"
               title="Our journey"
-              subtitle="From concept to an industry-leading streaming platform and where we go next."
+              subtitle="How we got here and where we're headed."
               items={timeline}
             />
           </motion.div>
@@ -472,7 +471,7 @@ const About = () => {
               partners={team}
               headline="Powered by MistServer and Livepeer"
               eyebrow="Partners"
-              subtitle="Industry-leading video infrastructure expertise backed by the Livepeer treasury"
+              subtitle="Video infrastructure expertise backed by the Livepeer treasury"
               variant="flush"
             />
           </motion.div>
@@ -490,8 +489,8 @@ const About = () => {
         >
           <MarketingFinalCTA
             eyebrow="Next steps"
-            title="Ready to transform your streaming?"
-            description="Join the teams using FrameWorks for mission-critical video infrastructure. Start on your own hardware or partner with us for managed deployments."
+            title="Ready to get started?"
+            description="Hosted, hybrid, or self-hosted. Mission-critical video infrastructure that fits how you work."
             variant="band"
             primaryAction={{
               label: 'Start Free',

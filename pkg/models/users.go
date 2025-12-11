@@ -37,6 +37,9 @@ type APIToken struct {
 	UpdatedAt   time.Time  `json:"updated_at"`
 }
 
+// GraphQL union type marker method for APIToken (DeveloperToken in GraphQL)
+func (APIToken) IsCreateDeveloperTokenResult() {}
+
 // BehaviorData represents user interaction data for bot detection
 type BehaviorData struct {
 	FormShownAt int64 `json:"formShownAt"` // Timestamp when form was shown
@@ -88,3 +91,6 @@ type BootstrapToken struct {
 	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
 	IsActive   bool       `json:"is_active"`
 }
+
+// GraphQL union type marker method for BootstrapToken
+func (BootstrapToken) IsCreateBootstrapTokenResult() {}

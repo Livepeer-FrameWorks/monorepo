@@ -2,34 +2,60 @@ package resolvers
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"math"
 	"strings"
 	"time"
 
 	"frameworks/api_gateway/graph/model"
+	"frameworks/api_gateway/internal/datafetcher"
 	"frameworks/api_gateway/internal/demo"
 	"frameworks/api_gateway/internal/middleware"
-	"frameworks/pkg/api/periscope"
-	"frameworks/pkg/models"
+	periscopeclient "frameworks/pkg/clients/periscope"
+	pb "frameworks/pkg/proto"
 
 	"github.com/sirupsen/logrus"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-type streamBufferPayload struct {
-	HealthScore *float64                   `json:"health_score"`
-	Tracks      []streamBufferTrackPayload `json:"tracks"`
+// Helper function to convert model time range to Periscope TimeRangeOpts
+func toTimeRangeOpts(timeRange *model.TimeRangeInput) *periscopeclient.TimeRangeOpts {
+	if timeRange == nil {
+		return nil
+	}
+	return &periscopeclient.TimeRangeOpts{
+		StartTime: timeRange.Start,
+		EndTime:   timeRange.End,
+	}
 }
 
-type streamBufferTrackPayload struct {
-	TrackType     string   `json:"track_type"`
-	FrameJitterMs *float64 `json:"frame_jitter_ms"`
-	Jitter        *float64 `json:"jitter"`
+// Helper function to convert time pointers to TimeRangeOpts
+func timePtrsToTimeRangeOpts(startTime, endTime *time.Time) *periscopeclient.TimeRangeOpts {
+	if startTime == nil || endTime == nil {
+		return nil
+	}
+	return &periscopeclient.TimeRangeOpts{
+		StartTime: *startTime,
+		EndTime:   *endTime,
+	}
+}
+
+// Helper function to convert model pagination to cursor pagination opts
+func toCursorPaginationOpts(first *int, after *string) *periscopeclient.CursorPaginationOpts {
+	opts := &periscopeclient.CursorPaginationOpts{
+		First: 100,
+	}
+	if first != nil {
+		opts.First = int32(*first)
+	}
+	if after != nil {
+		opts.After = after
+	}
+	return opts
 }
 
 // DoGetStreamAnalytics returns analytics for a specific stream
-func (r *Resolver) DoGetStreamAnalytics(ctx context.Context, streamId string, timeRange *model.TimeRangeInput) (*models.StreamAnalytics, error) {
+func (r *Resolver) DoGetStreamAnalytics(ctx context.Context, streamId string, timeRange *model.TimeRangeInput) (*pb.StreamAnalytics, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning synthetic stream analytics")
 		return demo.GenerateStreamAnalytics(streamId), nil
@@ -41,85 +67,32 @@ func (r *Resolver) DoGetStreamAnalytics(ctx context.Context, streamId string, ti
 		return nil, fmt.Errorf("tenant context required")
 	}
 
-	// Get analytics from Periscope Query using tenant_id from JWT context
-	var startStr, endStr string
+	// Build cache key
+	cacheKey := tenantID + ":" + streamId
 	if timeRange != nil {
-		startStr = timeRange.Start.Format("2006-01-02T15:04:05Z")
-		endStr = timeRange.End.Format("2006-01-02T15:04:05Z")
+		cacheKey += ":" + timeRange.Start.Format(time.RFC3339) + ":" + timeRange.End.Format(time.RFC3339)
 	}
-	analytics, err := r.Clients.Periscope.GetStreamAnalytics(ctx, tenantID, streamId, startStr, endStr)
+
+	// Get analytics from Periscope Query using tenant_id from JWT context
+	val, err := r.fetchPeriscope(ctx, "stream_analytics", []string{cacheKey}, func(ctx context.Context) (interface{}, error) {
+		return r.Clients.Periscope.GetStreamAnalytics(ctx, tenantID, &streamId, toTimeRangeOpts(timeRange), nil)
+	})
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to get stream analytics")
 		return nil, fmt.Errorf("failed to get stream analytics: %w", err)
 	}
+	resp := val.(*pb.GetStreamAnalyticsResponse)
 
 	// Return the first analytics result if available
-	if len(*analytics) > 0 {
-		return &(*analytics)[0], nil
+	if len(resp.GetStreams()) > 0 {
+		return resp.GetStreams()[0], nil
 	}
 	// Return null instead of error when no analytics found - this is normal for new streams
 	return nil, nil
 }
 
-// DoGetViewerMetrics returns viewer metrics
-func (r *Resolver) DoGetViewerMetrics(ctx context.Context, stream *string, timeRange *model.TimeRangeInput) ([]*models.AnalyticsViewerSession, error) {
-	if middleware.IsDemoMode(ctx) {
-		r.Logger.Debug("Demo mode: returning synthetic viewer metrics")
-		demoMetrics := demo.GenerateViewerMetrics()
-		out := make([]*models.AnalyticsViewerSession, 0, len(demoMetrics))
-		for _, dm := range demoMetrics {
-			out = append(out, &models.AnalyticsViewerSession{
-				Timestamp:   dm.Timestamp,
-				ViewerCount: dm.ViewerCount,
-			})
-		}
-		return out, nil
-	}
-
-	// Extract tenant ID from context for data isolation
-	tenantID, ok := ctx.Value("tenant_id").(string)
-	if !ok {
-		return nil, fmt.Errorf("tenant context required")
-	}
-
-	// Determine stream context
-	var internalName string
-	if stream != nil {
-		internalName = *stream
-	}
-
-	// Get viewer metrics from Periscope Query using tenant_id from JWT context
-	var startTime, endTime *time.Time
-	if timeRange != nil {
-		var err error
-		startTime, endTime, err = r.normalizeTimeRange(TimeRangeParams{Start: &timeRange.Start, End: &timeRange.End, MaxWindow: 31 * 24 * time.Hour, DefaultWindow: 24 * time.Hour})
-		if err != nil {
-			return nil, fmt.Errorf("invalid time range: %w", err)
-		}
-	} else {
-		var err error
-		startTime, endTime, err = r.normalizeTimeRange(TimeRangeParams{})
-		if err != nil {
-			return nil, fmt.Errorf("invalid time range: %w", err)
-		}
-	}
-	metrics, err := r.Clients.Periscope.GetViewerMetrics(ctx, tenantID, internalName, startTime, endTime)
-	if err != nil {
-		r.Logger.WithError(err).Error("Failed to get viewer metrics")
-		return nil, fmt.Errorf("failed to get viewer metrics: %w", err)
-	}
-
-	// Convert to slice of pointers for binding
-	result := make([]*models.AnalyticsViewerSession, 0, len(*metrics))
-	for i := range *metrics {
-		result = append(result, &(*metrics)[i])
-	}
-
-	return result, nil
-}
-
 // DoGetPlatformOverview returns platform-wide metrics
-func (r *Resolver) DoGetPlatformOverview(ctx context.Context, timeRange *model.TimeRangeInput) (*periscope.PlatformOverviewResponse, error) {
+func (r *Resolver) DoGetPlatformOverview(ctx context.Context, timeRange *model.TimeRangeInput) (*pb.GetPlatformOverviewResponse, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning synthetic platform overview")
 		return demo.GeneratePlatformOverview(), nil
@@ -132,55 +105,111 @@ func (r *Resolver) DoGetPlatformOverview(ctx context.Context, timeRange *model.T
 	}
 
 	// Get platform overview from Periscope Query
-	var startStr2, endStr2 string
+	tr := toTimeRangeOpts(timeRange)
+	cacheKey := tenantID
 	if timeRange != nil {
-		startStr2 = timeRange.Start.Format("2006-01-02T15:04:05Z")
-		endStr2 = timeRange.End.Format("2006-01-02T15:04:05Z")
+		cacheKey += ":" + timeRange.Start.Format(time.RFC3339) + ":" + timeRange.End.Format(time.RFC3339)
 	}
-	overview, err := r.Clients.Periscope.GetPlatformOverview(ctx, tenantID, startStr2, endStr2)
+	val, err := r.fetchPeriscope(ctx, "platform_overview", []string{cacheKey}, func(ctx context.Context) (interface{}, error) {
+		return r.Clients.Periscope.GetPlatformOverview(ctx, tenantID, tr)
+	})
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to get platform overview")
 		return nil, fmt.Errorf("failed to get platform overview: %w", err)
 	}
 
-	return overview, nil
+	return val.(*pb.GetPlatformOverviewResponse), nil
+}
+
+// DoGetViewerCountTimeSeries returns time-bucketed viewer counts for charts
+// interval should be "5m", "15m", "1h", or "1d"
+func (r *Resolver) DoGetViewerCountTimeSeries(ctx context.Context, stream *string, timeRange *model.TimeRangeInput, interval *string) ([]*pb.ViewerCountBucket, error) {
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Demo mode: returning synthetic viewer count time series")
+		return demo.GenerateViewerCountTimeSeries(), nil
+	}
+
+	// Extract tenant ID from context for data isolation
+	tenantID, ok := ctx.Value("tenant_id").(string)
+	if !ok {
+		return nil, fmt.Errorf("tenant context required")
+	}
+
+	// Default interval to 5m if not specified
+	intervalVal := "5m"
+	if interval != nil && *interval != "" {
+		intervalVal = *interval
+	}
+
+	// Build cache key
+	streamKey := ""
+	if stream != nil {
+		streamKey = *stream
+	}
+	cacheKey := tenantID + ":" + streamKey + ":" + intervalVal
+	if timeRange != nil {
+		cacheKey += ":" + timeRange.Start.Format(time.RFC3339) + ":" + timeRange.End.Format(time.RFC3339)
+	}
+
+	// Get viewer count time series from Periscope
+	val, err := r.fetchPeriscope(ctx, "viewer_count_timeseries", []string{cacheKey}, func(ctx context.Context) (interface{}, error) {
+		return r.Clients.Periscope.GetViewerCountTimeSeries(ctx, tenantID, stream, toTimeRangeOpts(timeRange), intervalVal)
+	})
+	if err != nil {
+		r.Logger.WithError(err).WithFields(logrus.Fields{
+			"tenant_id": tenantID,
+			"stream":    streamKey,
+			"interval":  intervalVal,
+		}).Error("Failed to get viewer count time series")
+		return nil, fmt.Errorf("failed to get viewer count time series: %w", err)
+	}
+	resp := val.(*pb.GetViewerCountTimeSeriesResponse)
+
+	return resp.Buckets, nil
 }
 
 // DoGetStreamHealthMetrics returns stream health metrics
-func (r *Resolver) DoGetStreamHealthMetrics(ctx context.Context, streamId string, timeRange *model.TimeRangeInput) ([]*periscope.StreamHealthMetric, error) {
+func (r *Resolver) DoGetStreamHealthMetrics(ctx context.Context, streamId string, timeRange *model.TimeRangeInput) ([]*pb.StreamHealthMetric, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning synthetic stream health metrics")
 		return demo.GenerateStreamHealthMetrics(), nil
 	}
 
 	// Convert time range for Periscope client
-	var startTime, endTime *time.Time
-	if timeRange != nil {
-		startTime = &timeRange.Start
-		endTime = &timeRange.End
+	tr := toTimeRangeOpts(timeRange)
+	var internalName *string
+	if streamId != "" {
+		internalName = &streamId
 	}
 
 	// Get health metrics from Periscope Query
-	metrics, err := r.Clients.Periscope.GetStreamHealthMetrics(ctx, startTime, endTime)
+	cacheKey := "all"
+	if streamId != "" {
+		cacheKey = streamId
+	}
+	if timeRange != nil {
+		cacheKey += ":" + timeRange.Start.Format(time.RFC3339) + ":" + timeRange.End.Format(time.RFC3339)
+	}
+	val, err := r.fetchPeriscope(ctx, "stream_health", []string{cacheKey}, func(ctx context.Context) (interface{}, error) {
+		return r.Clients.Periscope.GetStreamHealthMetrics(ctx, internalName, tr, nil)
+	})
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to get stream health metrics")
 		return nil, fmt.Errorf("failed to get stream health metrics: %w", err)
 	}
+	resp := val.(*pb.GetStreamHealthMetricsResponse)
 
-	// Filter by streamId if provided
-	var result []*periscope.StreamHealthMetric
-	for i := range *metrics {
-		m := &(*metrics)[i]
-		if streamId == "" || m.InternalName == streamId {
-			result = append(result, m)
-		}
+	// Return metrics
+	result := make([]*pb.StreamHealthMetric, len(resp.Metrics))
+	for i := range resp.Metrics {
+		result[i] = resp.Metrics[i]
 	}
 
 	return result, nil
 }
 
 // DoGetCurrentStreamHealth returns current health for a stream
-func (r *Resolver) DoGetCurrentStreamHealth(ctx context.Context, streamId string) (*periscope.StreamHealthMetric, error) {
+func (r *Resolver) DoGetCurrentStreamHealth(ctx context.Context, streamId string) (*pb.StreamHealthMetric, error) {
 	// Get recent health metrics (last 5 minutes)
 	now := time.Now()
 	startTime := now.Add(-5 * time.Minute)
@@ -203,110 +232,6 @@ func (r *Resolver) DoGetCurrentStreamHealth(ctx context.Context, streamId string
 	return nil, nil
 }
 
-// DoGetTrackListEvents returns track list updates for a stream
-func (r *Resolver) DoGetTrackListEvents(ctx context.Context, streamID string, timeRange *model.TimeRangeInput) ([]*periscope.AnalyticsTrackListEvent, error) {
-	if middleware.IsDemoMode(ctx) {
-		r.Logger.Debug("Demo mode: returning synthetic track list events")
-		return demo.GenerateTrackListEvents(), nil
-	}
-
-	var startTime, endTime *time.Time
-	if timeRange != nil {
-		startTime = &timeRange.Start
-		endTime = &timeRange.End
-	}
-
-	events, err := r.Clients.Periscope.GetTrackListEvents(ctx, streamID, startTime, endTime)
-	if err != nil {
-		r.Logger.WithError(err).
-			WithField("stream", streamID).
-			Error("Failed to get track list events")
-		return nil, fmt.Errorf("failed to get track list events: %w", err)
-	}
-
-	if events == nil || len(*events) == 0 {
-		return []*periscope.AnalyticsTrackListEvent{}, nil
-	}
-
-	result := make([]*periscope.AnalyticsTrackListEvent, len(*events))
-	for i := range *events {
-		result[i] = &((*events)[i])
-	}
-
-	return result, nil
-}
-
-// DoGetStreamHealthAlerts returns health alerts for streams
-func (r *Resolver) DoGetStreamHealthAlerts(ctx context.Context, streamId *string, timeRange *model.TimeRangeInput) ([]*model.StreamHealthAlert, error) {
-	if middleware.IsDemoMode(ctx) {
-		r.Logger.Debug("Demo mode: returning synthetic stream health alerts")
-		return demo.GenerateStreamHealthAlerts(), nil
-	}
-
-	// Get health metrics and derive alerts from them
-	var targetStream string
-	if streamId != nil {
-		targetStream = *streamId
-	}
-
-	metrics, err := r.DoGetStreamHealthMetrics(ctx, targetStream, timeRange)
-	if err != nil {
-		return nil, err
-	}
-
-	// Convert health metrics to alerts based on thresholds now using Periscope-computed fields
-	var result []*model.StreamHealthAlert
-	for _, m := range metrics {
-		// Map buffer state string to enum
-		var bs model.BufferState
-		switch strings.ToUpper(m.BufferState) {
-		case "FULL":
-			bs = model.BufferStateFull
-		case "EMPTY":
-			bs = model.BufferStateEmpty
-		case "DRY":
-			bs = model.BufferStateDry
-		default:
-			bs = model.BufferStateRecover
-		}
-		bsPtr := bs
-
-		// Map alert type and severity heuristically from computed fields
-		alertType := model.AlertTypeQualityDegradation
-		severity := model.AlertSeverityMedium
-		if m.FrameJitterMs != nil && *m.FrameJitterMs > 50 {
-			alertType = model.AlertTypeHighJitter
-		}
-		if m.PacketLossPercentage != nil && *m.PacketLossPercentage > 5.0 {
-			alertType = model.AlertTypePacketLoss
-			severity = model.AlertSeverityHigh
-		}
-		if strings.ToUpper(m.BufferState) == "DRY" {
-			alertType = model.AlertTypeRebuffering
-			severity = model.AlertSeverityHigh
-		}
-
-		// Convert health score to float64 pointer
-		hs := float64(m.HealthScore)
-
-		result = append(result, &model.StreamHealthAlert{
-			Timestamp:            m.Timestamp,
-			Stream:               m.InternalName,
-			NodeID:               m.NodeID,
-			AlertType:            alertType,
-			Severity:             severity,
-			HealthScore:          &hs,
-			FrameJitterMs:        m.FrameJitterMs,
-			PacketLossPercentage: m.PacketLossPercentage,
-			IssuesDescription:    m.IssuesDescription,
-			BufferState:          &bsPtr,
-			QualityTier:          m.QualityTier,
-		})
-	}
-
-	return result, nil
-}
-
 // DoGetRebufferingEvents returns rebuffering events for a stream
 func (r *Resolver) DoGetRebufferingEvents(ctx context.Context, streamId string, timeRange *model.TimeRangeInput) ([]*model.RebufferingEvent, error) {
 	if middleware.IsDemoMode(ctx) {
@@ -315,24 +240,27 @@ func (r *Resolver) DoGetRebufferingEvents(ctx context.Context, streamId string, 
 	}
 
 	// Convert time range for Periscope client
-	var startTime, endTime *time.Time
+	tr := toTimeRangeOpts(timeRange)
+	cacheKey := streamId
 	if timeRange != nil {
-		startTime = &timeRange.Start
-		endTime = &timeRange.End
+		cacheKey += ":" + timeRange.Start.Format(time.RFC3339) + ":" + timeRange.End.Format(time.RFC3339)
 	}
 
 	// Get buffer events as proxy for rebuffering
-	bufferEvents, err := r.Clients.Periscope.GetStreamBufferEvents(ctx, streamId, startTime, endTime)
+	val, err := r.fetchPeriscope(ctx, "buffer_events", []string{cacheKey}, func(ctx context.Context) (interface{}, error) {
+		return r.Clients.Periscope.GetBufferEvents(ctx, streamId, tr, nil)
+	})
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to get buffer events")
 		return nil, fmt.Errorf("failed to get rebuffering events: %w", err)
 	}
+	bufferEvents := val.(*pb.GetBufferEventsResponse)
 
 	// Convert buffer events to rebuffering events
 	var result []*model.RebufferingEvent
 	var prevState model.BufferState = model.BufferStateFull
 
-	for _, event := range *bufferEvents {
+	for _, event := range bufferEvents.Events {
 		// Parse buffer state from event status or data
 		bufferState := model.BufferStateEmpty // Default
 		if event.Status == "FULL" {
@@ -347,24 +275,19 @@ func (r *Resolver) DoGetRebufferingEvents(ctx context.Context, streamId string, 
 		rebufferStart := (prevState == model.BufferStateFull && bufferState == model.BufferStateDry)
 		rebufferEnd := (prevState == model.BufferStateDry && bufferState == model.BufferStateRecover)
 
-		var healthScore *float64
-		var frameJitter *float64
-		if payload := parseStreamBufferPayload(event); payload != nil {
-			healthScore = normalizeHealthScore(payload.HealthScore)
-			frameJitter = extractMaxJitter(payload.Tracks)
-		}
-
 		if rebufferStart || rebufferEnd {
+			ts := time.Time{}
+			if event.Timestamp != nil {
+				ts = event.Timestamp.AsTime()
+			}
 			result = append(result, &model.RebufferingEvent{
-				Timestamp:     event.Timestamp,
+				Timestamp:     ts,
 				Stream:        streamId,
-				NodeID:        event.NodeID,
+				NodeID:        event.NodeId,
 				BufferState:   bufferState,
 				PreviousState: prevState,
 				RebufferStart: rebufferStart,
 				RebufferEnd:   rebufferEnd,
-				HealthScore:   healthScore,
-				FrameJitterMs: frameJitter,
 			})
 		}
 
@@ -375,36 +298,32 @@ func (r *Resolver) DoGetRebufferingEvents(ctx context.Context, streamId string, 
 }
 
 // DoGetViewerGeographics returns geographic data for individual viewer/connection events
-func (r *Resolver) DoGetViewerGeographics(ctx context.Context, stream *string, timeRange *model.TimeRangeInput) ([]*periscope.ConnectionEvent, error) {
+func (r *Resolver) DoGetViewerGeographics(ctx context.Context, stream *string, timeRange *model.TimeRangeInput) ([]*pb.ConnectionEvent, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning synthetic viewer geographics")
 		return demo.GenerateViewerGeographics(), nil
 	}
 
 	// Get geographic data from Periscope Query
-	var sTime, eTime *time.Time
-	if timeRange != nil {
-		var err error
-		sTime, eTime, err = r.normalizeTimeRange(TimeRangeParams{Start: &timeRange.Start, End: &timeRange.End})
-		if err != nil {
-			return []*periscope.ConnectionEvent{}, nil
-		}
-	} else {
-		var err error
-		sTime, eTime, err = r.normalizeTimeRange(TimeRangeParams{})
-		if err != nil {
-			return []*periscope.ConnectionEvent{}, nil
-		}
+	tr := toTimeRangeOpts(timeRange)
+	cacheKey := "all"
+	if stream != nil && *stream != "" {
+		cacheKey = *stream
 	}
-	connResp, err := r.Clients.Periscope.GetConnectionEvents(ctx, sTime, eTime)
+	if timeRange != nil {
+		cacheKey += ":" + timeRange.Start.Format(time.RFC3339) + ":" + timeRange.End.Format(time.RFC3339)
+	}
+	val, err := r.fetchPeriscope(ctx, "connection_events", []string{cacheKey}, func(ctx context.Context) (interface{}, error) {
+		return r.Clients.Periscope.GetConnectionEvents(ctx, stream, tr, nil)
+	})
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to get connection events for geographics")
-		return []*periscope.ConnectionEvent{}, nil
+		return []*pb.ConnectionEvent{}, nil
 	}
+	connResp := val.(*pb.GetConnectionEventsResponse)
 
-	var out []*periscope.ConnectionEvent
-	for i := range *connResp {
-		ev := &(*connResp)[i]
+	var out []*pb.ConnectionEvent
+	for _, ev := range connResp.Events {
 		if stream != nil && *stream != "" && ev.InternalName != *stream {
 			continue
 		}
@@ -413,88 +332,9 @@ func (r *Resolver) DoGetViewerGeographics(ctx context.Context, stream *string, t
 	return out, nil
 }
 
-func parseStreamBufferPayload(event periscope.BufferEvent) *streamBufferPayload {
-	if payload := decodeStreamBufferPayload(event.EventData); payload != nil {
-		return payload
-	}
-	if event.EventPayload != nil {
-		if encoded, err := json.Marshal(event.EventPayload); err == nil {
-			return decodeStreamBufferPayload(string(encoded))
-		}
-	}
-	return nil
-}
-
-func decodeStreamBufferPayload(raw string) *streamBufferPayload {
-	if strings.TrimSpace(raw) == "" {
-		return nil
-	}
-	var payload streamBufferPayload
-	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
-		return nil
-	}
-	return &payload
-}
-
-func normalizeHealthScore(raw *float64) *float64 {
-	if raw == nil {
-		return nil
-	}
-	normalized := *raw
-	if normalized > 1.0 {
-		normalized = normalized / 100.0
-	}
-	if normalized < 0 {
-		normalized = 0
-	}
-	if normalized > 1 {
-		normalized = 1
-	}
-	return &normalized
-}
-
-func extractMaxJitter(tracks []streamBufferTrackPayload) *float64 {
-	var bestVideo float64
-	var haveVideo bool
-	var bestAny float64
-	var haveAny bool
-	for _, track := range tracks {
-		candidate, ok := jitterFromTrack(track)
-		if !ok {
-			continue
-		}
-		if strings.EqualFold(track.TrackType, "video") {
-			if !haveVideo || candidate > bestVideo {
-				haveVideo = true
-				bestVideo = candidate
-			}
-		}
-		if !haveAny || candidate > bestAny {
-			haveAny = true
-			bestAny = candidate
-		}
-	}
-	if haveVideo {
-		return &bestVideo
-	}
-	if haveAny {
-		return &bestAny
-	}
-	return nil
-}
-
-func jitterFromTrack(track streamBufferTrackPayload) (float64, bool) {
-	if track.FrameJitterMs != nil {
-		return *track.FrameJitterMs, true
-	}
-	if track.Jitter != nil {
-		return *track.Jitter, true
-	}
-	return 0, false
-}
-
 // DoGetGeographicDistribution returns aggregated geographic distribution analytics
-func (r *Resolver) DoGetGeographicDistribution(ctx context.Context, stream *string, timeRange *model.TimeRangeInput) (*model.GeographicDistribution, error) {
+// Uses server-side ClickHouse aggregation for scalability
+func (r *Resolver) DoGetGeographicDistribution(ctx context.Context, stream *string, timeRange *model.TimeRangeInput, topN *int) (*model.GeographicDistribution, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning synthetic geographic distribution")
 		return demo.GenerateGeographicDistribution(), nil
@@ -506,107 +346,63 @@ func (r *Resolver) DoGetGeographicDistribution(ctx context.Context, stream *stri
 		return nil, fmt.Errorf("tenant context required")
 	}
 
-	var streamID string
-	if stream != nil {
-		streamID = *stream
+	// Default topN to 10 if not specified
+	topNVal := int32(10)
+	if topN != nil && *topN > 0 {
+		topNVal = int32(*topN)
 	}
 
-	var sTime, eTime *time.Time
-	if timeRange != nil {
-		sTime = &timeRange.Start
-		eTime = &timeRange.End
+	// Build cache key
+	streamKey := ""
+	if stream != nil {
+		streamKey = *stream
 	}
-	vmResp, err := r.Clients.Periscope.GetViewerMetrics(ctx, tenantID, streamID, sTime, eTime)
+	cacheKey := tenantID + ":" + streamKey + ":" + fmt.Sprintf("%d", topNVal)
+	if timeRange != nil {
+		cacheKey += ":" + timeRange.Start.Format(time.RFC3339) + ":" + timeRange.End.Format(time.RFC3339)
+	}
+
+	// Get geographic distribution from Periscope (server-side aggregation)
+	val, err := r.fetchPeriscope(ctx, "geographic_distribution", []string{cacheKey}, func(ctx context.Context) (interface{}, error) {
+		return r.Clients.Periscope.GetGeographicDistribution(ctx, tenantID, stream, toTimeRangeOpts(timeRange), topNVal)
+	})
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to get viewer metrics for geographic distribution")
+		r.Logger.WithError(err).WithFields(logrus.Fields{
+			"tenant_id": tenantID,
+			"stream":    streamKey,
+			"topN":      topNVal,
+		}).Error("Failed to get geographic distribution")
 		return nil, fmt.Errorf("failed to get geographic distribution: %w", err)
 	}
+	resp := val.(*pb.GetGeographicDistributionResponse)
 
-	// Aggregate counts
-	countryCounts := map[string]int{}
-	cityCounts := map[string]struct {
-		country  string
-		count    int
-		lat, lon float64
-	}{}
-	viewersByCountry := []*model.CountryTimeSeries{}
-	uniqCountries := map[string]struct{}{}
-	totalViewers := 0
-
-	for _, m := range *vmResp {
-		if stream != nil && *stream != "" && m.InternalName != *stream {
-			continue
-		}
-		if m.CountryCode != "" {
-			countryCounts[m.CountryCode] += m.ViewerCount
-			uniqCountries[m.CountryCode] = struct{}{}
-			viewersByCountry = append(viewersByCountry, &model.CountryTimeSeries{
-				Timestamp:   m.Timestamp,
-				CountryCode: m.CountryCode,
-				ViewerCount: m.ViewerCount,
-			})
-		}
-		if m.City != "" {
-			k := m.City + "|" + m.CountryCode
-			entry := cityCounts[k]
-			entry.country = m.CountryCode
-			entry.count += m.ViewerCount
-			entry.lat = m.Latitude
-			entry.lon = m.Longitude
-			cityCounts[k] = entry
-		}
-		totalViewers += m.ViewerCount
+	// Build time range for response
+	startTime := time.Now().Add(-24 * time.Hour)
+	endTime := time.Now()
+	if timeRange != nil {
+		startTime = timeRange.Start
+		endTime = timeRange.End
+	}
+	tr := &pb.TimeRange{
+		Start: timestamppb.New(startTime),
+		End:   timestamppb.New(endTime),
 	}
 
-	// Build top lists with percentages
-	var topCountries []*model.CountryMetric
-	for cc, cnt := range countryCounts {
-		perc := 0.0
-		if totalViewers > 0 {
-			perc = (float64(cnt) / float64(totalViewers)) * 100.0
-		}
-		topCountries = append(topCountries, &model.CountryMetric{CountryCode: cc, ViewerCount: cnt, Percentage: perc})
-	}
-	var topCities []*model.CityMetric
-	for key, v := range cityCounts {
-		parts := strings.SplitN(key, "|", 2)
-		city := parts[0]
-		perc := 0.0
-		if totalViewers > 0 {
-			perc = (float64(v.count) / float64(totalViewers)) * 100.0
-		}
-		topCities = append(topCities, &model.CityMetric{City: city, CountryCode: &v.country, ViewerCount: v.count, Latitude: &v.lat, Longitude: &v.lon, Percentage: perc})
-	}
-
-	tr := &model.TimeRange{
-		Start: func() time.Time {
-			if timeRange != nil {
-				return timeRange.Start
-			}
-			return time.Now().Add(-24 * time.Hour)
-		}(),
-		End: func() time.Time {
-			if timeRange != nil {
-				return timeRange.End
-			}
-			return time.Now()
-		}(),
-	}
-
+	// Proto types from Periscope are directly compatible with the model
 	return &model.GeographicDistribution{
 		TimeRange:        tr,
 		Stream:           stream,
-		TopCountries:     topCountries,
-		TopCities:        topCities,
-		UniqueCountries:  len(uniqCountries),
-		UniqueCities:     len(topCities),
-		TotalViewers:     totalViewers,
-		ViewersByCountry: viewersByCountry,
+		TopCountries:     resp.TopCountries,
+		TopCities:        resp.TopCities,
+		UniqueCountries:  int(resp.UniqueCountries),
+		UniqueCities:     int(resp.UniqueCities),
+		TotalViewers:     int(resp.TotalViewers),
+		ViewersByCountry: []*model.CountryTimeSeries{}, // Server-side doesn't return time series yet
 	}, nil
 }
 
 // DoGetLoadBalancingMetrics returns load balancing and routing metrics with geographic context
-func (r *Resolver) DoGetLoadBalancingMetrics(ctx context.Context, timeRange *model.TimeRangeInput) ([]*model.LoadBalancingMetric, error) {
+func (r *Resolver) DoGetLoadBalancingMetrics(ctx context.Context, timeRange *model.TimeRangeInput) ([]*pb.RoutingEvent, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning synthetic load balancing metrics")
 		return demo.GenerateLoadBalancingMetrics(), nil
@@ -618,74 +414,42 @@ func (r *Resolver) DoGetLoadBalancingMetrics(ctx context.Context, timeRange *mod
 		return nil, fmt.Errorf("tenant context required")
 	}
 
-	var startTime, endTime *time.Time
+	tr := toTimeRangeOpts(timeRange)
+	cacheKey := "all"
 	if timeRange != nil {
-		startTime = &timeRange.Start
-		endTime = &timeRange.End
+		cacheKey = timeRange.Start.Format(time.RFC3339) + ":" + timeRange.End.Format(time.RFC3339)
+	}
+
+	// Fetch related tenant IDs (from subscriptions)
+	var relatedTenantIDs []string
+	if user := middleware.GetUserFromContext(ctx); user != nil {
+		// Fetch subscribed clusters to find their owners
+		subs, err := r.Clients.Quartermaster.ListMySubscriptions(ctx, &pb.ListMySubscriptionsRequest{
+			TenantId: user.TenantID,
+		})
+		if err == nil && subs != nil {
+			for _, cluster := range subs.Clusters {
+				if cluster.OwnerTenantId != nil && *cluster.OwnerTenantId != "" && *cluster.OwnerTenantId != user.TenantID {
+					relatedTenantIDs = append(relatedTenantIDs, *cluster.OwnerTenantId)
+				}
+			}
+		}
 	}
 
 	// Fetch routing events from Periscope
-	events, err := r.Clients.Periscope.GetRoutingEvents(ctx, startTime, endTime)
+	val, err := r.fetchPeriscope(ctx, "routing_events", []string{cacheKey}, func(ctx context.Context) (interface{}, error) {
+		return r.Clients.Periscope.GetRoutingEvents(ctx, nil, tr, nil, relatedTenantIDs)
+	})
 	if err != nil {
 		r.Logger.WithError(err).WithFields(logrus.Fields{
 			"tenant_id": tenantID,
 		}).Error("Failed to get routing events")
 		return nil, fmt.Errorf("failed to get load balancing metrics: %w", err)
 	}
+	resp := val.(*pb.GetRoutingEventsResponse)
 
-	// Map to GraphQL LoadBalancingMetric
-	var out []*model.LoadBalancingMetric
-	for i := range *events {
-		e := &(*events)[i]
-
-		metric := &model.LoadBalancingMetric{
-			Timestamp:    e.Timestamp,
-			Stream:       e.StreamName,
-			SelectedNode: e.SelectedNode,
-			Status:       e.Status,
-		}
-
-		// Optional fields
-		if e.Details != "" {
-			metric.Details = &e.Details
-		}
-		if e.ClientIP != "" {
-			metric.ClientIP = &e.ClientIP
-		}
-		if e.ClientCountry != "" {
-			metric.ClientCountry = &e.ClientCountry
-		}
-		// Use SelectedNode as NodeID when explicit ID is not provided separately
-		if e.SelectedNode != "" {
-			metric.NodeID = &e.SelectedNode
-		}
-		// Coordinates
-		clientLat := e.ClientLatitude
-		clientLon := e.ClientLongitude
-		nodeLat := e.NodeLatitude
-		nodeLon := e.NodeLongitude
-		metric.ClientLatitude = &clientLat
-		metric.ClientLongitude = &clientLon
-		metric.NodeLatitude = &nodeLat
-		metric.NodeLongitude = &nodeLon
-		if e.NodeName != "" {
-			metric.NodeName = &e.NodeName
-		}
-		if e.Score != 0 {
-			s := e.Score
-			metric.Score = &s
-		}
-
-		// Compute routing distance if both coordinate pairs look valid
-		if !isZeroCoord(clientLat, clientLon) && !isZeroCoord(nodeLat, nodeLon) {
-			d := haversineKm(clientLat, clientLon, nodeLat, nodeLon)
-			metric.RoutingDistance = &d
-		}
-
-		out = append(out, metric)
-	}
-
-	return out, nil
+	// Events already privacy-safe (no IP, bucketed coords); return as-is
+	return resp.Events, nil
 }
 
 func isZeroCoord(lat, lon float64) bool {
@@ -704,4 +468,292 @@ func haversineKm(lat1, lon1, lat2, lon2 float64) float64 {
 	a := math.Sin(dLat/2)*math.Sin(dLat/2) + math.Cos(lat1Rad)*math.Cos(lat2Rad)*math.Sin(dLon/2)*math.Sin(dLon/2)
 	c := 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
 	return earthRadiusKm * c
+}
+
+func (r *Resolver) fetchPeriscope(ctx context.Context, operation string, keyParts []string, loader func(context.Context) (interface{}, error)) (interface{}, error) {
+	return r.fetchPeriscopeWithOptions(ctx, operation, keyParts, loader, false)
+}
+
+func (r *Resolver) fetchPeriscopeWithOptions(ctx context.Context, operation string, keyParts []string, loader func(context.Context) (interface{}, error), skipCache bool) (interface{}, error) {
+	if r.Fetcher == nil {
+		return loader(ctx)
+	}
+	req := datafetcher.FetchRequest{
+		Service:   datafetcher.ServicePeriscope,
+		Operation: operation,
+		KeyParts:  keyParts,
+		Loader:    loader,
+		SkipCache: skipCache,
+	}
+	return r.Fetcher.Fetch(ctx, req)
+}
+
+func timeKey(t *time.Time) string {
+	if t == nil {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339Nano)
+}
+
+func clampPagination(p *model.PaginationInput, total int) (start int, end int) {
+	const defaultLimit = 100
+	const maxLimit = 1000
+
+	limit := defaultLimit
+	if p != nil {
+		if p.Offset != nil {
+			start = *p.Offset
+			if start < 0 {
+				start = 0
+			}
+		}
+		if p.Limit != nil {
+			limit = *p.Limit
+		}
+	}
+	if limit <= 0 {
+		limit = defaultLimit
+	}
+	if limit > maxLimit {
+		limit = maxLimit
+	}
+	end = total
+	if start+limit < end {
+		end = start + limit
+	}
+	return start, end
+}
+
+func (r *Resolver) loadRoutingEvents(ctx context.Context, stream *string, startTime, endTime *time.Time, opts *periscopeclient.CursorPaginationOpts, skipCache bool, relatedTenantIDs []string) (*pb.GetRoutingEventsResponse, error) {
+	streamKey := ""
+	if stream != nil {
+		streamKey = *stream
+	}
+
+	// Build cache key including pagination parameters and related tenants
+	relatedKey := strings.Join(relatedTenantIDs, ",")
+	keyParts := []string{streamKey, timeKey(startTime), timeKey(endTime), relatedKey}
+	if opts != nil {
+		keyParts = append(keyParts, fmt.Sprintf("f%d", opts.First))
+		if opts.After != nil {
+			keyParts = append(keyParts, *opts.After)
+		}
+	}
+
+	// Convert time pointers to TimeRangeOpts
+	var tr *periscopeclient.TimeRangeOpts
+	if startTime != nil && endTime != nil {
+		tr = &periscopeclient.TimeRangeOpts{StartTime: *startTime, EndTime: *endTime}
+	}
+
+	val, err := r.fetchPeriscopeWithOptions(ctx, "routing_events", keyParts, func(ctx context.Context) (interface{}, error) {
+		return r.Clients.Periscope.GetRoutingEvents(ctx, stream, tr, opts, relatedTenantIDs)
+	}, skipCache)
+	if err != nil {
+		return nil, err
+	}
+	return val.(*pb.GetRoutingEventsResponse), nil
+}
+
+func (r *Resolver) loadConnectionEvents(ctx context.Context, stream *string, startTime, endTime *time.Time, opts *periscopeclient.CursorPaginationOpts, skipCache bool) (*pb.GetConnectionEventsResponse, error) {
+	streamKey := ""
+	if stream != nil {
+		streamKey = *stream
+	}
+
+	// Build cache key including pagination parameters
+	keyParts := []string{streamKey, timeKey(startTime), timeKey(endTime)}
+	if opts != nil {
+		keyParts = append(keyParts, fmt.Sprintf("f%d", opts.First))
+		if opts.After != nil {
+			keyParts = append(keyParts, *opts.After)
+		}
+	}
+
+	// Convert time pointers to TimeRangeOpts
+	var tr *periscopeclient.TimeRangeOpts
+	if startTime != nil && endTime != nil {
+		tr = &periscopeclient.TimeRangeOpts{StartTime: *startTime, EndTime: *endTime}
+	}
+
+	val, err := r.fetchPeriscopeWithOptions(ctx, "connection_events", keyParts, func(ctx context.Context) (interface{}, error) {
+		return r.Clients.Periscope.GetConnectionEvents(ctx, stream, tr, opts)
+	}, skipCache)
+	if err != nil {
+		return nil, err
+	}
+	return val.(*pb.GetConnectionEventsResponse), nil
+}
+
+func (r *Resolver) loadNodeMetrics(ctx context.Context, nodeID *string, startTime, endTime *time.Time, opts *periscopeclient.CursorPaginationOpts, skipCache bool) (*pb.GetNodeMetricsResponse, error) {
+	nodeKey := ""
+	if nodeID != nil {
+		nodeKey = *nodeID
+	}
+
+	// Build cache key including pagination parameters
+	keyParts := []string{nodeKey, timeKey(startTime), timeKey(endTime)}
+	if opts != nil {
+		keyParts = append(keyParts, fmt.Sprintf("f%d", opts.First))
+		if opts.After != nil {
+			keyParts = append(keyParts, *opts.After)
+		}
+	}
+
+	// Convert time pointers to TimeRangeOpts
+	var tr *periscopeclient.TimeRangeOpts
+	if startTime != nil && endTime != nil {
+		tr = &periscopeclient.TimeRangeOpts{StartTime: *startTime, EndTime: *endTime}
+	}
+
+	val, err := r.fetchPeriscopeWithOptions(ctx, "node_metrics", keyParts, func(ctx context.Context) (interface{}, error) {
+		return r.Clients.Periscope.GetNodeMetrics(ctx, nodeID, tr, opts)
+	}, skipCache)
+	if err != nil {
+		return nil, err
+	}
+	return val.(*pb.GetNodeMetricsResponse), nil
+}
+
+func (r *Resolver) loadNodeMetrics1h(ctx context.Context, nodeID *string, startTime, endTime *time.Time, opts *periscopeclient.CursorPaginationOpts, skipCache bool) (*pb.GetNodeMetrics1HResponse, error) {
+	nodeKey := ""
+	if nodeID != nil {
+		nodeKey = *nodeID
+	}
+
+	// Build cache key including pagination parameters
+	keyParts := []string{nodeKey, timeKey(startTime), timeKey(endTime)}
+	if opts != nil {
+		keyParts = append(keyParts, fmt.Sprintf("f%d", opts.First))
+		if opts.After != nil {
+			keyParts = append(keyParts, *opts.After)
+		}
+	}
+
+	// Convert time pointers to TimeRangeOpts
+	var tr *periscopeclient.TimeRangeOpts
+	if startTime != nil && endTime != nil {
+		tr = &periscopeclient.TimeRangeOpts{StartTime: *startTime, EndTime: *endTime}
+	}
+
+	val, err := r.fetchPeriscopeWithOptions(ctx, "node_metrics_1h", keyParts, func(ctx context.Context) (interface{}, error) {
+		return r.Clients.Periscope.GetNodeMetrics1H(ctx, nodeID, tr, opts)
+	}, skipCache)
+	if err != nil {
+		return nil, err
+	}
+	return val.(*pb.GetNodeMetrics1HResponse), nil
+}
+
+func (r *Resolver) loadClipEvents(ctx context.Context, internalName, stage *string, startTime, endTime *time.Time, opts *periscopeclient.CursorPaginationOpts, skipCache bool) (*pb.GetClipEventsResponse, error) {
+	internalNameKey := ""
+	if internalName != nil {
+		internalNameKey = *internalName
+	}
+	stageKey := ""
+	if stage != nil {
+		stageKey = *stage
+	}
+
+	// Build cache key including pagination parameters
+	keyParts := []string{internalNameKey, stageKey, timeKey(startTime), timeKey(endTime)}
+	if opts != nil {
+		keyParts = append(keyParts, fmt.Sprintf("f%d", opts.First))
+		if opts.After != nil {
+			keyParts = append(keyParts, *opts.After)
+		}
+	}
+
+	// Convert time pointers to TimeRangeOpts
+	var tr *periscopeclient.TimeRangeOpts
+	if startTime != nil && endTime != nil {
+		tr = &periscopeclient.TimeRangeOpts{StartTime: *startTime, EndTime: *endTime}
+	}
+
+	val, err := r.fetchPeriscopeWithOptions(ctx, "clip_events", keyParts, func(ctx context.Context) (interface{}, error) {
+		return r.Clients.Periscope.GetClipEvents(ctx, internalName, stage, tr, opts)
+	}, skipCache)
+	if err != nil {
+		return nil, err
+	}
+	return val.(*pb.GetClipEventsResponse), nil
+}
+
+func (r *Resolver) loadStreamEvents(ctx context.Context, internalName string, startTime, endTime *time.Time, opts *periscopeclient.CursorPaginationOpts, skipCache bool) (*pb.GetStreamEventsResponse, error) {
+	// Build cache key including pagination parameters
+	keyParts := []string{internalName, timeKey(startTime), timeKey(endTime)}
+	if opts != nil {
+		keyParts = append(keyParts, fmt.Sprintf("f%d", opts.First))
+		if opts.After != nil {
+			keyParts = append(keyParts, *opts.After)
+		}
+	}
+
+	// Convert time pointers to TimeRangeOpts
+	var tr *periscopeclient.TimeRangeOpts
+	if startTime != nil && endTime != nil {
+		tr = &periscopeclient.TimeRangeOpts{StartTime: *startTime, EndTime: *endTime}
+	}
+
+	val, err := r.fetchPeriscopeWithOptions(ctx, "stream_events", keyParts, func(ctx context.Context) (interface{}, error) {
+		return r.Clients.Periscope.GetStreamEvents(ctx, internalName, tr, opts)
+	}, skipCache)
+	if err != nil {
+		return nil, err
+	}
+	return val.(*pb.GetStreamEventsResponse), nil
+}
+
+func (r *Resolver) loadTrackListEvents(ctx context.Context, stream string, startTime, endTime *time.Time, opts *periscopeclient.CursorPaginationOpts, skipCache bool) (*pb.GetTrackListEventsResponse, error) {
+	// Build cache key including pagination parameters
+	keyParts := []string{stream, timeKey(startTime), timeKey(endTime)}
+	if opts != nil {
+		keyParts = append(keyParts, fmt.Sprintf("f%d", opts.First))
+		if opts.After != nil {
+			keyParts = append(keyParts, *opts.After)
+		}
+	}
+
+	// Convert time pointers to TimeRangeOpts
+	var tr *periscopeclient.TimeRangeOpts
+	if startTime != nil && endTime != nil {
+		tr = &periscopeclient.TimeRangeOpts{StartTime: *startTime, EndTime: *endTime}
+	}
+
+	val, err := r.fetchPeriscopeWithOptions(ctx, "track_list_events", keyParts, func(ctx context.Context) (interface{}, error) {
+		return r.Clients.Periscope.GetTrackListEvents(ctx, stream, tr, opts)
+	}, skipCache)
+	if err != nil {
+		return nil, err
+	}
+	return val.(*pb.GetTrackListEventsResponse), nil
+}
+
+func (r *Resolver) loadStreamHealthMetrics(ctx context.Context, stream *string, startTime, endTime *time.Time, opts *periscopeclient.CursorPaginationOpts, skipCache bool) (*pb.GetStreamHealthMetricsResponse, error) {
+	// Build cache key including stream and pagination parameters
+	streamKey := ""
+	if stream != nil {
+		streamKey = *stream
+	}
+	keyParts := []string{streamKey, timeKey(startTime), timeKey(endTime)}
+	if opts != nil {
+		keyParts = append(keyParts, fmt.Sprintf("f%d", opts.First))
+		if opts.After != nil {
+			keyParts = append(keyParts, *opts.After)
+		}
+	}
+
+	// Convert time pointers to TimeRangeOpts
+	var tr *periscopeclient.TimeRangeOpts
+	if startTime != nil && endTime != nil {
+		tr = &periscopeclient.TimeRangeOpts{StartTime: *startTime, EndTime: *endTime}
+	}
+
+	val, err := r.fetchPeriscopeWithOptions(ctx, "stream_health_metrics", keyParts, func(ctx context.Context) (interface{}, error) {
+		return r.Clients.Periscope.GetStreamHealthMetrics(ctx, stream, tr, opts)
+	}, skipCache)
+	if err != nil {
+		return nil, err
+	}
+	return val.(*pb.GetStreamHealthMetricsResponse), nil
 }

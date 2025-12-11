@@ -12,25 +12,40 @@ subscription StreamEvents($stream: String) {
 }
 
 # Subscribe to real-time viewer metrics for a specific stream
+# NOTE: Schema now returns per-client metrics (ViewerMetrics), not aggregated stats.
+# The previous fields (viewerCount, peakViewers) are not available here.
 subscription ViewerMetricsStream($stream: String!) {
   viewerMetrics(stream: $stream) {
-    stream
-    currentViewers
-    viewerCount
-    peakViewers
-    bandwidth
-    connectionQuality
-    bufferHealth
+    internalName
+    nodeId
+    action
+    protocol
     timestamp
+    bandwidthInBps
+    bandwidthOutBps
+    clientCity
+    clientCountry
   }
 }
 
 # Subscribe to track list updates for a stream
 subscription TrackListUpdates($stream: String!) {
   trackListUpdates(stream: $stream) {
-    stream
-    trackList
-    trackCount
-    timestamp
+    streamName
+    totalTracks
+    videoTrackCount
+    audioTrackCount
+    tracks {
+      trackName
+      trackType
+      codec
+      bitrateKbps
+      width
+      height
+      fps
+      resolution
+      channels
+      sampleRate
+    }
   }
 }

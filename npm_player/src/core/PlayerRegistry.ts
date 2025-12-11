@@ -17,14 +17,14 @@ async function registerPlayersForManager(manager: PlayerManager): Promise<void> 
   if (manager.getRegisteredPlayers().length > 0) return;
 
   const [
-    html5Module,
+    directModule,
     videoModule,
     hlsModule,
     dashModule,
     mistModule,
     mewsModule
   ] = await Promise.all([
-    import('../components/players/Html5NativePlayer'),
+    import('../components/players/DirectPlaybackPlayer'),
     import('../components/players/VideoJsPlayer'),
     import('../components/players/HlsJsPlayer'),
     import('../components/players/DashJsPlayer'),
@@ -33,7 +33,7 @@ async function registerPlayersForManager(manager: PlayerManager): Promise<void> 
   ]);
 
   const instantiatedPlayers: IPlayer[] = [
-    new html5Module.Html5NativePlayerImpl(),
+    new directModule.DirectPlaybackPlayerImpl(),
     new videoModule.VideoJsPlayerImpl(),
     new hlsModule.HlsJsPlayerImpl(),
     new dashModule.DashJsPlayerImpl(),
@@ -119,7 +119,7 @@ export function createPlayerManager(options?: ConstructorParameters<typeof Playe
 /**
  * Export individual player classes for direct use
  */
-export { Html5NativePlayerImpl } from '../components/players/Html5NativePlayer';
+export { DirectPlaybackPlayerImpl } from '../components/players/DirectPlaybackPlayer';
 export { HlsJsPlayerImpl } from '../components/players/HlsJsPlayer';
 export { DashJsPlayerImpl } from '../components/players/DashJsPlayer';
 export { VideoJsPlayerImpl } from '../components/players/VideoJsPlayer';

@@ -19,12 +19,11 @@ All endpoints require `Authorization: Bearer <SERVICE_TOKEN>`.
 - Start the full stack from repo root: `docker-compose up -d`
 - Or run just Quartermaster: `cd api_tenants && go run ./cmd/quartermaster`
 
-Configuration is shared via `config/env/base.env` and `config/env/secrets.env`. Use `make env` or `frameworks config env generate` to create `.env`, and customise `config/env/secrets.env` for secrets. See `docs/configuration.md`. Do not commit secrets.
+Configuration is shared via `config/env/base.env` and `config/env/secrets.env`. Use `make env` or `frameworks config env generate` to create `.env`, and customise `config/env/secrets.env` for secrets. Do not commit secrets.
 
-Health: `GET /health`.
+Health: `GET /health`. 
 
-Cross‑refs: see docs/IMPLEMENTATION.md for how Commodore and Foghorn consume this API. 
-
-## Health & port
-- Health: `GET /health`
+## Health & ports
+- Health: `GET /health` (HTTP) or `grpc.health.v1.Health/Check` (gRPC)
 - HTTP: 18002
+- gRPC: 19002

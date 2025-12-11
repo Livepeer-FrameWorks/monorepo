@@ -1,19 +1,59 @@
 # Stream management queries
-fragment StreamInfo on Stream {
+# Config fields from Control Plane (Commodore)
+fragment StreamConfig on Stream {
   id
   name
   description
   streamKey
   playbackId
-  status
   record
   createdAt
   updatedAt
 }
 
+# Operational metrics from Data Plane (Periscope) - lazy loaded via edge
+fragment StreamMetricsFields on StreamMetrics {
+  status
+  isLive
+  currentViewers
+  peakViewers
+  totalViews
+  startedAt
+  endedAt
+  duration
+  lastEventAt
+  lastEventType
+}
+
+# Combined fragment for full stream data
+fragment StreamInfo on Stream {
+  ...StreamConfig
+  metrics {
+    ...StreamMetricsFields
+  }
+}
+
 query GetStreams {
   streams {
     ...StreamInfo
+  }
+}
+
+query GetStreamsConnection($first: Int = 50, $after: String) {
+  streamsConnection(first: $first, after: $after) {
+    edges {
+      cursor
+      node {
+        ...StreamInfo
+      }
+    }
+    pageInfo {
+      hasNextPage
+      hasPreviousPage
+      startCursor
+      endCursor
+    }
+    totalCount
   }
 }
 
@@ -25,7 +65,7 @@ query GetStream($id: ID!) {
 
 query ValidateStreamKey($streamKey: String!) {
   validateStreamKey(streamKey: $streamKey) {
-    valid
+    status
     streamKey
     error
   }
@@ -67,6 +107,24 @@ fragment RecordingInfo on Recording {
 query GetRecordings($streamId: ID) {
   recordings(streamId: $streamId) {
     ...RecordingInfo
+  }
+}
+
+query GetRecordingsConnection($streamId: ID, $first: Int = 50, $after: String) {
+  recordingsConnection(streamId: $streamId, first: $first, after: $after) {
+    edges {
+      cursor
+      node {
+        ...RecordingInfo
+      }
+    }
+    pageInfo {
+      hasNextPage
+      hasPreviousPage
+      startCursor
+      endCursor
+    }
+    totalCount
   }
 }
 

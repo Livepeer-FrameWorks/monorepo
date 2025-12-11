@@ -1,5 +1,19 @@
 import { writable } from "svelte/store";
-import type { ApolloError } from "@apollo/client";
+
+// Generic GraphQL error interface (compatible with Houdini errors)
+interface GraphQLError {
+  message: string;
+  extensions?: {
+    code?: string;
+    [key: string]: unknown;
+  };
+}
+
+interface GraphQLErrorLike {
+  graphQLErrors?: GraphQLError[];
+  networkError?: Error & { statusCode?: number };
+  message?: string;
+}
 
 interface ErrorBoundaryState {
   hasError: boolean;
@@ -19,7 +33,11 @@ function createErrorBoundaryStore() {
   return {
     subscribe,
 
-    setError(error: Error, userMessage?: string, additionalInfo?: string): void {
+    setError(
+      error: Error,
+      userMessage?: string,
+      additionalInfo?: string,
+    ): void {
       console.error("ErrorBoundary caught error:", error);
 
       set({
@@ -39,7 +57,7 @@ function createErrorBoundaryStore() {
       });
     },
 
-    handleGraphQLError(graphQLError: ApolloError): void {
+    handleGraphQLError(graphQLError: GraphQLErrorLike): void {
       let userMessage = "Failed to load data";
       let additionalInfo = "";
 
@@ -59,7 +77,10 @@ function createErrorBoundaryStore() {
         } else {
           userMessage = "Network error. Please check your connection.";
         }
-      } else if (graphQLError.graphQLErrors && graphQLError.graphQLErrors.length > 0) {
+      } else if (
+        graphQLError.graphQLErrors &&
+        graphQLError.graphQLErrors.length > 0
+      ) {
         const firstError = graphQLError.graphQLErrors[0];
         if (firstError.extensions?.code === "FORBIDDEN") {
           userMessage = "You do not have permission to access this resource.";

@@ -46,7 +46,7 @@ type StreamState struct {
 	Tracks             []StreamTrack          `json:"tracks"`
 	Issues             string                 `json:"issues,omitempty"`
 	HasIssues          bool                   `json:"has_issues"`
-	HealthScore        float64                `json:"health_score,omitempty"`
+	StartedAt          *time.Time             `json:"started_at,omitempty"` // When stream first went live
 	LastUpdate         time.Time              `json:"last_update"`
 	RawDetails         map[string]interface{} `json:"raw_details,omitempty"` // Raw MistServer data
 	Viewers            int                    `json:"viewers"`
@@ -80,7 +80,8 @@ type NodeState struct {
 	NodeID               string                 `json:"node_id"`
 	BaseURL              string                 `json:"base_url"`
 	IsHealthy            bool                   `json:"is_healthy"`
-	IsStale              bool                   `json:"is_stale"` // Node hasn't reported recently
+	IsStale              bool                   `json:"is_stale"`            // Node hasn't reported recently
+	TenantID             string                 `json:"tenant_id,omitempty"` // Tenant owning this dedicated node
 	Latitude             *float64               `json:"latitude,omitempty"`
 	Longitude            *float64               `json:"longitude,omitempty"`
 	Location             string                 `json:"location,omitempty"`
@@ -101,6 +102,8 @@ type NodeState struct {
 	StorageUsedBytes     uint64                 `json:"storage_used_bytes,omitempty"`
 	MaxTranscodes        int                    `json:"max_transcodes,omitempty"`
 	CurrentTranscodes    int                    `json:"current_transcodes,omitempty"`
+	DiskTotalBytes       uint64                 `json:"disk_total_bytes,omitempty"`
+	DiskUsedBytes        uint64                 `json:"disk_used_bytes,omitempty"`
 	LastUpdate           time.Time              `json:"last_update"`
 
 	// GPU information
@@ -199,12 +202,14 @@ func (sm *StreamStateManager) UpdateStreamFromBuffer(streamName, internalName, n
 
 	// Get or create stream state
 	state := sm.streams[internalName]
+	now := time.Now()
 	if state == nil {
 		state = &StreamState{
 			StreamName:   streamName,
 			InternalName: internalName,
 			NodeID:       nodeID,
 			TenantID:     tenantID,
+			StartedAt:    &now, // Track when stream first went live
 		}
 		sm.streams[internalName] = state
 	}
@@ -584,12 +589,22 @@ func (sm *StreamStateManager) SetNodeInfo(nodeID, baseURL string, isHealthy bool
 	}
 	n.BaseURL = baseURL
 	n.IsHealthy = isHealthy
+	n.IsStale = false // Reset staleness on update
 	n.Latitude = lat
 	n.Longitude = lon
 	n.Location = location
+
+	// Handle outputs parsing
 	if outputs != nil {
 		n.Outputs = outputs
+	} else if outputsRaw != "" {
+		// Try to parse raw JSON if map not provided (e.g. rehydration)
+		var parsed map[string]interface{}
+		if err := json.Unmarshal([]byte(outputsRaw), &parsed); err == nil {
+			n.Outputs = parsed
+		}
 	}
+
 	if outputsRaw != "" {
 		n.OutputsRaw = outputsRaw
 	}
@@ -848,8 +863,10 @@ func (sm *StreamStateManager) GetClusterSnapshot() (streams []*StreamState, node
 	return
 }
 
-// SetNodeBalancerInfo updates balancer-specific node information
-func (sm *StreamStateManager) SetNodeBalancerInfo(nodeID string, host string, port, dtscPort int, tags []string, configStreams []string) {
+// SetNodeConnectionInfo updates connection-related information for a node.
+// It primarily focuses on setting the binary host IP for same-host avoidance in the balancer.
+// Node tags are updated only if explicitly provided, allowing for flexible tag management.
+func (sm *StreamStateManager) SetNodeConnectionInfo(nodeID string, host string, tenantID string, tags []string) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
@@ -859,20 +876,46 @@ func (sm *StreamStateManager) SetNodeBalancerInfo(nodeID string, host string, po
 		sm.nodes[nodeID] = n
 	}
 
-	// Update balancer-specific fields
-	n.Port = port
-	n.DTSCPort = dtscPort
-	n.Tags = append([]string(nil), tags...) // Copy to avoid shared slices
-	n.ConfigStreams = append([]string(nil), configStreams...)
-	n.LastUpdate = time.Now()
+	if tenantID != "" {
+		n.TenantID = tenantID
+	}
 
-	// Compute binary IP for fast comparison
+	// Update node tags only if explicitly provided (non-nil slice)
+	if tags != nil {
+		n.Tags = append([]string(nil), tags...) // Copy to avoid shared slices
+	}
+
+	// Compute binary IP for fast comparison in load balancing decisions.
 	if host != "" {
 		n.BinHost = hostToBinary(host)
 	}
 
-	// Recompute cached scores
+	n.LastUpdate = time.Now() // Update timestamp since node info changed.
+
+	// Recompute cached scores as node connection info (like BinHost) affects eligibility.
 	sm.recomputeNodeScoresLocked(n)
+}
+
+// FindNodeByArtifactHash searches for a node hosting the specified artifact (Clip/DVR).
+// Returns the node's host/base URL and the artifact details if found.
+func (sm *StreamStateManager) FindNodeByArtifactHash(hash string) (string, *pb.StoredArtifact) {
+	snapshot := sm.GetBalancerSnapshotAtomic()
+	if snapshot == nil {
+		return "", nil
+	}
+
+	for _, node := range snapshot.Nodes {
+		// Skip inactive nodes
+		if !node.IsActive {
+			continue
+		}
+		for _, artifact := range node.Artifacts {
+			if artifact.GetClipHash() == hash {
+				return node.Host, artifact
+			}
+		}
+	}
+	return "", nil
 }
 
 // UpdateAddBandwidth updates the bandwidth penalty for a node
@@ -907,6 +950,41 @@ func (sm *StreamStateManager) SetNodeArtifacts(nodeID string, artifacts []*pb.St
 	n.Artifacts = make([]*pb.StoredArtifact, len(artifacts))
 	copy(n.Artifacts, artifacts)
 	n.LastUpdate = time.Now()
+}
+
+// RemoveNodeArtifact removes a specific artifact from a node's list
+func (sm *StreamStateManager) RemoveNodeArtifact(nodeID string, clipHash string) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	n := sm.nodes[nodeID]
+	if n == nil || len(n.Artifacts) == 0 {
+		return
+	}
+
+	// Filter out the deleted artifact
+	newArtifacts := make([]*pb.StoredArtifact, 0, len(n.Artifacts))
+	for _, a := range n.Artifacts {
+		if a.ClipHash != clipHash {
+			newArtifacts = append(newArtifacts, a)
+		}
+	}
+
+	n.Artifacts = newArtifacts
+	n.LastUpdate = time.Now()
+}
+
+// ApplyArtifactDeleted updates state and persists artifact deletion
+func (sm *StreamStateManager) ApplyArtifactDeleted(ctx context.Context, clipHash string, nodeID string) error {
+	// Remove from in-memory state
+	sm.RemoveNodeArtifact(nodeID, clipHash)
+
+	// Track metric
+	if writeCounter != nil {
+		writeCounter(map[string]string{"entity": "artifact", "op": "deleted"})
+	}
+
+	return nil
 }
 
 // DecayAddBandwidth applies bandwidth penalty decay to a node (like C++ LoadBalancer)
@@ -1054,6 +1132,10 @@ type EnhancedBalancerNodeSnapshot struct {
 	StorageBucket string `json:"storage_bucket"`
 	StoragePrefix string `json:"storage_prefix"`
 
+	// Disk Usage (Real-time)
+	DiskTotalBytes uint64 `json:"disk_total_bytes"`
+	DiskUsedBytes  uint64 `json:"disk_used_bytes"`
+
 	// Transcoding info
 	MaxTranscodes     int `json:"max_transcodes"`
 	CurrentTranscodes int `json:"current_transcodes"`
@@ -1107,9 +1189,9 @@ func (sm *StreamStateManager) GetBalancerSnapshotAtomic() *BalancerSnapshot {
 			continue
 		}
 
-		// Ensure scores are up to date (recompute if stale)
-		if time.Since(n.LastScoreTime) > time.Minute {
-			sm.recomputeNodeScoresLocked(n)
+		// Skip stale or unhealthy nodes to prevent routing blackholes
+		if !n.IsHealthy || n.IsStale {
+			continue
 		}
 
 		snapshot := EnhancedBalancerNodeSnapshot{
@@ -1172,6 +1254,10 @@ func (sm *StreamStateManager) GetBalancerSnapshotAtomic() *BalancerSnapshot {
 			StorageLocal:  n.StorageLocal,
 			StorageBucket: n.StorageBucket,
 			StoragePrefix: n.StoragePrefix,
+
+			// Disk Usage
+			DiskTotalBytes: n.DiskTotalBytes,
+			DiskUsedBytes:  n.DiskUsedBytes,
 
 			// Transcoding info
 			MaxTranscodes:     n.MaxTranscodes,
@@ -1576,6 +1662,12 @@ func (sm *StreamStateManager) ApplyNodeLifecycle(ctx context.Context, update *pb
 		}(),
 		CurrentTranscodes: 0,
 	})
+
+	// Update disk usage directly
+	if n := sm.nodes[update.GetNodeId()]; n != nil {
+		n.DiskTotalBytes = update.GetDiskTotalBytes()
+		n.DiskUsedBytes = update.GetDiskUsedBytes()
+	}
 
 	// Write-through: persist outputs/base_url and lifecycle snapshot if policy allows
 	if sm.nodeRepo != nil {

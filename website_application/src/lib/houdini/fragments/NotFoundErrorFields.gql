@@ -1,0 +1,7 @@
+fragment NotFoundErrorFields on NotFoundError {
+  __typename
+  message
+  code
+  resourceType
+  resourceId
+}

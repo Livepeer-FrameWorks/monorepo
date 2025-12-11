@@ -1,0 +1,21 @@
+query GetCluster($id: ID!) {
+  cluster(id: $id) {
+    id
+    clusterName
+    healthStatus
+    createdAt
+    nodes {
+      id
+      nodeName
+      clusterId
+      nodeType
+      status
+      region
+      externalIp
+      lastHeartbeat
+      createdAt
+      latitude
+      longitude
+    }
+  }
+}

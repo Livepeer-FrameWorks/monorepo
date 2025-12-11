@@ -1,30 +1,53 @@
 # Stream health and quality monitoring queries
 
-query GetStreamHealthMetrics($stream: String!, $timeRange: TimeRangeInput) {
-  streamHealthMetrics(stream: $stream, timeRange: $timeRange) {
-    timestamp
-    stream
-    nodeId
-    healthScore
-    frameJitterMs
-    keyframeStabilityMs
-    issuesDescription
-    hasIssues
-    bitrate
-    fps
-    width
-    height
-    codec
-    qualityTier
-    packetsSent
-    packetsLost
-    packetLossPercentage
-    bufferState
-    bufferHealth
-    audioChannels
-    audioSampleRate
-    audioCodec
-    audioBitrate
+query GetStreamHealthMetrics(
+  $stream: String!
+  $timeRange: TimeRangeInput
+  $first: Int = 100
+  $after: String
+  $noCache: Boolean = false
+) {
+  streamHealthMetricsConnection(
+    stream: $stream
+    timeRange: $timeRange
+    first: $first
+    after: $after
+    noCache: $noCache
+  ) {
+    edges {
+      cursor
+      node {
+        timestamp
+        stream
+        nodeId
+        issuesDescription
+        hasIssues
+        bitrate
+        fps
+        width
+        height
+        codec
+        profile
+        qualityTier
+        gopSize
+        packetsSent
+        packetsLost
+        packetLossPercentage
+        bufferState
+        bufferHealth
+        bufferSize
+        bufferUsed
+        audioChannels
+        audioSampleRate
+        audioCodec
+        audioBitrate
+      }
+    }
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+    totalCount
   }
 }
 
@@ -33,56 +56,75 @@ query GetCurrentStreamHealth($stream: String!) {
     timestamp
     stream
     nodeId
-    healthScore
-    frameJitterMs
-    keyframeStabilityMs
     issuesDescription
     hasIssues
-    bufferState
-    packetLossPercentage
+    bitrate
+    fps
+    width
+    height
+    codec
+    profile
     qualityTier
+    gopSize
+    packetsSent
+    packetsLost
+    packetLossPercentage
+    bufferState
+    bufferHealth
+    bufferSize
+    bufferUsed
+    audioChannels
+    audioSampleRate
+    audioCodec
+    audioBitrate
   }
 }
 
-query GetTrackListEvents($stream: String!, $timeRange: TimeRangeInput) {
-  trackListEvents(stream: $stream, timeRange: $timeRange) {
-    timestamp
-    stream
-    nodeId
-    trackList
-    trackCount
-    tracks {
-      trackName
-      trackType
-      codec
-      bitrateKbps
-      bitrateBps
-      buffer
-      jitter
-      width
-      height
-      fps
-      resolution
-      hasBFrames
-      channels
-      sampleRate
+query GetTrackListEvents(
+  $stream: String!
+  $timeRange: TimeRangeInput
+  $first: Int = 100
+  $after: String
+  $noCache: Boolean = false
+) {
+  trackListEventsConnection(
+    stream: $stream
+    timeRange: $timeRange
+    first: $first
+    after: $after
+    noCache: $noCache
+  ) {
+    edges {
+      cursor
+      node {
+        timestamp
+        stream
+        nodeId
+        trackList
+        trackCount
+        tracks {
+          trackName
+          trackType
+          codec
+          bitrateKbps
+          bitrateBps
+          buffer
+          jitter
+          width
+          height
+          fps
+          resolution
+          hasBFrames
+          channels
+          sampleRate
+        }
+      }
     }
-  }
-}
-
-query GetStreamHealthAlerts($stream: String, $timeRange: TimeRangeInput) {
-  streamHealthAlerts(stream: $stream, timeRange: $timeRange) {
-    timestamp
-    stream
-    nodeId
-    alertType
-    severity
-    healthScore
-    frameJitterMs
-    packetLossPercentage
-    issuesDescription
-    bufferState
-    qualityTier
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+    totalCount
   }
 }
 
@@ -95,8 +137,6 @@ query GetRebufferingEvents($stream: String!, $timeRange: TimeRangeInput) {
     previousState
     rebufferStart
     rebufferEnd
-    healthScore
-    frameJitterMs
     packetLossPercentage
   }
 }

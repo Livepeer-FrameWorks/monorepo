@@ -8,6 +8,12 @@
 				default: "bg-card text-card-foreground",
 				destructive:
 					"text-destructive bg-card *:data-[slot=alert-description]:text-destructive/90 [&>svg]:text-current",
+				info: "bg-accent/10 border-accent/30 text-accent *:data-[slot=alert-description]:text-accent/90 [&>svg]:text-current",
+				success:
+					"bg-success/10 border-success/30 text-success *:data-[slot=alert-description]:text-success/90 [&>svg]:text-current",
+				warning:
+					"bg-warning/10 border-warning/30 text-warning *:data-[slot=alert-description]:text-warning/90 [&>svg]:text-current",
+				error: "bg-error/10 border-error/30 text-error *:data-[slot=alert-description]:text-error/90 [&>svg]:text-current",
 			},
 		},
 		defaultVariants: {

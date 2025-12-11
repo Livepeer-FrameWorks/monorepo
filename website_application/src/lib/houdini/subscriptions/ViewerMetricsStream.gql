@@ -1,0 +1,25 @@
+subscription ViewerMetricsStream($stream: String!) {
+  viewerMetrics(stream: $stream) {
+    nodeId
+    internalName
+    action
+    protocol
+    host
+    sessionId
+    connectionTime
+    position
+    bandwidthInBps
+    bandwidthOutBps
+    bytesDownloaded
+    bytesUploaded
+    packetsSent
+    packetsLost
+    packetsRetransmitted
+    timestamp
+    clientIp
+    clientCountry
+    clientCity
+    clientLatitude
+    clientLongitude
+  }
+}

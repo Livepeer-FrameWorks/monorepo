@@ -515,18 +515,19 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ message = "Waiting for so
   return (
     <div
       ref={containerRef}
+      className="fw-player-root"
       style={{
         position: "relative",
         width: "100%",
         height: "100%",
         minHeight: "300px",
         background: `
-          linear-gradient(135deg, 
-            #1a1b26 0%, 
-            #24283b 25%, 
-            #1a1b26 50%, 
-            #24283b 75%, 
-            #1a1b26 100%
+          linear-gradient(135deg,
+            hsl(var(--tn-bg-dark, 235 21% 11%)) 0%,
+            hsl(var(--tn-bg, 233 23% 17%)) 25%,
+            hsl(var(--tn-bg-dark, 235 21% 11%)) 50%,
+            hsl(var(--tn-bg, 233 23% 17%)) 75%,
+            hsl(var(--tn-bg-dark, 235 21% 11%)) 100%
           )
         `,
         backgroundSize: "400% 400%",
@@ -536,7 +537,7 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({ message = "Waiting for so
         alignItems: "center",
         justifyContent: "center",
         overflow: "hidden",
-        borderRadius: "1px",
+        borderRadius: "0",  /* Slab - no rounded corners */
         userSelect: "none",
         WebkitUserSelect: "none",
         MozUserSelect: "none",

@@ -1,10 +1,24 @@
 # Infrastructure management mutations
+# Uses shared fragments from fragments/shared.graphql
+
 mutation UpdateTenant($input: UpdateTenantInput!) {
   updateTenant(input: $input) {
-    id
-    name
-    settings
-    cluster
-    createdAt
+    ... on Tenant {
+      ...CoreTenant
+    }
+    ... on ValidationError {
+      ...ValidationErrorFields
+    }
+    ... on AuthError {
+      ...AuthErrorFields
+    }
   }
+}
+
+mutation SubscribeToCluster($clusterId: ID!) {
+  subscribeToCluster(clusterId: $clusterId)
+}
+
+mutation UnsubscribeFromCluster($clusterId: ID!) {
+  unsubscribeFromCluster(clusterId: $clusterId)
 }

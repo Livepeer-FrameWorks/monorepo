@@ -1,13 +1,15 @@
 module frameworks/api_analytics_query
 
-go 1.23.8
+go 1.24.0
 
 require (
 	frameworks/pkg v0.0.0
-	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/gin-gonic/gin v1.9.1
 	github.com/prometheus/client_golang v1.17.0
-	github.com/stretchr/testify v1.10.0
+	github.com/sirupsen/logrus v1.9.3
+	github.com/stretchr/testify v1.11.1
+	google.golang.org/grpc v1.74.2
+	google.golang.org/protobuf v1.36.6
 )
 
 replace frameworks/pkg => ../pkg
@@ -51,9 +53,9 @@ require (
 	github.com/prometheus/client_model v0.4.1-0.20230718164431-9a2bf3000d16 // indirect
 	github.com/prometheus/common v0.44.0 // indirect
 	github.com/prometheus/procfs v0.11.1 // indirect
+	github.com/rogpeppe/go-internal v1.12.0 // indirect
 	github.com/segmentio/asm v1.2.0 // indirect
 	github.com/shopspring/decimal v1.4.0 // indirect
-	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/twmb/franz-go v1.19.5 // indirect
 	github.com/twmb/franz-go/pkg/kmsg v1.11.2 // indirect
@@ -65,6 +67,6 @@ require (
 	golang.org/x/net v0.42.0 // indirect
 	golang.org/x/sys v0.34.0 // indirect
 	golang.org/x/text v0.27.0 // indirect
-	google.golang.org/protobuf v1.36.6 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20250528174236-200df99c418a // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

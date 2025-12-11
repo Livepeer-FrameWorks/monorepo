@@ -31,3 +31,13 @@ export * from './PlayerRegistry';
 export { PlayerManager } from './PlayerManager';
 export { globalPlayerManager, createPlayerManager, ensurePlayersRegistered } from './PlayerRegistry';
 export type { IPlayer, PlayerOptions } from './PlayerInterface';
+
+// New core classes (MistMetaPlayer feature backport)
+export { QualityMonitor } from './QualityMonitor';
+export type { QualityMonitorOptions, QualityMonitorState } from './QualityMonitor';
+export { TelemetryReporter } from './TelemetryReporter';
+export type { TelemetryReporterConfig } from './TelemetryReporter';
+export { ABRController } from './ABRController';
+export type { ABRControllerConfig, ABRDecision } from './ABRController';
+export { MetaTrackManager } from './MetaTrackManager';
+export type { MetaTrackManagerConfig, MetaTrackSubscription } from './MetaTrackManager';

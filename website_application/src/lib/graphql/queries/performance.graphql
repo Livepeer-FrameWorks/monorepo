@@ -1,21 +1,6 @@
 # Performance and aggregated analytics queries
 
-# 5-minute aggregated viewer metrics
-query GetViewerMetrics5m($stream: String, $timeRange: TimeRangeInput) {
-  viewerMetrics5m(stream: $stream, timeRange: $timeRange) {
-    timestamp
-    internalName
-    nodeId
-    peakViewers
-    avgViewers
-    uniqueCountries
-    uniqueCities
-    avgConnectionQuality
-    avgBufferHealth
-  }
-}
-
-# Service instance monitoring for performance
+# Service instance monitoring for performance (no Connection version - stays as array)
 query GetPerformanceServiceInstances($clusterId: String) {
   serviceInstances(clusterId: $clusterId) {
     id
@@ -37,99 +22,170 @@ query GetPerformanceServiceInstances($clusterId: String) {
   }
 }
 
-# Platform-wide performance overview
-query GetPlatformPerformance($timeRange: TimeRangeInput) {
-  viewerMetrics5m(timeRange: $timeRange) {
-    timestamp
-    internalName
-    nodeId
-    peakViewers
-    avgViewers
-    uniqueCountries
-    uniqueCities
-    avgConnectionQuality
-    avgBufferHealth
-  }
-
-  nodeMetrics(timeRange: $timeRange) {
-    timestamp
-    nodeId
-    cpuUsage
-    memoryUsage
-    diskUsage
-    healthScore
-    status
+# Platform-wide performance overview (node metrics only - viewer metrics use viewerCountTimeSeries)
+query GetPlatformPerformance(
+  $timeRange: TimeRangeInput
+  $first: Int = 100
+  $after: String
+  $noCache: Boolean = false
+) {
+  nodeMetricsConnection(
+    timeRange: $timeRange
+    first: $first
+    after: $after
+    noCache: $noCache
+  ) {
+    edges {
+      cursor
+      node {
+        timestamp
+        nodeId
+        cpuUsage
+        memoryTotal
+        memoryUsed
+        diskTotal
+        diskUsed
+        shmTotal
+        shmUsed
+        status
+      }
+    }
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+    totalCount
   }
 }
 
-# Stream performance with aggregated data
-query GetStreamPerformance($stream: String!, $timeRange: TimeRangeInput) {
-  viewerMetrics5m(stream: $stream, timeRange: $timeRange) {
-    timestamp
-    internalName
-    nodeId
-    peakViewers
-    avgViewers
-    uniqueCountries
-    uniqueCities
-    avgConnectionQuality
-    avgBufferHealth
-  }
-
+# Stream performance with routing data
+query GetStreamPerformance(
+  $stream: String!
+  $timeRange: TimeRangeInput
+  $first: Int = 100
+  $after: String
+  $noCache: Boolean = false
+) {
   # Include routing performance for this stream
-  routingEvents(stream: $stream, timeRange: $timeRange) {
-    timestamp
-    selectedNode
-    score
-    status
-    clientCountry
-    nodeLatitude
-    nodeLongitude
+  routingEventsConnection(
+    stream: $stream
+    timeRange: $timeRange
+    first: $first
+    after: $after
+    noCache: $noCache
+  ) {
+    edges {
+      cursor
+      node {
+        timestamp
+        selectedNode
+        score
+        status
+        clientCountry
+        nodeLatitude
+        nodeLongitude
+      }
+    }
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+    totalCount
   }
 }
 
 # Node efficiency metrics combining performance and routing
-query GetNodeEfficiency($nodeId: String!, $timeRange: TimeRangeInput) {
-  nodeMetrics(nodeId: $nodeId, timeRange: $timeRange) {
-    timestamp
-    nodeId
-    cpuUsage
-    memoryUsage
-    diskUsage
-    networkRx
-    networkTx
-    healthScore
-    status
+query GetNodeEfficiency(
+  $nodeId: String!
+  $timeRange: TimeRangeInput
+  $first: Int = 100
+  $after: String
+  $noCache: Boolean = false
+) {
+  nodeMetricsConnection(
+    nodeId: $nodeId
+    timeRange: $timeRange
+    first: $first
+    after: $after
+    noCache: $noCache
+  ) {
+    edges {
+      cursor
+      node {
+        timestamp
+        nodeId
+        cpuUsage
+        memoryTotal
+        memoryUsed
+        diskTotal
+        diskUsed
+        shmTotal
+        shmUsed
+        networkRx
+        networkTx
+        status
+      }
+    }
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+    totalCount
   }
 
   # Get routing decisions made for this node
-  routingEvents(timeRange: $timeRange) {
-    timestamp
-    streamName
-    selectedNode
-    score
-    status
-    clientCountry
+  routingEventsConnection(
+    timeRange: $timeRange
+    first: $first
+    after: $after
+    noCache: $noCache
+  ) {
+    edges {
+      cursor
+      node {
+        timestamp
+        streamName
+        selectedNode
+        score
+        status
+        clientCountry
+      }
+    }
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+    totalCount
   }
 }
 
-# Regional performance analysis
-query GetRegionalPerformance($timeRange: TimeRangeInput) {
-  viewerMetrics5m(timeRange: $timeRange) {
-    timestamp
-    internalName
-    nodeId
-    avgViewers
-    uniqueCountries
-    avgConnectionQuality
-    avgBufferHealth
-  }
-
-  connectionEvents(timeRange: $timeRange) {
-    timestamp
-    nodeId
-    countryCode
-    city
-    eventType
+# Regional performance analysis (connection events for geographic data)
+query GetRegionalPerformance(
+  $timeRange: TimeRangeInput
+  $first: Int = 100
+  $after: String
+  $noCache: Boolean = false
+) {
+  connectionEventsConnection(
+    timeRange: $timeRange
+    first: $first
+    after: $after
+    noCache: $noCache
+  ) {
+    edges {
+      cursor
+      node {
+        timestamp
+        nodeId
+        countryCode
+        city
+        eventType
+      }
+    }
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+    totalCount
   }
 }

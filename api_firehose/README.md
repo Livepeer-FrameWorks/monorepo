@@ -3,7 +3,7 @@
 Event ingress over gRPC. Validates, batches, and publishes to Kafka with tenant headers.
 
 ## What it does
-- Receives batched events from Helmsman and others (gRPC streaming)
+- Receives batched events from Foghorn (gRPC streaming)
 - Validates schemas and maps to hyphenated event types
 - Publishes to `analytics_events` with `tenant_id` header
 
@@ -17,14 +17,8 @@ Event ingress over gRPC. Validates, batches, and publishes to Kafka with tenant 
 ## Health
 - gRPC: `decklog.DecklogService/CheckHealth` (see docker-compose healthcheck example)
 
-Configuration lives in `config/env/base.env` and `config/env/secrets.env`. Generate `.env` with `make env` or `frameworks config env generate`, and keep secrets in the git-ignored `config/env/secrets.env`. See `docs/configuration.md` for details. Do not commit secrets.
-
-## Related
-- Root `README.md` (ports, stack overview)
-- `docs/IMPLEMENTATION.md` (event headers/types)
+Configuration lives in `config/env/base.env` and `config/env/secrets.env`. Generate `.env` with `make env` or `frameworks config env generate`, and keep secrets in the git-ignored `config/env/secrets.env`. Do not commit secrets.
 
 Development:
 - `make proto` to generate stubs
-- `make build` to build
-
-Cross‑refs: see docs/IMPLEMENTATION.md for event headers and types. 
+- `make build` to build 

@@ -3,29 +3,30 @@ package handlers
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/big"
 	"net/http"
 	"os"
+	"strings"
 	"time"
-
-	"github.com/google/uuid"
-
-	purserapi "frameworks/pkg/api/purser"
-	"frameworks/pkg/logging"
-	"frameworks/pkg/models"
-
-	"crypto/ecdsa"
-	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
+	"github.com/google/uuid"
+	"github.com/sirupsen/logrus"
+
+	"frameworks/pkg/config"
+	"frameworks/pkg/kafka"
+	"frameworks/pkg/logging"
+	"frameworks/pkg/models"
 )
 
 // isClusterMetered checks if a cluster is metered based on the metered clusters list
@@ -47,23 +48,53 @@ type JobManager struct {
 	logger        logging.Logger
 	emailService  *EmailService
 	cryptoMonitor *CryptoMonitor
+	kafkaConsumer *kafka.Consumer
 	stopCh        chan struct{}
+	billingTopic  string
 }
 
 // NewJobManager creates a new job manager
 func NewJobManager(database *sql.DB, log logging.Logger) *JobManager {
+	// Initialize Kafka consumer
+	brokers := strings.Split(config.GetEnv("KAFKA_BROKERS", "kafka:9092"), ",")
+	clusterID := config.GetEnv("KAFKA_CLUSTER_ID", "local")
+	clientID := config.GetEnv("KAFKA_CLIENT_ID", "purser")
+	groupID := config.GetEnv("KAFKA_GROUP_ID", "purser-ingest")
+	billingTopic := config.GetEnv("BILLING_KAFKA_TOPIC", "billing.usage_reports")
+	kLogger := logrus.New() // Adapt logger
+
+	// Consumer group for billing reports
+	// Note: We reuse KAFKA_BROKERS but use a unique group ID to avoid collision with analytics consumers
+	consumer, err := kafka.NewConsumer(brokers, groupID, clusterID, clientID, kLogger)
+	if err != nil {
+		log.WithError(err).Error("Failed to create Kafka consumer for billing")
+		// Don't fatal here, allow API to start without consumer if needed
+	}
+
 	return &JobManager{
 		db:            database,
 		logger:        log,
 		emailService:  NewEmailService(log),
 		cryptoMonitor: NewCryptoMonitor(database, log),
+		kafkaConsumer: consumer,
 		stopCh:        make(chan struct{}),
+		billingTopic:  billingTopic,
 	}
 }
 
 // Start begins all background jobs
 func (jm *JobManager) Start(ctx context.Context) {
 	jm.logger.Info("Starting billing job manager")
+
+	// Start usage report consumer
+	if jm.kafkaConsumer != nil {
+		jm.kafkaConsumer.AddHandler(jm.billingTopic, jm.handleUsageReport)
+		go func() {
+			if err := jm.kafkaConsumer.Start(ctx); err != nil {
+				jm.logger.WithError(err).Error("Kafka consumer exited with error")
+			}
+		}()
+	}
 
 	// Start crypto payment monitor
 	go jm.cryptoMonitor.Start(ctx)
@@ -85,7 +116,39 @@ func (jm *JobManager) Start(ctx context.Context) {
 func (jm *JobManager) Stop() {
 	jm.logger.Info("Stopping billing job manager")
 	jm.cryptoMonitor.Stop()
+	if jm.kafkaConsumer != nil {
+		jm.kafkaConsumer.Close()
+	}
 	close(jm.stopCh)
+}
+
+// handleUsageReport consumes billing usage reports from Kafka
+func (jm *JobManager) handleUsageReport(ctx context.Context, msg kafka.Message) error {
+	var summary models.UsageSummary
+	if err := json.Unmarshal(msg.Value, &summary); err != nil {
+		jm.logger.WithError(err).Error("Failed to unmarshal usage summary from Kafka")
+		return nil // Skip bad message
+	}
+
+	if err := jm.processUsageSummary(summary, "kafka"); err != nil {
+		jm.logger.WithError(err).WithFields(logging.Fields{
+			"tenant_id": summary.TenantID,
+			"period":    summary.Period,
+		}).Error("Failed to process usage summary from Kafka")
+		return err
+	}
+
+	// Update invoice draft after processing
+	if err := jm.updateInvoiceDraft(summary.TenantID); err != nil {
+		jm.logger.WithError(err).WithField("tenant_id", summary.TenantID).Warn("Failed to update invoice draft")
+	}
+
+	jm.logger.WithFields(logging.Fields{
+		"tenant_id": summary.TenantID,
+		"period":    summary.Period,
+	}).Debug("Processed usage summary from Kafka")
+
+	return nil
 }
 
 // runInvoiceGeneration generates monthly invoices for active tenants
@@ -123,7 +186,7 @@ func (jm *JobManager) generateMonthlyInvoices() {
 	rows, err := jm.db.Query(`
 		SELECT ts.tenant_id, ts.billing_email, ts.tier_id, ts.status,
 		       bt.tier_name, bt.display_name, bt.base_price, bt.currency, bt.billing_period,
-		       bt.metering_enabled, bt.overage_rates,
+		       bt.metering_enabled, bt.overage_rates, bt.storage_allocation, bt.bandwidth_allocation,
 		       ts.custom_pricing, ts.custom_features, ts.custom_allocations
 		FROM purser.tenant_subscriptions ts
 		JOIN purser.billing_tiers bt ON ts.tier_id = bt.id
@@ -146,11 +209,15 @@ func (jm *JobManager) generateMonthlyInvoices() {
 		var tierName, displayName, currency, billingPeriod string
 		var basePrice float64
 		var meteringEnabled bool
-		var overageRates, customPricing, customFeatures, customAllocations models.JSONB
+		var overageRates models.OverageRates
+		var storageAllocation, bandwidthAllocation models.AllocationDetails
+		var customPricing models.CustomPricing
+		var customFeatures models.BillingFeatures
+		var customAllocations models.AllocationDetails
 
 		err := rows.Scan(&tenantID, &billingEmail, &tierID, &subscriptionStatus,
 			&tierName, &displayName, &basePrice, &currency, &billingPeriod,
-			&meteringEnabled, &overageRates,
+			&meteringEnabled, &overageRates, &storageAllocation, &bandwidthAllocation,
 			&customPricing, &customFeatures, &customAllocations)
 		if err != nil {
 			jm.logger.WithFields(logging.Fields{
@@ -182,11 +249,11 @@ func (jm *JobManager) generateMonthlyInvoices() {
 		billingMonth := firstOfMonth.AddDate(0, -1, 0).Format("2006-01") // Previous month
 		usageData := map[string]float64{}
 
+		// Fetch raw records to aggregate correctly (SUM vs MAX)
 		usageRows, err := jm.db.Query(`
-			SELECT usage_type, SUM(usage_value) as total_usage
+			SELECT usage_type, usage_value
 			FROM purser.usage_records
 			WHERE tenant_id = $1 AND billing_month = $2
-			GROUP BY usage_type
 		`, tenantID, billingMonth)
 
 		if err != nil {
@@ -196,9 +263,19 @@ func (jm *JobManager) generateMonthlyInvoices() {
 			defer usageRows.Close()
 			for usageRows.Next() {
 				var usageType string
-				var totalUsage float64
-				if err := usageRows.Scan(&usageType, &totalUsage); err == nil {
-					usageData[usageType] = totalUsage
+				var val float64
+				if err := usageRows.Scan(&usageType, &val); err == nil {
+					// Apply correct aggregation per type
+					switch usageType {
+					case "average_storage_gb", "peak_bandwidth_mbps", "max_viewers", "total_streams", "unique_users":
+						// State/Peak metrics: Take MAX
+						if val > usageData[usageType] {
+							usageData[usageType] = val
+						}
+					default:
+						// Flow metrics (hours, gb transfer): SUM
+						usageData[usageType] += val
+					}
 				}
 			}
 		}
@@ -208,26 +285,44 @@ func (jm *JobManager) generateMonthlyInvoices() {
 		var meteredAmount float64
 
 		// Apply custom pricing if available (for enterprise tiers)
-		if len(customPricing) > 0 {
-			if customBase, ok := customPricing["base_price"].(float64); ok {
-				totalAmount = customBase
-			}
+		if customPricing.BasePrice > 0 {
+			totalAmount = customPricing.BasePrice
 		}
 
 		// Calculate overage charges if metering is enabled
-		if meteringEnabled && len(overageRates) > 0 {
-			for usageType, usage := range usageData {
-				if rate, ok := overageRates[usageType+"_per_unit"].(float64); ok {
-					overage := usage * rate
-					meteredAmount += overage
-					jm.logger.WithFields(logging.Fields{
-						"tenant_id":  tenantID,
-						"usage_type": usageType,
-						"usage":      usage,
-						"rate":       rate,
-						"overage":    overage,
-					}).Debug("Calculated overage charge")
+		if meteringEnabled {
+			// Billing model: delivered_minutes (viewer × minutes)
+			// viewer_hours from usage data, convert to minutes
+			viewerMinutes := usageData["viewer_hours"] * 60
+
+			// 1. Bandwidth (delivered minutes)
+			if bandwidthAllocation.Limit != nil && viewerMinutes > 0 {
+				includedMinutes := *bandwidthAllocation.Limit
+				billable := viewerMinutes - includedMinutes
+				if billable > 0 && overageRates.Bandwidth.UnitPrice > 0 {
+					meteredAmount += billable * overageRates.Bandwidth.UnitPrice
 				}
+			}
+
+			// 2. Storage overage
+			storageUsage := usageData["average_storage_gb"]
+			if storageUsage == 0 {
+				storageUsage = usageData["recording_gb"]
+			}
+			if storageAllocation.Limit != nil && storageUsage > 0 {
+				includedStorage := *storageAllocation.Limit
+				billable := storageUsage - includedStorage
+				if billable > 0 && overageRates.Storage.UnitPrice > 0 {
+					meteredAmount += billable * overageRates.Storage.UnitPrice
+				}
+			}
+
+			// 3. Compute overage (GPU hours)
+			gpuHours := usageData["gpu_hours"]
+			if gpuHours > 0 && overageRates.Compute.UnitPrice > 0 {
+				// TODO: Get compute allocation limit when compute billing is implemented
+				// For now, charge all GPU hours at overage rate
+				meteredAmount += gpuHours * overageRates.Compute.UnitPrice
 			}
 		}
 
@@ -244,10 +339,10 @@ func (jm *JobManager) generateMonthlyInvoices() {
 		}
 
 		// Create typed usage details
-		usageDetails := purserapi.UsageDetails{
+		usageDetails := UsageDetails{
 			UsageData:    usageData,
 			BillingMonth: billingMonth,
-			TierInfo: purserapi.TierInfo{
+			TierInfo: TierInfo{
 				TierID:          tierID,
 				TierName:        tierName,
 				DisplayName:     displayName,
@@ -314,7 +409,15 @@ func (jm *JobManager) generateMonthlyInvoices() {
 
 		// Send invoice created email notification
 		if billingEmail != "" {
-			err = jm.emailService.SendInvoiceCreatedEmail(billingEmail, "", invoiceID, totalAmount, currency, dueDate)
+			// Convert usage data for email template
+			emailUsageDetails := make(map[string]interface{})
+			for k, v := range usageData {
+				emailUsageDetails[k] = v
+			}
+			// Add unique users from usage details if available (need to fetch from records or summary)
+			// For now, usageData has the aggregates
+
+			err = jm.emailService.SendInvoiceCreatedEmail(billingEmail, "", invoiceID, totalAmount, currency, dueDate, emailUsageDetails)
 			if err != nil {
 				jm.logger.WithError(err).WithFields(logging.Fields{
 					"billing_email": billingEmail,
@@ -564,11 +667,11 @@ func (jm *JobManager) sweepBitcoin(fromAddress, toAddress string, amount float64
 	}
 
 	// Create transaction payload for BlockCypher with private key for signing
-	payload := purserapi.BlockCypherTransactionRequest{
-		Inputs: []purserapi.BlockCypherTransactionInput{
+	payload := BlockCypherTransactionRequest{
+		Inputs: []BlockCypherTransactionInput{
 			{Addresses: []string{fromAddress}},
 		},
-		Outputs: []purserapi.BlockCypherTransactionOutput{
+		Outputs: []BlockCypherTransactionOutput{
 			{
 				Addresses: []string{toAddress},
 				Value:     amountInSatoshis,
@@ -928,4 +1031,201 @@ func (jm *JobManager) cleanupExpiredWallets() {
 			"expired_wallets": rowsAffected,
 		}).Info("Cleaned up expired crypto wallets")
 	}
+}
+
+// ============================================================================
+// USAGE PROCESSING (Kafka ingestion)
+// These methods were moved from usage.go when HTTP handlers were deleted.
+// Usage ingestion flows: Periscope -> Kafka -> JobManager.handleUsageReport
+// ============================================================================
+
+// processUsageSummary processes a single usage summary and stores it in the usage records table
+func (jm *JobManager) processUsageSummary(summary models.UsageSummary, source string) error {
+	billingMonth := summary.Timestamp.Format("2006-01")
+	usageTypes := map[string]float64{
+		"stream_hours":            summary.StreamHours,
+		"viewer_hours":            summary.ViewerHours,
+		"egress_gb":               summary.EgressGB,
+		"recording_gb":            summary.RecordingGB,
+		"peak_bandwidth_mbps":     summary.PeakBandwidthMbps,
+		"storage_gb":              summary.StorageGB,
+		"average_storage_gb":      summary.AverageStorageGB,
+		"clips_added":             float64(summary.ClipsAdded),
+		"clips_deleted":           float64(summary.ClipsDeleted),
+		"clip_storage_added_gb":   summary.ClipStorageAddedGB,
+		"clip_storage_deleted_gb": summary.ClipStorageDeletedGB,
+	}
+
+	// Build usage details JSONB
+	usageDetails := models.JSONB{
+		"max_viewers":             summary.MaxViewers,
+		"total_streams":           summary.TotalStreams,
+		"unique_users":            summary.UniqueUsers,
+		"avg_viewers":             summary.AvgViewers,
+		"unique_countries":        summary.UniqueCountries,
+		"unique_cities":           summary.UniqueCities,
+		"geo_breakdown":           summary.GeoBreakdown,
+		"avg_buffer_health":       summary.AvgBufferHealth,
+		"avg_bitrate":             summary.AvgBitrate,
+		"packet_loss_rate":        summary.PacketLossRate,
+		"source":                  source,
+		"clips_added":             summary.ClipsAdded,
+		"clips_deleted":           summary.ClipsDeleted,
+		"clip_storage_added_gb":   summary.ClipStorageAddedGB,
+		"clip_storage_deleted_gb": summary.ClipStorageDeletedGB,
+		"storage_gb":              summary.StorageGB,
+	}
+
+	// Upsert each usage type
+	for usageType, usageValue := range usageTypes {
+		if usageValue <= 0 {
+			continue
+		}
+
+		_, err := jm.db.Exec(`
+			INSERT INTO purser.usage_records (tenant_id, cluster_id, usage_type, usage_value, usage_details, billing_month, created_at)
+			VALUES ($1, $2, $3, $4, $5, $6, NOW())
+			ON CONFLICT (tenant_id, cluster_id, usage_type, billing_month) DO UPDATE SET
+				usage_value = purser.usage_records.usage_value + EXCLUDED.usage_value,
+				usage_details = EXCLUDED.usage_details,
+				updated_at = NOW()
+		`, summary.TenantID, summary.ClusterID, usageType, usageValue, usageDetails, billingMonth)
+
+		if err != nil {
+			return fmt.Errorf("failed to upsert %s: %w", usageType, err)
+		}
+	}
+
+	return nil
+}
+
+// updateInvoiceDraft creates or updates an invoice draft for the tenant based on usage
+func (jm *JobManager) updateInvoiceDraft(tenantID string) error {
+	var (
+		tierID              string
+		subscriptionStatus  string
+		basePrice           float64
+		meteringEnabled     bool
+		overageRates        models.OverageRates
+		storageAllocation   models.AllocationDetails
+		bandwidthAllocation models.AllocationDetails
+		customPricing       models.CustomPricing
+	)
+
+	err := jm.db.QueryRow(`
+		SELECT ts.tier_id, ts.status, bt.base_price, bt.metering_enabled,
+		       bt.overage_rates, bt.storage_allocation, bt.bandwidth_allocation, ts.custom_pricing
+		FROM purser.tenant_subscriptions ts
+		JOIN purser.billing_tiers bt ON ts.tier_id = bt.id
+		WHERE ts.tenant_id = $1 AND ts.status = 'active' AND bt.is_active = true
+	`, tenantID).Scan(&tierID, &subscriptionStatus, &basePrice, &meteringEnabled,
+		&overageRates, &storageAllocation, &bandwidthAllocation, &customPricing)
+
+	if err == sql.ErrNoRows {
+		jm.logger.WithField("tenant_id", tenantID).Debug("No active subscription, skipping invoice draft")
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("failed to get subscription: %w", err)
+	}
+
+	// Get current billing period
+	now := time.Now()
+	periodStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+	periodEnd := periodStart.AddDate(0, 1, 0).Add(-time.Second)
+
+	// Aggregate usage for current billing period
+	rows, err := jm.db.Query(`
+		SELECT usage_type, SUM(usage_value) as total
+		FROM purser.usage_records
+		WHERE tenant_id = $1 AND billing_month = $2
+		GROUP BY usage_type
+	`, tenantID, periodStart.Format("2006-01"))
+	if err != nil {
+		return fmt.Errorf("failed to query usage: %w", err)
+	}
+	defer rows.Close()
+
+	var totalStreamHours, totalViewerHours, totalEgressGB, totalRecordingGB float64
+	var maxViewers, totalStreams int64
+	allUsageDetails := make(map[string]interface{})
+
+	for rows.Next() {
+		var usageType string
+		var total float64
+		if err := rows.Scan(&usageType, &total); err != nil {
+			continue
+		}
+		allUsageDetails[usageType] = total
+
+		switch usageType {
+		case "stream_hours":
+			totalStreamHours = total
+		case "viewer_hours":
+			totalViewerHours = total
+		case "egress_gb":
+			totalEgressGB = total
+		case "recording_gb":
+			totalRecordingGB = total
+		}
+	}
+
+	// Calculate charges
+	totalAmount := basePrice
+	if customPricing.BasePrice > 0 {
+		totalAmount = customPricing.BasePrice
+	}
+
+	if meteringEnabled {
+		// Bandwidth overage (delivered minutes = viewer_hours * 60)
+		deliveredMinutes := totalViewerHours * 60
+		if bandwidthAllocation.Limit != nil && overageRates.Bandwidth.UnitPrice > 0 {
+			billableMinutes := deliveredMinutes - *bandwidthAllocation.Limit
+			if billableMinutes > 0 {
+				totalAmount += billableMinutes * overageRates.Bandwidth.UnitPrice
+			}
+		}
+
+		// Storage overage
+		storageUsage := totalRecordingGB
+		if storageAllocation.Limit != nil && overageRates.Storage.UnitPrice > 0 {
+			billableStorage := storageUsage - *storageAllocation.Limit
+			if billableStorage > 0 {
+				totalAmount += billableStorage * overageRates.Storage.UnitPrice
+			}
+		}
+	}
+
+	draftUsageDetails, _ := json.Marshal(allUsageDetails)
+
+	// Upsert invoice draft
+	_, err = jm.db.Exec(`
+		INSERT INTO purser.invoice_drafts (
+			tenant_id, billing_period_start, billing_period_end,
+			stream_hours, egress_gb, recording_gb, max_viewers, total_streams,
+			calculated_amount, status, usage_details, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'draft', $10, NOW(), NOW())
+		ON CONFLICT (tenant_id, billing_period_start) DO UPDATE SET
+			stream_hours = EXCLUDED.stream_hours,
+			egress_gb = EXCLUDED.egress_gb,
+			recording_gb = EXCLUDED.recording_gb,
+			max_viewers = EXCLUDED.max_viewers,
+			total_streams = EXCLUDED.total_streams,
+			calculated_amount = EXCLUDED.calculated_amount,
+			usage_details = EXCLUDED.usage_details,
+			updated_at = NOW()
+	`, tenantID, periodStart, periodEnd, totalStreamHours, totalEgressGB,
+		totalRecordingGB, maxViewers, totalStreams, totalAmount, draftUsageDetails)
+
+	if err != nil {
+		return fmt.Errorf("failed to upsert invoice draft: %w", err)
+	}
+
+	jm.logger.WithFields(logging.Fields{
+		"tenant_id":         tenantID,
+		"billing_period":    periodStart.Format("2006-01"),
+		"calculated_amount": totalAmount,
+	}).Debug("Updated invoice draft")
+
+	return nil
 }

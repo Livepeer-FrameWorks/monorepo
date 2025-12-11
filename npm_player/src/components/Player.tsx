@@ -1,14 +1,18 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import LoadingScreen from "./LoadingScreen";
 import ThumbnailOverlay from "./ThumbnailOverlay";
-import LogoOverlay from "./LogoOverlay";
 import PlayerControls from "./PlayerControls";
+import StreamStateOverlay from "./StreamStateOverlay";
+import { PlayerProvider, usePlayer } from "../context/PlayerContext";
 import { PlayerProps, EndpointInfo, OutputEndpoint, OutputCapabilities, PlayerState, PlayerStateContext } from "../types";
 import useViewerEndpoints from "../hooks/useViewerEndpoints";
+import { useStreamState } from "../hooks/useStreamState";
 import { globalPlayerManager, StreamInfo, StreamSource, StreamTrack } from "../core";
-import defaultLogo from "../../public/logomark.svg";
 
-const Player: React.FC<PlayerProps> = ({
+/**
+ * Inner player component that uses PlayerContext
+ */
+const PlayerInner: React.FC<PlayerProps> = ({
   contentId,
   contentType,
   thumbnailUrl = null,
@@ -16,6 +20,7 @@ const Player: React.FC<PlayerProps> = ({
   endpoints,
   onStateChange
 }) => {
+  const { setPlayer } = usePlayer();
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [isMuted, setIsMuted] = useState<boolean>(true);
   const [currentTime, setCurrentTime] = useState<number>(0);
@@ -38,6 +43,25 @@ const Player: React.FC<PlayerProps> = ({
     gw ? { gatewayUrl: gw, contentType, contentId, authToken: options?.authToken } : ({} as any)
   );
   const ep = endpoints?.primary ? endpoints : fetchedEndpoints || undefined;
+
+  // Extract MistServer base URL for native communication
+  const mistBaseUrl = ep?.primary?.baseUrl || '';
+
+  // Stream state polling via native MistServer WebSocket/HTTP
+  const {
+    status: streamStatus,
+    isOnline: streamIsOnline,
+    message: streamMessage,
+    percentage: streamPercentage,
+    refetch: refetchStreamState,
+  } = useStreamState({
+    mistBaseUrl,
+    streamName: contentId,
+    enabled: Boolean(mistBaseUrl) && contentType === 'live',
+    useWebSocket: true,
+    pollInterval: 3000,
+  });
+
   // Emit helper for state
   const emit = (state: PlayerState, context?: PlayerStateContext) => {
     if (lastStateRef.current !== state) {
@@ -148,6 +172,14 @@ const Player: React.FC<PlayerProps> = ({
 
   const streamInfo: StreamInfo | null = sources.length ? { source: sources, meta: { tracks } } : null;
 
+  // Stable key for sources to avoid unnecessary re-renders
+  // sources is constructed freshly each render, so we use JSON.stringify once in useMemo
+  const sourcesKey = useMemo(
+    () => sources.map(s => s.url).join('|'),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [primary?.nodeId, outputs]
+  );
+
   // Initialize via PlayerManager
   useEffect(() => {
     const container = containerRef.current;
@@ -164,6 +196,10 @@ const Player: React.FC<PlayerProps> = ({
         controls: options?.controls !== false,
         poster: thumbnailUrl || undefined,
         onReady: (el) => {
+          // Set player in context for controls
+          const currentPlayer = globalPlayerManager.getCurrentPlayer();
+          setPlayer(currentPlayer);
+
           setDuration(isFinite(el.duration) ? el.duration : el.duration);
           const onDur = () => setDuration(isFinite(el.duration) ? el.duration : el.duration);
           el.addEventListener('durationchange', onDur);
@@ -188,11 +224,12 @@ const Player: React.FC<PlayerProps> = ({
       .catch((e) => console.warn('Player init failed', e));
     return () => {
       emit('destroyed');
+      setPlayer(null); // Clear player from context on cleanup
       try { (globalPlayerManager as any).off?.('playerSelected', onSelected); } catch {}
       globalPlayerManager.destroy();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [primary?.nodeId, contentId, JSON.stringify(sources)]);
+  }, [primary?.nodeId, contentId, sourcesKey, setPlayer]);
 
   // If Gateway fetch failed, report offline
   useEffect(() => {
@@ -227,9 +264,6 @@ const Player: React.FC<PlayerProps> = ({
       />
     );
   }
-
-  const branding = options?.branding || { showLogo: true };
-  const resolvedLogo: string = options?.branding?.logoUrl || defaultLogo;
 
   // Always render player, conditionally render overlay on top
   const useStockControls = options?.stockControls === true;
@@ -282,10 +316,26 @@ const Player: React.FC<PlayerProps> = ({
     };
   }, [useStockControls]);
 
+  // For live streams, show stream state overlay if not online
+  const showStreamStateOverlay = contentType === 'live' && mistBaseUrl && !streamIsOnline && streamStatus !== 'ONLINE';
+
   return (
     <div className="fw-player-root" data-player-container="true">
       <div ref={containerRef} className="fw-player-container" />
-      {(isBuffering || errorText) && (
+
+      {/* Stream state overlay for live streams (offline/initializing/etc.) */}
+      {showStreamStateOverlay && (
+        <StreamStateOverlay
+          status={streamStatus}
+          message={streamMessage}
+          percentage={streamPercentage}
+          onRetry={refetchStreamState}
+          visible={true}
+        />
+      )}
+
+      {/* Buffering/Error overlay */}
+      {!showStreamStateOverlay && (isBuffering || errorText) && (
         <div
           role="status"
           aria-live="polite"
@@ -328,14 +378,6 @@ const Player: React.FC<PlayerProps> = ({
         </div>
       )}
       {!useStockControls && overlayComponent}
-      <LogoOverlay
-        src={resolvedLogo}
-        show={branding.showLogo !== false}
-        position={branding.position}
-        width={branding.width}
-        height={branding.height}
-        clickUrl={branding.clickUrl}
-      />
       {/* New unified controls component */}
       {!useStockControls && (
         <PlayerControls
@@ -349,4 +391,17 @@ const Player: React.FC<PlayerProps> = ({
   );
 };
 
-export default Player; 
+/**
+ * Main Player component wrapped with PlayerProvider.
+ * This enables PlayerControls to access the player via context
+ * instead of the global singleton.
+ */
+const Player: React.FC<PlayerProps> = (props) => {
+  return (
+    <PlayerProvider>
+      <PlayerInner {...props} />
+    </PlayerProvider>
+  );
+};
+
+export default Player;

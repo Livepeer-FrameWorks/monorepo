@@ -1,0 +1,16 @@
+query GetStreamRecordings($streamId: ID!) {
+  recordings(streamId: $streamId) {
+    id
+    streamId
+    title
+    duration
+    fileSizeBytes
+    playbackId
+    thumbnailUrl
+    startTime
+    endTime
+    status
+    createdAt
+    updatedAt
+  }
+}

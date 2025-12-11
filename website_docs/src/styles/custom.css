@@ -1,0 +1,124 @@
+/* FrameWorks brand colors - aligned with marketing site */
+:root {
+	/* Primary accent - brand blue */
+	--sl-color-accent-low: #16161e;
+	--sl-color-accent: #7aa2f7;
+	--sl-color-accent-high: #c0caf5;
+
+	/* Grayscale - Tokyo Night palette */
+	--sl-color-white: #ffffff;
+	--sl-color-gray-1: #c0caf5;
+	--sl-color-gray-2: #a9b1d6;
+	--sl-color-gray-3: #565f89;
+	--sl-color-gray-4: #414868;
+	--sl-color-gray-5: #24283b;
+	--sl-color-gray-6: #1a1b26;
+	--sl-color-black: #15161e;
+
+	/* Brand palette for custom components */
+	--brand-green: #9ece6a;
+	--brand-yellow: #e0af68;
+	--brand-purple: #bb9af7;
+	--brand-cyan: #7aa2f7;
+	--brand-orange: #ff9e64;
+	--brand-red: #f7768e;
+
+	/* Marketing-compatible HSL values for button styling */
+	--primary: 225 86% 70%;
+	--accent-rgb: 122 162 247;
+	--brand-surface: 229 24% 19%;
+}
+
+/* Light mode - optimized for readability */
+:root[data-theme='light'] {
+	--sl-color-accent-low: #e0e7ff;
+	--sl-color-accent: #3b82f6;
+	--sl-color-accent-high: #1e3a8a;
+	--sl-color-white: #1a1b26;
+	--sl-color-gray-1: #24283b;
+	--sl-color-gray-2: #414868;
+	--sl-color-gray-3: #565f89;
+	--sl-color-gray-4: #a9b1d6;
+	--sl-color-gray-5: #c0caf5;
+	--sl-color-gray-6: #f8fafc;
+	--sl-color-black: #ffffff;
+}
+
+/* Typography alignment with marketing site */
+body {
+	font-family: 'Inter', system-ui, sans-serif;
+}
+
+code {
+	font-family: 'JetBrains Mono', monospace;
+}
+
+/* Button Hover Effects */
+.sl-link-button {
+	transition: all 0.2s ease-out !important;
+	border-radius: 0.85rem !important;
+	font-weight: 600 !important;
+	text-transform: uppercase;
+	letter-spacing: 0.08em;
+	padding: 0.65rem 1.4rem !important;
+	position: relative;
+	overflow: hidden;
+}
+
+/* Primary Action - Marketing-style gradient with overlay */
+.sl-link-button.primary {
+	background: linear-gradient(130deg,
+		color-mix(in srgb, hsl(var(--primary)) 82%, hsl(var(--brand-surface)) 18%),
+		color-mix(in srgb, hsl(var(--primary)) 65%, hsl(var(--brand-surface)) 35%)) !important;
+	border: 1px solid hsl(var(--primary) / 0.45) !important;
+	color: hsl(235 19% 13%) !important;
+	box-shadow: 0 12px 24px rgba(34, 56, 106, 0.32) !important;
+}
+
+.sl-link-button.primary::before {
+	content: '';
+	position: absolute;
+	inset: 0;
+	background: radial-gradient(circle at 20% 20%, rgba(255, 255, 255, 0.35), transparent 55%);
+	opacity: 0.75;
+	pointer-events: none;
+	mix-blend-mode: screen;
+	transition: opacity 0.25s ease;
+	border-radius: inherit;
+}
+
+.sl-link-button.primary:hover {
+	transform: translateY(-2px);
+	border-color: hsl(var(--primary) / 0.6) !important;
+	box-shadow: 0 18px 34px rgba(34, 56, 106, 0.38) !important;
+	background: linear-gradient(130deg,
+		color-mix(in srgb, hsl(var(--primary)) 88%, hsl(var(--brand-surface)) 12%),
+		color-mix(in srgb, hsl(var(--primary)) 72%, hsl(var(--brand-surface)) 28%)) !important;
+}
+
+.sl-link-button.primary:hover::before {
+	opacity: 0.95;
+}
+
+/* Minimal/Secondary Action - Marketing-style subtle surface */
+.sl-link-button.minimal {
+	background-color: rgba(24, 32, 52, 0.55) !important;
+	border: 1px solid rgba(125, 207, 255, 0.32) !important;
+	color: #c0caf5 !important;
+}
+
+.sl-link-button.minimal:hover {
+	transform: translateY(-2px);
+	border-color: rgba(125, 207, 255, 0.48) !important;
+	background-color: rgba(36, 46, 72, 0.68) !important;
+	color: hsl(var(--primary)) !important;
+}
+
+/* Animated Arrow for External Links */
+.sl-link-button.minimal svg {
+	transition: transform 0.2s ease-out;
+}
+
+.sl-link-button.minimal:hover svg {
+	transform: translate(3px, -3px);
+}

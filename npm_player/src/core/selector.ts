@@ -1,12 +1,15 @@
 /**
  * Player Selection Algorithm
  * Ported from MistMetaPlayer v3.1.0
- * 
+ *
  * Implements sophisticated player selection based on:
  * - Source priority (from MistServer)
  * - Player capability scoring
  * - Browser compatibility checks
+ * - Weighted scoring (track types, player priority, source order)
  */
+
+import { scorePlayer } from './scorer';
 
 export interface StreamSource {
   url: string;
@@ -56,48 +59,6 @@ export interface SelectionOptions {
     player?: string | number;
     source?: string | number;
   };
-}
-
-/**
- * Calculate score for a player+source combination
- */
-function calcScore(tracktypes: boolean | string[]): number {
-  if (tracktypes === true) {
-    return 1.9; // Something will play, but player doesn't tell us what
-  }
-  
-  if (tracktypes === false || !Array.isArray(tracktypes)) {
-    return 0;
-  }
-
-  const scores = {
-    video: 2,
-    audio: 1,
-    subtitle: 0.5
-  };
-
-  let score = 0;
-  for (const tracktype of tracktypes) {
-    score += scores[tracktype as keyof typeof scores] || 0;
-  }
-  return score;
-}
-
-/**
- * Calculate maximum possible score for this stream
- */
-function getMaxScore(info: StreamInfo): number {
-  const trackTypes: Record<string, boolean> = {};
-  
-  for (const track of info.meta.tracks) {
-    if (track.type === 'meta') {
-      trackTypes[track.codec] = true;
-    } else {
-      trackTypes[track.type] = true;
-    }
-  }
-  
-  return calcScore(Object.keys(trackTypes));
 }
 
 /**
@@ -159,7 +120,10 @@ export function selectPlayer(
     }
   }
 
-  const maxScore = getMaxScore(info);
+  // Calculate max priority for normalization
+  const maxPriority = Math.max(...filteredPlayers.map(p => p.priority), 1);
+  const totalSources = sources.length;
+
   let best: PlayerSelection = {
     score: 0,
     source_index: -1,
@@ -187,19 +151,20 @@ export function selectPlayer(
         continue;
       }
 
-      const score = calcScore(tracktypes);
-      if (score > best.score) {
+      // Use weighted scoring from scorer.ts
+      const sourceIndex = source.index ?? 0;
+      const playerScore = scorePlayer(tracktypes, player.priority, sourceIndex, {
+        maxPriority,
+        totalSources,
+      });
+
+      if (playerScore.total > best.score) {
         best = {
-          score,
+          score: playerScore.total,
           player: player.shortname,
           source,
-          source_index: source.index || 0
+          source_index: sourceIndex
         };
-
-        // Early exit if we found the maximum possible score
-        if (best.score === maxScore) {
-          return best;
-        }
       }
     }
   }

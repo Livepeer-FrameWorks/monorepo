@@ -1,0 +1,444 @@
+---
+title: "WireGuard Mesh Setup"
+description: "Secure mesh networking for FrameWorks distributed architecture using WireGuard VPN."
+sidebar:
+  order: 11
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+<Aside type="tip" title="Automated Setup Available">
+**Privateer (`api_mesh`)** automates WireGuard mesh configuration for FrameWorks infrastructure nodes. It handles key exchange, peer discovery, and configuration management via Quartermaster. Status: **In Testing**.
+
+This manual guide is for advanced users who need custom configurations or want to understand the underlying mesh architecture.
+</Aside>
+
+A robust mesh network is the backbone of any distributed system. FrameWorks uses WireGuard to create a secure, high-performance private network that connects all your backend services across different regions and clouds.
+
+## Overview
+
+FrameWorks requires a WireGuard mesh network to securely connect backend infrastructure nodes (Central and Regional tiers) across geographic locations. This creates a private overlay network for service-to-service communication.
+
+**Note:** Edge streaming nodes do not participate in this mesh.
+
+### Network Architecture
+
+The mesh uses a structured IP allocation for backend infrastructure:
+
+```
+10.99.0.0/16 - FrameWorks WireGuard Mesh (Backend Infrastructure Only)
+├── 10.99.0.x  - Central control nodes
+├── 10.99.1.x  - Regional frontend nodes
+├── 10.99.2.x  - Reserved
+└── 10.99.3.x  - Database cluster nodes
+```
+
+Edge streaming nodes are **not** part of this mesh—they communicate over the public internet.
+
+## Installation
+
+### Install WireGuard
+
+**Ubuntu/Debian:**
+```bash
+sudo apt update
+sudo apt install wireguard wireguard-tools
+```
+
+**RHEL/CentOS:**
+```bash
+sudo dnf install wireguard-tools
+# or
+sudo yum install wireguard-tools
+```
+
+**Alpine Linux:**
+```bash
+apk add wireguard-tools
+```
+
+### Generate Keys
+
+**On each node, generate key pairs:**
+
+```bash
+# Create WireGuard directory
+sudo mkdir -p /etc/wireguard
+cd /etc/wireguard
+
+# Generate private key
+sudo wg genkey > private.key
+sudo chmod 600 private.key
+
+# Generate public key
+sudo wg pubkey < private.key > public.key
+
+# Store keys securely
+echo "Private key: $(sudo cat private.key)"
+echo "Public key: $(sudo cat public.key)"
+```
+
+## Configuration
+
+### Central Control Node (10.99.0.10)
+
+**Create `/etc/wireguard/wg0.conf`:**
+
+```ini
+[Interface]
+PrivateKey = <central-private-key>
+Address = 10.99.0.10/16
+ListenPort = 51820
+PostUp = iptables -A FORWARD -i %i -j ACCEPT; iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+PostDown = iptables -D FORWARD -i %i -j ACCEPT; iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE
+
+# Database Cluster Nodes
+[Peer]
+PublicKey = <db1-public-key>
+AllowedIPs = 10.99.3.10/32
+Endpoint = <db1-public-ip>:51820
+PersistentKeepalive = 25
+
+[Peer]
+PublicKey = <db2-public-key>
+AllowedIPs = 10.99.3.11/32
+Endpoint = <db2-public-ip>:51820
+PersistentKeepalive = 25
+
+[Peer]
+PublicKey = <db3-public-key>
+AllowedIPs = 10.99.3.12/32
+Endpoint = <db3-public-ip>:51820
+PersistentKeepalive = 25
+
+# Regional Frontend Nodes
+[Peer]
+PublicKey = <regional-eu-public-key>
+AllowedIPs = 10.99.1.10/32
+Endpoint = <regional-eu-public-ip>:51820
+PersistentKeepalive = 25
+
+[Peer]
+PublicKey = <regional-us-public-key>
+AllowedIPs = 10.99.1.11/32
+Endpoint = <regional-us-public-ip>:51820
+PersistentKeepalive = 25
+```
+
+### Regional Frontend Node (10.99.1.10)
+
+**Create `/etc/wireguard/wg0.conf`:**
+
+```ini
+[Interface]
+PrivateKey = <regional-eu-private-key>
+Address = 10.99.1.10/16
+ListenPort = 51820
+
+# Central Control
+[Peer]
+PublicKey = <central-public-key>
+AllowedIPs = 10.99.0.0/24
+Endpoint = <central-public-ip>:51820
+PersistentKeepalive = 25
+
+# Database Cluster (direct access)
+[Peer]
+PublicKey = <db1-public-key>
+AllowedIPs = 10.99.3.10/32
+Endpoint = <db1-public-ip>:51820
+PersistentKeepalive = 25
+
+[Peer]
+PublicKey = <db2-public-key>
+AllowedIPs = 10.99.3.11/32
+Endpoint = <db2-public-ip>:51820
+PersistentKeepalive = 25
+
+[Peer]
+PublicKey = <db3-public-key>
+AllowedIPs = 10.99.3.12/32
+Endpoint = <db3-public-ip>:51820
+PersistentKeepalive = 25
+```
+
+### Database Cluster Node (10.99.3.10)
+
+**Create `/etc/wireguard/wg0.conf`:**
+
+```ini
+[Interface]
+PrivateKey = <db1-private-key>
+Address = 10.99.3.10/16
+ListenPort = 51820
+
+# Central Control
+[Peer]
+PublicKey = <central-public-key>
+AllowedIPs = 10.99.0.0/24
+Endpoint = <central-public-ip>:51820
+PersistentKeepalive = 25
+
+# Regional Nodes (direct database access)
+[Peer]
+PublicKey = <regional-eu-public-key>
+AllowedIPs = 10.99.1.10/32
+Endpoint = <regional-eu-public-ip>:51820
+PersistentKeepalive = 25
+
+[Peer]
+PublicKey = <regional-us-public-key>
+AllowedIPs = 10.99.1.11/32
+Endpoint = <regional-us-public-ip>:51820
+PersistentKeepalive = 25
+
+# Other Database Nodes (cluster communication)
+[Peer]
+PublicKey = <db2-public-key>
+AllowedIPs = 10.99.3.11/32
+Endpoint = <db2-public-ip>:51820
+PersistentKeepalive = 25
+
+[Peer]
+PublicKey = <db3-public-key>
+AllowedIPs = 10.99.3.12/32
+Endpoint = <db3-public-ip>:51820
+PersistentKeepalive = 25
+```
+
+## Managing the Mesh
+
+### Enable and Start WireGuard
+
+**On all nodes:**
+
+```bash
+# Set proper permissions
+sudo chmod 600 /etc/wireguard/wg0.conf
+
+# Enable and start WireGuard
+sudo systemctl enable wg-quick@wg0
+sudo systemctl start wg-quick@wg0
+
+# Check status
+sudo systemctl status wg-quick@wg0
+sudo wg show
+```
+
+### Manage WireGuard Interface
+
+```bash
+# Start interface manually
+sudo wg-quick up wg0
+
+# Stop interface  
+sudo wg-quick down wg0
+
+# Reload configuration
+sudo wg-quick down wg0
+sudo wg-quick up wg0
+
+# Show interface status
+sudo wg show wg0
+
+# Show detailed peer info
+sudo wg show wg0 dump
+```
+
+## Firewall Configuration
+
+### iptables Rules
+
+**Allow WireGuard traffic:**
+
+```bash
+# Allow WireGuard port
+sudo iptables -A INPUT -p udp --dport 51820 -j ACCEPT
+
+# Allow WireGuard interface traffic
+sudo iptables -A INPUT -i wg0 -j ACCEPT
+sudo iptables -A FORWARD -i wg0 -j ACCEPT
+sudo iptables -A OUTPUT -o wg0 -j ACCEPT
+
+# Save rules (Ubuntu/Debian)
+sudo iptables-save > /etc/iptables/rules.v4
+```
+
+### UFW Configuration (Ubuntu)
+
+```bash
+# Allow WireGuard port
+sudo ufw allow 51820/udp
+
+# Allow mesh network traffic
+sudo ufw allow from 10.99.0.0/16
+
+# Enable UFW
+sudo ufw enable
+```
+
+### Service-Specific Rules
+
+**Central Control Node:**
+```bash
+# Allow API access from mesh only
+sudo iptables -A INPUT -s 10.99.0.0/16 -p tcp --dport 18001:18010 -j ACCEPT
+sudo iptables -A INPUT -p tcp --dport 18001:18010 -j DROP
+```
+
+**Edge Streaming Node:**
+```bash
+# Allow public RTMP and HTTP
+sudo iptables -A INPUT -p tcp --dport 1935 -j ACCEPT  # RTMP
+sudo iptables -A INPUT -p tcp --dport 8080 -j ACCEPT  # HTTP Media
+
+# Allow management from central only
+sudo iptables -A INPUT -s 10.99.0.0/24 -p tcp --dport 4242 -j ACCEPT
+sudo iptables -A INPUT -p tcp --dport 4242 -j DROP
+```
+
+**Database Cluster Node:**
+```bash
+# Allow database access from mesh only
+sudo iptables -A INPUT -s 10.99.0.0/16 -p tcp --dport 5433 -j ACCEPT  # YugabyteDB
+sudo iptables -A INPUT -s 10.99.0.0/16 -p tcp --dport 9000 -j ACCEPT  # ClickHouse
+sudo iptables -A INPUT -s 10.99.0.0/16 -p tcp --dport 2181 -j ACCEPT  # Zookeeper
+
+# Block external database access
+sudo iptables -A INPUT -p tcp --dport 5433 -j DROP
+sudo iptables -A INPUT -p tcp --dport 9000 -j DROP
+sudo iptables -A INPUT -p tcp --dport 2181 -j DROP
+```
+
+## Testing and Validation
+
+### Connectivity Testing
+
+**Test mesh connectivity:**
+
+```bash
+# From any node, ping other mesh nodes
+ping 10.99.0.10  # Central
+ping 10.99.1.10  # Regional EU
+ping 10.99.3.10  # Database-1
+
+# Test with specific packet sizes
+ping -s 1400 10.99.0.10
+ping -s 8192 10.99.3.10
+```
+
+### Bandwidth Testing
+
+**Install and test bandwidth:**
+
+```bash
+# Install iperf3
+sudo apt install iperf3
+
+# On target node (server)
+iperf3 -s
+
+# From source node (client)
+iperf3 -c 10.99.x.x -t 30
+```
+
+### Service Testing
+
+**Test database connectivity:**
+
+```bash
+# YugabyteDB connection test
+telnet 10.99.3.10 5433
+
+# ClickHouse connection test  
+telnet 10.99.3.10 9000
+
+# HTTP service test
+curl http://10.99.0.10:18001/health
+```
+
+### Monitoring Commands
+
+```bash
+# WireGuard status
+sudo wg show
+
+# Traffic statistics
+sudo wg show wg0 transfer
+
+# Peer status
+sudo wg show wg0 peers
+
+# Interface statistics
+ip -s link show wg0
+
+# Routing table
+ip route show table all | grep wg0
+
+# Active connections
+ss -tuln | grep :51820
+```
+
+## Network Troubleshooting
+
+### Common Issues
+
+**Peers not connecting:**
+1. Check public keys match in configuration
+2. Verify endpoints are reachable: `ping <public-ip>`
+3. Check firewall allows port 51820/udp
+4. Verify NAT/port forwarding if behind router
+
+**High latency/packet loss:**
+1. Test direct connectivity without WireGuard
+2. Check for MTU issues: `ping -s 1472 -M do <target>`
+3. Adjust MTU in WireGuard config: `MTU = 1420`
+4. Monitor bandwidth utilization
+
+**Services can't reach each other:**
+1. Verify WireGuard interface is up: `ip addr show wg0`
+2. Check routing table: `ip route show table all`
+3. Test mesh connectivity: `ping 10.99.x.x`
+4. Verify firewall allows service ports
+
+### Debug Commands
+
+```bash
+# Detailed WireGuard info
+sudo wg show all dump
+
+# Interface configuration
+ip addr show wg0
+ip route show dev wg0
+
+# Network troubleshooting
+traceroute 10.99.x.x
+mtr 10.99.x.x
+tcpdump -i wg0
+
+# Log analysis
+sudo journalctl -u wg-quick@wg0 -f
+sudo tail -f /var/log/syslog | grep -i wireguard
+```
+
+### Performance Tuning
+
+**Optimize for throughput:**
+
+```ini
+# Add to [Interface] section
+MTU = 1420
+PreUp = echo 'net.core.default_qdisc = fq' >> /etc/sysctl.conf
+PreUp = echo 'net.ipv4.tcp_congestion_control = bbr' >> /etc/sysctl.conf
+PreUp = sysctl -p
+```
+
+**Optimize for low latency:**
+
+```ini
+# Reduce keepalive intervals
+PersistentKeepalive = 15
+
+# Add to interface config
+PostUp = echo 0 > /proc/sys/net/ipv4/conf/wg0/rp_filter
+```

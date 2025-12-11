@@ -1,0 +1,3 @@
+mutation SubscribeToCluster($clusterId: ID!) {
+  subscribeToCluster(clusterId: $clusterId)
+}

@@ -9,12 +9,15 @@ import (
 	"testing"
 	"time"
 
-	"frameworks/pkg/api/periscope"
-
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// errorResponse is a local test type for error response validation
+type errorResponse struct {
+	Error string `json:"error"`
+}
 
 // Mock ClickHouse interface for testing
 type mockClickHouseDB struct {
@@ -205,7 +208,7 @@ func TestGetViewerMetrics_DateTimeConversion(t *testing.T) {
 
 				// For this test, require explicit time parameters to test validation
 				if startTimeStr == "" {
-					c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "start_time parameter is required. Use RFC3339 format."})
+					c.JSON(http.StatusBadRequest, errorResponse{Error: "start_time parameter is required. Use RFC3339 format."})
 					return
 				}
 				if endTimeStr == "" {
@@ -215,13 +218,13 @@ func TestGetViewerMetrics_DateTimeConversion(t *testing.T) {
 				// Parse time strings into time.Time objects for ClickHouse
 				startTime, err := time.Parse(time.RFC3339, startTimeStr)
 				if err != nil {
-					c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Invalid start_time format. Use RFC3339 format."})
+					c.JSON(http.StatusBadRequest, errorResponse{Error: "Invalid start_time format. Use RFC3339 format."})
 					return
 				}
 
 				endTime, err := time.Parse(time.RFC3339, endTimeStr)
 				if err != nil {
-					c.JSON(http.StatusBadRequest, periscope.ErrorResponse{Error: "Invalid end_time format. Use RFC3339 format."})
+					c.JSON(http.StatusBadRequest, errorResponse{Error: "Invalid end_time format. Use RFC3339 format."})
 					return
 				}
 
@@ -234,7 +237,7 @@ func TestGetViewerMetrics_DateTimeConversion(t *testing.T) {
 				`, tenantID, startTime, endTime)
 
 				if err != nil {
-					c.JSON(http.StatusInternalServerError, periscope.ErrorResponse{Error: "Failed to fetch viewer metrics"})
+					c.JSON(http.StatusInternalServerError, errorResponse{Error: "Failed to fetch viewer metrics"})
 					return
 				}
 
@@ -292,10 +295,10 @@ func TestGetViewerMetrics_DateTimeConversion(t *testing.T) {
 				assert.Contains(t, response, "end_time", "Response should contain end_time")
 			} else if tt.expectedStatus == http.StatusBadRequest {
 				// Verify error response
-				var errorResponse periscope.ErrorResponse
-				err := json.Unmarshal(w.Body.Bytes(), &errorResponse)
+				var errResp errorResponse
+				err := json.Unmarshal(w.Body.Bytes(), &errResp)
 				require.NoError(t, err, "Error response should be valid JSON")
-				assert.Contains(t, errorResponse.Error, "format", "Error should mention format issue")
+				assert.Contains(t, errResp.Error, "format", "Error should mention format issue")
 			}
 		})
 	}
@@ -325,7 +328,7 @@ func TestClickHouseTimeQuery_ProperTypes(t *testing.T) {
 			startTime: "2024-01-15T09:00:00Z",
 			endTime:   "2024-01-15T10:00:00Z",
 			query: `
-				SELECT timestamp, stream_name, selected_node, status
+				SELECT timestamp, internal_name, selected_node, status
 				FROM routing_events
 				WHERE tenant_id = $1 AND timestamp BETWEEN $2 AND $3
 				ORDER BY timestamp DESC

@@ -1,0 +1,11 @@
+query GetMySubscriptions {
+  mySubscriptions {
+    id
+    clusterId
+    clusterName
+    healthStatus
+    createdAt
+    isDefaultCluster
+    isSubscribed
+  }
+}

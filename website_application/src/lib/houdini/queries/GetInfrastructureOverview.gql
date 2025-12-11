@@ -1,0 +1,80 @@
+query GetInfrastructureOverview($timeRange: TimeRangeInput, $first: Int = 100, $noCache: Boolean = false) {
+  tenant {
+    id
+    name
+    cluster
+    createdAt
+  }
+
+  clusters {
+    id
+    clusterId
+    clusterName
+    healthStatus
+    isDefaultCluster
+    isSubscribed
+    createdAt
+    nodes {
+      id
+      nodeName
+      clusterId
+      nodeType
+      status
+      region
+      externalIp
+      internalIp
+      wireguardIp
+      availabilityZone
+      cpuCores
+      memoryGb
+      diskGb
+      lastHeartbeat
+      createdAt
+      latitude
+      longitude
+    }
+  }
+
+  nodes {
+    id
+    nodeName
+    clusterId
+    nodeType
+    status
+    region
+    externalIp
+    internalIp
+    wireguardIp
+    availabilityZone
+    cpuCores
+    memoryGb
+    diskGb
+    lastHeartbeat
+    createdAt
+    latitude
+    longitude
+  }
+
+  nodeMetrics1hConnection(timeRange: $timeRange, first: $first, noCache: $noCache) {
+    edges {
+      node {
+        timestamp
+        nodeId
+        avgCpu
+        peakCpu
+        avgMemory
+        peakMemory
+        avgDisk
+        peakDisk
+        totalBandwidthIn
+        totalBandwidthOut
+        wasHealthy
+      }
+    }
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+    totalCount
+  }
+}

@@ -1,0 +1,25 @@
+mutation CreateAPIToken($input: CreateDeveloperTokenInput!) {
+  createDeveloperToken(input: $input) {
+    __typename
+    ... on DeveloperToken {
+      id
+      tokenName
+      tokenValue
+      permissions
+      status
+      expiresAt
+      lastUsedAt
+      createdAt
+      ...AllAPITokens_insert @prepend
+    }
+    ... on ValidationError {
+      ...ValidationErrorFields @mask_disable
+    }
+    ... on RateLimitError {
+      ...RateLimitErrorFields @mask_disable
+    }
+    ... on AuthError {
+      ...AuthErrorFields @mask_disable
+    }
+  }
+}

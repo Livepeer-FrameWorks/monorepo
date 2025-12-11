@@ -1,0 +1,30 @@
+query GetClipsConnection($streamId: ID, $first: Int = 50, $after: String) {
+  clipsConnection(streamId: $streamId, first: $first, after: $after) @paginate {
+    edges {
+      cursor
+      node {
+        id
+        clipHash
+        streamName
+        title
+        description
+        startTime
+        duration
+        nodeId
+        storagePath
+        sizeBytes
+        status
+        accessCount
+        createdAt
+        updatedAt
+      }
+    }
+    pageInfo {
+      hasNextPage
+      hasPreviousPage
+      startCursor
+      endCursor
+    }
+    totalCount
+  }
+}

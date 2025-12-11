@@ -11,7 +11,7 @@
 					"relative isolate bg-[linear-gradient(135deg,color-mix(in_srgb,hsl(var(--primary))_82%,hsl(var(--brand-surface))_18%),color-mix(in_srgb,hsl(var(--accent))_76%,hsl(var(--brand-surface))_24%))] text-[hsl(var(--primary-foreground))] border-[hsl(var(--accent)/0.45)] shadow-[0_10px_22px_rgba(34,56,106,0.24),0_0_0_1px_hsl(var(--accent)/0.22)]",
 				destructive:
 					"bg-destructive [a&]:hover:bg-destructive/90 focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40 dark:bg-destructive/70 border-transparent text-primary-foreground",
-				outline: "text-foreground [a&]:hover:bg-accent [a&]:hover:text-accent-foreground",
+				outline: "text-foreground [a&]:hover:bg-accent/90 [a&]:hover:text-accent-foreground",
 			},
 			tone: {
 				default: "",

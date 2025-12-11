@@ -6,824 +6,2421 @@ package graph
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"frameworks/api_gateway/graph/generated"
 	"frameworks/api_gateway/graph/model"
-	"frameworks/pkg/api/commodore"
-	"frameworks/pkg/api/periscope"
-	"frameworks/pkg/models"
+	"frameworks/api_gateway/internal/loaders"
+	"frameworks/api_gateway/internal/middleware"
+	"frameworks/api_gateway/internal/resolvers"
+	"frameworks/pkg/logging"
+	"frameworks/pkg/proto"
+	"net/http"
+	"strconv"
+	"strings"
 	"time"
+
+	"github.com/gin-gonic/gin"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// CurrentTier is the resolver for the currentTier field.
-func (r *billingStatusResolver) CurrentTier(ctx context.Context, obj *models.BillingStatus) (*models.BillingTier, error) {
-	panic(fmt.Errorf("not implemented: CurrentTier - currentTier"))
+// ProgressPercent is the resolver for the progressPercent field.
+func (r *artifactStateResolver) ProgressPercent(ctx context.Context, obj *proto.ArtifactState) (int, error) {
+	return int(obj.ProgressPercent), nil
 }
 
-// OutstandingAmount is the resolver for the outstandingAmount field.
-func (r *billingStatusResolver) OutstandingAmount(ctx context.Context, obj *models.BillingStatus) (float64, error) {
-	panic(fmt.Errorf("not implemented: OutstandingAmount - outstandingAmount"))
+// RequestedAt is the resolver for the requestedAt field.
+func (r *artifactStateResolver) RequestedAt(ctx context.Context, obj *proto.ArtifactState) (*time.Time, error) {
+	if obj.RequestedAt == nil {
+		return nil, nil
+	}
+	t := obj.RequestedAt.AsTime()
+	return &t, nil
 }
 
-// Name is the resolver for the name field.
-func (r *billingTierResolver) Name(ctx context.Context, obj *models.BillingTier) (string, error) {
-	panic(fmt.Errorf("not implemented: Name - name"))
+// StartedAt is the resolver for the startedAt field.
+func (r *artifactStateResolver) StartedAt(ctx context.Context, obj *proto.ArtifactState) (*time.Time, error) {
+	if obj.StartedAt == nil {
+		return nil, nil
+	}
+	t := obj.StartedAt.AsTime()
+	return &t, nil
 }
 
-// Price is the resolver for the price field.
-func (r *billingTierResolver) Price(ctx context.Context, obj *models.BillingTier) (float64, error) {
-	panic(fmt.Errorf("not implemented: Price - price"))
+// CompletedAt is the resolver for the completedAt field.
+func (r *artifactStateResolver) CompletedAt(ctx context.Context, obj *proto.ArtifactState) (*time.Time, error) {
+	if obj.CompletedAt == nil {
+		return nil, nil
+	}
+	t := obj.CompletedAt.AsTime()
+	return &t, nil
 }
 
-// Features is the resolver for the features field.
-func (r *billingTierResolver) Features(ctx context.Context, obj *models.BillingTier) ([]string, error) {
-	panic(fmt.Errorf("not implemented: Features - features"))
-}
-
-// Type is the resolver for the type field.
-func (r *bootstrapTokenResolver) Type(ctx context.Context, obj *models.BootstrapToken) (model.BootstrapTokenType, error) {
-	panic(fmt.Errorf("not implemented: Type - type"))
-}
-
-// Stream is the resolver for the stream field.
-func (r *clipResolver) Stream(ctx context.Context, obj *commodore.ClipResponse) (string, error) {
-	panic(fmt.Errorf("not implemented: Stream - stream"))
-}
-
-// ViewingUrls is the resolver for the viewingUrls field.
-func (r *clipResolver) ViewingUrls(ctx context.Context, obj *commodore.ClipResponse) (*model.ClipViewingUrls, error) {
-	panic(fmt.Errorf("not implemented: ViewingUrls - viewingUrls"))
-}
-
-// Percent is the resolver for the percent field.
-func (r *clipEventResolver) Percent(ctx context.Context, obj *periscope.ClipEvent) (*int, error) {
-	panic(fmt.Errorf("not implemented: Percent - percent"))
+// SegmentCount is the resolver for the segmentCount field.
+func (r *artifactStateResolver) SegmentCount(ctx context.Context, obj *proto.ArtifactState) (*int, error) {
+	if obj.SegmentCount == nil {
+		return nil, nil
+	}
+	v := int(*obj.SegmentCount)
+	return &v, nil
 }
 
 // SizeBytes is the resolver for the sizeBytes field.
-func (r *clipEventResolver) SizeBytes(ctx context.Context, obj *periscope.ClipEvent) (*int, error) {
-	panic(fmt.Errorf("not implemented: SizeBytes - sizeBytes"))
+func (r *artifactStateResolver) SizeBytes(ctx context.Context, obj *proto.ArtifactState) (*int, error) {
+	if obj.SizeBytes == nil {
+		return nil, nil
+	}
+	v := int(*obj.SizeBytes)
+	return &v, nil
+}
+
+// CurrentTier is the resolver for the currentTier field.
+func (r *billingStatusResolver) CurrentTier(ctx context.Context, obj *proto.BillingStatusResponse) (*proto.BillingTier, error) {
+	return obj.Tier, nil
+}
+
+// NextBillingDate is the resolver for the nextBillingDate field.
+func (r *billingStatusResolver) NextBillingDate(ctx context.Context, obj *proto.BillingStatusResponse) (*time.Time, error) {
+	if obj.NextBillingDate == nil {
+		return nil, nil
+	}
+	t := obj.NextBillingDate.AsTime()
+	return &t, nil
+}
+
+// TrialEndsAt is the resolver for the trialEndsAt field.
+func (r *billingStatusResolver) TrialEndsAt(ctx context.Context, obj *proto.BillingStatusResponse) (*time.Time, error) {
+	if obj.Subscription == nil || obj.Subscription.TrialEndsAt == nil || !obj.Subscription.TrialEndsAt.IsValid() {
+		return nil, nil
+	}
+	t := obj.Subscription.TrialEndsAt.AsTime()
+	return &t, nil
 }
 
 // Name is the resolver for the name field.
-func (r *clusterResolver) Name(ctx context.Context, obj *models.InfrastructureCluster) (string, error) {
-	panic(fmt.Errorf("not implemented: Name - name"))
-}
-
-// Region is the resolver for the region field.
-func (r *clusterResolver) Region(ctx context.Context, obj *models.InfrastructureCluster) (string, error) {
-	panic(fmt.Errorf("not implemented: Region - region"))
-}
-
-// Status is the resolver for the status field.
-func (r *clusterResolver) Status(ctx context.Context, obj *models.InfrastructureCluster) (model.NodeStatus, error) {
-	panic(fmt.Errorf("not implemented: Status - status"))
-}
-
-// Nodes is the resolver for the nodes field.
-func (r *clusterResolver) Nodes(ctx context.Context, obj *models.InfrastructureCluster) ([]*models.InfrastructureNode, error) {
-	panic(fmt.Errorf("not implemented: Nodes - nodes"))
-}
-
-// ServiceInstances is the resolver for the serviceInstances field.
-func (r *clusterResolver) ServiceInstances(ctx context.Context, obj *models.InfrastructureCluster, status *model.InstanceStatus, nodeID *string) ([]*models.ServiceInstance, error) {
-	panic(fmt.Errorf("not implemented: ServiceInstances - serviceInstances"))
-}
-
-// Name is the resolver for the name field.
-func (r *developerTokenResolver) Name(ctx context.Context, obj *models.APIToken) (string, error) {
-	panic(fmt.Errorf("not implemented: Name - name"))
-}
-
-// Token is the resolver for the token field.
-func (r *developerTokenResolver) Token(ctx context.Context, obj *models.APIToken) (*string, error) {
-	panic(fmt.Errorf("not implemented: Token - token"))
-}
-
-// Permissions is the resolver for the permissions field.
-func (r *developerTokenResolver) Permissions(ctx context.Context, obj *models.APIToken) (string, error) {
-	panic(fmt.Errorf("not implemented: Permissions - permissions"))
-}
-
-// Status is the resolver for the status field.
-func (r *developerTokenResolver) Status(ctx context.Context, obj *models.APIToken) (string, error) {
-	panic(fmt.Errorf("not implemented: Status - status"))
-}
-
-// Status is the resolver for the status field.
-func (r *invoiceResolver) Status(ctx context.Context, obj *models.Invoice) (model.InvoiceStatus, error) {
-	panic(fmt.Errorf("not implemented: Status - status"))
-}
-
-// LineItems is the resolver for the lineItems field.
-func (r *invoiceResolver) LineItems(ctx context.Context, obj *models.Invoice) ([]*model.LineItem, error) {
-	panic(fmt.Errorf("not implemented: LineItems - lineItems"))
-}
-
-// CreateStream is the resolver for the createStream field.
-func (r *mutationResolver) CreateStream(ctx context.Context, input model.CreateStreamInput) (*models.Stream, error) {
-	panic(fmt.Errorf("not implemented: CreateStream - createStream"))
-}
-
-// UpdateStream is the resolver for the updateStream field.
-func (r *mutationResolver) UpdateStream(ctx context.Context, id string, input model.UpdateStreamInput) (*models.Stream, error) {
-	panic(fmt.Errorf("not implemented: UpdateStream - updateStream"))
-}
-
-// DeleteStream is the resolver for the deleteStream field.
-func (r *mutationResolver) DeleteStream(ctx context.Context, id string) (bool, error) {
-	panic(fmt.Errorf("not implemented: DeleteStream - deleteStream"))
-}
-
-// RefreshStreamKey is the resolver for the refreshStreamKey field.
-func (r *mutationResolver) RefreshStreamKey(ctx context.Context, id string) (*models.Stream, error) {
-	panic(fmt.Errorf("not implemented: RefreshStreamKey - refreshStreamKey"))
-}
-
-// CreateClip is the resolver for the createClip field.
-func (r *mutationResolver) CreateClip(ctx context.Context, input model.CreateClipInput) (*commodore.ClipResponse, error) {
-	panic(fmt.Errorf("not implemented: CreateClip - createClip"))
-}
-
-// DeleteClip is the resolver for the deleteClip field.
-func (r *mutationResolver) DeleteClip(ctx context.Context, id string) (bool, error) {
-	panic(fmt.Errorf("not implemented: DeleteClip - deleteClip"))
-}
-
-// StartDvr is the resolver for the startDVR field.
-func (r *mutationResolver) StartDvr(ctx context.Context, internalName string, streamID *string) (*model.DVRRequest, error) {
-	panic(fmt.Errorf("not implemented: StartDvr - startDVR"))
-}
-
-// StopDvr is the resolver for the stopDVR field.
-func (r *mutationResolver) StopDvr(ctx context.Context, dvrHash string) (bool, error) {
-	panic(fmt.Errorf("not implemented: StopDvr - stopDVR"))
-}
-
-// SetStreamRecordingConfig is the resolver for the setStreamRecordingConfig field.
-func (r *mutationResolver) SetStreamRecordingConfig(ctx context.Context, internalName string, enabled bool, retentionDays *int, format *string, segmentDuration *int) (*model.RecordingConfig, error) {
-	panic(fmt.Errorf("not implemented: SetStreamRecordingConfig - setStreamRecordingConfig"))
-}
-
-// CreatePayment is the resolver for the createPayment field.
-func (r *mutationResolver) CreatePayment(ctx context.Context, input model.CreatePaymentInput) (*models.Payment, error) {
-	panic(fmt.Errorf("not implemented: CreatePayment - createPayment"))
-}
-
-// UpdateTenant is the resolver for the updateTenant field.
-func (r *mutationResolver) UpdateTenant(ctx context.Context, input model.UpdateTenantInput) (*models.Tenant, error) {
-	panic(fmt.Errorf("not implemented: UpdateTenant - updateTenant"))
-}
-
-// CreateDeveloperToken is the resolver for the createDeveloperToken field.
-func (r *mutationResolver) CreateDeveloperToken(ctx context.Context, input model.CreateDeveloperTokenInput) (*models.APIToken, error) {
-	panic(fmt.Errorf("not implemented: CreateDeveloperToken - createDeveloperToken"))
-}
-
-// RevokeDeveloperToken is the resolver for the revokeDeveloperToken field.
-func (r *mutationResolver) RevokeDeveloperToken(ctx context.Context, id string) (bool, error) {
-	panic(fmt.Errorf("not implemented: RevokeDeveloperToken - revokeDeveloperToken"))
-}
-
-// CreateBootstrapToken is the resolver for the createBootstrapToken field.
-func (r *mutationResolver) CreateBootstrapToken(ctx context.Context, input model.CreateBootstrapTokenInput) (*models.BootstrapToken, error) {
-	panic(fmt.Errorf("not implemented: CreateBootstrapToken - createBootstrapToken"))
-}
-
-// RevokeBootstrapToken is the resolver for the revokeBootstrapToken field.
-func (r *mutationResolver) RevokeBootstrapToken(ctx context.Context, id string) (bool, error) {
-	panic(fmt.Errorf("not implemented: RevokeBootstrapToken - revokeBootstrapToken"))
-}
-
-// CreateStreamKey is the resolver for the createStreamKey field.
-func (r *mutationResolver) CreateStreamKey(ctx context.Context, streamID string, input model.CreateStreamKeyInput) (*models.StreamKey, error) {
-	panic(fmt.Errorf("not implemented: CreateStreamKey - createStreamKey"))
-}
-
-// DeleteStreamKey is the resolver for the deleteStreamKey field.
-func (r *mutationResolver) DeleteStreamKey(ctx context.Context, streamID string, keyID string) (bool, error) {
-	panic(fmt.Errorf("not implemented: DeleteStreamKey - deleteStreamKey"))
-}
-
-// Name is the resolver for the name field.
-func (r *nodeResolver) Name(ctx context.Context, obj *models.InfrastructureNode) (string, error) {
-	panic(fmt.Errorf("not implemented: Name - name"))
-}
-
-// Cluster is the resolver for the cluster field.
-func (r *nodeResolver) Cluster(ctx context.Context, obj *models.InfrastructureNode) (string, error) {
-	panic(fmt.Errorf("not implemented: Cluster - cluster"))
-}
-
-// ClusterInfo is the resolver for the clusterInfo field.
-func (r *nodeResolver) ClusterInfo(ctx context.Context, obj *models.InfrastructureNode) (*models.InfrastructureCluster, error) {
-	panic(fmt.Errorf("not implemented: ClusterInfo - clusterInfo"))
-}
-
-// Type is the resolver for the type field.
-func (r *nodeResolver) Type(ctx context.Context, obj *models.InfrastructureNode) (string, error) {
-	panic(fmt.Errorf("not implemented: Type - type"))
-}
-
-// Status is the resolver for the status field.
-func (r *nodeResolver) Status(ctx context.Context, obj *models.InfrastructureNode) (model.NodeStatus, error) {
-	panic(fmt.Errorf("not implemented: Status - status"))
-}
-
-// IPAddress is the resolver for the ipAddress field.
-func (r *nodeResolver) IPAddress(ctx context.Context, obj *models.InfrastructureNode) (*string, error) {
-	panic(fmt.Errorf("not implemented: IPAddress - ipAddress"))
-}
-
-// LastSeen is the resolver for the lastSeen field.
-func (r *nodeResolver) LastSeen(ctx context.Context, obj *models.InfrastructureNode) (*time.Time, error) {
-	panic(fmt.Errorf("not implemented: LastSeen - lastSeen"))
-}
-
-// Location is the resolver for the location field.
-func (r *nodeResolver) Location(ctx context.Context, obj *models.InfrastructureNode) (*string, error) {
-	panic(fmt.Errorf("not implemented: Location - location"))
-}
-
-// ServiceInstances is the resolver for the serviceInstances field.
-func (r *nodeResolver) ServiceInstances(ctx context.Context, obj *models.InfrastructureNode, status *model.InstanceStatus) ([]*models.ServiceInstance, error) {
-	panic(fmt.Errorf("not implemented: ServiceInstances - serviceInstances"))
-}
-
-// Metrics is the resolver for the metrics field.
-func (r *nodeResolver) Metrics(ctx context.Context, obj *models.InfrastructureNode, timeRange *model.TimeRangeInput) ([]*periscope.NodeMetric, error) {
-	panic(fmt.Errorf("not implemented: Metrics - metrics"))
-}
-
-// Metrics1h is the resolver for the metrics1h field.
-func (r *nodeResolver) Metrics1h(ctx context.Context, obj *models.InfrastructureNode, timeRange *model.TimeRangeInput) ([]*model.NodeMetricHourly, error) {
-	panic(fmt.Errorf("not implemented: Metrics1h - metrics1h"))
-}
-
-// CPUUsage is the resolver for the cpuUsage field.
-func (r *nodeMetricResolver) CPUUsage(ctx context.Context, obj *periscope.NodeMetric) (float64, error) {
-	panic(fmt.Errorf("not implemented: CPUUsage - cpuUsage"))
-}
-
-// MemoryUsage is the resolver for the memoryUsage field.
-func (r *nodeMetricResolver) MemoryUsage(ctx context.Context, obj *periscope.NodeMetric) (float64, error) {
-	panic(fmt.Errorf("not implemented: MemoryUsage - memoryUsage"))
-}
-
-// DiskUsage is the resolver for the diskUsage field.
-func (r *nodeMetricResolver) DiskUsage(ctx context.Context, obj *periscope.NodeMetric) (float64, error) {
-	panic(fmt.Errorf("not implemented: DiskUsage - diskUsage"))
-}
-
-// NetworkRx is the resolver for the networkRx field.
-func (r *nodeMetricResolver) NetworkRx(ctx context.Context, obj *periscope.NodeMetric) (int, error) {
-	panic(fmt.Errorf("not implemented: NetworkRx - networkRx"))
-}
-
-// NetworkTx is the resolver for the networkTx field.
-func (r *nodeMetricResolver) NetworkTx(ctx context.Context, obj *periscope.NodeMetric) (int, error) {
-	panic(fmt.Errorf("not implemented: NetworkTx - networkTx"))
-}
-
-// HealthScore is the resolver for the healthScore field.
-func (r *nodeMetricResolver) HealthScore(ctx context.Context, obj *periscope.NodeMetric) (float64, error) {
-	panic(fmt.Errorf("not implemented: HealthScore - healthScore"))
-}
-
-// Status is the resolver for the status field.
-func (r *nodeMetricResolver) Status(ctx context.Context, obj *periscope.NodeMetric) (string, error) {
-	panic(fmt.Errorf("not implemented: Status - status"))
+func (r *billingTierResolver) Name(ctx context.Context, obj *proto.BillingTier) (string, error) {
+	return obj.DisplayName, nil
 }
 
 // Metadata is the resolver for the metadata field.
-func (r *nodeMetricResolver) Metadata(ctx context.Context, obj *periscope.NodeMetric) (*string, error) {
-	panic(fmt.Errorf("not implemented: Metadata - metadata"))
+func (r *bootstrapTokenResolver) Metadata(ctx context.Context, obj *proto.BootstrapToken) (*string, error) {
+	if obj.Metadata == nil {
+		return nil, nil
+	}
+	b, err := json.Marshal(obj.Metadata.AsMap())
+	if err != nil {
+		return nil, err
+	}
+	s := string(b)
+	return &s, nil
 }
 
-// Method is the resolver for the method field.
-func (r *paymentResolver) Method(ctx context.Context, obj *models.Payment) (model.PaymentMethod, error) {
-	panic(fmt.Errorf("not implemented: Method - method"))
+// ExpiresAt is the resolver for the expiresAt field.
+func (r *bootstrapTokenResolver) ExpiresAt(ctx context.Context, obj *proto.BootstrapToken) (*time.Time, error) {
+	if obj.ExpiresAt == nil {
+		return nil, nil
+	}
+	t := obj.ExpiresAt.AsTime()
+	return &t, nil
+}
+
+// UsedAt is the resolver for the usedAt field.
+func (r *bootstrapTokenResolver) UsedAt(ctx context.Context, obj *proto.BootstrapToken) (*time.Time, error) {
+	if obj.UsedAt == nil {
+		return nil, nil
+	}
+	t := obj.UsedAt.AsTime()
+	return &t, nil
+}
+
+// CreatedAt is the resolver for the createdAt field.
+func (r *bootstrapTokenResolver) CreatedAt(ctx context.Context, obj *proto.BootstrapToken) (*time.Time, error) {
+	if obj.CreatedAt == nil {
+		return nil, nil
+	}
+	t := obj.CreatedAt.AsTime()
+	return &t, nil
+}
+
+// Percentage is the resolver for the percentage field.
+func (r *cityMetricResolver) Percentage(ctx context.Context, obj *proto.CityMetric) (float64, error) {
+	return float64(obj.Percentage), nil
+}
+
+// Timestamp is the resolver for the timestamp field.
+func (r *clientMetrics5mResolver) Timestamp(ctx context.Context, obj *proto.ClientMetrics5M) (*time.Time, error) {
+	if obj.Timestamp == nil {
+		return nil, nil
+	}
+	t := obj.Timestamp.AsTime()
+	return &t, nil
+}
+
+// ActiveSessions is the resolver for the activeSessions field.
+func (r *clientMetrics5mResolver) ActiveSessions(ctx context.Context, obj *proto.ClientMetrics5M) (int, error) {
+	return int(obj.ActiveSessions), nil
+}
+
+// AvgConnectionTime is the resolver for the avgConnectionTime field.
+func (r *clientMetrics5mResolver) AvgConnectionTime(ctx context.Context, obj *proto.ClientMetrics5M) (float64, error) {
+	return float64(obj.AvgConnectionTime), nil
+}
+
+// PacketLossRate is the resolver for the packetLossRate field.
+func (r *clientMetrics5mResolver) PacketLossRate(ctx context.Context, obj *proto.ClientMetrics5M) (*float64, error) {
+	if obj.PacketLossRate == nil {
+		return nil, nil
+	}
+	value := float64(*obj.PacketLossRate)
+	return &value, nil
+}
+
+// AvgConnectionQuality is the resolver for the avgConnectionQuality field.
+func (r *clientMetrics5mResolver) AvgConnectionQuality(ctx context.Context, obj *proto.ClientMetrics5M) (*float64, error) {
+	if obj.AvgConnectionQuality == nil {
+		return nil, nil
+	}
+	value := float64(*obj.AvgConnectionQuality)
+	return &value, nil
+}
+
+// CreatedAt is the resolver for the createdAt field.
+func (r *clipResolver) CreatedAt(ctx context.Context, obj *proto.ClipInfo) (*time.Time, error) {
+	if obj.CreatedAt == nil {
+		return nil, nil
+	}
+	t := obj.CreatedAt.AsTime()
+	return &t, nil
+}
+
+// UpdatedAt is the resolver for the updatedAt field.
+func (r *clipResolver) UpdatedAt(ctx context.Context, obj *proto.ClipInfo) (*time.Time, error) {
+	if obj.UpdatedAt == nil {
+		return nil, nil
+	}
+	t := obj.UpdatedAt.AsTime()
+	return &t, nil
+}
+
+// Timestamp is the resolver for the timestamp field.
+func (r *clipEventResolver) Timestamp(ctx context.Context, obj *proto.ClipEvent) (*time.Time, error) {
+	if obj.Timestamp == nil {
+		return nil, nil
+	}
+	t := obj.Timestamp.AsTime()
+	return &t, nil
+}
+
+// Percent is the resolver for the percent field.
+func (r *clipEventResolver) Percent(ctx context.Context, obj *proto.ClipEvent) (*int, error) {
+	if obj.Percent == nil {
+		return nil, nil
+	}
+	v := int(*obj.Percent)
+	return &v, nil
+}
+
+// SizeBytes is the resolver for the sizeBytes field.
+func (r *clipEventResolver) SizeBytes(ctx context.Context, obj *proto.ClipEvent) (*int, error) {
+	if obj.SizeBytes == nil {
+		return nil, nil
+	}
+	v := int(*obj.SizeBytes)
+	return &v, nil
+}
+
+// Stage is the resolver for the stage field.
+func (r *clipLifecycleResolver) Stage(ctx context.Context, obj *proto.ClipLifecycleData) (int, error) {
+	return int(obj.Stage), nil
+}
+
+// ProgressPercent is the resolver for the progressPercent field.
+func (r *clipLifecycleResolver) ProgressPercent(ctx context.Context, obj *proto.ClipLifecycleData) (*int, error) {
+	if obj.ProgressPercent == nil {
+		return nil, nil
+	}
+	v := int(*obj.ProgressPercent)
+	return &v, nil
+}
+
+// SizeBytes is the resolver for the sizeBytes field.
+func (r *clipLifecycleResolver) SizeBytes(ctx context.Context, obj *proto.ClipLifecycleData) (*int, error) {
+	if obj.SizeBytes == nil {
+		return nil, nil
+	}
+	v := int(*obj.SizeBytes)
+	return &v, nil
+}
+
+// Urls is the resolver for the urls field.
+func (r *clipViewingUrlsResolver) Urls(ctx context.Context, obj *proto.ClipViewingURLs) (*string, error) {
+	if obj.Urls == nil {
+		return nil, nil
+	}
+	b, err := json.Marshal(obj.Urls)
+	if err != nil {
+		return nil, err
+	}
+	s := string(b)
+	return &s, nil
+}
+
+// ExpiresAt is the resolver for the expiresAt field.
+func (r *clipViewingUrlsResolver) ExpiresAt(ctx context.Context, obj *proto.ClipViewingURLs) (*time.Time, error) {
+	if obj.ExpiresAt == nil {
+		return nil, nil
+	}
+	t := obj.ExpiresAt.AsTime()
+	return &t, nil
+}
+
+// IsSubscribed is the resolver for the isSubscribed field.
+func (r *clusterResolver) IsSubscribed(ctx context.Context, obj *proto.InfrastructureCluster) (bool, error) {
+	return r.Resolver.DoCheckIsSubscribed(ctx, obj)
+}
+
+// CreatedAt is the resolver for the createdAt field.
+func (r *clusterResolver) CreatedAt(ctx context.Context, obj *proto.InfrastructureCluster) (*time.Time, error) {
+	if obj.CreatedAt == nil {
+		return nil, nil
+	}
+	t := obj.CreatedAt.AsTime()
+	return &t, nil
+}
+
+// UpdatedAt is the resolver for the updatedAt field.
+func (r *clusterResolver) UpdatedAt(ctx context.Context, obj *proto.InfrastructureCluster) (*time.Time, error) {
+	if obj.UpdatedAt == nil {
+		return nil, nil
+	}
+	t := obj.UpdatedAt.AsTime()
+	return &t, nil
+}
+
+// Nodes is the resolver for the nodes field.
+func (r *clusterResolver) Nodes(ctx context.Context, obj *proto.InfrastructureCluster) ([]*proto.InfrastructureNode, error) {
+	if lds, ok := ctx.Value("loaders").(*loaders.Loaders); ok && lds != nil && lds.NodesByCluster != nil {
+		return lds.NodesByCluster.Load(ctx, obj.ClusterId)
+	}
+	resp, err := r.Clients.Quartermaster.ListNodes(ctx, obj.ClusterId, "", "", nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get nodes for cluster %s: %w", obj.ClusterId, err)
+	}
+	return resp.Nodes, nil
+}
+
+// Timestamp is the resolver for the timestamp field.
+func (r *connectionEventResolver) Timestamp(ctx context.Context, obj *proto.ConnectionEvent) (*time.Time, error) {
+	if obj.Timestamp == nil {
+		return nil, nil
+	}
+	t := obj.Timestamp.AsTime()
+	return &t, nil
+}
+
+// SessionDurationSeconds is the resolver for the sessionDurationSeconds field.
+func (r *connectionEventResolver) SessionDurationSeconds(ctx context.Context, obj *proto.ConnectionEvent) (*int, error) {
+	if obj.SessionDurationSeconds == 0 {
+		return nil, nil
+	}
+	v := int(obj.SessionDurationSeconds)
+	return &v, nil
+}
+
+// BytesTransferred is the resolver for the bytesTransferred field.
+func (r *connectionEventResolver) BytesTransferred(ctx context.Context, obj *proto.ConnectionEvent) (*int, error) {
+	if obj.BytesTransferred == 0 {
+		return nil, nil
+	}
+	v := int(obj.BytesTransferred)
+	return &v, nil
+}
+
+// Percentage is the resolver for the percentage field.
+func (r *countryMetricResolver) Percentage(ctx context.Context, obj *proto.CountryMetric) (float64, error) {
+	return float64(obj.GetPercentage()), nil
 }
 
 // Status is the resolver for the status field.
-func (r *paymentResolver) Status(ctx context.Context, obj *models.Payment) (model.PaymentStatus, error) {
-	panic(fmt.Errorf("not implemented: Status - status"))
+func (r *dVREventResolver) Status(ctx context.Context, obj *proto.DVRLifecycleData) (string, error) {
+	return obj.Status.String(), nil
+}
+
+// RequestID is the resolver for the requestId field.
+func (r *dVREventResolver) RequestID(ctx context.Context, obj *proto.DVRLifecycleData) (*string, error) {
+	if obj.DvrHash == "" {
+		return nil, nil
+	}
+	return &obj.DvrHash, nil
+}
+
+// SizeBytes is the resolver for the sizeBytes field.
+func (r *dVREventResolver) SizeBytes(ctx context.Context, obj *proto.DVRLifecycleData) (*int, error) {
+	if obj.SizeBytes == nil {
+		return nil, nil
+	}
+	v := int(*obj.SizeBytes)
+	return &v, nil
+}
+
+// StartedAt is the resolver for the startedAt field.
+func (r *dVRRequestResolver) StartedAt(ctx context.Context, obj *proto.DVRInfo) (*time.Time, error) {
+	if obj.StartedAt == nil {
+		return nil, nil
+	}
+	t := obj.StartedAt.AsTime()
+	return &t, nil
+}
+
+// EndedAt is the resolver for the endedAt field.
+func (r *dVRRequestResolver) EndedAt(ctx context.Context, obj *proto.DVRInfo) (*time.Time, error) {
+	if obj.EndedAt == nil {
+		return nil, nil
+	}
+	t := obj.EndedAt.AsTime()
+	return &t, nil
+}
+
+// CreatedAt is the resolver for the createdAt field.
+func (r *dVRRequestResolver) CreatedAt(ctx context.Context, obj *proto.DVRInfo) (*time.Time, error) {
+	if obj.CreatedAt == nil {
+		return nil, nil
+	}
+	t := obj.CreatedAt.AsTime()
+	return &t, nil
+}
+
+// UpdatedAt is the resolver for the updatedAt field.
+func (r *dVRRequestResolver) UpdatedAt(ctx context.Context, obj *proto.DVRInfo) (*time.Time, error) {
+	if obj.UpdatedAt == nil {
+		return nil, nil
+	}
+	t := obj.UpdatedAt.AsTime()
+	return &t, nil
+}
+
+// LastUsedAt is the resolver for the lastUsedAt field.
+func (r *developerTokenResolver) LastUsedAt(ctx context.Context, obj *proto.APITokenInfo) (*time.Time, error) {
+	if obj.LastUsedAt == nil {
+		return nil, nil
+	}
+	t := obj.LastUsedAt.AsTime()
+	return &t, nil
+}
+
+// ExpiresAt is the resolver for the expiresAt field.
+func (r *developerTokenResolver) ExpiresAt(ctx context.Context, obj *proto.APITokenInfo) (*time.Time, error) {
+	if obj.ExpiresAt == nil {
+		return nil, nil
+	}
+	t := obj.ExpiresAt.AsTime()
+	return &t, nil
+}
+
+// CreatedAt is the resolver for the createdAt field.
+func (r *developerTokenResolver) CreatedAt(ctx context.Context, obj *proto.APITokenInfo) (*time.Time, error) {
+	if obj.CreatedAt == nil {
+		return nil, nil
+	}
+	t := obj.CreatedAt.AsTime()
+	return &t, nil
+}
+
+// H3Index is the resolver for the h3Index field.
+func (r *geoBucketResolver) H3Index(ctx context.Context, obj *proto.GeoBucket) (string, error) {
+	if obj == nil {
+		return "", nil
+	}
+	// ClickHouse stores H3 as UInt64; present as hex string for frontend (h3-js expects hex)
+	return strings.ToLower(strconv.FormatUint(obj.H3Index, 16)), nil
+}
+
+// Resolution is the resolver for the resolution field.
+func (r *geoBucketResolver) Resolution(ctx context.Context, obj *proto.GeoBucket) (int, error) {
+	if obj == nil {
+		return 0, nil
+	}
+	return int(obj.Resolution), nil
+}
+
+// Status is the resolver for the status field.
+func (r *invoiceResolver) Status(ctx context.Context, obj *proto.Invoice) (model.InvoiceStatus, error) {
+	s := strings.ToLower(obj.Status)
+	switch s {
+	case "pending":
+		return model.InvoiceStatusPending, nil
+	case "paid":
+		return model.InvoiceStatusPaid, nil
+	case "failed":
+		return model.InvoiceStatusFailed, nil
+	case "cancelled":
+		return model.InvoiceStatusCancelled, nil
+	default:
+		return model.InvoiceStatusPending, fmt.Errorf("unknown invoice status: %s", obj.Status)
+	}
+}
+
+// DueDate is the resolver for the dueDate field.
+func (r *invoiceResolver) DueDate(ctx context.Context, obj *proto.Invoice) (*time.Time, error) {
+	if obj.DueDate == nil {
+		return nil, nil
+	}
+	t := obj.DueDate.AsTime()
+	return &t, nil
+}
+
+// CreatedAt is the resolver for the createdAt field.
+func (r *invoiceResolver) CreatedAt(ctx context.Context, obj *proto.Invoice) (*time.Time, error) {
+	if obj.CreatedAt == nil {
+		return nil, nil
+	}
+	t := obj.CreatedAt.AsTime()
+	return &t, nil
+}
+
+// LineItems is the resolver for the lineItems field.
+func (r *invoiceResolver) LineItems(ctx context.Context, obj *proto.Invoice) ([]*model.LineItem, error) {
+	// Convert usage details (structpb.Struct) to line items
+	var lineItems []*model.LineItem
+	if obj.UsageDetails != nil && obj.UsageDetails.Fields != nil {
+		for description, value := range obj.UsageDetails.Fields {
+			quantity := 1
+			unitPrice := obj.Amount
+			// Try to extract quantity and unit_price from nested struct
+			if structVal := value.GetStructValue(); structVal != nil && structVal.Fields != nil {
+				if q := structVal.Fields["quantity"]; q != nil {
+					quantity = int(q.GetNumberValue())
+				}
+				if up := structVal.Fields["unit_price"]; up != nil {
+					unitPrice = up.GetNumberValue()
+				}
+			}
+			if quantity == 0 {
+				quantity = 1
+			}
+			lineItems = append(lineItems, &model.LineItem{
+				Description: description,
+				Quantity:    quantity,
+				UnitPrice:   unitPrice,
+				Total:       unitPrice * float64(quantity),
+			})
+		}
+	}
+	// If no line items from usage details, create a default one
+	if len(lineItems) == 0 {
+		lineItems = append(lineItems, &model.LineItem{
+			Description: "Service usage",
+			Quantity:    1,
+			UnitPrice:   obj.Amount,
+			Total:       obj.Amount,
+		})
+	}
+	return lineItems, nil
+}
+
+// Timestamp is the resolver for the timestamp field.
+func (r *loadBalancingMetricResolver) Timestamp(ctx context.Context, obj *proto.RoutingEvent) (*time.Time, error) {
+	if obj.Timestamp == nil {
+		return nil, nil
+	}
+	t := obj.Timestamp.AsTime()
+	return &t, nil
+}
+
+// LatencyMs is the resolver for the latencyMs field.
+func (r *loadBalancingMetricResolver) LatencyMs(ctx context.Context, obj *proto.RoutingEvent) (*float64, error) {
+	v := float64(obj.GetLatencyMs())
+	return &v, nil
+}
+
+// CreateStream is the resolver for the createStream field.
+func (r *mutationResolver) CreateStream(ctx context.Context, input model.CreateStreamInput) (model.CreateStreamResult, error) {
+	return r.DoCreateStream(ctx, input)
+}
+
+// UpdateStream is the resolver for the updateStream field.
+func (r *mutationResolver) UpdateStream(ctx context.Context, id string, input model.UpdateStreamInput) (model.UpdateStreamResult, error) {
+	return r.DoUpdateStream(ctx, id, input)
+}
+
+// DeleteStream is the resolver for the deleteStream field.
+func (r *mutationResolver) DeleteStream(ctx context.Context, id string) (model.DeleteStreamResult, error) {
+	return r.DoDeleteStream(ctx, id)
+}
+
+// RefreshStreamKey is the resolver for the refreshStreamKey field.
+func (r *mutationResolver) RefreshStreamKey(ctx context.Context, id string) (model.UpdateStreamResult, error) {
+	return r.Resolver.DoRefreshStreamKey(ctx, id)
+}
+
+// CreateClip is the resolver for the createClip field.
+func (r *mutationResolver) CreateClip(ctx context.Context, input model.CreateClipInput) (model.CreateClipResult, error) {
+	return r.DoCreateClip(ctx, input)
+}
+
+// DeleteClip is the resolver for the deleteClip field.
+func (r *mutationResolver) DeleteClip(ctx context.Context, id string) (model.DeleteClipResult, error) {
+	return r.DoDeleteClip(ctx, id)
+}
+
+// StartDvr is the resolver for the startDVR field.
+func (r *mutationResolver) StartDvr(ctx context.Context, internalName string, streamID *string) (model.StartDVRResult, error) {
+	res, err := r.Resolver.DoStartDVR(ctx, internalName, streamID)
+	if err != nil {
+		return nil, err
+	}
+	// Map StartDVRResponse into DVRInfo (bound to GraphQL DVRRequest)
+	now := timestamppb.Now()
+	return &proto.DVRInfo{
+		DvrHash:       res.DvrHash,
+		InternalName:  internalName,
+		StorageNodeId: res.StorageNodeId,
+		Status:        res.Status,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}, nil
+}
+
+// StopDvr is the resolver for the stopDVR field.
+func (r *mutationResolver) StopDvr(ctx context.Context, dvrHash string) (model.StopDVRResult, error) {
+	return r.Resolver.DoStopDVR(ctx, dvrHash)
+}
+
+// CreatePayment is the resolver for the createPayment field.
+func (r *mutationResolver) CreatePayment(ctx context.Context, input model.CreatePaymentInput) (model.CreatePaymentResult, error) {
+	return r.DoCreatePayment(ctx, input)
+}
+
+// UpdateTenant is the resolver for the updateTenant field.
+func (r *mutationResolver) UpdateTenant(ctx context.Context, input model.UpdateTenantInput) (model.UpdateTenantResult, error) {
+	return r.DoUpdateTenant(ctx, input)
+}
+
+// SubscribeToCluster is the resolver for the subscribeToCluster field.
+func (r *mutationResolver) SubscribeToCluster(ctx context.Context, clusterID string) (bool, error) {
+	return r.Resolver.DoSubscribeToCluster(ctx, clusterID)
+}
+
+// UnsubscribeFromCluster is the resolver for the unsubscribeFromCluster field.
+func (r *mutationResolver) UnsubscribeFromCluster(ctx context.Context, clusterID string) (bool, error) {
+	return r.Resolver.DoUnsubscribeFromCluster(ctx, clusterID)
+}
+
+// CreateDeveloperToken is the resolver for the createDeveloperToken field.
+func (r *mutationResolver) CreateDeveloperToken(ctx context.Context, input model.CreateDeveloperTokenInput) (model.CreateDeveloperTokenResult, error) {
+	return r.DoCreateDeveloperToken(ctx, input)
+}
+
+// RevokeDeveloperToken is the resolver for the revokeDeveloperToken field.
+func (r *mutationResolver) RevokeDeveloperToken(ctx context.Context, id string) (model.RevokeDeveloperTokenResult, error) {
+	return r.DoRevokeDeveloperToken(ctx, id)
+}
+
+// CreateBootstrapToken is the resolver for the createBootstrapToken field.
+func (r *mutationResolver) CreateBootstrapToken(ctx context.Context, input model.CreateBootstrapTokenInput) (model.CreateBootstrapTokenResult, error) {
+	return r.DoCreateBootstrapToken(ctx, input)
+}
+
+// RevokeBootstrapToken is the resolver for the revokeBootstrapToken field.
+func (r *mutationResolver) RevokeBootstrapToken(ctx context.Context, id string) (model.RevokeBootstrapTokenResult, error) {
+	return r.DoRevokeBootstrapToken(ctx, id)
+}
+
+// CreateStreamKey is the resolver for the createStreamKey field.
+func (r *mutationResolver) CreateStreamKey(ctx context.Context, streamID string, input model.CreateStreamKeyInput) (model.CreateStreamKeyResult, error) {
+	return r.Resolver.DoCreateStreamKey(ctx, streamID, input)
+}
+
+// DeleteStreamKey is the resolver for the deleteStreamKey field.
+func (r *mutationResolver) DeleteStreamKey(ctx context.Context, streamID string, keyID string) (model.DeleteStreamKeyResult, error) {
+	return r.Resolver.DoDeleteStreamKey(ctx, streamID, keyID)
+}
+
+// LastHeartbeat is the resolver for the lastHeartbeat field.
+func (r *nodeResolver) LastHeartbeat(ctx context.Context, obj *proto.InfrastructureNode) (*time.Time, error) {
+	if obj.LastHeartbeat == nil {
+		return nil, nil
+	}
+	t := obj.LastHeartbeat.AsTime()
+	return &t, nil
+}
+
+// Tags is the resolver for the tags field.
+func (r *nodeResolver) Tags(ctx context.Context, obj *proto.InfrastructureNode) (*string, error) {
+	if obj.Tags == nil {
+		return nil, nil
+	}
+	b, err := json.Marshal(obj.Tags.AsMap())
+	if err != nil {
+		return nil, err
+	}
+	s := string(b)
+	return &s, nil
+}
+
+// Metadata is the resolver for the metadata field.
+func (r *nodeResolver) Metadata(ctx context.Context, obj *proto.InfrastructureNode) (*string, error) {
+	if obj.Metadata == nil {
+		return nil, nil
+	}
+	b, err := json.Marshal(obj.Metadata.AsMap())
+	if err != nil {
+		return nil, err
+	}
+	s := string(b)
+	return &s, nil
+}
+
+// CreatedAt is the resolver for the createdAt field.
+func (r *nodeResolver) CreatedAt(ctx context.Context, obj *proto.InfrastructureNode) (*time.Time, error) {
+	if obj.CreatedAt == nil {
+		return nil, nil
+	}
+	t := obj.CreatedAt.AsTime()
+	return &t, nil
+}
+
+// UpdatedAt is the resolver for the updatedAt field.
+func (r *nodeResolver) UpdatedAt(ctx context.Context, obj *proto.InfrastructureNode) (*time.Time, error) {
+	if obj.UpdatedAt == nil {
+		return nil, nil
+	}
+	t := obj.UpdatedAt.AsTime()
+	return &t, nil
+}
+
+// MetricsConnection is the resolver for the metricsConnection field.
+func (r *nodeResolver) MetricsConnection(ctx context.Context, obj *proto.InfrastructureNode, timeRange *model.TimeRangeInput, first *int, after *string) (*model.NodeMetricsConnection, error) {
+	return r.Resolver.DoGetNodeMetricsConnectionForNode(ctx, obj, timeRange, first, after)
+}
+
+// Metrics1hConnection is the resolver for the metrics1hConnection field.
+func (r *nodeResolver) Metrics1hConnection(ctx context.Context, obj *proto.InfrastructureNode, timeRange *model.TimeRangeInput, first *int, after *string) (*model.NodeMetrics1hConnection, error) {
+	return r.Resolver.DoGetNodeMetrics1hConnectionForNode(ctx, obj, timeRange, first, after)
+}
+
+// Timestamp is the resolver for the timestamp field.
+func (r *nodeMetricResolver) Timestamp(ctx context.Context, obj *proto.NodeMetric) (*time.Time, error) {
+	if obj.Timestamp == nil {
+		return nil, nil
+	}
+	t := obj.Timestamp.AsTime()
+	return &t, nil
+}
+
+// CPUUsage is the resolver for the cpuUsage field.
+func (r *nodeMetricResolver) CPUUsage(ctx context.Context, obj *proto.NodeMetric) (float64, error) {
+	return float64(obj.CpuUsage), nil
+}
+
+// MemoryTotal is the resolver for the memoryTotal field.
+func (r *nodeMetricResolver) MemoryTotal(ctx context.Context, obj *proto.NodeMetric) (*float64, error) {
+	v := float64(obj.RamMax)
+	return &v, nil
+}
+
+// MemoryUsed is the resolver for the memoryUsed field.
+func (r *nodeMetricResolver) MemoryUsed(ctx context.Context, obj *proto.NodeMetric) (*float64, error) {
+	v := float64(obj.RamCurrent)
+	return &v, nil
+}
+
+// DiskTotal is the resolver for the diskTotal field.
+func (r *nodeMetricResolver) DiskTotal(ctx context.Context, obj *proto.NodeMetric) (*float64, error) {
+	v := float64(obj.DiskTotalBytes)
+	return &v, nil
+}
+
+// DiskUsed is the resolver for the diskUsed field.
+func (r *nodeMetricResolver) DiskUsed(ctx context.Context, obj *proto.NodeMetric) (*float64, error) {
+	v := float64(obj.DiskUsedBytes)
+	return &v, nil
+}
+
+// ShmTotal is the resolver for the shmTotal field.
+func (r *nodeMetricResolver) ShmTotal(ctx context.Context, obj *proto.NodeMetric) (*float64, error) {
+	v := float64(obj.ShmTotalBytes)
+	return &v, nil
+}
+
+// ShmUsed is the resolver for the shmUsed field.
+func (r *nodeMetricResolver) ShmUsed(ctx context.Context, obj *proto.NodeMetric) (*float64, error) {
+	v := float64(obj.ShmUsedBytes)
+	return &v, nil
+}
+
+// NetworkRx is the resolver for the networkRx field.
+func (r *nodeMetricResolver) NetworkRx(ctx context.Context, obj *proto.NodeMetric) (int, error) {
+	return int(obj.BandwidthIn), nil
+}
+
+// NetworkTx is the resolver for the networkTx field.
+func (r *nodeMetricResolver) NetworkTx(ctx context.Context, obj *proto.NodeMetric) (int, error) {
+	return int(obj.BandwidthOut), nil
+}
+
+// Status is the resolver for the status field.
+func (r *nodeMetricResolver) Status(ctx context.Context, obj *proto.NodeMetric) (string, error) {
+	if obj.IsHealthy {
+		return "HEALTHY", nil
+	}
+	return "DEGRADED", nil
+}
+
+// Metadata is the resolver for the metadata field.
+func (r *nodeMetricResolver) Metadata(ctx context.Context, obj *proto.NodeMetric) (*string, error) {
+	if obj == nil || obj.Metadata == nil {
+		return nil, nil
+	}
+
+	payload, err := json.Marshal(obj.Metadata.AsMap())
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal node metadata: %w", err)
+	}
+
+	result := string(payload)
+	return &result, nil
+}
+
+// Timestamp is the resolver for the timestamp field.
+func (r *nodeMetricHourlyResolver) Timestamp(ctx context.Context, obj *proto.NodeMetricHourly) (*time.Time, error) {
+	if obj.Timestamp == nil {
+		return nil, nil
+	}
+	t := obj.Timestamp.AsTime()
+	return &t, nil
+}
+
+// AvgCPU is the resolver for the avgCpu field.
+func (r *nodeMetricHourlyResolver) AvgCPU(ctx context.Context, obj *proto.NodeMetricHourly) (float64, error) {
+	return float64(obj.AvgCpu), nil
+}
+
+// PeakCPU is the resolver for the peakCpu field.
+func (r *nodeMetricHourlyResolver) PeakCPU(ctx context.Context, obj *proto.NodeMetricHourly) (float64, error) {
+	return float64(obj.PeakCpu), nil
+}
+
+// AvgMemory is the resolver for the avgMemory field.
+func (r *nodeMetricHourlyResolver) AvgMemory(ctx context.Context, obj *proto.NodeMetricHourly) (float64, error) {
+	return float64(obj.AvgMemory), nil
+}
+
+// PeakMemory is the resolver for the peakMemory field.
+func (r *nodeMetricHourlyResolver) PeakMemory(ctx context.Context, obj *proto.NodeMetricHourly) (float64, error) {
+	return float64(obj.PeakMemory), nil
+}
+
+// AvgDisk is the resolver for the avgDisk field.
+func (r *nodeMetricHourlyResolver) AvgDisk(ctx context.Context, obj *proto.NodeMetricHourly) (float64, error) {
+	return float64(obj.GetAvgDisk()), nil
+}
+
+// PeakDisk is the resolver for the peakDisk field.
+func (r *nodeMetricHourlyResolver) PeakDisk(ctx context.Context, obj *proto.NodeMetricHourly) (float64, error) {
+	return float64(obj.GetPeakDisk()), nil
+}
+
+// Method is the resolver for the method field.
+func (r *paymentResolver) Method(ctx context.Context, obj *proto.PaymentResponse) (model.PaymentMethod, error) {
+	// Convert payment method string to GraphQL enum
+	switch strings.ToLower(obj.Method) {
+	case "card", "mollie":
+		return model.PaymentMethodCard, nil
+	case "crypto", "crypto_btc", "crypto_eth":
+		return model.PaymentMethodCrypto, nil
+	case "bank_transfer":
+		return model.PaymentMethodBankTransfer, nil
+	default:
+		// Default to card if method not specified
+		return model.PaymentMethodCard, nil
+	}
+}
+
+// Status is the resolver for the status field.
+func (r *paymentResolver) Status(ctx context.Context, obj *proto.PaymentResponse) (model.PaymentStatus, error) {
+	s := strings.ToLower(obj.Status)
+	switch s {
+	case "pending":
+		return model.PaymentStatusPending, nil
+	case "confirmed":
+		return model.PaymentStatusConfirmed, nil
+	case "failed":
+		return model.PaymentStatusFailed, nil
+	default:
+		return model.PaymentStatusPending, fmt.Errorf("unknown payment status: %s", obj.Status)
+	}
+}
+
+// CreatedAt is the resolver for the createdAt field.
+func (r *paymentResolver) CreatedAt(ctx context.Context, obj *proto.PaymentResponse) (*time.Time, error) {
+	if obj.CreatedAt == nil {
+		return nil, nil
+	}
+	t := obj.CreatedAt.AsTime()
+	return &t, nil
 }
 
 // TotalBandwidth is the resolver for the totalBandwidth field.
-func (r *platformOverviewResolver) TotalBandwidth(ctx context.Context, obj *periscope.PlatformOverviewResponse) (float64, error) {
-	panic(fmt.Errorf("not implemented: TotalBandwidth - totalBandwidth"))
+func (r *platformOverviewResolver) TotalBandwidth(ctx context.Context, obj *proto.GetPlatformOverviewResponse) (float64, error) {
+	return obj.PeakBandwidth, nil
 }
 
 // TimeRange is the resolver for the timeRange field.
-func (r *platformOverviewResolver) TimeRange(ctx context.Context, obj *periscope.PlatformOverviewResponse) (*model.TimeRange, error) {
-	panic(fmt.Errorf("not implemented: TimeRange - timeRange"))
+func (r *platformOverviewResolver) TimeRange(ctx context.Context, obj *proto.GetPlatformOverviewResponse) (*proto.TimeRange, error) {
+	if obj.GeneratedAt == nil {
+		return nil, nil
+	}
+	end := obj.GeneratedAt
+	start := timestamppb.New(end.AsTime().Add(-24 * time.Hour))
+	return &proto.TimeRange{Start: start, End: end}, nil
+}
+
+// TotalUploadBytes is the resolver for the totalUploadBytes field.
+func (r *platformOverviewResolver) TotalUploadBytes(ctx context.Context, obj *proto.GetPlatformOverviewResponse) (int, error) {
+	return int(obj.TotalUploadBytes), nil
+}
+
+// TotalDownloadBytes is the resolver for the totalDownloadBytes field.
+func (r *platformOverviewResolver) TotalDownloadBytes(ctx context.Context, obj *proto.GetPlatformOverviewResponse) (int, error) {
+	return int(obj.TotalDownloadBytes), nil
+}
+
+// LastUpdate is the resolver for the lastUpdate field.
+func (r *playbackInstanceResolver) LastUpdate(ctx context.Context, obj *proto.PlaybackInstance) (*time.Time, error) {
+	if obj.LastUpdate == nil {
+		return nil, nil
+	}
+	t := obj.LastUpdate.AsTime()
+	return &t, nil
+}
+
+// CreatedAt is the resolver for the createdAt field.
+func (r *playbackMetadataResolver) CreatedAt(ctx context.Context, obj *proto.PlaybackMetadata) (*time.Time, error) {
+	if obj.CreatedAt == nil {
+		return nil, nil
+	}
+	t := obj.CreatedAt.AsTime()
+	return &t, nil
+}
+
+// Hour is the resolver for the hour field.
+func (r *qualityChangesHourlyResolver) Hour(ctx context.Context, obj *proto.QualityChangesHourly) (*time.Time, error) {
+	if obj.Hour == nil {
+		return nil, nil
+	}
+	t := obj.Hour.AsTime()
+	return &t, nil
+}
+
+// TotalChanges is the resolver for the totalChanges field.
+func (r *qualityChangesHourlyResolver) TotalChanges(ctx context.Context, obj *proto.QualityChangesHourly) (int, error) {
+	return int(obj.TotalChanges), nil
+}
+
+// ResolutionChanges is the resolver for the resolutionChanges field.
+func (r *qualityChangesHourlyResolver) ResolutionChanges(ctx context.Context, obj *proto.QualityChangesHourly) (int, error) {
+	return int(obj.ResolutionChanges), nil
+}
+
+// CodecChanges is the resolver for the codecChanges field.
+func (r *qualityChangesHourlyResolver) CodecChanges(ctx context.Context, obj *proto.QualityChangesHourly) (int, error) {
+	return int(obj.CodecChanges), nil
+}
+
+// Day is the resolver for the day field.
+func (r *qualityTierDailyResolver) Day(ctx context.Context, obj *proto.QualityTierDaily) (*time.Time, error) {
+	if obj.Day == nil {
+		return nil, nil
+	}
+	t := obj.Day.AsTime()
+	return &t, nil
+}
+
+// Tier1080pMinutes is the resolver for the tier1080pMinutes field.
+func (r *qualityTierDailyResolver) Tier1080pMinutes(ctx context.Context, obj *proto.QualityTierDaily) (int, error) {
+	return int(obj.Tier_1080PMinutes), nil
+}
+
+// Tier720pMinutes is the resolver for the tier720pMinutes field.
+func (r *qualityTierDailyResolver) Tier720pMinutes(ctx context.Context, obj *proto.QualityTierDaily) (int, error) {
+	return int(obj.Tier_720PMinutes), nil
+}
+
+// Tier480pMinutes is the resolver for the tier480pMinutes field.
+func (r *qualityTierDailyResolver) Tier480pMinutes(ctx context.Context, obj *proto.QualityTierDaily) (int, error) {
+	return int(obj.Tier_480PMinutes), nil
+}
+
+// TierSdMinutes is the resolver for the tierSdMinutes field.
+func (r *qualityTierDailyResolver) TierSdMinutes(ctx context.Context, obj *proto.QualityTierDaily) (int, error) {
+	return int(obj.TierSdMinutes), nil
+}
+
+// CodecH264Minutes is the resolver for the codecH264Minutes field.
+func (r *qualityTierDailyResolver) CodecH264Minutes(ctx context.Context, obj *proto.QualityTierDaily) (int, error) {
+	return int(obj.CodecH264Minutes), nil
+}
+
+// CodecH265Minutes is the resolver for the codecH265Minutes field.
+func (r *qualityTierDailyResolver) CodecH265Minutes(ctx context.Context, obj *proto.QualityTierDaily) (int, error) {
+	return int(obj.CodecH265Minutes), nil
+}
+
+// AvgBitrate is the resolver for the avgBitrate field.
+func (r *qualityTierDailyResolver) AvgBitrate(ctx context.Context, obj *proto.QualityTierDaily) (int, error) {
+	return int(obj.AvgBitrate), nil
+}
+
+// AvgFps is the resolver for the avgFps field.
+func (r *qualityTierDailyResolver) AvgFps(ctx context.Context, obj *proto.QualityTierDaily) (float64, error) {
+	return float64(obj.AvgFps), nil
 }
 
 // Streams is the resolver for the streams field.
-func (r *queryResolver) Streams(ctx context.Context) ([]*models.Stream, error) {
-	panic(fmt.Errorf("not implemented: Streams - streams"))
+func (r *queryResolver) Streams(ctx context.Context) ([]*proto.Stream, error) {
+	return r.DoGetStreams(ctx)
+}
+
+// StreamsConnection is the resolver for the streamsConnection field.
+func (r *queryResolver) StreamsConnection(ctx context.Context, first *int, after *string, last *int, before *string) (*model.StreamsConnection, error) {
+	return r.DoGetStreamsConnection(ctx, first, after, last, before)
 }
 
 // Stream is the resolver for the stream field.
-func (r *queryResolver) Stream(ctx context.Context, id string) (*models.Stream, error) {
-	panic(fmt.Errorf("not implemented: Stream - stream"))
+func (r *queryResolver) Stream(ctx context.Context, id string) (*proto.Stream, error) {
+	return r.DoGetStream(ctx, id)
 }
 
 // ValidateStreamKey is the resolver for the validateStreamKey field.
 func (r *queryResolver) ValidateStreamKey(ctx context.Context, streamKey string) (*model.StreamValidation, error) {
-	panic(fmt.Errorf("not implemented: ValidateStreamKey - validateStreamKey"))
+	return r.DoValidateStreamKey(ctx, streamKey)
 }
 
 // StreamAnalytics is the resolver for the streamAnalytics field.
-func (r *queryResolver) StreamAnalytics(ctx context.Context, stream string, timeRange *model.TimeRangeInput) (*models.StreamAnalytics, error) {
-	panic(fmt.Errorf("not implemented: StreamAnalytics - streamAnalytics"))
-}
-
-// ViewerMetrics is the resolver for the viewerMetrics field.
-func (r *queryResolver) ViewerMetrics(ctx context.Context, stream *string, timeRange *model.TimeRangeInput) ([]*models.AnalyticsViewerSession, error) {
-	panic(fmt.Errorf("not implemented: ViewerMetrics - viewerMetrics"))
+func (r *queryResolver) StreamAnalytics(ctx context.Context, stream string, timeRange *model.TimeRangeInput) (*proto.StreamAnalytics, error) {
+	return r.DoGetStreamAnalytics(ctx, stream, timeRange)
 }
 
 // PlatformOverview is the resolver for the platformOverview field.
-func (r *queryResolver) PlatformOverview(ctx context.Context, timeRange *model.TimeRangeInput) (*periscope.PlatformOverviewResponse, error) {
-	panic(fmt.Errorf("not implemented: PlatformOverview - platformOverview"))
+func (r *queryResolver) PlatformOverview(ctx context.Context, timeRange *model.TimeRangeInput) (*proto.GetPlatformOverviewResponse, error) {
+	return r.DoGetPlatformOverview(ctx, timeRange)
+}
+
+// ViewerCountTimeSeries is the resolver for the viewerCountTimeSeries field.
+func (r *queryResolver) ViewerCountTimeSeries(ctx context.Context, stream *string, timeRange *model.TimeRangeInput, interval *string) ([]*proto.ViewerCountBucket, error) {
+	return r.DoGetViewerCountTimeSeries(ctx, stream, timeRange, interval)
 }
 
 // ViewerGeographics is the resolver for the viewerGeographics field.
-func (r *queryResolver) ViewerGeographics(ctx context.Context, stream *string, timeRange *model.TimeRangeInput) ([]*periscope.ConnectionEvent, error) {
-	panic(fmt.Errorf("not implemented: ViewerGeographics - viewerGeographics"))
+func (r *queryResolver) ViewerGeographics(ctx context.Context, stream *string, timeRange *model.TimeRangeInput) ([]*proto.ConnectionEvent, error) {
+	ce, err := r.DoGetViewerGeographics(ctx, stream, timeRange)
+	if err != nil {
+		return nil, err
+	}
+	return ce, nil
 }
 
 // GeographicDistribution is the resolver for the geographicDistribution field.
-func (r *queryResolver) GeographicDistribution(ctx context.Context, stream *string, timeRange *model.TimeRangeInput) (*model.GeographicDistribution, error) {
-	panic(fmt.Errorf("not implemented: GeographicDistribution - geographicDistribution"))
+func (r *queryResolver) GeographicDistribution(ctx context.Context, stream *string, timeRange *model.TimeRangeInput, topN *int) (*model.GeographicDistribution, error) {
+	return r.DoGetGeographicDistribution(ctx, stream, timeRange, topN)
 }
 
 // LoadBalancingMetrics is the resolver for the loadBalancingMetrics field.
-func (r *queryResolver) LoadBalancingMetrics(ctx context.Context, timeRange *model.TimeRangeInput, pagination *model.PaginationInput, sortOrder *model.SortOrder) ([]*model.LoadBalancingMetric, error) {
-	panic(fmt.Errorf("not implemented: LoadBalancingMetrics - loadBalancingMetrics"))
+func (r *queryResolver) LoadBalancingMetrics(ctx context.Context, timeRange *model.TimeRangeInput, pagination *model.PaginationInput, sortOrder *model.SortOrder) ([]*proto.RoutingEvent, error) {
+	items, err := r.DoGetLoadBalancingMetrics(ctx, timeRange)
+	if err != nil {
+		return nil, err
+	}
+	// Apply simple sort by timestamp
+	if sortOrder != nil && *sortOrder == model.SortOrderAsc {
+		for i, j := 0, len(items)-1; i < j; i, j = i+1, j-1 {
+			items[i], items[j] = items[j], items[i]
+		}
+	}
+	start, end := clampPagination(pagination, len(items))
+	if start > len(items) {
+		return []*proto.RoutingEvent{}, nil
+	}
+	return items[start:end], nil
 }
 
-// RoutingEvents is the resolver for the routingEvents field.
-func (r *queryResolver) RoutingEvents(ctx context.Context, stream *string, timeRange *model.TimeRangeInput, pagination *model.PaginationInput, sortOrder *model.SortOrder) ([]*models.AnalyticsRoutingEvent, error) {
-	panic(fmt.Errorf("not implemented: RoutingEvents - routingEvents"))
+// RoutingEventsConnection is the resolver for the routingEventsConnection field.
+func (r *queryResolver) RoutingEventsConnection(ctx context.Context, stream *string, timeRange *model.TimeRangeInput, first *int, after *string, last *int, before *string, noCache *bool) (*model.RoutingEventsConnection, error) {
+	return r.Resolver.DoGetRoutingEventsConnection(ctx, stream, timeRange, first, after, last, before, noCache)
 }
 
-// ConnectionEvents is the resolver for the connectionEvents field.
-func (r *queryResolver) ConnectionEvents(ctx context.Context, stream *string, timeRange *model.TimeRangeInput, pagination *model.PaginationInput, sortOrder *model.SortOrder) ([]*periscope.ConnectionEvent, error) {
-	panic(fmt.Errorf("not implemented: ConnectionEvents - connectionEvents"))
+// ConnectionEventsConnection is the resolver for the connectionEventsConnection field.
+func (r *queryResolver) ConnectionEventsConnection(ctx context.Context, stream *string, timeRange *model.TimeRangeInput, first *int, after *string, last *int, before *string, noCache *bool) (*model.ConnectionEventsConnection, error) {
+	return r.Resolver.DoGetConnectionEventsConnection(ctx, stream, timeRange, first, after, last, before, noCache)
 }
 
-// ClipEvents is the resolver for the clipEvents field.
-func (r *queryResolver) ClipEvents(ctx context.Context, internalName *string, stage *string, timeRange *model.TimeRangeInput, pagination *model.PaginationInput) ([]*periscope.ClipEvent, error) {
-	panic(fmt.Errorf("not implemented: ClipEvents - clipEvents"))
+// ClipEventsConnection is the resolver for the clipEventsConnection field.
+func (r *queryResolver) ClipEventsConnection(ctx context.Context, internalName *string, stage *string, timeRange *model.TimeRangeInput, first *int, after *string, last *int, before *string, noCache *bool) (*model.ClipEventsConnection, error) {
+	return r.Resolver.DoGetClipEventsConnection(ctx, internalName, stage, timeRange, first, after, last, before, noCache)
 }
 
-// NodeMetrics is the resolver for the nodeMetrics field.
-func (r *queryResolver) NodeMetrics(ctx context.Context, nodeID *string, timeRange *model.TimeRangeInput) ([]*periscope.NodeMetric, error) {
-	panic(fmt.Errorf("not implemented: NodeMetrics - nodeMetrics"))
+// ArtifactState is the resolver for the artifactState field.
+func (r *queryResolver) ArtifactState(ctx context.Context, requestID string) (*proto.ArtifactState, error) {
+	return r.Resolver.DoGetArtifactState(ctx, requestID)
 }
 
-// NodeMetrics1h is the resolver for the nodeMetrics1h field.
-func (r *queryResolver) NodeMetrics1h(ctx context.Context, timeRange *model.TimeRangeInput, nodeID *string) ([]*model.NodeMetricHourly, error) {
-	panic(fmt.Errorf("not implemented: NodeMetrics1h - nodeMetrics1h"))
+// ArtifactStatesConnection is the resolver for the artifactStatesConnection field.
+func (r *queryResolver) ArtifactStatesConnection(ctx context.Context, internalName *string, contentType *string, stage *string, first *int, after *string, last *int, before *string) (*model.ArtifactStatesConnection, error) {
+	return r.Resolver.DoGetArtifactStatesConnection(ctx, internalName, contentType, stage, first, after, last, before)
 }
 
-// ViewerMetrics5m is the resolver for the viewerMetrics5m field.
-func (r *queryResolver) ViewerMetrics5m(ctx context.Context, stream *string, timeRange *model.TimeRangeInput) ([]*models.AnalyticsViewerSession5m, error) {
-	panic(fmt.Errorf("not implemented: ViewerMetrics5m - viewerMetrics5m"))
+// NodeMetricsConnection is the resolver for the nodeMetricsConnection field.
+func (r *queryResolver) NodeMetricsConnection(ctx context.Context, nodeID *string, timeRange *model.TimeRangeInput, first *int, after *string, last *int, before *string, noCache *bool) (*model.NodeMetricsConnection, error) {
+	return r.Resolver.DoGetNodeMetricsConnection(ctx, nodeID, timeRange, first, after, last, before, noCache)
+}
+
+// NodeMetrics1hConnection is the resolver for the nodeMetrics1hConnection field.
+func (r *queryResolver) NodeMetrics1hConnection(ctx context.Context, timeRange *model.TimeRangeInput, nodeID *string, first *int, after *string, last *int, before *string, noCache *bool) (*model.NodeMetrics1hConnection, error) {
+	return r.Resolver.DoGetNodeMetrics1hConnection(ctx, timeRange, nodeID, first, after, last, before, noCache)
+}
+
+// StreamConnectionHourlyConnection is the resolver for the streamConnectionHourlyConnection field.
+func (r *queryResolver) StreamConnectionHourlyConnection(ctx context.Context, stream *string, timeRange *model.TimeRangeInput, first *int, after *string, last *int, before *string, noCache *bool) (*model.StreamConnectionHourlyConnection, error) {
+	return r.Resolver.DoGetStreamConnectionHourlyConnection(ctx, stream, timeRange, first, after, last, before, noCache)
+}
+
+// ClientMetrics5mConnection is the resolver for the clientMetrics5mConnection field.
+func (r *queryResolver) ClientMetrics5mConnection(ctx context.Context, stream *string, nodeID *string, timeRange *model.TimeRangeInput, first *int, after *string, last *int, before *string, noCache *bool) (*model.ClientMetrics5mConnection, error) {
+	return r.Resolver.DoGetClientMetrics5mConnection(ctx, stream, nodeID, timeRange, first, after, last, before, noCache)
+}
+
+// QualityTierDailyConnection is the resolver for the qualityTierDailyConnection field.
+func (r *queryResolver) QualityTierDailyConnection(ctx context.Context, stream *string, timeRange *model.TimeRangeInput, first *int, after *string, last *int, before *string, noCache *bool) (*model.QualityTierDailyConnection, error) {
+	return r.Resolver.DoGetQualityTierDailyConnection(ctx, stream, timeRange, first, after, last, before, noCache)
+}
+
+// QualityChangesHourlyConnection is the resolver for the qualityChangesHourlyConnection field.
+func (r *queryResolver) QualityChangesHourlyConnection(ctx context.Context, stream *string, timeRange *model.TimeRangeInput, first *int, after *string, last *int, before *string, noCache *bool) (*model.QualityChangesHourlyConnection, error) {
+	return r.Resolver.DoGetQualityChangesHourlyConnection(ctx, stream, timeRange, first, after, last, before, noCache)
+}
+
+// StorageUsageConnection is the resolver for the storageUsageConnection field.
+func (r *queryResolver) StorageUsageConnection(ctx context.Context, nodeID *string, timeRange *model.TimeRangeInput, first *int, after *string, last *int, before *string, noCache *bool) (*model.StorageUsageConnection, error) {
+	return r.Resolver.DoGetStorageUsageConnection(ctx, nodeID, timeRange, first, after, last, before, noCache)
 }
 
 // ServiceInstances is the resolver for the serviceInstances field.
-func (r *queryResolver) ServiceInstances(ctx context.Context, clusterID *string, nodeID *string, status *model.InstanceStatus) ([]*models.ServiceInstance, error) {
-	panic(fmt.Errorf("not implemented: ServiceInstances - serviceInstances"))
+func (r *queryResolver) ServiceInstances(ctx context.Context, clusterID *string, nodeID *string, status *model.InstanceStatus, pagination *model.PaginationInput) ([]*proto.ServiceInstance, error) {
+	return r.Resolver.DoGetServiceInstances(ctx, clusterID, nodeID, status, pagination)
+}
+
+// ServiceInstancesConnection is the resolver for the serviceInstancesConnection field.
+func (r *queryResolver) ServiceInstancesConnection(ctx context.Context, clusterID *string, nodeID *string, status *model.InstanceStatus, first *int, after *string, last *int, before *string) (*model.ServiceInstancesConnection, error) {
+	return r.Resolver.DoGetServiceInstancesConnection(ctx, clusterID, nodeID, status, first, after, last, before)
 }
 
 // StreamKeys is the resolver for the streamKeys field.
-func (r *queryResolver) StreamKeys(ctx context.Context, streamID string) ([]*models.StreamKey, error) {
-	panic(fmt.Errorf("not implemented: StreamKeys - streamKeys"))
+func (r *queryResolver) StreamKeys(ctx context.Context, streamID string) ([]*proto.StreamKey, error) {
+	return r.Resolver.DoGetStreamKeys(ctx, streamID)
 }
 
 // Recordings is the resolver for the recordings field.
-func (r *queryResolver) Recordings(ctx context.Context, streamID *string) ([]*commodore.Recording, error) {
-	panic(fmt.Errorf("not implemented: Recordings - recordings"))
+func (r *queryResolver) Recordings(ctx context.Context, streamID *string) ([]*proto.Recording, error) {
+	return r.DoGetRecordings(ctx, streamID)
+}
+
+// RecordingsConnection is the resolver for the recordingsConnection field.
+func (r *queryResolver) RecordingsConnection(ctx context.Context, streamID *string, first *int, after *string, last *int, before *string) (*model.RecordingsConnection, error) {
+	return r.DoGetRecordingsConnection(ctx, streamID, first, after, last, before)
 }
 
 // Clips is the resolver for the clips field.
-func (r *queryResolver) Clips(ctx context.Context, streamID *string) ([]*commodore.ClipResponse, error) {
-	panic(fmt.Errorf("not implemented: Clips - clips"))
+func (r *queryResolver) Clips(ctx context.Context, streamID *string) ([]*proto.ClipInfo, error) {
+	return r.DoGetClips(ctx, streamID)
+}
+
+// ClipsConnection is the resolver for the clipsConnection field.
+func (r *queryResolver) ClipsConnection(ctx context.Context, streamID *string, first *int, after *string, last *int, before *string) (*model.ClipsConnection, error) {
+	return r.DoGetClipsConnection(ctx, streamID, first, after, last, before)
 }
 
 // Clip is the resolver for the clip field.
-func (r *queryResolver) Clip(ctx context.Context, id string) (*commodore.ClipResponse, error) {
-	panic(fmt.Errorf("not implemented: Clip - clip"))
+func (r *queryResolver) Clip(ctx context.Context, id string) (*proto.ClipInfo, error) {
+	return r.DoGetClip(ctx, id)
 }
 
 // ClipViewingUrls is the resolver for the clipViewingUrls field.
-func (r *queryResolver) ClipViewingUrls(ctx context.Context, clipID string) (*model.ClipViewingUrls, error) {
-	panic(fmt.Errorf("not implemented: ClipViewingUrls - clipViewingUrls"))
+func (r *queryResolver) ClipViewingUrls(ctx context.Context, clipID string) (*proto.ClipViewingURLs, error) {
+	return r.DoGetClipViewingUrls(ctx, clipID)
 }
 
-// TenantClusterAssignments is the resolver for the tenantClusterAssignments field.
-func (r *queryResolver) TenantClusterAssignments(ctx context.Context) ([]*model.TenantClusterAssignment, error) {
-	panic(fmt.Errorf("not implemented: TenantClusterAssignments - tenantClusterAssignments"))
+// StreamHealthMetricsConnection is the resolver for the streamHealthMetricsConnection field.
+func (r *queryResolver) StreamHealthMetricsConnection(ctx context.Context, stream string, timeRange *model.TimeRangeInput, first *int, after *string, last *int, before *string, noCache *bool) (*model.StreamHealthMetricsConnection, error) {
+	return r.Resolver.DoGetStreamHealthMetricsConnection(ctx, stream, timeRange, first, after, last, before, noCache)
 }
 
-// StreamHealthMetrics is the resolver for the streamHealthMetrics field.
-func (r *queryResolver) StreamHealthMetrics(ctx context.Context, stream string, timeRange *model.TimeRangeInput) ([]*periscope.StreamHealthMetric, error) {
-	panic(fmt.Errorf("not implemented: StreamHealthMetrics - streamHealthMetrics"))
-}
-
-// TrackListEvents is the resolver for the trackListEvents field.
-func (r *queryResolver) TrackListEvents(ctx context.Context, stream string, timeRange *model.TimeRangeInput) ([]*periscope.AnalyticsTrackListEvent, error) {
-	panic(fmt.Errorf("not implemented: TrackListEvents - trackListEvents"))
-}
-
-// StreamHealthAlerts is the resolver for the streamHealthAlerts field.
-func (r *queryResolver) StreamHealthAlerts(ctx context.Context, stream *string, timeRange *model.TimeRangeInput) ([]*model.StreamHealthAlert, error) {
-	panic(fmt.Errorf("not implemented: StreamHealthAlerts - streamHealthAlerts"))
+// TrackListEventsConnection is the resolver for the trackListEventsConnection field.
+func (r *queryResolver) TrackListEventsConnection(ctx context.Context, stream string, timeRange *model.TimeRangeInput, first *int, after *string, last *int, before *string, noCache *bool) (*model.TrackListEventsConnection, error) {
+	return r.Resolver.DoGetTrackListEventsConnection(ctx, stream, timeRange, first, after, last, before, noCache)
 }
 
 // CurrentStreamHealth is the resolver for the currentStreamHealth field.
-func (r *queryResolver) CurrentStreamHealth(ctx context.Context, stream string) (*periscope.StreamHealthMetric, error) {
-	panic(fmt.Errorf("not implemented: CurrentStreamHealth - currentStreamHealth"))
+func (r *queryResolver) CurrentStreamHealth(ctx context.Context, stream string) (*proto.StreamHealthMetric, error) {
+	return r.DoGetCurrentStreamHealth(ctx, stream)
 }
 
 // RebufferingEvents is the resolver for the rebufferingEvents field.
 func (r *queryResolver) RebufferingEvents(ctx context.Context, stream string, timeRange *model.TimeRangeInput) ([]*model.RebufferingEvent, error) {
-	panic(fmt.Errorf("not implemented: RebufferingEvents - rebufferingEvents"))
+	return r.DoGetRebufferingEvents(ctx, stream, timeRange)
 }
 
 // BillingTiers is the resolver for the billingTiers field.
-func (r *queryResolver) BillingTiers(ctx context.Context) ([]*models.BillingTier, error) {
-	panic(fmt.Errorf("not implemented: BillingTiers - billingTiers"))
+func (r *queryResolver) BillingTiers(ctx context.Context) ([]*proto.BillingTier, error) {
+	return r.DoGetBillingTiers(ctx)
 }
 
 // Invoices is the resolver for the invoices field.
-func (r *queryResolver) Invoices(ctx context.Context) ([]*models.Invoice, error) {
-	panic(fmt.Errorf("not implemented: Invoices - invoices"))
+func (r *queryResolver) Invoices(ctx context.Context) ([]*proto.Invoice, error) {
+	return r.DoGetInvoices(ctx)
 }
 
 // Invoice is the resolver for the invoice field.
-func (r *queryResolver) Invoice(ctx context.Context, id string) (*models.Invoice, error) {
-	panic(fmt.Errorf("not implemented: Invoice - invoice"))
+func (r *queryResolver) Invoice(ctx context.Context, id string) (*proto.Invoice, error) {
+	return r.DoGetInvoice(ctx, id)
 }
 
 // BillingStatus is the resolver for the billingStatus field.
-func (r *queryResolver) BillingStatus(ctx context.Context) (*models.BillingStatus, error) {
-	panic(fmt.Errorf("not implemented: BillingStatus - billingStatus"))
+func (r *queryResolver) BillingStatus(ctx context.Context) (*proto.BillingStatusResponse, error) {
+	return r.DoGetBillingStatus(ctx)
+}
+
+// TenantUsage is the resolver for the tenantUsage field.
+func (r *queryResolver) TenantUsage(ctx context.Context, timeRange *model.TimeRangeInput) (*model.TenantUsage, error) {
+	return r.DoGetTenantUsage(ctx, timeRange)
 }
 
 // UsageRecords is the resolver for the usageRecords field.
-func (r *queryResolver) UsageRecords(ctx context.Context, timeRange *model.TimeRangeInput) ([]*models.UsageRecord, error) {
-	panic(fmt.Errorf("not implemented: UsageRecords - usageRecords"))
+func (r *queryResolver) UsageRecords(ctx context.Context, timeRange *model.TimeRangeInput) ([]*proto.UsageRecord, error) {
+	return r.DoGetUsageRecords(ctx, timeRange)
 }
 
 // Tenant is the resolver for the tenant field.
-func (r *queryResolver) Tenant(ctx context.Context) (*models.Tenant, error) {
-	panic(fmt.Errorf("not implemented: Tenant - tenant"))
+func (r *queryResolver) Tenant(ctx context.Context) (*proto.Tenant, error) {
+	return r.DoGetTenant(ctx)
 }
 
 // Clusters is the resolver for the clusters field.
-func (r *queryResolver) Clusters(ctx context.Context) ([]*models.InfrastructureCluster, error) {
-	panic(fmt.Errorf("not implemented: Clusters - clusters"))
+func (r *queryResolver) Clusters(ctx context.Context, pagination *model.PaginationInput) ([]*proto.InfrastructureCluster, error) {
+	return r.DoGetClusters(ctx, pagination)
+}
+
+// ClustersConnection is the resolver for the clustersConnection field.
+func (r *queryResolver) ClustersConnection(ctx context.Context, first *int, after *string, last *int, before *string) (*model.ClustersConnection, error) {
+	return r.Resolver.DoGetClustersConnection(ctx, first, after, last, before)
 }
 
 // Cluster is the resolver for the cluster field.
-func (r *queryResolver) Cluster(ctx context.Context, id string) (*models.InfrastructureCluster, error) {
-	panic(fmt.Errorf("not implemented: Cluster - cluster"))
+func (r *queryResolver) Cluster(ctx context.Context, id string) (*proto.InfrastructureCluster, error) {
+	return r.DoGetCluster(ctx, id)
 }
 
 // Nodes is the resolver for the nodes field.
-func (r *queryResolver) Nodes(ctx context.Context, clusterID *string, status *model.NodeStatus, typeArg *string, tag *string) ([]*models.InfrastructureNode, error) {
-	panic(fmt.Errorf("not implemented: Nodes - nodes"))
+func (r *queryResolver) Nodes(ctx context.Context, clusterID *string, status *model.NodeStatus, typeArg *string, tag *string, pagination *model.PaginationInput) ([]*proto.InfrastructureNode, error) {
+	return r.Resolver.DoGetNodes(ctx, clusterID, status, typeArg, tag, pagination)
+}
+
+// NodesConnection is the resolver for the nodesConnection field.
+func (r *queryResolver) NodesConnection(ctx context.Context, clusterID *string, status *model.NodeStatus, typeArg *string, first *int, after *string, last *int, before *string) (*model.NodesConnection, error) {
+	return r.Resolver.DoGetNodesConnection(ctx, clusterID, status, typeArg, first, after, last, before)
 }
 
 // Node is the resolver for the node field.
-func (r *queryResolver) Node(ctx context.Context, id string) (*models.InfrastructureNode, error) {
-	panic(fmt.Errorf("not implemented: Node - node"))
+func (r *queryResolver) Node(ctx context.Context, id string) (*proto.InfrastructureNode, error) {
+	return r.DoGetNode(ctx, id)
 }
 
 // DiscoverServices is the resolver for the discoverServices field.
-func (r *queryResolver) DiscoverServices(ctx context.Context, typeArg string, clusterID *string) ([]*models.ServiceInstance, error) {
-	panic(fmt.Errorf("not implemented: DiscoverServices - discoverServices"))
+func (r *queryResolver) DiscoverServices(ctx context.Context, typeArg string, clusterID *string, pagination *model.PaginationInput) ([]*proto.ServiceInstance, error) {
+	return r.Resolver.DoDiscoverServices(ctx, typeArg, clusterID, pagination)
 }
 
 // ClustersAccess is the resolver for the clustersAccess field.
-func (r *queryResolver) ClustersAccess(ctx context.Context) ([]*model.ClusterAccess, error) {
-	panic(fmt.Errorf("not implemented: ClustersAccess - clustersAccess"))
+func (r *queryResolver) ClustersAccess(ctx context.Context, pagination *model.PaginationInput) ([]*model.ClusterAccess, error) {
+	return r.Resolver.DoGetClustersAccess(ctx, pagination)
 }
 
 // ClustersAvailable is the resolver for the clustersAvailable field.
-func (r *queryResolver) ClustersAvailable(ctx context.Context) ([]*model.AvailableCluster, error) {
-	panic(fmt.Errorf("not implemented: ClustersAvailable - clustersAvailable"))
+func (r *queryResolver) ClustersAvailable(ctx context.Context, pagination *model.PaginationInput) ([]*model.AvailableCluster, error) {
+	return r.Resolver.DoGetClustersAvailable(ctx, pagination)
+}
+
+// MySubscriptions is the resolver for the mySubscriptions field.
+func (r *queryResolver) MySubscriptions(ctx context.Context, pagination *model.PaginationInput) ([]*proto.InfrastructureCluster, error) {
+	return r.Resolver.DoListMySubscriptions(ctx, pagination)
 }
 
 // ServiceInstancesHealth is the resolver for the serviceInstancesHealth field.
-func (r *queryResolver) ServiceInstancesHealth(ctx context.Context, serviceID *string) ([]*model.ServiceInstanceHealth, error) {
-	panic(fmt.Errorf("not implemented: ServiceInstancesHealth - serviceInstancesHealth"))
+func (r *queryResolver) ServiceInstancesHealth(ctx context.Context, serviceID *string) ([]*proto.ServiceInstanceHealth, error) {
+	var resp *proto.ListServicesHealthResponse
+	var err error
+	if serviceID != nil && *serviceID != "" {
+		resp, err = r.Clients.Quartermaster.GetServiceHealth(ctx, *serviceID)
+	} else {
+		resp, err = r.Clients.Quartermaster.ListServicesHealth(ctx, nil)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get service health: %w", err)
+	}
+	return resp.Instances, nil
 }
 
 // DeveloperTokens is the resolver for the developerTokens field.
-func (r *queryResolver) DeveloperTokens(ctx context.Context) ([]*models.APIToken, error) {
-	panic(fmt.Errorf("not implemented: DeveloperTokens - developerTokens"))
+func (r *queryResolver) DeveloperTokens(ctx context.Context) ([]*proto.APITokenInfo, error) {
+	return r.DoGetDeveloperTokens(ctx)
+}
+
+// DeveloperTokensConnection is the resolver for the developerTokensConnection field.
+func (r *queryResolver) DeveloperTokensConnection(ctx context.Context, first *int, after *string, last *int, before *string) (*model.DeveloperTokensConnection, error) {
+	return r.Resolver.DoGetDeveloperTokensConnection(ctx, first, after, last, before)
 }
 
 // BootstrapTokens is the resolver for the bootstrapTokens field.
-func (r *queryResolver) BootstrapTokens(ctx context.Context) ([]*models.BootstrapToken, error) {
-	panic(fmt.Errorf("not implemented: BootstrapTokens - bootstrapTokens"))
+func (r *queryResolver) BootstrapTokens(ctx context.Context) ([]*proto.BootstrapToken, error) {
+	return r.DoGetBootstrapTokens(ctx)
 }
 
-// RecordingConfig is the resolver for the recordingConfig field.
-func (r *queryResolver) RecordingConfig(ctx context.Context, internalName string) (*model.RecordingConfig, error) {
-	panic(fmt.Errorf("not implemented: RecordingConfig - recordingConfig"))
-}
-
-// DvrRequests is the resolver for the dvrRequests field.
-func (r *queryResolver) DvrRequests(ctx context.Context, internalName *string, status *string, pagination *model.PaginationInput) (*model.DVRRequestList, error) {
-	panic(fmt.Errorf("not implemented: DvrRequests - dvrRequests"))
+// DvrRecordingsConnection is the resolver for the dvrRecordingsConnection field.
+func (r *queryResolver) DvrRecordingsConnection(ctx context.Context, internalName *string, first *int, after *string, last *int, before *string) (*model.DVRRecordingsConnection, error) {
+	return r.Resolver.DoGetDVRRecordingsConnection(ctx, internalName, first, after, last, before)
 }
 
 // ResolveViewerEndpoint is the resolver for the resolveViewerEndpoint field.
-func (r *queryResolver) ResolveViewerEndpoint(ctx context.Context, contentType string, contentID string) (*model.ViewerEndpointResponse, error) {
-	panic(fmt.Errorf("not implemented: ResolveViewerEndpoint - resolveViewerEndpoint"))
+// Returns proto.ViewerEndpointResponse directly via autobind.
+func (r *queryResolver) ResolveViewerEndpoint(ctx context.Context, contentType string, contentID string) (*proto.ViewerEndpointResponse, error) {
+	// Extract viewer IP from request context
+	var viewerIP *string
+
+	// Extract IP from GraphQL request context
+	if ginCtx := ctx.Value("GinContext"); ginCtx != nil {
+		if c, ok := ginCtx.(*gin.Context); ok {
+			clientIP := c.ClientIP() // Gin's built-in method handles X-Forwarded-For, etc.
+			viewerIP = &clientIP
+		}
+	}
+
+	// Fallback: try to get from raw HTTP request
+	if viewerIP == nil {
+		if req := ctx.Value("http_request"); req != nil {
+			if httpReq, ok := req.(*http.Request); ok {
+				clientIP := httpReq.Header.Get("X-Forwarded-For")
+				if clientIP == "" {
+					clientIP = httpReq.Header.Get("X-Real-IP")
+				}
+				if clientIP == "" {
+					clientIP = httpReq.RemoteAddr
+				}
+				// Extract IP from potential "ip:port" format
+				if idx := strings.LastIndex(clientIP, ":"); idx != -1 {
+					clientIP = clientIP[:idx]
+				}
+				// Use first IP if comma-separated list
+				if strings.Contains(clientIP, ",") {
+					clientIP = strings.TrimSpace(strings.Split(clientIP, ",")[0])
+				}
+				viewerIP = &clientIP
+			}
+		}
+	}
+
+	// If we still don't have an IP, this is an error
+	if viewerIP == nil {
+		return nil, fmt.Errorf("unable to determine viewer IP address for GeoIP routing")
+	}
+
+	// Call Commodore's viewer endpoint resolution (which then calls Foghorn)
+	// proto.ViewerEndpointResponse is autobound to GraphQL ViewerEndpointResponse
+	return r.Resolver.DoResolveViewerEndpoint(ctx, contentType, contentID, viewerIP)
 }
 
 // StreamMeta is the resolver for the streamMeta field.
-func (r *queryResolver) StreamMeta(ctx context.Context, streamKey string, targetBaseURL *string, targetNodeID *string, includeRaw *bool) (*model.StreamMetaResponse, error) {
-	panic(fmt.Errorf("not implemented: StreamMeta - streamMeta"))
+// Returns proto.StreamMetaResponse directly via autobind.
+func (r *queryResolver) StreamMeta(ctx context.Context, streamKey string, targetBaseURL *string, targetNodeID *string, includeRaw *bool) (*proto.StreamMetaResponse, error) {
+	return r.Resolver.DoGetStreamMeta(ctx, streamKey, targetBaseURL, targetNodeID, includeRaw)
 }
 
 // Title is the resolver for the title field.
-func (r *recordingResolver) Title(ctx context.Context, obj *commodore.Recording) (*string, error) {
-	panic(fmt.Errorf("not implemented: Title - title"))
+func (r *recordingResolver) Title(ctx context.Context, obj *proto.Recording) (*string, error) {
+	if obj.Filename != "" {
+		return &obj.Filename, nil
+	}
+	return nil, nil
 }
 
 // FileSizeBytes is the resolver for the fileSizeBytes field.
-func (r *recordingResolver) FileSizeBytes(ctx context.Context, obj *commodore.Recording) (*int, error) {
-	panic(fmt.Errorf("not implemented: FileSizeBytes - fileSizeBytes"))
+func (r *recordingResolver) FileSizeBytes(ctx context.Context, obj *proto.Recording) (*int, error) {
+	if obj.FileSize != nil {
+		v := int(*obj.FileSize)
+		return &v, nil
+	}
+	return nil, nil
 }
 
-// Status is the resolver for the status field.
-func (r *serviceInstanceResolver) Status(ctx context.Context, obj *models.ServiceInstance) (model.InstanceStatus, error) {
-	panic(fmt.Errorf("not implemented: Status - status"))
+// ThumbnailURL is the resolver for the thumbnailUrl field.
+func (r *recordingResolver) ThumbnailURL(ctx context.Context, obj *proto.Recording) (*string, error) {
+	// Not in proto - would need to be added if thumbnails are implemented
+	return nil, nil
 }
 
-// HealthStatus is the resolver for the healthStatus field.
-func (r *serviceInstanceResolver) HealthStatus(ctx context.Context, obj *models.ServiceInstance) (model.NodeStatus, error) {
-	panic(fmt.Errorf("not implemented: HealthStatus - healthStatus"))
+// StartTime is the resolver for the startTime field.
+func (r *recordingResolver) StartTime(ctx context.Context, obj *proto.Recording) (*time.Time, error) {
+	if obj.StartTime == nil {
+		return nil, nil
+	}
+	t := obj.StartTime.AsTime()
+	return &t, nil
 }
 
-// Node is the resolver for the node field.
-func (r *serviceInstanceResolver) Node(ctx context.Context, obj *models.ServiceInstance) (*models.InfrastructureNode, error) {
-	panic(fmt.Errorf("not implemented: Node - node"))
+// EndTime is the resolver for the endTime field.
+func (r *recordingResolver) EndTime(ctx context.Context, obj *proto.Recording) (*time.Time, error) {
+	if obj.EndTime == nil {
+		return nil, nil
+	}
+	t := obj.EndTime.AsTime()
+	return &t, nil
 }
 
-// Cluster is the resolver for the cluster field.
-func (r *serviceInstanceResolver) Cluster(ctx context.Context, obj *models.ServiceInstance) (*models.InfrastructureCluster, error) {
-	panic(fmt.Errorf("not implemented: Cluster - cluster"))
+// CreatedAt is the resolver for the createdAt field.
+func (r *recordingResolver) CreatedAt(ctx context.Context, obj *proto.Recording) (*time.Time, error) {
+	if obj.CreatedAt == nil {
+		return nil, nil
+	}
+	t := obj.CreatedAt.AsTime()
+	return &t, nil
 }
 
-// Name is the resolver for the name field.
-func (r *streamResolver) Name(ctx context.Context, obj *models.Stream) (string, error) {
-	panic(fmt.Errorf("not implemented: Name - name"))
-}
-
-// Status is the resolver for the status field.
-func (r *streamResolver) Status(ctx context.Context, obj *models.Stream) (model.StreamStatus, error) {
-	panic(fmt.Errorf("not implemented: Status - status"))
-}
-
-// Record is the resolver for the record field.
-func (r *streamResolver) Record(ctx context.Context, obj *models.Stream) (bool, error) {
-	panic(fmt.Errorf("not implemented: Record - record"))
-}
-
-// Recordings is the resolver for the recordings field.
-func (r *streamResolver) Recordings(ctx context.Context, obj *models.Stream) ([]*commodore.Recording, error) {
-	panic(fmt.Errorf("not implemented: Recordings - recordings"))
-}
-
-// Events is the resolver for the events field.
-func (r *streamResolver) Events(ctx context.Context, obj *models.Stream, timeRange *model.TimeRangeInput, pagination *model.PaginationInput) ([]*periscope.StreamEvent, error) {
-	panic(fmt.Errorf("not implemented: Events - events"))
-}
-
-// Health is the resolver for the health field.
-func (r *streamResolver) Health(ctx context.Context, obj *models.Stream, timeRange *model.TimeRangeInput) ([]*periscope.StreamHealthMetric, error) {
-	panic(fmt.Errorf("not implemented: Health - health"))
-}
-
-// ViewerMetrics5m is the resolver for the viewerMetrics5m field.
-func (r *streamResolver) ViewerMetrics5m(ctx context.Context, obj *models.Stream, timeRange *model.TimeRangeInput) ([]*models.AnalyticsViewerSession5m, error) {
-	panic(fmt.Errorf("not implemented: ViewerMetrics5m - viewerMetrics5m"))
-}
-
-// BandwidthIn is the resolver for the bandwidthIn field.
-func (r *streamAnalyticsResolver) BandwidthIn(ctx context.Context, obj *models.StreamAnalytics) (float64, error) {
-	panic(fmt.Errorf("not implemented: BandwidthIn - bandwidthIn"))
-}
-
-// BandwidthOut is the resolver for the bandwidthOut field.
-func (r *streamAnalyticsResolver) BandwidthOut(ctx context.Context, obj *models.StreamAnalytics) (float64, error) {
-	panic(fmt.Errorf("not implemented: BandwidthOut - bandwidthOut"))
-}
-
-// Upbytes is the resolver for the upbytes field.
-func (r *streamAnalyticsResolver) Upbytes(ctx context.Context, obj *models.StreamAnalytics) (float64, error) {
-	panic(fmt.Errorf("not implemented: Upbytes - upbytes"))
-}
-
-// Downbytes is the resolver for the downbytes field.
-func (r *streamAnalyticsResolver) Downbytes(ctx context.Context, obj *models.StreamAnalytics) (float64, error) {
-	panic(fmt.Errorf("not implemented: Downbytes - downbytes"))
-}
-
-// PacketsSent is the resolver for the packetsSent field.
-func (r *streamAnalyticsResolver) PacketsSent(ctx context.Context, obj *models.StreamAnalytics) (float64, error) {
-	panic(fmt.Errorf("not implemented: PacketsSent - packetsSent"))
-}
-
-// PacketsLost is the resolver for the packetsLost field.
-func (r *streamAnalyticsResolver) PacketsLost(ctx context.Context, obj *models.StreamAnalytics) (float64, error) {
-	panic(fmt.Errorf("not implemented: PacketsLost - packetsLost"))
-}
-
-// PacketsRetrans is the resolver for the packetsRetrans field.
-func (r *streamAnalyticsResolver) PacketsRetrans(ctx context.Context, obj *models.StreamAnalytics) (float64, error) {
-	panic(fmt.Errorf("not implemented: PacketsRetrans - packetsRetrans"))
-}
-
-// AvgBufferHealth is the resolver for the avgBufferHealth field.
-func (r *streamAnalyticsResolver) AvgBufferHealth(ctx context.Context, obj *models.StreamAnalytics) (*float64, error) {
-	panic(fmt.Errorf("not implemented: AvgBufferHealth - avgBufferHealth"))
-}
-
-// PacketLossRate is the resolver for the packetLossRate field.
-func (r *streamAnalyticsResolver) PacketLossRate(ctx context.Context, obj *models.StreamAnalytics) (*float64, error) {
-	panic(fmt.Errorf("not implemented: PacketLossRate - packetLossRate"))
-}
-
-// Type is the resolver for the type field.
-func (r *streamEventResolver) Type(ctx context.Context, obj *periscope.StreamEvent) (model.StreamEventType, error) {
-	panic(fmt.Errorf("not implemented: Type - type"))
-}
-
-// Stream is the resolver for the stream field.
-func (r *streamEventResolver) Stream(ctx context.Context, obj *periscope.StreamEvent) (string, error) {
-	panic(fmt.Errorf("not implemented: Stream - stream"))
-}
-
-// Status is the resolver for the status field.
-func (r *streamEventResolver) Status(ctx context.Context, obj *periscope.StreamEvent) (model.StreamStatus, error) {
-	panic(fmt.Errorf("not implemented: Status - status"))
-}
-
-// Details is the resolver for the details field.
-func (r *streamEventResolver) Details(ctx context.Context, obj *periscope.StreamEvent) (*string, error) {
-	panic(fmt.Errorf("not implemented: Details - details"))
-}
-
-// Stream is the resolver for the stream field.
-func (r *streamHealthMetricResolver) Stream(ctx context.Context, obj *periscope.StreamHealthMetric) (string, error) {
-	panic(fmt.Errorf("not implemented: Stream - stream"))
-}
-
-// HealthScore is the resolver for the healthScore field.
-func (r *streamHealthMetricResolver) HealthScore(ctx context.Context, obj *periscope.StreamHealthMetric) (float64, error) {
-	panic(fmt.Errorf("not implemented: HealthScore - healthScore"))
-}
-
-// Fps is the resolver for the fps field.
-func (r *streamHealthMetricResolver) Fps(ctx context.Context, obj *periscope.StreamHealthMetric) (*float64, error) {
-	panic(fmt.Errorf("not implemented: Fps - fps"))
-}
-
-// BufferState is the resolver for the bufferState field.
-func (r *streamHealthMetricResolver) BufferState(ctx context.Context, obj *periscope.StreamHealthMetric) (model.BufferState, error) {
-	panic(fmt.Errorf("not implemented: BufferState - bufferState"))
-}
-
-// BufferHealth is the resolver for the bufferHealth field.
-func (r *streamHealthMetricResolver) BufferHealth(ctx context.Context, obj *periscope.StreamHealthMetric) (*float64, error) {
-	panic(fmt.Errorf("not implemented: BufferHealth - bufferHealth"))
-}
-
-// AudioChannels is the resolver for the audioChannels field.
-func (r *streamHealthMetricResolver) AudioChannels(ctx context.Context, obj *periscope.StreamHealthMetric) (*int, error) {
-	panic(fmt.Errorf("not implemented: AudioChannels - audioChannels"))
-}
-
-// AudioSampleRate is the resolver for the audioSampleRate field.
-func (r *streamHealthMetricResolver) AudioSampleRate(ctx context.Context, obj *periscope.StreamHealthMetric) (*int, error) {
-	panic(fmt.Errorf("not implemented: AudioSampleRate - audioSampleRate"))
-}
-
-// AudioCodec is the resolver for the audioCodec field.
-func (r *streamHealthMetricResolver) AudioCodec(ctx context.Context, obj *periscope.StreamHealthMetric) (*string, error) {
-	panic(fmt.Errorf("not implemented: AudioCodec - audioCodec"))
-}
-
-// AudioBitrate is the resolver for the audioBitrate field.
-func (r *streamHealthMetricResolver) AudioBitrate(ctx context.Context, obj *periscope.StreamHealthMetric) (*int, error) {
-	panic(fmt.Errorf("not implemented: AudioBitrate - audioBitrate"))
-}
-
-// StreamEvents is the resolver for the streamEvents field.
-func (r *subscriptionResolver) StreamEvents(ctx context.Context, stream *string) (<-chan *periscope.StreamEvent, error) {
-	panic(fmt.Errorf("not implemented: StreamEvents - streamEvents"))
-}
-
-// ViewerMetrics is the resolver for the viewerMetrics field.
-func (r *subscriptionResolver) ViewerMetrics(ctx context.Context, stream string) (<-chan *model.ViewerMetrics, error) {
-	panic(fmt.Errorf("not implemented: ViewerMetrics - viewerMetrics"))
-}
-
-// TrackListUpdates is the resolver for the trackListUpdates field.
-func (r *subscriptionResolver) TrackListUpdates(ctx context.Context, stream string) (<-chan *periscope.AnalyticsTrackListEvent, error) {
-	panic(fmt.Errorf("not implemented: TrackListUpdates - trackListUpdates"))
-}
-
-// ClipLifecycle is the resolver for the clipLifecycle field.
-func (r *subscriptionResolver) ClipLifecycle(ctx context.Context, stream string) (<-chan *periscope.ClipEvent, error) {
-	panic(fmt.Errorf("not implemented: ClipLifecycle - clipLifecycle"))
-}
-
-// DvrLifecycle is the resolver for the dvrLifecycle field.
-func (r *subscriptionResolver) DvrLifecycle(ctx context.Context, stream string) (<-chan *periscope.ClipEvent, error) {
-	panic(fmt.Errorf("not implemented: DvrLifecycle - dvrLifecycle"))
-}
-
-// SystemHealth is the resolver for the systemHealth field.
-func (r *subscriptionResolver) SystemHealth(ctx context.Context) (<-chan *model.SystemHealthEvent, error) {
-	panic(fmt.Errorf("not implemented: SystemHealth - systemHealth"))
-}
-
-// Settings is the resolver for the settings field.
-func (r *tenantResolver) Settings(ctx context.Context, obj *models.Tenant) (*string, error) {
-	panic(fmt.Errorf("not implemented: Settings - settings"))
-}
-
-// Cluster is the resolver for the cluster field.
-func (r *tenantResolver) Cluster(ctx context.Context, obj *models.Tenant) (*string, error) {
-	panic(fmt.Errorf("not implemented: Cluster - cluster"))
-}
-
-// ResourceType is the resolver for the resourceType field.
-func (r *usageRecordResolver) ResourceType(ctx context.Context, obj *models.UsageRecord) (string, error) {
-	panic(fmt.Errorf("not implemented: ResourceType - resourceType"))
-}
-
-// Quantity is the resolver for the quantity field.
-func (r *usageRecordResolver) Quantity(ctx context.Context, obj *models.UsageRecord) (float64, error) {
-	panic(fmt.Errorf("not implemented: Quantity - quantity"))
-}
-
-// Unit is the resolver for the unit field.
-func (r *usageRecordResolver) Unit(ctx context.Context, obj *models.UsageRecord) (string, error) {
-	panic(fmt.Errorf("not implemented: Unit - unit"))
-}
-
-// Cost is the resolver for the cost field.
-func (r *usageRecordResolver) Cost(ctx context.Context, obj *models.UsageRecord) (float64, error) {
-	panic(fmt.Errorf("not implemented: Cost - cost"))
+// UpdatedAt is the resolver for the updatedAt field.
+func (r *recordingResolver) UpdatedAt(ctx context.Context, obj *proto.Recording) (*time.Time, error) {
+	if obj.UpdatedAt == nil {
+		return nil, nil
+	}
+	t := obj.UpdatedAt.AsTime()
+	return &t, nil
 }
 
 // Timestamp is the resolver for the timestamp field.
-func (r *usageRecordResolver) Timestamp(ctx context.Context, obj *models.UsageRecord) (*time.Time, error) {
-	panic(fmt.Errorf("not implemented: Timestamp - timestamp"))
+func (r *routingEventResolver) Timestamp(ctx context.Context, obj *proto.RoutingEvent) (*time.Time, error) {
+	if obj.Timestamp == nil {
+		return nil, nil
+	}
+	t := obj.Timestamp.AsTime()
+	return &t, nil
+}
+
+// StreamName is the resolver for the streamName field.
+func (r *routingEventResolver) StreamName(ctx context.Context, obj *proto.RoutingEvent) (string, error) {
+	return obj.Stream, nil
+}
+
+// Status is the resolver for the status field.
+func (r *serviceInstanceResolver) Status(ctx context.Context, obj *proto.ServiceInstance) (model.InstanceStatus, error) {
+	s := strings.ToLower(obj.Status)
+	switch s {
+	case "running", "active":
+		return model.InstanceStatusRunning, nil
+	case "starting", "booting":
+		return model.InstanceStatusStarting, nil
+	case "stopping", "terminating":
+		return model.InstanceStatusStopping, nil
+	case "stopped", "inactive":
+		return model.InstanceStatusStopped, nil
+	case "error", "failed", "crashed":
+		return model.InstanceStatusError, nil
+	default:
+		return model.InstanceStatusUnknown, nil
+	}
+}
+
+// HealthStatus is the resolver for the healthStatus field.
+func (r *serviceInstanceResolver) HealthStatus(ctx context.Context, obj *proto.ServiceInstance) (model.NodeStatus, error) {
+	hs := strings.ToLower(obj.HealthStatus)
+	switch hs {
+	case "healthy", "ok", "passing":
+		return model.NodeStatusHealthy, nil
+	case "degraded", "warning":
+		return model.NodeStatusDegraded, nil
+	case "unhealthy", "failing", "error":
+		return model.NodeStatusUnhealthy, nil
+	default:
+		return model.NodeStatusUnhealthy, nil
+	}
+}
+
+// StartedAt is the resolver for the startedAt field.
+func (r *serviceInstanceResolver) StartedAt(ctx context.Context, obj *proto.ServiceInstance) (*time.Time, error) {
+	if obj.StartedAt == nil {
+		return nil, nil
+	}
+	t := obj.StartedAt.AsTime()
+	return &t, nil
+}
+
+// StoppedAt is the resolver for the stoppedAt field.
+func (r *serviceInstanceResolver) StoppedAt(ctx context.Context, obj *proto.ServiceInstance) (*time.Time, error) {
+	if obj.StoppedAt == nil {
+		return nil, nil
+	}
+	t := obj.StoppedAt.AsTime()
+	return &t, nil
+}
+
+// LastHealthCheck is the resolver for the lastHealthCheck field.
+func (r *serviceInstanceResolver) LastHealthCheck(ctx context.Context, obj *proto.ServiceInstance) (*time.Time, error) {
+	if obj.LastHealthCheck == nil {
+		return nil, nil
+	}
+	t := obj.LastHealthCheck.AsTime()
+	return &t, nil
+}
+
+// Node is the resolver for the node field.
+func (r *serviceInstanceResolver) Node(ctx context.Context, obj *proto.ServiceInstance) (*proto.InfrastructureNode, error) {
+	if obj.NodeId == nil || *obj.NodeId == "" {
+		return nil, nil
+	}
+	if lds, ok := ctx.Value("loaders").(*loaders.Loaders); ok && lds != nil && lds.Node != nil {
+		return lds.Node.Load(ctx, *obj.NodeId)
+	}
+	resp, err := r.Clients.Quartermaster.GetNode(ctx, *obj.NodeId)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get node: %w", err)
+	}
+	return resp.Node, nil
+}
+
+// Cluster is the resolver for the cluster field.
+func (r *serviceInstanceResolver) Cluster(ctx context.Context, obj *proto.ServiceInstance) (*proto.InfrastructureCluster, error) {
+	if lds, ok := ctx.Value("loaders").(*loaders.Loaders); ok && lds != nil && lds.Cluster != nil {
+		return lds.Cluster.Load(ctx, obj.ClusterId)
+	}
+	resp, err := r.Clients.Quartermaster.GetCluster(ctx, obj.ClusterId)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get cluster: %w", err)
+	}
+	return resp.Cluster, nil
+}
+
+// LastHealthCheck is the resolver for the lastHealthCheck field.
+func (r *serviceInstanceHealthResolver) LastHealthCheck(ctx context.Context, obj *proto.ServiceInstanceHealth) (*time.Time, error) {
+	if obj.LastHealthCheck == nil {
+		return nil, nil
+	}
+	t := obj.LastHealthCheck.AsTime()
+	return &t, nil
+}
+
+// Timestamp is the resolver for the timestamp field.
+func (r *storageUsageRecordResolver) Timestamp(ctx context.Context, obj *proto.StorageUsageRecord) (*time.Time, error) {
+	if obj.Timestamp == nil {
+		return nil, nil
+	}
+	t := obj.Timestamp.AsTime()
+	return &t, nil
+}
+
+// TotalBytes is the resolver for the totalBytes field.
+func (r *storageUsageRecordResolver) TotalBytes(ctx context.Context, obj *proto.StorageUsageRecord) (int, error) {
+	return int(obj.TotalBytes), nil
+}
+
+// FileCount is the resolver for the fileCount field.
+func (r *storageUsageRecordResolver) FileCount(ctx context.Context, obj *proto.StorageUsageRecord) (int, error) {
+	return int(obj.FileCount), nil
+}
+
+// DvrBytes is the resolver for the dvrBytes field.
+func (r *storageUsageRecordResolver) DvrBytes(ctx context.Context, obj *proto.StorageUsageRecord) (int, error) {
+	return int(obj.DvrBytes), nil
+}
+
+// ClipBytes is the resolver for the clipBytes field.
+func (r *storageUsageRecordResolver) ClipBytes(ctx context.Context, obj *proto.StorageUsageRecord) (int, error) {
+	return int(obj.ClipBytes), nil
+}
+
+// RecordingBytes is the resolver for the recordingBytes field.
+func (r *storageUsageRecordResolver) RecordingBytes(ctx context.Context, obj *proto.StorageUsageRecord) (int, error) {
+	return int(obj.RecordingBytes), nil
+}
+
+// ID is the resolver for the id field.
+func (r *streamResolver) ID(ctx context.Context, obj *proto.Stream) (string, error) {
+	return obj.InternalName, nil
 }
 
 // Name is the resolver for the name field.
-func (r *userResolver) Name(ctx context.Context, obj *models.User) (*string, error) {
-	panic(fmt.Errorf("not implemented: Name - name"))
+func (r *streamResolver) Name(ctx context.Context, obj *proto.Stream) (string, error) {
+	return obj.Title, nil
 }
 
-// Stream is the resolver for the stream field.
-func (r *viewerGeographicResolver) Stream(ctx context.Context, obj *periscope.ConnectionEvent) (*string, error) {
-	panic(fmt.Errorf("not implemented: Stream - stream"))
+// Record is the resolver for the record field.
+func (r *streamResolver) Record(ctx context.Context, obj *proto.Stream) (bool, error) {
+	return obj.IsRecording, nil
 }
 
-// ViewerCount is the resolver for the viewerCount field.
-func (r *viewerGeographicResolver) ViewerCount(ctx context.Context, obj *periscope.ConnectionEvent) (*int, error) {
-	panic(fmt.Errorf("not implemented: ViewerCount - viewerCount"))
+// CreatedAt is the resolver for the createdAt field.
+func (r *streamResolver) CreatedAt(ctx context.Context, obj *proto.Stream) (*time.Time, error) {
+	if obj.CreatedAt == nil {
+		return nil, nil
+	}
+	t := obj.CreatedAt.AsTime()
+	return &t, nil
 }
 
-// Source is the resolver for the source field.
-func (r *viewerGeographicResolver) Source(ctx context.Context, obj *periscope.ConnectionEvent) (*string, error) {
-	panic(fmt.Errorf("not implemented: Source - source"))
+// UpdatedAt is the resolver for the updatedAt field.
+func (r *streamResolver) UpdatedAt(ctx context.Context, obj *proto.Stream) (*time.Time, error) {
+	if obj.UpdatedAt == nil {
+		return nil, nil
+	}
+	t := obj.UpdatedAt.AsTime()
+	return &t, nil
 }
 
-// AvgConnectionQuality is the resolver for the avgConnectionQuality field.
-func (r *viewerMetrics5mResolver) AvgConnectionQuality(ctx context.Context, obj *models.AnalyticsViewerSession5m) (float64, error) {
-	panic(fmt.Errorf("not implemented: AvgConnectionQuality - avgConnectionQuality"))
+// Metrics is the resolver for the metrics field.
+func (r *streamResolver) Metrics(ctx context.Context, obj *proto.Stream) (*proto.StreamStatusResponse, error) {
+	// In demo mode, return metrics from the stream object itself (set by demo.GenerateStreams)
+	if middleware.IsDemoMode(ctx) {
+		return &proto.StreamStatusResponse{
+			Status:          obj.Status,
+			CurrentViewers:  int64(obj.CurrentViewers),
+			PeakViewers:     int64(obj.PeakViewers),
+			TotalViews:      int64(obj.TotalViews),
+			DurationSeconds: int64(obj.Duration),
+			StartedAt:       obj.StartedAt,
+			EndedAt:         obj.EndedAt,
+		}, nil
+	}
+
+	tenantID, _ := ctx.Value("tenant_id").(string)
+	if tenantID == "" {
+		return nil, nil
+	}
+
+	// Use loader for request-scoped caching
+	loaders := loaders.FromContext(ctx)
+	if loaders == nil || loaders.StreamMetrics == nil {
+		// Fallback: direct call
+		return r.Clients.Periscope.GetStreamStatus(ctx, tenantID, obj.InternalName)
+	}
+
+	return loaders.StreamMetrics.Load(ctx, tenantID, obj.InternalName)
+}
+
+// Recordings is the resolver for the recordings field.
+func (r *streamResolver) Recordings(ctx context.Context, obj *proto.Stream) ([]*proto.Recording, error) {
+	streamID := obj.InternalName
+	return r.DoGetRecordings(ctx, &streamID)
+}
+
+// EventsConnection is the resolver for the eventsConnection field.
+func (r *streamResolver) EventsConnection(ctx context.Context, obj *proto.Stream, timeRange *model.TimeRangeInput, first *int, after *string) (*model.StreamEventsConnection, error) {
+	return r.Resolver.DoGetStreamEventsConnection(ctx, obj, timeRange, first, after)
+}
+
+// HealthConnection is the resolver for the healthConnection field.
+func (r *streamResolver) HealthConnection(ctx context.Context, obj *proto.Stream, timeRange *model.TimeRangeInput, first *int, after *string) (*model.StreamHealthMetricsConnection, error) {
+	return r.Resolver.DoGetStreamHealthConnection(ctx, obj, timeRange, first, after)
+}
+
+// SessionStartTime is the resolver for the sessionStartTime field.
+func (r *streamAnalyticsResolver) SessionStartTime(ctx context.Context, obj *proto.StreamAnalytics) (*time.Time, error) {
+	if obj.SessionStartTime == nil {
+		return nil, nil
+	}
+	t := obj.SessionStartTime.AsTime()
+	return &t, nil
+}
+
+// SessionEndTime is the resolver for the sessionEndTime field.
+func (r *streamAnalyticsResolver) SessionEndTime(ctx context.Context, obj *proto.StreamAnalytics) (*time.Time, error) {
+	if obj.SessionEndTime == nil {
+		return nil, nil
+	}
+	t := obj.SessionEndTime.AsTime()
+	return &t, nil
+}
+
+// BandwidthIn is the resolver for the bandwidthIn field.
+func (r *streamAnalyticsResolver) BandwidthIn(ctx context.Context, obj *proto.StreamAnalytics) (float64, error) {
+	return float64(obj.BandwidthIn), nil
+}
+
+// BandwidthOut is the resolver for the bandwidthOut field.
+func (r *streamAnalyticsResolver) BandwidthOut(ctx context.Context, obj *proto.StreamAnalytics) (float64, error) {
+	return float64(obj.BandwidthOut), nil
+}
+
+// Upbytes is the resolver for the upbytes field.
+func (r *streamAnalyticsResolver) Upbytes(ctx context.Context, obj *proto.StreamAnalytics) (float64, error) {
+	return float64(obj.Upbytes), nil
+}
+
+// Downbytes is the resolver for the downbytes field.
+func (r *streamAnalyticsResolver) Downbytes(ctx context.Context, obj *proto.StreamAnalytics) (float64, error) {
+	return float64(obj.Downbytes), nil
+}
+
+// PacketsSent is the resolver for the packetsSent field.
+func (r *streamAnalyticsResolver) PacketsSent(ctx context.Context, obj *proto.StreamAnalytics) (float64, error) {
+	return float64(obj.PacketsSent), nil
+}
+
+// PacketsLost is the resolver for the packetsLost field.
+func (r *streamAnalyticsResolver) PacketsLost(ctx context.Context, obj *proto.StreamAnalytics) (float64, error) {
+	return float64(obj.PacketsLost), nil
+}
+
+// PacketsRetrans is the resolver for the packetsRetrans field.
+func (r *streamAnalyticsResolver) PacketsRetrans(ctx context.Context, obj *proto.StreamAnalytics) (float64, error) {
+	return float64(obj.PacketsRetrans), nil
+}
+
+// LastUpdated is the resolver for the lastUpdated field.
+func (r *streamAnalyticsResolver) LastUpdated(ctx context.Context, obj *proto.StreamAnalytics) (*time.Time, error) {
+	if obj.LastUpdated == nil {
+		return nil, nil
+	}
+	t := obj.LastUpdated.AsTime()
+	return &t, nil
+}
+
+// CreatedAt is the resolver for the createdAt field.
+func (r *streamAnalyticsResolver) CreatedAt(ctx context.Context, obj *proto.StreamAnalytics) (*time.Time, error) {
+	if obj.CreatedAt == nil {
+		return nil, nil
+	}
+	t := obj.CreatedAt.AsTime()
+	return &t, nil
+}
+
+// CurrentFps is the resolver for the currentFps field.
+func (r *streamAnalyticsResolver) CurrentFps(ctx context.Context, obj *proto.StreamAnalytics) (*float64, error) {
+	if obj.CurrentFps == nil {
+		return nil, nil
+	}
+	v := float64(*obj.CurrentFps)
+	return &v, nil
 }
 
 // AvgBufferHealth is the resolver for the avgBufferHealth field.
-func (r *viewerMetrics5mResolver) AvgBufferHealth(ctx context.Context, obj *models.AnalyticsViewerSession5m) (float64, error) {
-	panic(fmt.Errorf("not implemented: AvgBufferHealth - avgBufferHealth"))
+func (r *streamAnalyticsResolver) AvgBufferHealth(ctx context.Context, obj *proto.StreamAnalytics) (*float64, error) {
+	value := float64(obj.AvgBufferHealth)
+	return &value, nil
 }
+
+// PacketLossRate is the resolver for the packetLossRate field.
+func (r *streamAnalyticsResolver) PacketLossRate(ctx context.Context, obj *proto.StreamAnalytics) (*float64, error) {
+	value := float64(obj.PacketLossRate)
+	return &value, nil
+}
+
+// AvgConnectionQuality is the resolver for the avgConnectionQuality field.
+func (r *streamAnalyticsResolver) AvgConnectionQuality(ctx context.Context, obj *proto.StreamAnalytics) (*float64, error) {
+	value := float64(obj.AvgConnectionQuality)
+	return &value, nil
+}
+
+// Hour is the resolver for the hour field.
+func (r *streamConnectionHourlyResolver) Hour(ctx context.Context, obj *proto.StreamConnectionHourly) (*time.Time, error) {
+	if obj.Hour == nil {
+		return nil, nil
+	}
+	t := obj.Hour.AsTime()
+	return &t, nil
+}
+
+// TotalBytes is the resolver for the totalBytes field.
+func (r *streamConnectionHourlyResolver) TotalBytes(ctx context.Context, obj *proto.StreamConnectionHourly) (int, error) {
+	return int(obj.TotalBytes), nil
+}
+
+// UniqueViewers is the resolver for the uniqueViewers field.
+func (r *streamConnectionHourlyResolver) UniqueViewers(ctx context.Context, obj *proto.StreamConnectionHourly) (int, error) {
+	return int(obj.UniqueViewers), nil
+}
+
+// TotalSessions is the resolver for the totalSessions field.
+func (r *streamConnectionHourlyResolver) TotalSessions(ctx context.Context, obj *proto.StreamConnectionHourly) (int, error) {
+	return int(obj.TotalSessions), nil
+}
+
+// Type is the resolver for the type field.
+func (r *streamEventResolver) Type(ctx context.Context, obj *proto.StreamEvent) (model.StreamEventType, error) {
+	switch obj.EventType {
+	case "STREAM_START":
+		return model.StreamEventTypeStreamStart, nil
+	case "STREAM_END":
+		return model.StreamEventTypeStreamEnd, nil
+	case "STREAM_ERROR":
+		return model.StreamEventTypeStreamError, nil
+	case "BUFFER_UPDATE":
+		return model.StreamEventTypeBufferUpdate, nil
+	case "TRACK_LIST_UPDATE":
+		return model.StreamEventTypeTrackListUpdate, nil
+	default:
+		return model.StreamEventTypeStreamStart, fmt.Errorf("unknown stream event type: %s", obj.EventType)
+	}
+}
+
+// Stream is the resolver for the stream field.
+func (r *streamEventResolver) Stream(ctx context.Context, obj *proto.StreamEvent) (string, error) {
+	return obj.InternalName, nil
+}
+
+// Status is the resolver for the status field.
+func (r *streamEventResolver) Status(ctx context.Context, obj *proto.StreamEvent) (model.StreamStatus, error) {
+	switch obj.Status {
+	case "LIVE":
+		return model.StreamStatusLive, nil
+	case "RECORDING":
+		return model.StreamStatusRecording, nil
+	case "ENDED":
+		return model.StreamStatusEnded, nil
+	case "OFFLINE":
+		return model.StreamStatusOffline, nil
+	default:
+		return model.StreamStatusOffline, fmt.Errorf("unknown stream status: %s", obj.Status)
+	}
+}
+
+// Timestamp is the resolver for the timestamp field.
+func (r *streamEventResolver) Timestamp(ctx context.Context, obj *proto.StreamEvent) (*time.Time, error) {
+	if obj.Timestamp == nil {
+		return nil, nil
+	}
+	t := obj.Timestamp.AsTime()
+	return &t, nil
+}
+
+// Details is the resolver for the details field.
+func (r *streamEventResolver) Details(ctx context.Context, obj *proto.StreamEvent) (*string, error) {
+	if obj.EventData == "" {
+		return nil, nil
+	}
+	return &obj.EventData, nil
+}
+
+// Timestamp is the resolver for the timestamp field.
+func (r *streamHealthMetricResolver) Timestamp(ctx context.Context, obj *proto.StreamHealthMetric) (*time.Time, error) {
+	if obj.Timestamp == nil {
+		return nil, nil
+	}
+	t := obj.Timestamp.AsTime()
+	return &t, nil
+}
+
+// Stream is the resolver for the stream field.
+func (r *streamHealthMetricResolver) Stream(ctx context.Context, obj *proto.StreamHealthMetric) (string, error) {
+	return obj.InternalName, nil
+}
+
+// Fps is the resolver for the fps field.
+func (r *streamHealthMetricResolver) Fps(ctx context.Context, obj *proto.StreamHealthMetric) (*float64, error) {
+	if obj.Fps == 0 {
+		return nil, nil
+	}
+	v := float64(obj.Fps)
+	return &v, nil
+}
+
+// BufferState is the resolver for the bufferState field.
+func (r *streamHealthMetricResolver) BufferState(ctx context.Context, obj *proto.StreamHealthMetric) (model.BufferState, error) {
+	s := strings.ToUpper(obj.BufferState)
+	switch s {
+	case "FULL":
+		return model.BufferStateFull, nil
+	case "EMPTY":
+		return model.BufferStateEmpty, nil
+	case "DRY":
+		return model.BufferStateDry, nil
+	case "RECOVER":
+		return model.BufferStateRecover, nil
+	default:
+		return model.BufferStateRecover, nil
+	}
+}
+
+// BufferHealth is the resolver for the bufferHealth field.
+func (r *streamHealthMetricResolver) BufferHealth(ctx context.Context, obj *proto.StreamHealthMetric) (*float64, error) {
+	v := float64(obj.BufferHealth)
+	return &v, nil
+}
+
+// AudioChannels is the resolver for the audioChannels field.
+func (r *streamHealthMetricResolver) AudioChannels(ctx context.Context, obj *proto.StreamHealthMetric) (*int, error) {
+	if obj.PrimaryAudioChannels == nil {
+		return nil, nil
+	}
+	v := int(*obj.PrimaryAudioChannels)
+	return &v, nil
+}
+
+// AudioSampleRate is the resolver for the audioSampleRate field.
+func (r *streamHealthMetricResolver) AudioSampleRate(ctx context.Context, obj *proto.StreamHealthMetric) (*int, error) {
+	if obj.PrimaryAudioSampleRate == nil {
+		return nil, nil
+	}
+	v := int(*obj.PrimaryAudioSampleRate)
+	return &v, nil
+}
+
+// AudioCodec is the resolver for the audioCodec field.
+func (r *streamHealthMetricResolver) AudioCodec(ctx context.Context, obj *proto.StreamHealthMetric) (*string, error) {
+	if obj.PrimaryAudioCodec != nil {
+		return obj.PrimaryAudioCodec, nil
+	}
+	// Fallback to generic codec field if no audio-specific codec
+	if obj.Codec == "" {
+		return nil, nil
+	}
+	return &obj.Codec, nil
+}
+
+// AudioBitrate is the resolver for the audioBitrate field.
+func (r *streamHealthMetricResolver) AudioBitrate(ctx context.Context, obj *proto.StreamHealthMetric) (*int, error) {
+	if obj.PrimaryAudioBitrate == nil {
+		return nil, nil
+	}
+	v := int(*obj.PrimaryAudioBitrate)
+	return &v, nil
+}
+
+// LastUsedAt is the resolver for the lastUsedAt field.
+func (r *streamKeyResolver) LastUsedAt(ctx context.Context, obj *proto.StreamKey) (*time.Time, error) {
+	if obj.LastUsedAt == nil {
+		return nil, nil
+	}
+	t := obj.LastUsedAt.AsTime()
+	return &t, nil
+}
+
+// CreatedAt is the resolver for the createdAt field.
+func (r *streamKeyResolver) CreatedAt(ctx context.Context, obj *proto.StreamKey) (*time.Time, error) {
+	if obj.CreatedAt == nil {
+		return nil, nil
+	}
+	t := obj.CreatedAt.AsTime()
+	return &t, nil
+}
+
+// Raw is the resolver for the raw field.
+func (r *streamMetaResponseResolver) Raw(ctx context.Context, obj *proto.StreamMetaResponse) (*string, error) {
+	if len(obj.Raw) == 0 {
+		return nil, nil
+	}
+	s := string(obj.Raw)
+	return &s, nil
+}
+
+// Status is the resolver for the status field.
+func (r *streamMetricsResolver) Status(ctx context.Context, obj *proto.StreamStatusResponse) (model.StreamStatus, error) {
+	switch obj.Status {
+	case "live":
+		return model.StreamStatusLive, nil
+	case "offline":
+		return model.StreamStatusOffline, nil
+	case "recording":
+		return model.StreamStatusRecording, nil
+	case "ended":
+		return model.StreamStatusEnded, nil
+	default:
+		return model.StreamStatusOffline, nil
+	}
+}
+
+// IsLive is the resolver for the isLive field.
+func (r *streamMetricsResolver) IsLive(ctx context.Context, obj *proto.StreamStatusResponse) (bool, error) {
+	return obj.Status == "live", nil
+}
+
+// StartedAt is the resolver for the startedAt field.
+func (r *streamMetricsResolver) StartedAt(ctx context.Context, obj *proto.StreamStatusResponse) (*time.Time, error) {
+	if obj.StartedAt == nil {
+		return nil, nil
+	}
+	t := obj.StartedAt.AsTime()
+	return &t, nil
+}
+
+// EndedAt is the resolver for the endedAt field.
+func (r *streamMetricsResolver) EndedAt(ctx context.Context, obj *proto.StreamStatusResponse) (*time.Time, error) {
+	if obj.EndedAt == nil {
+		return nil, nil
+	}
+	t := obj.EndedAt.AsTime()
+	return &t, nil
+}
+
+// Duration is the resolver for the duration field.
+func (r *streamMetricsResolver) Duration(ctx context.Context, obj *proto.StreamStatusResponse) (int, error) {
+	return int(obj.DurationSeconds), nil
+}
+
+// LastEventAt is the resolver for the lastEventAt field.
+func (r *streamMetricsResolver) LastEventAt(ctx context.Context, obj *proto.StreamStatusResponse) (*time.Time, error) {
+	if obj.LastEventAt == nil {
+		return nil, nil
+	}
+	t := obj.LastEventAt.AsTime()
+	return &t, nil
+}
+
+// PrimaryFps is the resolver for the primaryFps field.
+func (r *streamMetricsResolver) PrimaryFps(ctx context.Context, obj *proto.StreamStatusResponse) (*float64, error) {
+	if obj.PrimaryFps == nil {
+		return nil, nil
+	}
+	v := float64(*obj.PrimaryFps)
+	return &v, nil
+}
+
+// StreamEvents is the resolver for the streamEvents field.
+func (r *subscriptionResolver) StreamEvents(ctx context.Context, stream *string) (<-chan *proto.StreamEvent, error) {
+	return r.Resolver.DoStreamUpdates(ctx, stream)
+}
+
+// ViewerMetrics is the resolver for the viewerMetrics field.
+func (r *subscriptionResolver) ViewerMetrics(ctx context.Context, stream string) (<-chan *proto.ClientLifecycleUpdate, error) {
+	return r.Resolver.DoAnalyticsUpdates(ctx, stream)
+}
+
+// TrackListUpdates is the resolver for the trackListUpdates field.
+func (r *subscriptionResolver) TrackListUpdates(ctx context.Context, stream string) (<-chan *proto.StreamTrackListTrigger, error) {
+	return r.Resolver.DoTrackListUpdates(ctx, stream)
+}
+
+// ClipLifecycle is the resolver for the clipLifecycle field.
+func (r *subscriptionResolver) ClipLifecycle(ctx context.Context, stream string) (<-chan *proto.ClipLifecycleData, error) {
+	user, err := middleware.RequireAuth(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("authentication required for subscriptions: %w", err)
+	}
+	jwtToken := ""
+	if token := ctx.Value("jwt_token"); token != nil {
+		if s, ok := token.(string); ok {
+			jwtToken = s
+		}
+	}
+	cfg := resolvers.ConnectionConfig{UserID: user.UserID, TenantID: user.TenantID, JWT: jwtToken}
+	return r.Resolver.SubManager.SubscribeToLifecycle(ctx, cfg, stream)
+}
+
+// DvrLifecycle is the resolver for the dvrLifecycle field.
+func (r *subscriptionResolver) DvrLifecycle(ctx context.Context, stream string) (<-chan *proto.DVRLifecycleData, error) {
+	user, err := middleware.RequireAuth(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("authentication required for subscriptions: %w", err)
+	}
+	jwtToken := ""
+	if token := ctx.Value("jwt_token"); token != nil {
+		if s, ok := token.(string); ok {
+			jwtToken = s
+		}
+	}
+	cfg := resolvers.ConnectionConfig{UserID: user.UserID, TenantID: user.TenantID, JWT: jwtToken}
+	return r.Resolver.SubManager.SubscribeToDVRLifecycle(ctx, cfg, stream)
+}
+
+// SystemHealth is the resolver for the systemHealth field.
+func (r *subscriptionResolver) SystemHealth(ctx context.Context) (<-chan *proto.NodeLifecycleUpdate, error) {
+	return r.Resolver.DoSystemUpdates(ctx)
+}
+
+// Firehose is the resolver for the firehose field.
+func (r *subscriptionResolver) Firehose(ctx context.Context) (<-chan *model.TenantEvent, error) {
+	if r.Resolver.Metrics != nil {
+		r.Resolver.Metrics.Operations.WithLabelValues("subscription_firehose", "requested").Inc()
+	}
+
+	// Demo mode returns mock events
+	if middleware.IsDemoMode(ctx) {
+		r.Resolver.Logger.Debug("Returning demo firehose subscription")
+		if r.Resolver.Metrics != nil {
+			r.Resolver.Metrics.Operations.WithLabelValues("subscription_firehose", "demo").Inc()
+		}
+		ch := make(chan *model.TenantEvent, 10)
+		go func() {
+			defer close(ch)
+			// Send demo events periodically
+			ticker := time.NewTicker(2 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					// Send a random demo event
+					ch <- &model.TenantEvent{
+						Type:      "demo_event",
+						Channel:   "STREAMS",
+						Timestamp: time.Now(),
+					}
+				}
+			}
+		}()
+		return ch, nil
+	}
+
+	r.Resolver.Logger.Info("Setting up firehose subscription")
+	user, err := middleware.RequireAuth(ctx)
+	if err != nil {
+		if r.Resolver.Metrics != nil {
+			r.Resolver.Metrics.Operations.WithLabelValues("subscription_firehose", "auth_error").Inc()
+		}
+		return nil, fmt.Errorf("authentication required for firehose subscription: %w", err)
+	}
+
+	jwtToken := ""
+	if token := ctx.Value("jwt_token"); token != nil {
+		if tokenStr, ok := token.(string); ok {
+			jwtToken = tokenStr
+		}
+	}
+
+	config := resolvers.ConnectionConfig{UserID: user.UserID, TenantID: user.TenantID, JWT: jwtToken}
+	ch, err := r.Resolver.SubManager.SubscribeToFirehose(ctx, config)
+	if err != nil {
+		if r.Resolver.Metrics != nil {
+			r.Resolver.Metrics.Operations.WithLabelValues("subscription_firehose", "error").Inc()
+		}
+		r.Resolver.Logger.WithError(err).WithFields(logging.Fields{
+			"user_id":   user.UserID,
+			"tenant_id": user.TenantID,
+		}).Error("Failed to setup firehose subscription")
+		return nil, fmt.Errorf("failed to setup firehose subscription: %w", err)
+	}
+
+	r.Resolver.Logger.WithFields(logging.Fields{
+		"user_id":   user.UserID,
+		"tenant_id": user.TenantID,
+	}).Info("Successfully setup firehose subscription")
+
+	if r.Resolver.Metrics != nil {
+		r.Resolver.Metrics.Operations.WithLabelValues("subscription_firehose", "success").Inc()
+	}
+	return ch, nil
+}
+
+// Node is the resolver for the node field.
+func (r *systemHealthEventResolver) Node(ctx context.Context, obj *proto.NodeLifecycleUpdate) (string, error) {
+	return obj.NodeId, nil
+}
+
+// Status is the resolver for the status field.
+func (r *systemHealthEventResolver) Status(ctx context.Context, obj *proto.NodeLifecycleUpdate) (model.NodeStatus, error) {
+	if obj.IsHealthy {
+		return model.NodeStatusHealthy, nil
+	}
+	return model.NodeStatusUnhealthy, nil
+}
+
+// CPUTenths is the resolver for the cpuTenths field.
+func (r *systemHealthEventResolver) CPUTenths(ctx context.Context, obj *proto.NodeLifecycleUpdate) (int, error) {
+	return int(obj.CpuTenths), nil
+}
+
+// RAMMax is the resolver for the ramMax field.
+func (r *systemHealthEventResolver) RAMMax(ctx context.Context, obj *proto.NodeLifecycleUpdate) (*float64, error) {
+	v := float64(obj.RamMax)
+	return &v, nil
+}
+
+// RAMCurrent is the resolver for the ramCurrent field.
+func (r *systemHealthEventResolver) RAMCurrent(ctx context.Context, obj *proto.NodeLifecycleUpdate) (*float64, error) {
+	v := float64(obj.RamCurrent)
+	return &v, nil
+}
+
+// DiskTotalBytes is the resolver for the diskTotalBytes field.
+func (r *systemHealthEventResolver) DiskTotalBytes(ctx context.Context, obj *proto.NodeLifecycleUpdate) (*float64, error) {
+	v := float64(obj.DiskTotalBytes)
+	return &v, nil
+}
+
+// DiskUsedBytes is the resolver for the diskUsedBytes field.
+func (r *systemHealthEventResolver) DiskUsedBytes(ctx context.Context, obj *proto.NodeLifecycleUpdate) (*float64, error) {
+	v := float64(obj.DiskUsedBytes)
+	return &v, nil
+}
+
+// ShmTotalBytes is the resolver for the shmTotalBytes field.
+func (r *systemHealthEventResolver) ShmTotalBytes(ctx context.Context, obj *proto.NodeLifecycleUpdate) (*float64, error) {
+	v := float64(obj.ShmTotalBytes)
+	return &v, nil
+}
+
+// ShmUsedBytes is the resolver for the shmUsedBytes field.
+func (r *systemHealthEventResolver) ShmUsedBytes(ctx context.Context, obj *proto.NodeLifecycleUpdate) (*float64, error) {
+	v := float64(obj.ShmUsedBytes)
+	return &v, nil
+}
+
+// Timestamp is the resolver for the timestamp field.
+func (r *systemHealthEventResolver) Timestamp(ctx context.Context, obj *proto.NodeLifecycleUpdate) (*time.Time, error) {
+	if obj.Timestamp == 0 {
+		return nil, nil
+	}
+	t := time.Unix(obj.Timestamp, 0)
+	return &t, nil
+}
+
+// Cluster is the resolver for the cluster field.
+func (r *tenantResolver) Cluster(ctx context.Context, obj *proto.Tenant) (*string, error) {
+	return obj.PrimaryClusterId, nil
+}
+
+// CreatedAt is the resolver for the createdAt field.
+func (r *tenantResolver) CreatedAt(ctx context.Context, obj *proto.Tenant) (*time.Time, error) {
+	if obj.CreatedAt == nil {
+		return nil, nil
+	}
+	t := obj.CreatedAt.AsTime()
+	return &t, nil
+}
+
+// Start is the resolver for the start field.
+func (r *timeRangeResolver) Start(ctx context.Context, obj *proto.TimeRange) (*time.Time, error) {
+	if obj.Start == nil {
+		return nil, nil
+	}
+	t := obj.Start.AsTime()
+	return &t, nil
+}
+
+// End is the resolver for the end field.
+func (r *timeRangeResolver) End(ctx context.Context, obj *proto.TimeRange) (*time.Time, error) {
+	if obj.End == nil {
+		return nil, nil
+	}
+	t := obj.End.AsTime()
+	return &t, nil
+}
+
+// Timestamp is the resolver for the timestamp field.
+func (r *trackListEventResolver) Timestamp(ctx context.Context, obj *proto.TrackListEvent) (*time.Time, error) {
+	if obj.Timestamp == nil {
+		return nil, nil
+	}
+	t := obj.Timestamp.AsTime()
+	return &t, nil
+}
+
+// CreatedAt is the resolver for the createdAt field.
+func (r *usageRecordResolver) CreatedAt(ctx context.Context, obj *proto.UsageRecord) (*time.Time, error) {
+	if obj.CreatedAt == nil {
+		return nil, nil
+	}
+	t := obj.CreatedAt.AsTime()
+	return &t, nil
+}
+
+// Timestamp is the resolver for the timestamp field.
+func (r *usageSummaryResolver) Timestamp(ctx context.Context, obj *proto.UsageSummary) (*time.Time, error) {
+	if obj.Timestamp == nil {
+		return nil, nil
+	}
+	t := obj.Timestamp.AsTime()
+	return &t, nil
+}
+
+// AvgBufferHealth is the resolver for the avgBufferHealth field.
+func (r *usageSummaryResolver) AvgBufferHealth(ctx context.Context, obj *proto.UsageSummary) (float64, error) {
+	return float64(obj.AvgBufferHealth), nil
+}
+
+// PacketLossRate is the resolver for the packetLossRate field.
+func (r *usageSummaryResolver) PacketLossRate(ctx context.Context, obj *proto.UsageSummary) (float64, error) {
+	return float64(obj.PacketLossRate), nil
+}
+
+// Name is the resolver for the name field.
+func (r *userResolver) Name(ctx context.Context, obj *proto.User) (*string, error) {
+	if obj.FirstName != "" || obj.LastName != "" {
+		fullName := obj.FirstName + " " + obj.LastName
+		fullName = strings.TrimSpace(fullName)
+		return &fullName, nil
+	}
+	return nil, nil
+}
+
+// CreatedAt is the resolver for the createdAt field.
+func (r *userResolver) CreatedAt(ctx context.Context, obj *proto.User) (*time.Time, error) {
+	if obj.CreatedAt == nil {
+		return nil, nil
+	}
+	t := obj.CreatedAt.AsTime()
+	return &t, nil
+}
+
+// Timestamp is the resolver for the timestamp field.
+func (r *viewerCountBucketResolver) Timestamp(ctx context.Context, obj *proto.ViewerCountBucket) (*time.Time, error) {
+	if obj.Timestamp == nil {
+		return nil, nil
+	}
+	t := obj.Timestamp.AsTime()
+	return &t, nil
+}
+
+// Stream is the resolver for the stream field.
+func (r *viewerCountBucketResolver) Stream(ctx context.Context, obj *proto.ViewerCountBucket) (*string, error) {
+	if obj.InternalName == "" {
+		return nil, nil
+	}
+	return &obj.InternalName, nil
+}
+
+// Outputs is the resolver for the outputs field.
+func (r *viewerEndpointResolver) Outputs(ctx context.Context, obj *proto.ViewerEndpoint) (*string, error) {
+	if obj.Outputs == nil || len(obj.Outputs) == 0 {
+		return nil, nil
+	}
+	b, err := json.Marshal(obj.Outputs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal outputs: %w", err)
+	}
+	s := string(b)
+	return &s, nil
+}
+
+// Timestamp is the resolver for the timestamp field.
+func (r *viewerGeographicResolver) Timestamp(ctx context.Context, obj *proto.ConnectionEvent) (*time.Time, error) {
+	if obj.Timestamp == nil {
+		return nil, nil
+	}
+	t := obj.Timestamp.AsTime()
+	return &t, nil
+}
+
+// Stream is the resolver for the stream field.
+func (r *viewerGeographicResolver) Stream(ctx context.Context, obj *proto.ConnectionEvent) (*string, error) {
+	s := obj.InternalName
+	return &s, nil
+}
+
+// ViewerCount is the resolver for the viewerCount field.
+func (r *viewerGeographicResolver) ViewerCount(ctx context.Context, obj *proto.ConnectionEvent) (*int, error) {
+	v := 0
+	if obj.EventType == "connect" {
+		v = 1
+	}
+	return &v, nil
+}
+
+// Source is the resolver for the source field.
+func (r *viewerGeographicResolver) Source(ctx context.Context, obj *proto.ConnectionEvent) (*string, error) {
+	if obj.Connector != "" {
+		v := obj.Connector
+		return &v, nil
+	}
+	return nil, nil
+}
+
+// SessionDurationSeconds is the resolver for the sessionDurationSeconds field.
+func (r *viewerGeographicResolver) SessionDurationSeconds(ctx context.Context, obj *proto.ConnectionEvent) (*int, error) {
+	if obj.SessionDurationSeconds == 0 {
+		return nil, nil
+	}
+	v := int(obj.SessionDurationSeconds)
+	return &v, nil
+}
+
+// BytesTransferred is the resolver for the bytesTransferred field.
+func (r *viewerGeographicResolver) BytesTransferred(ctx context.Context, obj *proto.ConnectionEvent) (*int, error) {
+	if obj.BytesTransferred == 0 {
+		return nil, nil
+	}
+	v := int(obj.BytesTransferred)
+	return &v, nil
+}
+
+// ConnectionTime is the resolver for the connectionTime field.
+func (r *viewerMetricsResolver) ConnectionTime(ctx context.Context, obj *proto.ClientLifecycleUpdate) (*float64, error) {
+	if obj.ConnectionTime == nil {
+		return nil, nil
+	}
+	v := float64(*obj.ConnectionTime)
+	return &v, nil
+}
+
+// Position is the resolver for the position field.
+func (r *viewerMetricsResolver) Position(ctx context.Context, obj *proto.ClientLifecycleUpdate) (*float64, error) {
+	if obj.Position == nil {
+		return nil, nil
+	}
+	v := float64(*obj.Position)
+	return &v, nil
+}
+
+// BandwidthInBps is the resolver for the bandwidthInBps field.
+func (r *viewerMetricsResolver) BandwidthInBps(ctx context.Context, obj *proto.ClientLifecycleUpdate) (*int, error) {
+	if obj.BandwidthInBps == nil {
+		return nil, nil
+	}
+	v := int(*obj.BandwidthInBps)
+	return &v, nil
+}
+
+// BandwidthOutBps is the resolver for the bandwidthOutBps field.
+func (r *viewerMetricsResolver) BandwidthOutBps(ctx context.Context, obj *proto.ClientLifecycleUpdate) (*int, error) {
+	if obj.BandwidthOutBps == nil {
+		return nil, nil
+	}
+	v := int(*obj.BandwidthOutBps)
+	return &v, nil
+}
+
+// BytesDownloaded is the resolver for the bytesDownloaded field.
+func (r *viewerMetricsResolver) BytesDownloaded(ctx context.Context, obj *proto.ClientLifecycleUpdate) (*int, error) {
+	if obj.BytesDownloaded == nil {
+		return nil, nil
+	}
+	v := int(*obj.BytesDownloaded)
+	return &v, nil
+}
+
+// BytesUploaded is the resolver for the bytesUploaded field.
+func (r *viewerMetricsResolver) BytesUploaded(ctx context.Context, obj *proto.ClientLifecycleUpdate) (*int, error) {
+	if obj.BytesUploaded == nil {
+		return nil, nil
+	}
+	v := int(*obj.BytesUploaded)
+	return &v, nil
+}
+
+// PacketsSent is the resolver for the packetsSent field.
+func (r *viewerMetricsResolver) PacketsSent(ctx context.Context, obj *proto.ClientLifecycleUpdate) (*int, error) {
+	if obj.PacketsSent == nil {
+		return nil, nil
+	}
+	v := int(*obj.PacketsSent)
+	return &v, nil
+}
+
+// PacketsLost is the resolver for the packetsLost field.
+func (r *viewerMetricsResolver) PacketsLost(ctx context.Context, obj *proto.ClientLifecycleUpdate) (*int, error) {
+	if obj.PacketsLost == nil {
+		return nil, nil
+	}
+	v := int(*obj.PacketsLost)
+	return &v, nil
+}
+
+// PacketsRetransmitted is the resolver for the packetsRetransmitted field.
+func (r *viewerMetricsResolver) PacketsRetransmitted(ctx context.Context, obj *proto.ClientLifecycleUpdate) (*int, error) {
+	if obj.PacketsRetransmitted == nil {
+		return nil, nil
+	}
+	v := int(*obj.PacketsRetransmitted)
+	return &v, nil
+}
+
+// ArtifactState returns generated.ArtifactStateResolver implementation.
+func (r *Resolver) ArtifactState() generated.ArtifactStateResolver { return &artifactStateResolver{r} }
 
 // BillingStatus returns generated.BillingStatusResolver implementation.
 func (r *Resolver) BillingStatus() generated.BillingStatusResolver { return &billingStatusResolver{r} }
@@ -836,22 +2433,60 @@ func (r *Resolver) BootstrapToken() generated.BootstrapTokenResolver {
 	return &bootstrapTokenResolver{r}
 }
 
+// CityMetric returns generated.CityMetricResolver implementation.
+func (r *Resolver) CityMetric() generated.CityMetricResolver { return &cityMetricResolver{r} }
+
+// ClientMetrics5m returns generated.ClientMetrics5mResolver implementation.
+func (r *Resolver) ClientMetrics5m() generated.ClientMetrics5mResolver {
+	return &clientMetrics5mResolver{r}
+}
+
 // Clip returns generated.ClipResolver implementation.
 func (r *Resolver) Clip() generated.ClipResolver { return &clipResolver{r} }
 
 // ClipEvent returns generated.ClipEventResolver implementation.
 func (r *Resolver) ClipEvent() generated.ClipEventResolver { return &clipEventResolver{r} }
 
+// ClipLifecycle returns generated.ClipLifecycleResolver implementation.
+func (r *Resolver) ClipLifecycle() generated.ClipLifecycleResolver { return &clipLifecycleResolver{r} }
+
+// ClipViewingUrls returns generated.ClipViewingUrlsResolver implementation.
+func (r *Resolver) ClipViewingUrls() generated.ClipViewingUrlsResolver {
+	return &clipViewingUrlsResolver{r}
+}
+
 // Cluster returns generated.ClusterResolver implementation.
 func (r *Resolver) Cluster() generated.ClusterResolver { return &clusterResolver{r} }
+
+// ConnectionEvent returns generated.ConnectionEventResolver implementation.
+func (r *Resolver) ConnectionEvent() generated.ConnectionEventResolver {
+	return &connectionEventResolver{r}
+}
+
+// CountryMetric returns generated.CountryMetricResolver implementation.
+func (r *Resolver) CountryMetric() generated.CountryMetricResolver { return &countryMetricResolver{r} }
+
+// DVREvent returns generated.DVREventResolver implementation.
+func (r *Resolver) DVREvent() generated.DVREventResolver { return &dVREventResolver{r} }
+
+// DVRRequest returns generated.DVRRequestResolver implementation.
+func (r *Resolver) DVRRequest() generated.DVRRequestResolver { return &dVRRequestResolver{r} }
 
 // DeveloperToken returns generated.DeveloperTokenResolver implementation.
 func (r *Resolver) DeveloperToken() generated.DeveloperTokenResolver {
 	return &developerTokenResolver{r}
 }
 
+// GeoBucket returns generated.GeoBucketResolver implementation.
+func (r *Resolver) GeoBucket() generated.GeoBucketResolver { return &geoBucketResolver{r} }
+
 // Invoice returns generated.InvoiceResolver implementation.
 func (r *Resolver) Invoice() generated.InvoiceResolver { return &invoiceResolver{r} }
+
+// LoadBalancingMetric returns generated.LoadBalancingMetricResolver implementation.
+func (r *Resolver) LoadBalancingMetric() generated.LoadBalancingMetricResolver {
+	return &loadBalancingMetricResolver{r}
+}
 
 // Mutation returns generated.MutationResolver implementation.
 func (r *Resolver) Mutation() generated.MutationResolver { return &mutationResolver{r} }
@@ -862,6 +2497,11 @@ func (r *Resolver) Node() generated.NodeResolver { return &nodeResolver{r} }
 // NodeMetric returns generated.NodeMetricResolver implementation.
 func (r *Resolver) NodeMetric() generated.NodeMetricResolver { return &nodeMetricResolver{r} }
 
+// NodeMetricHourly returns generated.NodeMetricHourlyResolver implementation.
+func (r *Resolver) NodeMetricHourly() generated.NodeMetricHourlyResolver {
+	return &nodeMetricHourlyResolver{r}
+}
+
 // Payment returns generated.PaymentResolver implementation.
 func (r *Resolver) Payment() generated.PaymentResolver { return &paymentResolver{r} }
 
@@ -870,15 +2510,48 @@ func (r *Resolver) PlatformOverview() generated.PlatformOverviewResolver {
 	return &platformOverviewResolver{r}
 }
 
+// PlaybackInstance returns generated.PlaybackInstanceResolver implementation.
+func (r *Resolver) PlaybackInstance() generated.PlaybackInstanceResolver {
+	return &playbackInstanceResolver{r}
+}
+
+// PlaybackMetadata returns generated.PlaybackMetadataResolver implementation.
+func (r *Resolver) PlaybackMetadata() generated.PlaybackMetadataResolver {
+	return &playbackMetadataResolver{r}
+}
+
+// QualityChangesHourly returns generated.QualityChangesHourlyResolver implementation.
+func (r *Resolver) QualityChangesHourly() generated.QualityChangesHourlyResolver {
+	return &qualityChangesHourlyResolver{r}
+}
+
+// QualityTierDaily returns generated.QualityTierDailyResolver implementation.
+func (r *Resolver) QualityTierDaily() generated.QualityTierDailyResolver {
+	return &qualityTierDailyResolver{r}
+}
+
 // Query returns generated.QueryResolver implementation.
 func (r *Resolver) Query() generated.QueryResolver { return &queryResolver{r} }
 
 // Recording returns generated.RecordingResolver implementation.
 func (r *Resolver) Recording() generated.RecordingResolver { return &recordingResolver{r} }
 
+// RoutingEvent returns generated.RoutingEventResolver implementation.
+func (r *Resolver) RoutingEvent() generated.RoutingEventResolver { return &routingEventResolver{r} }
+
 // ServiceInstance returns generated.ServiceInstanceResolver implementation.
 func (r *Resolver) ServiceInstance() generated.ServiceInstanceResolver {
 	return &serviceInstanceResolver{r}
+}
+
+// ServiceInstanceHealth returns generated.ServiceInstanceHealthResolver implementation.
+func (r *Resolver) ServiceInstanceHealth() generated.ServiceInstanceHealthResolver {
+	return &serviceInstanceHealthResolver{r}
+}
+
+// StorageUsageRecord returns generated.StorageUsageRecordResolver implementation.
+func (r *Resolver) StorageUsageRecord() generated.StorageUsageRecordResolver {
+	return &storageUsageRecordResolver{r}
 }
 
 // Stream returns generated.StreamResolver implementation.
@@ -889,6 +2562,11 @@ func (r *Resolver) StreamAnalytics() generated.StreamAnalyticsResolver {
 	return &streamAnalyticsResolver{r}
 }
 
+// StreamConnectionHourly returns generated.StreamConnectionHourlyResolver implementation.
+func (r *Resolver) StreamConnectionHourly() generated.StreamConnectionHourlyResolver {
+	return &streamConnectionHourlyResolver{r}
+}
+
 // StreamEvent returns generated.StreamEventResolver implementation.
 func (r *Resolver) StreamEvent() generated.StreamEventResolver { return &streamEventResolver{r} }
 
@@ -897,51 +2575,115 @@ func (r *Resolver) StreamHealthMetric() generated.StreamHealthMetricResolver {
 	return &streamHealthMetricResolver{r}
 }
 
+// StreamKey returns generated.StreamKeyResolver implementation.
+func (r *Resolver) StreamKey() generated.StreamKeyResolver { return &streamKeyResolver{r} }
+
+// StreamMetaResponse returns generated.StreamMetaResponseResolver implementation.
+func (r *Resolver) StreamMetaResponse() generated.StreamMetaResponseResolver {
+	return &streamMetaResponseResolver{r}
+}
+
+// StreamMetrics returns generated.StreamMetricsResolver implementation.
+func (r *Resolver) StreamMetrics() generated.StreamMetricsResolver { return &streamMetricsResolver{r} }
+
 // Subscription returns generated.SubscriptionResolver implementation.
 func (r *Resolver) Subscription() generated.SubscriptionResolver { return &subscriptionResolver{r} }
+
+// SystemHealthEvent returns generated.SystemHealthEventResolver implementation.
+func (r *Resolver) SystemHealthEvent() generated.SystemHealthEventResolver {
+	return &systemHealthEventResolver{r}
+}
 
 // Tenant returns generated.TenantResolver implementation.
 func (r *Resolver) Tenant() generated.TenantResolver { return &tenantResolver{r} }
 
+// TimeRange returns generated.TimeRangeResolver implementation.
+func (r *Resolver) TimeRange() generated.TimeRangeResolver { return &timeRangeResolver{r} }
+
+// TrackListEvent returns generated.TrackListEventResolver implementation.
+func (r *Resolver) TrackListEvent() generated.TrackListEventResolver {
+	return &trackListEventResolver{r}
+}
+
 // UsageRecord returns generated.UsageRecordResolver implementation.
 func (r *Resolver) UsageRecord() generated.UsageRecordResolver { return &usageRecordResolver{r} }
 
+// UsageSummary returns generated.UsageSummaryResolver implementation.
+func (r *Resolver) UsageSummary() generated.UsageSummaryResolver { return &usageSummaryResolver{r} }
+
 // User returns generated.UserResolver implementation.
 func (r *Resolver) User() generated.UserResolver { return &userResolver{r} }
+
+// ViewerCountBucket returns generated.ViewerCountBucketResolver implementation.
+func (r *Resolver) ViewerCountBucket() generated.ViewerCountBucketResolver {
+	return &viewerCountBucketResolver{r}
+}
+
+// ViewerEndpoint returns generated.ViewerEndpointResolver implementation.
+func (r *Resolver) ViewerEndpoint() generated.ViewerEndpointResolver {
+	return &viewerEndpointResolver{r}
+}
 
 // ViewerGeographic returns generated.ViewerGeographicResolver implementation.
 func (r *Resolver) ViewerGeographic() generated.ViewerGeographicResolver {
 	return &viewerGeographicResolver{r}
 }
 
-// ViewerMetrics5m returns generated.ViewerMetrics5mResolver implementation.
-func (r *Resolver) ViewerMetrics5m() generated.ViewerMetrics5mResolver {
-	return &viewerMetrics5mResolver{r}
-}
+// ViewerMetrics returns generated.ViewerMetricsResolver implementation.
+func (r *Resolver) ViewerMetrics() generated.ViewerMetricsResolver { return &viewerMetricsResolver{r} }
 
+type artifactStateResolver struct{ *Resolver }
 type billingStatusResolver struct{ *Resolver }
 type billingTierResolver struct{ *Resolver }
 type bootstrapTokenResolver struct{ *Resolver }
+type cityMetricResolver struct{ *Resolver }
+type clientMetrics5mResolver struct{ *Resolver }
 type clipResolver struct{ *Resolver }
 type clipEventResolver struct{ *Resolver }
+type clipLifecycleResolver struct{ *Resolver }
+type clipViewingUrlsResolver struct{ *Resolver }
 type clusterResolver struct{ *Resolver }
+type connectionEventResolver struct{ *Resolver }
+type countryMetricResolver struct{ *Resolver }
+type dVREventResolver struct{ *Resolver }
+type dVRRequestResolver struct{ *Resolver }
 type developerTokenResolver struct{ *Resolver }
+type geoBucketResolver struct{ *Resolver }
 type invoiceResolver struct{ *Resolver }
+type loadBalancingMetricResolver struct{ *Resolver }
 type mutationResolver struct{ *Resolver }
 type nodeResolver struct{ *Resolver }
 type nodeMetricResolver struct{ *Resolver }
+type nodeMetricHourlyResolver struct{ *Resolver }
 type paymentResolver struct{ *Resolver }
 type platformOverviewResolver struct{ *Resolver }
+type playbackInstanceResolver struct{ *Resolver }
+type playbackMetadataResolver struct{ *Resolver }
+type qualityChangesHourlyResolver struct{ *Resolver }
+type qualityTierDailyResolver struct{ *Resolver }
 type queryResolver struct{ *Resolver }
 type recordingResolver struct{ *Resolver }
+type routingEventResolver struct{ *Resolver }
 type serviceInstanceResolver struct{ *Resolver }
+type serviceInstanceHealthResolver struct{ *Resolver }
+type storageUsageRecordResolver struct{ *Resolver }
 type streamResolver struct{ *Resolver }
 type streamAnalyticsResolver struct{ *Resolver }
+type streamConnectionHourlyResolver struct{ *Resolver }
 type streamEventResolver struct{ *Resolver }
 type streamHealthMetricResolver struct{ *Resolver }
+type streamKeyResolver struct{ *Resolver }
+type streamMetaResponseResolver struct{ *Resolver }
+type streamMetricsResolver struct{ *Resolver }
 type subscriptionResolver struct{ *Resolver }
+type systemHealthEventResolver struct{ *Resolver }
 type tenantResolver struct{ *Resolver }
+type timeRangeResolver struct{ *Resolver }
+type trackListEventResolver struct{ *Resolver }
 type usageRecordResolver struct{ *Resolver }
+type usageSummaryResolver struct{ *Resolver }
 type userResolver struct{ *Resolver }
+type viewerCountBucketResolver struct{ *Resolver }
+type viewerEndpointResolver struct{ *Resolver }
 type viewerGeographicResolver struct{ *Resolver }
-type viewerMetrics5mResolver struct{ *Resolver }
+type viewerMetricsResolver struct{ *Resolver }

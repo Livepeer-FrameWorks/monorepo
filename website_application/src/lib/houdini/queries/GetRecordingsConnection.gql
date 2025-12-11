@@ -1,0 +1,28 @@
+query GetRecordingsConnection($streamId: ID, $first: Int = 50, $after: String) {
+  recordingsConnection(streamId: $streamId, first: $first, after: $after) @paginate {
+    edges {
+      cursor
+      node {
+        id
+        streamId
+        title
+        duration
+        fileSizeBytes
+        playbackId
+        thumbnailUrl
+        startTime
+        endTime
+        status
+        createdAt
+        updatedAt
+      }
+    }
+    pageInfo {
+      hasNextPage
+      hasPreviousPage
+      startCursor
+      endCursor
+    }
+    totalCount
+  }
+}

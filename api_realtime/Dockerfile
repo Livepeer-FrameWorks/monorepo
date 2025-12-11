@@ -1,5 +1,5 @@
 # Build stage
-FROM golang:1.23.8-alpine AS builder
+FROM golang:1.24-alpine AS builder
 
 # Install build dependencies
 RUN apk add --no-cache git ca-certificates tzdata
@@ -15,7 +15,14 @@ COPY api_realtime/go.mod api_realtime/go.sum api_realtime/
 # Copy shared pkg module (maintain relative path for replace directive)
 COPY pkg/ pkg/
 
+# Download dependencies
+WORKDIR /src/frameworks/api_realtime
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    go mod download
+
 # Copy service source code
+WORKDIR /src/frameworks
 COPY api_realtime/ api_realtime/
 
 # Build the application with version and component injection
@@ -26,8 +33,9 @@ ARG COMPONENT_NAME=signalman
 ARG COMPONENT_VERSION=0.0.0
 
 WORKDIR /src/frameworks/api_realtime
-RUN go mod download
-RUN CGO_ENABLED=0 go build \
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 go build \
     -ldflags "-X frameworks/pkg/version.Version=${VERSION} \
               -X frameworks/pkg/version.GitCommit=${GIT_COMMIT} \
               -X frameworks/pkg/version.BuildDate=${BUILD_DATE} \
@@ -57,11 +65,11 @@ COPY --from=builder /src/frameworks/api_realtime/signalman .
 RUN chown -R frameworks:frameworks /app
 USER frameworks
 
-# Expose port
-EXPOSE 18009
+# Expose HTTP (health/metrics) and gRPC ports
+EXPOSE 18009 19005
 
-# Health check
+# Health check via HTTP endpoint
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD grpcurl -plaintext localhost:18009 grpc.health.v1.Health/Check || exit 1
+    CMD wget -q --spider http://localhost:18009/health || exit 1
 
 CMD ["./signalman"] 

@@ -1,0 +1,232 @@
+---
+title: "API Reference"
+description: "Integrate with FrameWorks using our GraphQL API."
+sidebar:
+  order: 4
+---
+
+FrameWorks offers a powerful GraphQL API that puts you in full control. Whether you need to programmatically create streams, manage keys, or pull detailed analytics, our API provides a unified interface for all platform operations.
+
+## GraphQL Endpoint
+
+All API interactions are performed through a single GraphQL endpoint. This allows you to fetch exactly the data you need in a single request.
+
+```
+%API_URL%
+```
+
+All operations go through this single endpoint. Queries read data, mutations change it.
+
+## Authentication
+
+Every request needs a token in the Authorization header:
+
+```
+Authorization: Bearer YOUR_TOKEN
+```
+
+Get your token from **Developer → API** in the dashboard.
+
+## Try It Out
+
+The dashboard has a built-in GraphQL explorer. Go to **Developer → API Explorer** to run queries against your account.
+
+Or use any GraphQL client:
+- [Altair](https://altairgraphql.dev/)
+- [GraphQL Playground](https://github.com/graphql/graphql-playground)
+- [Insomnia](https://insomnia.rest/)
+
+## Common Usage Patterns
+
+Here are the most frequent operations you'll likely need when building your integration.
+
+### List Your Streams
+
+```graphql
+query {
+  streams {
+    id
+    name
+    status
+    playbackId
+    createdAt
+  }
+}
+```
+
+### Create a Stream
+
+```graphql
+mutation {
+  createStream(input: { name: "My New Stream" }) {
+    id
+    name
+    streamKey
+    playbackId
+  }
+}
+```
+
+### Get Stream Details
+
+```graphql
+query {
+  stream(id: "stream-id-here") {
+    id
+    name
+    streamKey
+    playbackId
+    record
+    recordings {
+      id
+      status
+    }
+  }
+}
+```
+
+### Create a Stream Key
+
+```graphql
+mutation {
+  createStreamKey(streamId: "stream-id-here", input: { name: "OBS Key" }) {
+    id
+    keyValue
+    keyName
+    createdAt
+  }
+}
+```
+
+### Get Stream Analytics
+
+Analytics queries require you to specify a time range. Data is returned in aggregated form to help you visualize viewer engagement and bandwidth usage.
+
+```graphql
+query {
+  streamAnalytics(
+    stream: "stream-internal-name"
+    timeRange: { start: "2024-01-01T00:00:00Z", end: "2024-01-02T00:00:00Z" }
+  ) {
+    currentViewers
+    peakViewers
+    totalSessionDuration
+    totalBandwidthGb
+  }
+}
+```
+
+Note: The `stream` parameter uses the stream's internal name, not its ID.
+
+## Playback Resolution
+
+When building a custom player, you should use the `resolveViewerEndpoint` query. This ensures your viewers are routed to the geographically closest and healthiest edge node for the best possible experience.
+
+```graphql
+query {
+  resolveViewerEndpoint(
+    contentType: "live"
+    contentId: "stream-internal-name"
+  ) {
+    primary {
+      nodeId
+      baseUrl
+      protocol
+      url
+      geoDistance
+      loadScore
+      healthScore
+    }
+    fallbacks {
+      nodeId
+      baseUrl
+      protocol
+      url
+    }
+    metadata {
+      status
+      isLive
+      viewers
+      tenantId
+      contentId
+      contentType
+      title
+      description
+    }
+  }
+}
+```
+
+Returns a primary endpoint (optimal for the viewer's location) plus fallbacks. Use the primary endpoint first, fall back to others if it fails.
+
+## Error Handling
+
+GraphQL errors come in the `errors` array:
+
+```json
+{
+  "data": null,
+  "errors": [
+    {
+      "message": "Stream not found",
+      "path": ["stream"],
+      "extensions": {
+        "code": "NOT_FOUND"
+      }
+    }
+  ]
+}
+```
+
+Common codes:
+- `UNAUTHORIZED` - Missing or invalid token
+- `FORBIDDEN` - Token lacks required permissions
+- `NOT_FOUND` - Resource doesn't exist
+- `VALIDATION_ERROR` - Invalid input
+
+
+## SDKs
+
+No official SDKs yet. Use any GraphQL client in your language of choice.
+
+JavaScript example with `graphql-request`:
+
+```javascript
+import { GraphQLClient, gql } from 'graphql-request';
+
+const client = new GraphQLClient('%API_URL%', {
+  headers: {
+    Authorization: 'Bearer YOUR_TOKEN',
+  },
+});
+
+const query = gql`
+  query {
+    streams {
+      id
+      name
+      status
+    }
+  }
+`;
+
+const data = await client.request(query);
+console.log(data.streams);
+```
+
+## Schema Reference
+
+The full schema is available via introspection. In any GraphQL client, run:
+
+```graphql
+{
+  __schema {
+    types {
+      name
+      description
+    }
+  }
+}
+```
+
+Or use the dashboard's API Explorer which shows docs inline.

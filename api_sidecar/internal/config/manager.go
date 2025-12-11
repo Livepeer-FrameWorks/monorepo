@@ -95,7 +95,7 @@ func (m *Manager) reconcile() {
 	}
 	triggers := map[string]interface{}{
 		"PUSH_REWRITE":    []interface{}{map[string]interface{}{"handler": join(webhookBase, "/webhooks/mist/push_rewrite"), "sync": true}},
-		"DEFAULT_STREAM":  []interface{}{map[string]interface{}{"handler": join(webhookBase, "/webhooks/mist/default_stream"), "sync": true}},
+		"PLAY_REWRITE":    []interface{}{map[string]interface{}{"handler": join(webhookBase, "/webhooks/mist/play_rewrite"), "sync": true}},
 		"STREAM_SOURCE":   []interface{}{map[string]interface{}{"handler": join(webhookBase, "/webhooks/mist/stream_source"), "sync": true}},
 		"PUSH_OUT_START":  []interface{}{map[string]interface{}{"handler": join(webhookBase, "/webhooks/mist/push_out_start"), "sync": true}},
 		"PUSH_END":        []interface{}{map[string]interface{}{"handler": join(webhookBase, "/webhooks/mist/push_end"), "sync": false}},
@@ -162,6 +162,12 @@ func (m *Manager) ensureProtocols(current map[string]interface{}) error {
 		if host := os.Getenv("EDGE_PUBLIC_HOSTNAME"); host != "" {
 			entry["pubhost"] = host + ":8080/view"
 		}
+		need = append(need, entry)
+	}
+	if _, ok := existing["DTSC"]; !ok {
+		// Ensure DTSC connector exists for inter-node communication
+		// DTSC is critical for DVR and load balancing
+		entry := map[string]interface{}{"connector": "DTSC"}
 		need = append(need, entry)
 	}
 	if len(need) == 0 {

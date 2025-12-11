@@ -1,0 +1,36 @@
+mutation UpdateStream($id: ID!, $input: UpdateStreamInput!) {
+  updateStream(id: $id, input: $input) {
+    __typename
+    ... on Stream {
+      id
+      name
+      description
+      streamKey
+      playbackId
+      record
+      createdAt
+      updatedAt
+      metrics {
+        status
+        isLive
+        currentViewers
+        peakViewers
+        totalViews
+        startedAt
+        endedAt
+        duration
+        lastEventAt
+        lastEventType
+      }
+    }
+    ... on ValidationError {
+      ...ValidationErrorFields @mask_disable
+    }
+    ... on NotFoundError {
+      ...NotFoundErrorFields @mask_disable
+    }
+    ... on AuthError {
+      ...AuthErrorFields @mask_disable
+    }
+  }
+}

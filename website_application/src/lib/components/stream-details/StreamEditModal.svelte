@@ -1,4 +1,4 @@
-<script>
+<script lang="ts">
   import { preventDefault } from "svelte/legacy";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
@@ -57,7 +57,7 @@
       <div class="space-y-2">
         <label
           for="editName"
-          class="block text-sm font-medium text-tokyo-night-fg"
+          class="block text-sm font-medium text-foreground"
         >
           Stream Name
         </label>
@@ -66,14 +66,14 @@
           type="text"
           bind:value={formData.name}
           required
-          class="transition-all focus:ring-2 focus:ring-tokyo-night-blue"
+          class="transition-all focus:ring-2 focus:ring-primary"
         />
       </div>
 
       <div class="space-y-2">
         <label
           for="editDescription"
-          class="block text-sm font-medium text-tokyo-night-fg"
+          class="block text-sm font-medium text-foreground"
         >
           Description
         </label>
@@ -81,13 +81,13 @@
           id="editDescription"
           bind:value={formData.description}
           rows={3}
-          class="transition-all focus:ring-2 focus:ring-tokyo-night-blue"
+          class="transition-all focus:ring-2 focus:ring-primary"
         />
       </div>
 
       <div class="flex items-start space-x-2">
         <Checkbox id="editRecord" bind:checked={formData.record} />
-        <Label for="editRecord" class="text-sm text-tokyo-night-fg">
+        <Label for="editRecord" class="text-sm text-foreground">
           Enable Recording
         </Label>
       </div>

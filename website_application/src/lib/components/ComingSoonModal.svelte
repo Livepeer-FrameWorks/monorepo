@@ -1,6 +1,12 @@
 <script lang="ts">
   import { createEventDispatcher } from "svelte";
-  import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "$lib/components/ui/dialog";
+  import {
+    Dialog,
+    DialogContent,
+    DialogHeader,
+    DialogTitle,
+    DialogDescription,
+  } from "$lib/components/ui/dialog";
   import { Badge } from "$lib/components/ui/badge";
   import { Button } from "$lib/components/ui/button";
   import { getIconComponent } from "../iconUtils";
@@ -33,7 +39,7 @@
 </script>
 
 {#if item}
-  {@const Icon = getIconComponent(item.icon)}
+  {@const Icon = getIconComponent(item.icon || "HelpCircle")}
   <Dialog
     open={show}
     onOpenChange={(value) => {
@@ -46,7 +52,9 @@
   >
     <DialogContent class="max-w-xl">
       <DialogHeader class="flex flex-row items-start gap-3 text-left">
-        <div class="flex h-12 w-12 items-center justify-center rounded-lg bg-tokyo-night-bg-light">
+        <div
+          class="flex h-12 w-12 items-center justify-center bg-card"
+        >
           <Icon class="h-6 w-6 text-primary" />
         </div>
         <div class="space-y-1">
@@ -64,8 +72,10 @@
       </DialogDescription>
 
       <section class="mt-4 space-y-4 text-sm text-foreground">
-        <div class="rounded-lg border border-warning/40 bg-warning/10 p-4">
-          <h3 class="mb-2 flex items-center gap-2 text-sm font-medium text-warning">
+        <div class="border border-warning/40 bg-warning/10 p-4">
+          <h3
+            class="mb-2 flex items-center gap-2 text-sm font-medium text-warning"
+          >
             <svg
               class="h-5 w-5"
               fill="none"
@@ -90,39 +100,75 @@
         <div class="space-y-2">
           <h3 class="text-sm font-semibold text-foreground">What to expect:</h3>
           <ul class="space-y-2 text-foreground/80">
-            {#if item.name === "Stream Settings"}
+            {#if item.name === "Browser Streaming"}
+              <li>
+                One-click "Go Live" experience, directly in the dashboard.
+              </li>
+              <li>Compose tracks from any stream or connected device.</li>
+            {:else if item.name === "Stream Settings"}
               <li>Configure transcoding, recording, and stream options.</li>
               <li>Set stream access controls and metadata.</li>
               <li>Customize stream thumbnails and descriptions.</li>
             {:else if item.name === "Stream Composer"}
-              <li>Compose multiple input streams with picture-in-picture layouts.</li>
+              <li>
+                Compose multiple input streams with picture-in-picture layouts.
+              </li>
               <li>Visual editor for stream overlays and scenes.</li>
-              <li>Deliver a unified output stream from multiple sources.</li>
-            {:else if item.name === "Browser Streaming"}
-              <li>WebRTC infrastructure is ready and configured.</li>
-              <li>Final browser integration and UI polish underway.</li>
-              <li>One-click "Go Live" experience directly in the dashboard.</li>
-            {:else if item.name === "Recordings"}
-              <li>Automatic live stream recording and archival.</li>
-              <li>Integration with storage node routing and metering.</li>
-              <li>Leverages the existing MistServer recording pipeline.</li>
-            {:else if item.name === "Reports"}
-              <li>Generate detailed analytics and billing reports.</li>
-              <li>Export usage data for external BI tooling.</li>
-              <li>Schedule recurring delivery to your teams.</li>
+              <li>
+                Compose on our processing nodes or on your own media node.
+              </li>
+            {:else if item.name === "Device Discovery"}
+              <li>Manage your AV devices and their settings.</li>
+              <li>Select tracks to make available for stream composition.</li>
+              <li>View device status and availability.</li>
+            {:else if item.name === "Network Status"}
+              <li>View publicly exposed cluster metrics.</li>
+              <li>Live status of platform and services.</li>
+            {:else if item.name === "AI Processing"}
+              <li>Configure AI-powered computer vision and analysis.</li>
+              <li>View AI processing history and results.</li>
+              <li>Export detailed AI processing results and metadata.</li>
+            {:else if item.name === "Live Transcription"}
+              <li>Configure transcription models and languages.</li>
+              <li>View transcription history and results.</li>
+              <li>Export detailed transcripts and metadata.</li>
+            {:else if item.name === "Team Members"}
+              <li>Connect with your team members.</li>
+              <li>Invite new team members to your account.</li>
+              <li>Remove team members from your account.</li>
+            {:else if item.name === "Permissions"}
+              <li>Manage permissions for your account.</li>
+              <li>Assign roles and permissions to your team members.</li>
+            {:else if item.name === "Team Activity"}
+              <li>View activity logs for your team.</li>
+              <li>Rollback to previous configurations.</li>
+            {:else if item.name === "Webhooks"}
+              <li>Configure integrations with external services.</li>
+              <li>Receive real-time notifications from the platform.</li>
+              <li>
+                Automate & customize your media pipeline by plugging in your own
+                logic.
+              </li>
+            {:else if item.name === "SDKs & Libraries"}
+              <li>Ready-to-use SDKs and libraries for your projects.</li>
+              <li>Documentation and examples for each SDK.</li>
+              <li>Support for multiple programming languages.</li>
+            {:else if item.name === "Support Tickets"}
+              <li>Talk directly to our support team.</li>
+              <li>Map tickets to streams and users.</li>
             {:else}
-              <li>Additional details for this feature will be announced soon.</li>
+              <li>
+                Additional details for this feature will be announced soon.
+              </li>
             {/if}
           </ul>
         </div>
       </section>
 
       <div class="mt-6 flex items-center justify-end gap-2">
-        <Button variant="secondary" onclick={close}>
-          Close
-        </Button>
+        <Button variant="secondary" onclick={close}>Close</Button>
         <Button
-          href="https://docs.frameworks.live"
+          href="https://docs.frameworks.network"
           target="_blank"
           rel="noreferrer"
         >

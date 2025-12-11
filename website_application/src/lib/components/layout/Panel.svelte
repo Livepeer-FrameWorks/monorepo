@@ -19,7 +19,7 @@
     class: className = "",
   }: Props = $props();
 
-  const panelClass = $derived(() => {
+  const panelClass = $derived.by(() => {
     const classes = ["panel"];
     if (variant === "glass") classes.push("panel--glass");
     if (padding === "compact") classes.push("panel--compact");
@@ -29,6 +29,6 @@
   });
 </script>
 
-<div class={panelClass()}>
+<div class={panelClass}>
   {@render children()}
 </div>

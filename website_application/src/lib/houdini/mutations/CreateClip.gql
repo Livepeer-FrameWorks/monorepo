@@ -1,0 +1,31 @@
+mutation CreateClip($input: CreateClipInput!) {
+  createClip(input: $input) {
+    __typename
+    ... on Clip {
+      id
+      clipHash
+      streamName
+      title
+      description
+      startTime
+      duration
+      nodeId
+      storagePath
+      sizeBytes
+      status
+      accessCount
+      createdAt
+      updatedAt
+      ...AllClips_insert @prepend
+    }
+    ... on ValidationError {
+      ...ValidationErrorFields @mask_disable
+    }
+    ... on NotFoundError {
+      ...NotFoundErrorFields @mask_disable
+    }
+    ... on AuthError {
+      ...AuthErrorFields @mask_disable
+    }
+  }
+}

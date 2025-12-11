@@ -1,0 +1,16 @@
+subscription SystemHealth {
+  systemHealth {
+    node
+    location
+    status
+    cpuTenths
+    isHealthy
+    ramMax
+    ramCurrent
+    diskTotalBytes
+    diskUsedBytes
+    shmTotalBytes
+    shmUsedBytes
+    timestamp
+  }
+}

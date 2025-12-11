@@ -1,0 +1,17 @@
+mutation UpdateTenant($input: UpdateTenantInput!) {
+  updateTenant(input: $input) {
+    __typename
+    ... on Tenant {
+      id
+      name
+      cluster
+      createdAt
+    }
+    ... on ValidationError {
+      ...ValidationErrorFields @mask_disable
+    }
+    ... on AuthError {
+      ...AuthErrorFields @mask_disable
+    }
+  }
+}

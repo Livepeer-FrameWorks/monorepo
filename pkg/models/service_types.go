@@ -45,6 +45,16 @@ type BillingStatus struct {
 
 // === PERISCOPE SERVICE TYPES ===
 
+// CountryMetrics represents viewer metrics for a single country
+// Used in geo_breakdown for rich billing/email summaries
+type CountryMetrics struct {
+	CountryCode string  `json:"country_code"`
+	ViewerCount int     `json:"viewer_count"`
+	ViewerHours float64 `json:"viewer_hours"`
+	Percentage  float64 `json:"percentage"` // Percentage of total viewers
+	EgressGB    float64 `json:"egress_gb"`
+}
+
 // UsageSummary represents usage summary for billing
 type UsageSummary struct {
 	TenantID          string  `json:"tenant_id"`
@@ -56,12 +66,14 @@ type UsageSummary struct {
 	PeakBandwidthMbps float64 `json:"peak_bandwidth_mbps"`
 	// Storage and clip lifecycle metrics for billing
 	StorageGB            float64   `json:"storage_gb"`
+	AverageStorageGB     float64   `json:"average_storage_gb"`
 	ClipsAdded           int       `json:"clips_added"`
 	ClipsDeleted         int       `json:"clips_deleted"`
 	ClipStorageAddedGB   float64   `json:"clip_storage_added_gb"`
 	ClipStorageDeletedGB float64   `json:"clip_storage_deleted_gb"`
 	TotalStreams         int       `json:"total_streams"`
 	TotalViewers         int       `json:"total_viewers"`
+	ViewerHours          float64   `json:"viewer_hours"`
 	PeakViewers          int       `json:"peak_viewers"`
 	MaxViewers           int       `json:"max_viewers"`
 	UniqueUsers          int       `json:"unique_users"`
@@ -69,12 +81,13 @@ type UsageSummary struct {
 	Timestamp            time.Time `json:"timestamp"`
 
 	// Additional metrics from ClickHouse
-	AvgViewers      float64 `json:"avg_viewers"`
-	UniqueCountries int     `json:"unique_countries"`
-	UniqueCities    int     `json:"unique_cities"`
-	AvgBufferHealth float32 `json:"avg_buffer_health"`
-	AvgBitrate      int     `json:"avg_bitrate"`
-	PacketLossRate  float32 `json:"packet_loss_rate"`
+	AvgViewers      float64          `json:"avg_viewers"`
+	UniqueCountries int              `json:"unique_countries"`
+	UniqueCities    int              `json:"unique_cities"`
+	GeoBreakdown    []CountryMetrics `json:"geo_breakdown"` // Rich geo breakdown with viewers, hours, percentage
+	AvgBufferHealth float32          `json:"avg_buffer_health"`
+	AvgBitrate      int              `json:"avg_bitrate"`
+	PacketLossRate  float32          `json:"packet_loss_rate"`
 }
 
 // === COMMODORE SERVICE TYPES ===

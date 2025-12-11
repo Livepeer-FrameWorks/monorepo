@@ -1,0 +1,24 @@
+mutation CreateStreamKey($streamId: ID!, $input: CreateStreamKeyInput!) {
+  createStreamKey(streamId: $streamId, input: $input) {
+    __typename
+    ... on StreamKey {
+      id
+      streamId
+      keyValue
+      keyName
+      isActive
+      lastUsedAt
+      createdAt
+      ...StreamKeys_insert @prepend
+    }
+    ... on ValidationError {
+      ...ValidationErrorFields @mask_disable
+    }
+    ... on NotFoundError {
+      ...NotFoundErrorFields @mask_disable
+    }
+    ... on AuthError {
+      ...AuthErrorFields @mask_disable
+    }
+  }
+}

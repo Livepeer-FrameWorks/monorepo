@@ -1,8 +1,9 @@
-<script>
+<script lang="ts">
   import { getIconComponent } from "$lib/iconUtils";
   import { formatDate } from "$lib/utils/stream-helpers";
   import { Button } from "$lib/components/ui/button";
   import EmptyState from "$lib/components/EmptyState.svelte";
+  import { Badge } from "$lib/components/ui/badge";
 
   let {
     streamKeys,
@@ -30,39 +31,38 @@
   {#if streamKeys.length > 0}
     <div class="space-y-4">
       {#each streamKeys as key (key.id ?? key.keyValue)}
-        <div
-          class="border border-tokyo-night-fg-gutter rounded-lg p-4 transition-all hover:border-tokyo-night-cyan/30 hover:shadow-brand-subtle"
-        >
+        <div class="border border-border/50 p-4">
           <div class="flex items-center justify-between">
             <div class="flex-1">
               <div class="flex items-center space-x-3 mb-2">
-                <h5 class="font-medium text-tokyo-night-fg">
+                <h5 class="font-medium text-foreground">
                   {key.keyName}
                 </h5>
-                <span
-                  class="badge {key.isActive ? 'badge-success' : 'badge-danger'}"
+                <Badge
+                  variant={key.isActive ? "default" : "secondary"}
+                  tone={key.isActive ? "green" : "default"}
                 >
                   {key.isActive ? "Active" : "Inactive"}
-                </span>
+                </Badge>
               </div>
 
               <div class="flex items-center space-x-2 mb-2">
                 <code
-                  class="flex-1 px-3 py-2 bg-tokyo-night-bg-dark rounded-lg text-sm font-mono text-tokyo-night-cyan transition-all focus-within:ring-2 focus-within:ring-tokyo-night-blue"
+                  class="flex-1 px-3 py-2 text-sm font-mono text-info border border-border/50"
                 >
                   {key.keyValue}
                 </code>
                 <Button
                   variant="ghost"
                   size="icon-sm"
-                  class="bg-tokyo-night-bg-dark hover:bg-tokyo-night-selection"
+                  class="border border-border/50"
                   onclick={() => onCopyKey(key.keyValue)}
                 >
                   <CopyIcon class="w-4 h-4" />
                 </Button>
               </div>
 
-              <div class="text-sm text-tokyo-night-comment">
+              <div class="text-sm text-muted-foreground">
                 Created: {formatDate(key.createdAt)}
                 {#if key.lastUsedAt}
                   • Last used: {formatDate(key.lastUsedAt)}
@@ -89,7 +89,7 @@
     </div>
   {:else}
     <EmptyState
-      icon="Key"
+      iconName="Key"
       title="No Stream Keys"
       description="Create your first stream key to start broadcasting"
       actionText="Create Stream Key"

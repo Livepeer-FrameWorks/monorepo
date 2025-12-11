@@ -1,11 +1,16 @@
 # Billing mutations
+# Uses shared fragments from fragments/shared.graphql
+
 mutation CreatePayment($input: CreatePaymentInput!) {
   createPayment(input: $input) {
-    id
-    amount
-    currency
-    method
-    status
-    createdAt
+    ... on Payment {
+      ...CorePayment
+    }
+    ... on ValidationError {
+      ...ValidationErrorFields
+    }
+    ... on AuthError {
+      ...AuthErrorFields
+    }
   }
 }

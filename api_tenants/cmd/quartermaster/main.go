@@ -2,17 +2,22 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"net"
+	"strconv"
+	"time"
+
+	qmgrpc "frameworks/api_tenants/internal/grpc"
 	"frameworks/api_tenants/internal/handlers"
-	qmapi "frameworks/pkg/api/quartermaster"
-	"frameworks/pkg/auth"
+	"frameworks/pkg/clients/navigator" // Import the navigator client
 	qmclient "frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/config"
 	"frameworks/pkg/database"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/monitoring"
+	pb "frameworks/pkg/proto"
 	"frameworks/pkg/server"
 	"frameworks/pkg/version"
-	"time"
 )
 
 func main() {
@@ -27,7 +32,8 @@ func main() {
 	dbURL := config.RequireEnv("DATABASE_URL")
 	serviceToken := config.RequireEnv("SERVICE_TOKEN")
 	jwtSecret := config.RequireEnv("JWT_SECRET")
-	quartermasterURL := config.RequireEnv("QUARTERMASTER_URL")
+	quartermasterGRPCAddr := config.GetEnv("QUARTERMASTER_GRPC_ADDR", "localhost:19002")
+	navigatorURL := config.GetEnv("NAVIGATOR_URL", "") // Load Navigator URL (optional)
 
 	// Connect to database
 	dbConfig := database.DefaultConfig()
@@ -46,88 +52,102 @@ func main() {
 		"SERVICE_TOKEN": serviceToken,
 	}))
 
-	// Create custom tenant management metrics
-	metrics := &handlers.QuartermasterMetrics{
-		TenantOperations:    metricsCollector.NewCounter("tenant_operations_total", "Tenant CRUD operations", []string{"operation", "status"}),
-		ClusterOperations:   metricsCollector.NewCounter("cluster_operations_total", "Cluster management operations", []string{"operation", "status"}),
-		TenantResourceUsage: metricsCollector.NewGauge("tenant_resource_usage", "Tenant resource usage", []string{"tenant_id", "resource_type"}),
+	// Create gRPC server metrics
+	serverMetrics := &qmgrpc.ServerMetrics{
+		TenantOperations:  metricsCollector.NewCounter("grpc_tenant_operations_total", "gRPC tenant operations", []string{"operation", "status"}),
+		ClusterOperations: metricsCollector.NewCounter("grpc_cluster_operations_total", "gRPC cluster operations", []string{"operation", "status"}),
+		NodeOperations:    metricsCollector.NewCounter("grpc_node_operations_total", "gRPC node operations", []string{"operation", "status"}),
+		ServiceOperations: metricsCollector.NewCounter("grpc_service_operations_total", "gRPC service registry operations", []string{"operation", "status"}),
+		GRPCRequests:      metricsCollector.NewCounter("grpc_requests_total", "Total gRPC requests", []string{"method", "status"}),
+		GRPCDuration:      metricsCollector.NewHistogram("grpc_request_duration_seconds", "gRPC request duration", []string{"method"}, nil),
 	}
 
-	// Create database metrics
-	metrics.DBQueries, metrics.DBDuration, metrics.DBConnections = metricsCollector.CreateDatabaseMetrics()
+	// Initialize Navigator client
+	var navigatorClient *navigator.Client
+	var err error
 
-	// Initialize handlers
-	handlers.Init(db, logger, metrics)
+	if navigatorURL != "" {
+		navigatorClient, err = navigator.NewClient(navigator.Config{
+			Addr:    navigatorURL,
+			Timeout: 5 * time.Second,
+			Logger:  logger,
+		})
+		if err != nil {
+			logger.WithError(err).Error("Failed to create Navigator client - DNS features will be disabled")
+		} else {
+			defer navigatorClient.Close() // Ensure the client connection is closed
+		}
+	} else {
+		logger.Info("NAVIGATOR_URL not set - DNS features will be disabled")
+	}
+
+	// Initialize handlers (for health poller)
+	handlers.Init(db, logger)
 
 	// Setup router with unified monitoring
 	router := server.SetupServiceRouter(logger, "quartermaster", healthChecker, metricsCollector)
 
-	// API routes (root level - nginx adds /api/tenants/ prefix)
-	{
-		// Public routes
-		router.POST("/tenants/validate", handlers.ValidateTenant)
-
-		// Protected routes (accept JWT user tokens and service token fallback)
-		protected := router.Group("")
-		protected.Use(auth.JWTAuthMiddleware([]byte(jwtSecret)))
-		{
-			// Tenant management
-			protected.POST("/tenants", handlers.CreateTenant)
-			protected.GET("/tenants/:id", handlers.GetTenant)
-			protected.PUT("/tenants/:id", handlers.UpdateTenant)
-			protected.DELETE("/tenants/:id", handlers.DeleteTenant)
-
-			// Cluster management
-			protected.GET("/clusters", handlers.GetClusters)
-			protected.POST("/clusters", handlers.CreateCluster)
-			protected.GET("/clusters/:id", handlers.GetCluster)
-			protected.PUT("/clusters/:id", handlers.UpdateCluster)
-
-			// Service management
-			protected.GET("/services", handlers.GetServices)
-			protected.GET("/services/:id", handlers.GetService)
-			protected.GET("/clusters/:id/services", handlers.GetClusterServices)
-			protected.PUT("/clusters/:id/services/:service_id", handlers.UpdateClusterServiceState)
-			protected.GET("/service-instances", handlers.GetServiceInstances)
-
-			// Discovery & Bootstrap
-			protected.GET("/service-discovery", handlers.ServiceDiscovery)
-			protected.GET("/services/health", handlers.GetServicesHealth)
-			protected.GET("/services/:id/health", handlers.GetServiceHealth)
-			protected.GET("/clusters/access", handlers.GetClustersAccess)
-			protected.GET("/clusters/available", handlers.GetClustersAvailable)
-			protected.POST("/bootstrap/edge-node", handlers.BootstrapEdgeNode)
-			protected.POST("/bootstrap/service", handlers.BootstrapService)
-
-			// Bootstrap token management (provider/admin only)
-			protected.POST("/admin/bootstrap-tokens", handlers.CreateBootstrapToken)
-			protected.GET("/admin/bootstrap-tokens", handlers.ListBootstrapTokens)
-			protected.DELETE("/admin/bootstrap-tokens/:id", handlers.RevokeBootstrapToken)
-
-			// Node management
-			protected.GET("/nodes", handlers.GetNodes)
-			protected.GET("/nodes/:id", handlers.GetNode)
-			protected.POST("/nodes/resolve-fingerprint", handlers.ResolveNodeFingerprint)
-			protected.POST("/nodes", handlers.CreateNode)
-			protected.PUT("/nodes/:id/health", handlers.UpdateNodeHealth)
-			protected.GET("/nodes/:id/owner", handlers.GetNodeOwner)
-		}
-	}
+	// NOTE: All API routes removed - now handled via gRPC only.
+	// Gateway -> Quartermaster gRPC for all tenant, cluster, node, service operations.
 
 	// Start health poller before serving
 	handlers.StartHealthPoller()
 
-	// Start server with graceful shutdown
+	// Start gRPC server in a goroutine
+	grpcPort := config.GetEnv("GRPC_PORT", "19002")
+	go func() {
+		grpcAddr := fmt.Sprintf(":%s", grpcPort)
+		lis, err := net.Listen("tcp", grpcAddr)
+		if err != nil {
+			logger.WithError(err).Fatal("Failed to listen on gRPC port")
+		}
+
+		grpcServer := qmgrpc.NewGRPCServer(qmgrpc.GRPCServerConfig{
+			DB:              db,
+			Logger:          logger,
+			ServiceToken:    serviceToken,
+			JWTSecret:       []byte(jwtSecret),
+			NavigatorClient: navigatorClient,
+			Metrics:         serverMetrics,
+		})
+		logger.WithField("addr", grpcAddr).Info("Starting gRPC server")
+
+		if err := grpcServer.Serve(lis); err != nil {
+			logger.WithError(err).Fatal("gRPC server failed")
+		}
+	}()
+
+	// Start HTTP server with graceful shutdown
 	serverConfig := server.DefaultConfig("quartermaster", "18002")
+
+	// Best-effort self-registration in Quartermaster (idempotent, using gRPC)
+	// Must be launched BEFORE server.Start() which blocks
+	go func() {
+		qc, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
+			GRPCAddr:     quartermasterGRPCAddr,
+			Timeout:      10 * time.Second,
+			Logger:       logger,
+			ServiceToken: serviceToken,
+		})
+		if err != nil {
+			logger.WithError(err).Warn("Failed to create Quartermaster gRPC client for self-registration")
+			return
+		}
+		defer qc.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		healthEndpoint := "/health"
+		httpPort, _ := strconv.Atoi(serverConfig.Port)
+		_, _ = qc.BootstrapService(ctx, &pb.BootstrapServiceRequest{
+			Type:           "quartermaster",
+			Version:        version.Version,
+			Protocol:       "http",
+			HealthEndpoint: &healthEndpoint,
+			Port:           int32(httpPort),
+		})
+	}()
+
 	if err := server.Start(serverConfig, router, logger); err != nil {
 		logger.WithError(err).Fatal("Server startup failed")
 	}
-
-	// Best-effort self-registration in Quartermaster (idempotent)
-	go func() {
-		qc := qmclient.NewClient(qmclient.Config{BaseURL: quartermasterURL, ServiceToken: serviceToken, Logger: logger})
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_, _ = qc.BootstrapService(ctx, &qmapi.BootstrapServiceRequest{Type: "quartermaster", Version: version.Version, Protocol: "http", HealthEndpoint: func() *string { s := "/health"; return &s }(), Port: 18002})
-	}()
 }

@@ -1,0 +1,16 @@
+query GetInvoices {
+  invoices @list(name: "AllInvoices") {
+    id
+    amount
+    currency
+    status
+    dueDate
+    createdAt
+    lineItems {
+      description
+      quantity
+      unitPrice
+      total
+    }
+  }
+}

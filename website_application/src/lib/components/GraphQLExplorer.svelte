@@ -1,6 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
-  import { explorerService } from "$lib/graphql/services/explorer.js";
+  import { explorerService, type Template, type TemplateGroups } from "$lib/graphql/services/explorer.js";
   import { toast } from "$lib/stores/toast.js";
   import ExplorerHeader from "$lib/components/explorer/ExplorerHeader.svelte";
   import QueryEditor from "$lib/components/explorer/QueryEditor.svelte";
@@ -13,12 +12,8 @@
     authToken?: string | null;
   }
 
-  interface QueryTemplate {
-    name: string;
-    description: string;
-    query: string;
-    variables: Record<string, unknown>;
-  }
+  // Use the Template type from the loader
+  type QueryTemplate = Template;
 
   interface QueryHistoryItem {
     id: number;
@@ -26,6 +21,19 @@
     variables: Record<string, unknown>;
     result: unknown;
     timestamp: string;
+  }
+
+  interface FormattedResponse {
+    status: string;
+    statusIcon: string;
+    timestamp: string;
+    duration: string;
+    data: string | null;
+    error: {
+      message: string;
+      graphQLErrors?: unknown;
+      networkError?: unknown;
+    } | null;
   }
 
   let { initialQuery = "", authToken = null }: Props = $props();
@@ -40,21 +48,25 @@
     description
     streamKey
     playbackId
-    status
     record
     createdAt
     updatedAt
+    metrics {
+      status
+      isLive
+      currentViewers
+    }
   }
 }`);
   let variables = $state("{}");
-  let response = $state(null);
+  let response = $state<FormattedResponse | null>(null);
   let loading = $state(false);
   let schema: null | {
     queryType?: { fields: Array<{ name: string; description?: string }> };
     mutationType?: { fields: Array<{ name: string; description?: string }> };
     subscriptionType?: { fields: Array<{ name: string; description?: string }> };
   } = $state(null);
-  let queryTemplates: Record<string, QueryTemplate[]> | null = $state(null);
+  let queryTemplates: TemplateGroups | null = $state(null);
   let selectedTemplate: QueryTemplate | null = $state(null);
   let showCodeExamples = $state(false);
   let showQueryEditor = $state(true);
@@ -62,9 +74,8 @@
   let queryHistory = $state<QueryHistoryItem[]>([]);
   let demoMode = $state(false);
 
-  // Overlay state
-  let overlayOpen = $state(false);
-  let overlayType = $state<"schema" | "templates" | null>(null); // 'schema' or 'templates'
+  // Library drawer state
+  let libraryOpen = $state(false);
 
   const languages = [
     { key: "javascript", name: "JavaScript (Apollo)" },
@@ -74,14 +85,17 @@
     { key: "go", name: "Go" },
   ];
 
-  onMount(async () => {
-    await loadQueryTemplates();
+  // Initialize on mount
+  $effect(() => {
+    loadQueryTemplates();
     loadQueryHistory();
+    // Load schema for CodeMirror autocomplete
+    loadSchema();
   });
 
   async function loadQueryTemplates() {
     try {
-      queryTemplates = explorerService.getQueryTemplates();
+      queryTemplates = await explorerService.getTemplates();
     } catch (error) {
       console.error("Failed to load query templates:", error);
       toast.error("Failed to load query templates");
@@ -93,7 +107,7 @@
 
     try {
       loading = true;
-      schema = await explorerService.getSchema();
+      schema = (await explorerService.getSchema()) as any;
     } catch (error) {
       console.error("Failed to load schema:", error);
       toast.error("Failed to load GraphQL schema");
@@ -140,7 +154,7 @@
         operationType,
         demoMode
       );
-      response = explorerService.formatResponse(result);
+      response = explorerService.formatResponse(result) as any;
 
       // Add to history
       addToHistory(query, parsedVariables, response);
@@ -149,7 +163,7 @@
         toast.error(
           "Query execution failed - check the response panel for details"
         );
-      } else {
+      } else if (response) {
         const modeIndicator = demoMode ? " (Demo)" : "";
         toast.success(`Query executed successfully in ${response.duration}${modeIndicator}`);
       }
@@ -165,7 +179,6 @@
     selectedTemplate = template;
     query = template.query;
     variables = JSON.stringify(template.variables, null, 2);
-    closeOverlay(); // Close overlay after selection
   }
 
   function addToHistory(
@@ -188,7 +201,7 @@
   function loadFromHistory(historyItem: QueryHistoryItem) {
     query = historyItem.query;
     variables = JSON.stringify(historyItem.variables, null, 2);
-    response = historyItem.result;
+    response = historyItem.result as any;
   }
 
   function saveQueryHistory() {
@@ -247,24 +260,37 @@
   // Reactive code examples
   let codeExamples = $derived(showCodeExamples ? generateCodeExamples() : {});
 
-  // Handle overlay state
-  function openOverlay(type: "schema" | "templates") {
-    overlayType = type;
-    overlayOpen = true;
-    if (type === "schema" && !schema) {
-      loadSchema();
-    }
+  // Handle library drawer state
+  function openLibrary() {
+    libraryOpen = true;
   }
 
-  function closeOverlay() {
-    overlayOpen = false;
-    overlayType = null;
+  function closeLibrary() {
+    libraryOpen = false;
+  }
+
+  // Generate query from schema field selection
+  interface SchemaField {
+    name: string;
+    description?: string;
+    args?: Array<{
+      name: string;
+      description?: string;
+      type?: { name?: string; kind?: string; ofType?: { name?: string } };
+    }>;
+    type?: { name?: string; kind?: string; ofType?: { name?: string } };
+  }
+
+  function handleSelectSchemaField(field: SchemaField, operationType: string) {
+    const generatedQuery = explorerService.generateQueryFromField(field, operationType);
+    query = generatedQuery.query;
+    variables = JSON.stringify(generatedQuery.variables, null, 2);
   }
 
 </script>
 
 <div
-  class="graphql-explorer bg-tokyo-night-bg rounded-lg border border-tokyo-night-fg-gutter overflow-hidden"
+  class="graphql-explorer h-full flex flex-col border border-border/50 overflow-hidden"
 >
   <ExplorerHeader
     {showQueryEditor}
@@ -272,7 +298,7 @@
     hasHistory={queryHistory.length > 0}
     {demoMode}
     {loading}
-    onOpenOverlay={openOverlay}
+    onOpenLibrary={openLibrary}
     onToggleQuery={() => {
       showQueryEditor = true;
       showCodeExamples = false;
@@ -287,13 +313,13 @@
   />
 
   <!-- 2-Column Layout: Left (Query/Code+Variables) | Right (Response) -->
-  <div class="flex min-h-[600px] relative">
+  <div class="flex flex-1 min-h-0 relative">
     <!-- Left Panel - Query Editor or Code Examples -->
     <div
-      class="flex-1 flex flex-col border-r border-tokyo-night-fg-gutter max-w-[60%]"
+      class="flex-1 flex flex-col border-r border-border max-w-[60%] min-w-0 overflow-hidden"
     >
       {#if showQueryEditor}
-        <QueryEditor bind:query bind:variables onKeyPress={handleKeyPress} />
+        <QueryEditor bind:query bind:variables {schema} onKeyPress={handleKeyPress} />
       {/if}
 
       {#if showCodeExamples}
@@ -311,30 +337,19 @@
 </div>
 
 <ExplorerOverlay
-  open={overlayOpen}
-  type={overlayType}
+  open={libraryOpen}
   {schema}
   {queryTemplates}
-  {queryHistory}
+  queryHistory={queryHistory as any}
   {loading}
-  {selectedTemplate}
-  onClose={closeOverlay}
+  onClose={closeLibrary}
   onSelectTemplate={selectTemplate}
   onLoadFromHistory={loadFromHistory}
+  onSelectSchemaField={handleSelectSchemaField}
   onLoadSchema={loadSchema}
 />
 
 <style>
-  .graphql-explorer {
-    min-height: 600px;
-  }
-
-  @media (max-width: 1024px) {
-    .graphql-explorer {
-      min-height: 800px;
-    }
-  }
-
   @media (max-width: 768px) {
     .graphql-explorer {
       flex-direction: column;

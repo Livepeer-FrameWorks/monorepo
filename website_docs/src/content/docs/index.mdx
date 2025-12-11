@@ -1,0 +1,61 @@
+---
+title: "FrameWorks Network"
+description: "Documentation for FrameWorks - full-stack video services on a sovereign network."
+template: splash
+hero:
+  tagline: "The open-source video infrastructure that gives you full control. Stream, transcribe, and analyze without the cloud tax."
+  image:
+    file: ../../assets/frameworks-hero.svg
+  actions:
+    - text: Get Started
+      link: /streamers/quick-start
+      icon: right-arrow
+      variant: primary
+    - text: Open Dashboard
+      link: WEBAPP_URL
+      icon: external
+      variant: minimal
+    - text: Visit Website
+      link: MARKETING_URL
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+## Choose Your Path
+
+<CardGrid>
+	<Card title="I want to stream" icon="rocket">
+		Zero friction. Connect your OBS, go live, and reach the world with our global CDN.
+
+		[Get started →](/streamers/quick-start)
+	</Card>
+	<Card title="I want to run my own edge nodes" icon="cloud-download">
+		Scale efficiently. Run your own edge nodes to cut bandwidth costs while keeping the platform managed.
+
+		[Learn about hybrid →](/hybrid/overview)
+	</Card>
+	<Card title="I want to self-host everything" icon="setting">
+		Total sovereignty. Deploy the entire stack on your own hardware for maximum privacy and control.
+
+		[Infrastructure guide →](/operators/deployment)
+	</Card>
+</CardGrid>
+
+## Quick Links
+
+<CardGrid stagger>
+	<Card title="Encoder Setup" icon="document">
+		Configure [OBS, FFmpeg, or any RTMP encoder](/streamers/encoder-setup) for your streams.
+	</Card>
+	<Card title="GraphQL API" icon="puzzle">
+		Build integrations with our [GraphQL API](/streamers/api-reference).
+	</Card>
+	<Card title="CLI Reference" icon="laptop">
+		Manage clusters with the [FrameWorks CLI](/operators/cli-reference).
+	</Card>
+	<Card title="Architecture" icon="open-book">
+		Understand the [system design](/operators/architecture) behind FrameWorks.
+	</Card>
+</CardGrid>

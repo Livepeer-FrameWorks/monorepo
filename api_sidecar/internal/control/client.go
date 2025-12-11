@@ -32,6 +32,7 @@ var (
 	currentStream pb.HelmsmanControl_ConnectClient
 	currentNodeID string
 	currentClient pb.HelmsmanControlClient
+	currentConfig *sidecarcfg.HelmsmanConfig
 	onSeed        func()
 )
 
@@ -41,15 +42,12 @@ func SetOnSeed(cb func()) {
 }
 
 // Start launches the Helmsman control client and maintains the stream to Foghorn
-func Start(logger logging.Logger) {
-	addr := os.Getenv("FOGHORN_CONTROL_ADDR")
-	if addr == "" {
-		addr = "foghorn:18019"
-	}
+func Start(logger logging.Logger, cfg *sidecarcfg.HelmsmanConfig) {
+	currentConfig = cfg
 	go func() {
 		backoff := time.Second
 		for {
-			if err := runClient(addr, logger); err != nil {
+			if err := runClient(cfg.FoghornControlAddr, logger); err != nil {
 				logger.WithError(err).Warn("Helmsman control client disconnected; retrying")
 			}
 			time.Sleep(backoff)
@@ -177,19 +175,40 @@ func SendDVRStartRequest(tenantID, internalName, userID string, retentionDays in
 	return stream.Send(msg)
 }
 
+// SendArtifactDeleted notifies Foghorn that an artifact has been deleted
+func SendArtifactDeleted(clipHash, filePath, reason string, sizeBytes uint64) error {
+	stream := currentStream
+	if stream == nil {
+		return fmt.Errorf("gRPC control stream not connected")
+	}
+
+	artifactDeleted := &pb.ArtifactDeleted{
+		ClipHash:  clipHash,
+		FilePath:  filePath,
+		Reason:    reason,
+		NodeId:    currentNodeID,
+		SizeBytes: sizeBytes,
+	}
+
+	msg := &pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_ArtifactDeleted{ArtifactDeleted: artifactDeleted}}
+	return stream.Send(msg)
+}
+
 func runClient(addr string, logger logging.Logger) error {
+	cfg := currentConfig
+	if cfg == nil {
+		return fmt.Errorf("config not initialized")
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// Configure TLS based on environment variables
+	// Configure TLS based on config
 	var creds credentials.TransportCredentials
-	if os.Getenv("GRPC_USE_TLS") == "true" {
-		certFile := os.Getenv("GRPC_TLS_CERT_PATH")
-		keyFile := os.Getenv("GRPC_TLS_KEY_PATH")
-
-		if certFile != "" && keyFile != "" {
+	if cfg.GRPCUseTLS {
+		if cfg.GRPCTLSCertPath != "" && cfg.GRPCTLSKeyPath != "" {
 			// Use client certificate for mutual TLS
-			cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+			cert, err := tls.LoadX509KeyPair(cfg.GRPCTLSCertPath, cfg.GRPCTLSKeyPath)
 			if err != nil {
 				return fmt.Errorf("failed to load TLS certificates: %w", err)
 			}
@@ -218,23 +237,20 @@ func runClient(addr string, logger logging.Logger) error {
 		return err
 	}
 
-	// Send Register
-	nodeID := os.Getenv("NODE_ID")
-	if nodeID == "" {
-		nodeID = hostnameFallback()
-	}
-	roles := deriveRolesFromCapabilities()
+	// Send Register using config values
+	nodeID := cfg.NodeID
+	roles := deriveRolesFromConfig(cfg)
 	reg := &pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_Register{Register: &pb.Register{
 		NodeId:          nodeID,
 		Roles:           roles,
-		CapIngest:       envBoolDefault("HELMSMAN_CAP_INGEST", true),
-		CapEdge:         envBoolDefault("HELMSMAN_CAP_EDGE", true),
-		CapStorage:      envBoolDefault("HELMSMAN_CAP_STORAGE", true),
-		CapProcessing:   envBoolDefault("HELMSMAN_CAP_PROCESSING", true),
-		StorageLocal:    os.Getenv("HELMSMAN_STORAGE_LOCAL_PATH"),
-		StorageBucket:   os.Getenv("HELMSMAN_STORAGE_S3_BUCKET"),
-		StoragePrefix:   os.Getenv("HELMSMAN_STORAGE_S3_PREFIX"),
-		EnrollmentToken: os.Getenv("EDGE_ENROLLMENT_TOKEN"),
+		CapIngest:       cfg.CapIngest,
+		CapEdge:         cfg.CapEdge,
+		CapStorage:      cfg.CapStorage,
+		CapProcessing:   cfg.CapProcessing,
+		StorageLocal:    cfg.StorageLocalPath,
+		StorageBucket:   cfg.StorageS3Bucket,
+		StoragePrefix:   cfg.StorageS3Prefix,
+		EnrollmentToken: cfg.EnrollmentToken,
 		Fingerprint:     collectNodeFingerprint(),
 	}}}
 	if err := stream.Send(reg); err != nil {
@@ -307,12 +323,15 @@ func runClient(addr string, logger logging.Logger) error {
 }
 
 func handleClipPull(logger logging.Logger, req *pb.ClipPullRequest, send func(*pb.ControlMessage)) {
+	cfg := currentConfig
+	if cfg == nil {
+		logger.Warn("config not initialized; dropping clip request")
+		return
+	}
+
 	mistBase := req.GetSourceBaseUrl()
 	if mistBase == "" {
-		mistBase = os.Getenv("MISTSERVER_URL")
-		if mistBase == "" {
-			mistBase = "http://localhost:8080"
-		}
+		mistBase = cfg.MistServerURL
 	}
 	mistBase = strings.TrimRight(mistBase, "/")
 	format := req.GetFormat()
@@ -332,9 +351,9 @@ func handleClipPull(logger logging.Logger, req *pb.ClipPullRequest, send func(*p
 	q := buildClipParams(req)
 	clipURL := fmt.Sprintf("%s/view/%s.%s?%s", mistBase, streamName, format, q)
 
-	root := os.Getenv("HELMSMAN_STORAGE_LOCAL_PATH")
+	root := cfg.StorageLocalPath
 	if root == "" {
-		logger.Warn("HELMSMAN_STORAGE_LOCAL_PATH not set; dropping clip request")
+		logger.Warn("storage path not configured; dropping clip request")
 		return
 	}
 
@@ -451,18 +470,18 @@ func hostnameFallback() string {
 	return h
 }
 
-func deriveRolesFromCapabilities() []string {
+func deriveRolesFromConfig(cfg *sidecarcfg.HelmsmanConfig) []string {
 	var roles []string
-	if envBoolDefault("HELMSMAN_CAP_INGEST", true) {
+	if cfg.CapIngest {
 		roles = append(roles, "ingest")
 	}
-	if envBoolDefault("HELMSMAN_CAP_EDGE", true) {
+	if cfg.CapEdge {
 		roles = append(roles, "edge")
 	}
-	if envBoolDefault("HELMSMAN_CAP_STORAGE", true) {
+	if cfg.CapStorage {
 		roles = append(roles, "storage")
 	}
-	if envBoolDefault("HELMSMAN_CAP_PROCESSING", true) {
+	if cfg.CapProcessing {
 		roles = append(roles, "processing")
 	}
 	return roles

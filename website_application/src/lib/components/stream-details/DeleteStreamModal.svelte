@@ -9,14 +9,15 @@
     DialogTitle,
   } from "$lib/components/ui/dialog";
 
-  interface Stream {
+  // Local interface for fields this component needs
+  interface DeleteStreamData {
     id: string;
-    name?: string;
+    name?: string | null;
   }
 
   interface Props {
     open: boolean;
-    stream: Stream | null;
+    stream: DeleteStreamData | null;
     deleting: boolean;
     onConfirm: () => void;
     onCancel: () => void;
@@ -40,9 +41,9 @@
       </DialogDescription>
     </DialogHeader>
 
-    <p class="text-sm text-tokyo-night-fg-dark">
+    <p class="text-sm text-muted-foreground">
       Are you sure you want to delete
-      <span class="font-semibold text-tokyo-night-fg"
+      <span class="font-semibold text-foreground"
         >"{stream?.name || `Stream ${stream?.id.slice(0, 8)}`}"</span
       >?
     </p>

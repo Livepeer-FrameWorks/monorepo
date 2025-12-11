@@ -3,14 +3,14 @@ export function getStatusColor(status: string | undefined): string {
     case "live":
     case "online":
     case "active":
-      return "text-green-400";
+      return "text-success";
     case "offline":
     case "inactive":
-      return "text-red-400";
+      return "text-error";
     case "recording":
-      return "text-yellow-400";
+      return "text-warning";
     default:
-      return "text-tokyo-night-comment";
+      return "text-muted-foreground";
   }
 }
 

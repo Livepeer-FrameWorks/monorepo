@@ -4,22 +4,24 @@
   import Player from "./Player.svelte";
   import { getIconComponent } from "$lib/iconUtils";
 
-  interface Clip {
-    id?: string;
-    title?: string;
-    description?: string;
-    playbackId?: string;
-    thumbnailUrl?: string;
-    duration?: number;
-    startTime?: number;
-    endTime?: number;
-    status?: string;
-    createdAt?: string;
+  // Clip type matching Houdini schema
+  interface ClipData {
+    id: string;
+    clipHash?: string | null;
+    title?: string | null;
+    description?: string | null;
+    startTime?: number | null;
+    endTime?: number | null;
+    duration?: number | null;
+    status?: string | null;
+    playbackId?: string | null;
+    manifestPath?: string | null;
+    createdAt?: string | null;
     streamName?: string;
   }
 
   interface Props {
-    clip?: Clip | null;
+    clip?: ClipData | null;
     onClose?: () => void;
   }
 
@@ -27,8 +29,8 @@
 
   const CloseIcon = getIconComponent("X");
 
-  function formatDuration(totalSeconds: number | undefined) {
-    if (!totalSeconds || totalSeconds < 0) return "0:00";
+  function formatDuration(totalSeconds: number | null | undefined) {
+    if (totalSeconds == null || totalSeconds < 0) return "0:00";
     const minutes = Math.floor(totalSeconds / 60);
     const seconds = Math.floor(totalSeconds % 60);
     return `${minutes}:${seconds.toString().padStart(2, "0")}`;
@@ -38,11 +40,11 @@
     onClose?.();
   }
 
-  const streamStatusColor = {
-    Available: "bg-tokyo-night-green/20 text-tokyo-night-green",
-    Processing: "bg-tokyo-night-yellow/20 text-tokyo-night-yellow",
-    Failed: "bg-tokyo-night-red/20 text-tokyo-night-red",
-  } as const;
+  const streamStatusColor: Record<string, string> = {
+    Available: "bg-success/20 text-success",
+    Processing: "bg-warning/20 text-warning",
+    Failed: "bg-destructive/20 text-destructive",
+  };
 </script>
 
 {#if clip}
@@ -71,18 +73,13 @@
 
       <section class="bg-black">
         <Player
-          contentId={clip.playbackId || clip.id}
+          contentId={clip.id}
           contentType="clip"
-          thumbnailUrl={clip.thumbnailUrl}
+          thumbnailUrl={undefined}
           options={{
             autoplay: true,
             muted: false,
             controls: true,
-            preferredProtocol: "auto",
-            analytics: {
-              enabled: true,
-              sessionTracking: false,
-            },
           }}
         />
       </section>
@@ -91,7 +88,7 @@
         <div class="grid grid-cols-2 gap-4 md:grid-cols-4">
           <div>
             <p class="text-muted-foreground">Duration</p>
-            <p class="font-medium">{formatDuration(clip.duration ?? (clip.endTime && clip.startTime ? clip.endTime - clip.startTime : undefined))}</p>
+            <p class="font-medium">{formatDuration(clip.duration)}</p>
           </div>
           <div>
             <p class="text-muted-foreground">Start Time</p>
@@ -110,7 +107,7 @@
         </div>
 
         {#if clip.streamName}
-          <div class="rounded-lg border border-border p-4">
+          <div class="border border-border p-4">
             <p class="text-sm text-foreground/80">
               From stream: <span class="font-medium text-foreground">{clip.streamName}</span>
             </p>
@@ -132,6 +129,7 @@
     display: -webkit-box;
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
+    line-clamp: 2;
     overflow: hidden;
   }
 </style>

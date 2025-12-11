@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/tls"
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -13,16 +12,19 @@ import (
 	"time"
 
 	"frameworks/api_balancing/internal/state"
-	qmapi "frameworks/pkg/api/quartermaster"
+	"frameworks/pkg/clients/commodore"
 	qmclient "frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/dvr"
 	"frameworks/pkg/geoip"
 	"frameworks/pkg/logging"
+	"frameworks/pkg/middleware"
 	pb "frameworks/pkg/proto"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/health"
+	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
@@ -47,26 +49,7 @@ var registry *Registry
 var streamHealthHandler func(string, string, string, bool, map[string]interface{})
 var clipHashResolver func(string) (string, string, error)
 var db *sql.DB
-var quartermasterClient *qmclient.Client
-
-// Stream health tracking for DVR readiness
-var streamHealthMutex sync.RWMutex
-var streamHealthMap = make(map[string]*StreamHealthStatus)
-
-// Node outputs tracking for DTSC URI resolution
-var nodeOutputsMutex sync.RWMutex
-var nodeOutputsMap = make(map[string]*NodeOutputs)
-
-// StreamHealthStatus tracks the health state of streams for DVR readiness checks
-type StreamHealthStatus struct {
-	InternalName  string
-	IsHealthy     bool
-	BufferState   string // FULL, EMPTY, DRY, RECOVER
-	Status        string // live, offline
-	LastUpdate    time.Time
-	SourceNodeID  string // Node ID where the stream originates
-	SourceBaseURL string // Base URL of source node
-}
+var quartermasterClient *qmclient.GRPCClient
 
 // GetStreamSource returns the source node and base URL for a given internal_name if known
 func GetStreamSource(internalName string) (nodeID string, baseURL string, ok bool) {
@@ -79,14 +62,7 @@ func GetStreamSource(internalName string) (nodeID string, baseURL string, ok boo
 			return nodeID, baseURL, true
 		}
 	}
-
-	streamHealthMutex.RLock()
-	sh, exists := streamHealthMap[internalName]
-	streamHealthMutex.RUnlock()
-	if !exists {
-		return "", "", false
-	}
-	return sh.SourceNodeID, sh.SourceBaseURL, true
+	return "", "", false
 }
 
 // NodeOutputs tracks the MistServer output configurations for each node
@@ -101,11 +77,13 @@ type NodeOutputs struct {
 // Optional analytics callbacks set by handlers package
 var clipProgressHandler func(*pb.ClipProgress)
 var clipDoneHandler func(*pb.ClipDone)
+var artifactDeletedHandler func(*pb.ArtifactDeleted)
 
 // SetClipHandlers registers callbacks for analytics emission
-func SetClipHandlers(onProgress func(*pb.ClipProgress), onDone func(*pb.ClipDone)) {
+func SetClipHandlers(onProgress func(*pb.ClipProgress), onDone func(*pb.ClipDone), onDeleted func(*pb.ArtifactDeleted)) {
 	clipProgressHandler = onProgress
 	clipDoneHandler = onDone
+	artifactDeletedHandler = onDeleted
 }
 
 // NodeMetricsProcessor interface for handling node metrics (implemented by handlers)
@@ -114,8 +92,10 @@ type NodeMetricsProcessor interface {
 }
 
 // Init initializes the global registry
-func Init(logger logging.Logger) {
+func Init(logger logging.Logger, cClient *commodore.GRPCClient, processor MistTriggerProcessor) {
 	registry = &Registry{conns: make(map[string]*conn), log: logger}
+	CommodoreClient = cClient
+	mistTriggerProcessor = processor
 }
 
 // SetDB sets the database connection for clip operations
@@ -134,7 +114,7 @@ func SetClipHashResolver(resolver func(string) (string, string, error)) {
 }
 
 // SetQuartermasterClient sets the Quartermaster client for edge enrollment and lookups
-func SetQuartermasterClient(c *qmclient.Client) { quartermasterClient = c }
+func SetQuartermasterClient(c *qmclient.GRPCClient) { quartermasterClient = c }
 
 // Server implements HelmsmanControl
 type Server struct {
@@ -194,6 +174,12 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 					}
 					host = h
 				}
+
+				// Register node IP with state manager for same-host avoidance logic.
+				// Also store the resolved TenantID if this is a dedicated node.
+				// Tags are not currently provided during initial registration.
+				state.DefaultManager().SetNodeConnectionInfo(nodeID, host, tenantID, nil)
+
 				var country, city string
 				var lat, lon float64
 				geoOnce.Do(func() { geoipReader = geoip.GetSharedReader() })
@@ -205,25 +191,25 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 						lon = gd.Longitude
 					}
 				}
-				fpReq := &qmapi.ResolveNodeFingerprintRequest{PeerIP: host, GeoCountry: country, GeoCity: city, GeoLatitude: lat, GeoLongitude: lon}
+				fpReq := &pb.ResolveNodeFingerprintRequest{PeerIp: host, GeoCountry: country, GeoCity: city, GeoLatitude: lat, GeoLongitude: lon}
 				if x.Register != nil && x.Register.Fingerprint != nil {
 					fp := x.Register.Fingerprint
-					fpReq.LocalIPv4 = append(fpReq.LocalIPv4, fp.GetLocalIpv4()...)
-					fpReq.LocalIPv6 = append(fpReq.LocalIPv6, fp.GetLocalIpv6()...)
+					fpReq.LocalIpv4 = append(fpReq.LocalIpv4, fp.GetLocalIpv4()...)
+					fpReq.LocalIpv6 = append(fpReq.LocalIpv6, fp.GetLocalIpv6()...)
 					if fp.GetMacsSha256() != "" {
 						s := fp.GetMacsSha256()
-						fpReq.MacsSHA256 = &s
+						fpReq.MacsSha256 = &s
 					}
 					if fp.GetMachineIdSha256() != "" {
 						s := fp.GetMachineIdSha256()
-						fpReq.MachineIDSHA256 = &s
+						fpReq.MachineIdSha256 = &s
 					}
 				}
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				if resp, err := quartermasterClient.ResolveNodeFingerprint(ctx, fpReq); err == nil && resp != nil {
-					tenantID = resp.TenantID
-					if resp.CanonicalNodeID != "" {
-						canonicalNodeID = resp.CanonicalNodeID
+					tenantID = resp.TenantId
+					if resp.CanonicalNodeId != "" {
+						canonicalNodeID = resp.CanonicalNodeId
 					}
 					registry.log.WithFields(logging.Fields{"node_id": canonicalNodeID, "tenant_id": tenantID}).Info("Resolved tenant via fingerprint")
 				}
@@ -252,30 +238,30 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 				}
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
-				req := &qmapi.BootstrapEdgeNodeRequest{Token: tok, IPs: []string{host}}
+				req := &pb.BootstrapEdgeNodeRequest{Token: tok, Ips: []string{host}}
 				// Include client-provided fingerprint to bind mapping at enrollment
 				if x.Register != nil && x.Register.Fingerprint != nil {
 					fp := x.Register.Fingerprint
 					if v := fp.GetLocalIpv4(); len(v) > 0 {
-						req.LocalIPv4 = append(req.LocalIPv4, v...)
+						req.LocalIpv4 = append(req.LocalIpv4, v...)
 					}
 					if v := fp.GetLocalIpv6(); len(v) > 0 {
-						req.LocalIPv6 = append(req.LocalIPv6, v...)
+						req.LocalIpv6 = append(req.LocalIpv6, v...)
 					}
 					if fp.GetMacsSha256() != "" {
 						s := fp.GetMacsSha256()
-						req.MacsSHA256 = &s
+						req.MacsSha256 = &s
 					}
 					if fp.GetMachineIdSha256() != "" {
 						s := fp.GetMachineIdSha256()
-						req.MachineIDSHA256 = &s
+						req.MachineIdSha256 = &s
 					}
 				}
 				if resp, err := quartermasterClient.BootstrapEdgeNode(ctx, req); err == nil && resp != nil {
-					if resp.NodeID != "" {
-						canonicalNodeID = resp.NodeID
+					if resp.NodeId != "" {
+						canonicalNodeID = resp.NodeId
 					}
-					tenantID = resp.TenantID
+					tenantID = resp.TenantId
 					registry.log.WithFields(logging.Fields{"node_id": canonicalNodeID, "tenant_id": tenantID}).Info("Edge node enrolled via Quartermaster")
 				} else if err != nil {
 					registry.log.WithError(err).WithField("node_id", nodeID).Warn("Edge enrollment failed; continuing without mapping")
@@ -297,6 +283,11 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 				go clipDoneHandler(x.ClipDone)
 			}
 			go handleClipDone(x.ClipDone, nodeID, registry.log)
+		case *pb.ControlMessage_ArtifactDeleted:
+			if artifactDeletedHandler != nil {
+				go artifactDeletedHandler(x.ArtifactDeleted)
+			}
+			go handleArtifactDeleted(x.ArtifactDeleted, nodeID, registry.log)
 		case *pb.ControlMessage_Heartbeat:
 			if nodeID != "" {
 				registry.mu.Lock()
@@ -400,9 +391,21 @@ func StopDVRByInternalName(internalName string, logger logging.Logger) {
 	_, _ = db.Exec(`UPDATE foghorn.dvr_requests SET status = 'stopping', updated_at = NOW() WHERE request_hash = $1`, dvrHash)
 }
 
+// ServiceRegistrar is a function that registers additional gRPC services
+type ServiceRegistrar func(srv *grpc.Server)
+
+// GRPCServerConfig contains configuration for starting the control gRPC server
+type GRPCServerConfig struct {
+	Addr         string
+	Logger       logging.Logger
+	ServiceToken string
+	Registrars   []ServiceRegistrar
+}
+
 // StartGRPCServer starts the control gRPC server on the given addr (e.g., ":18009")
-func StartGRPCServer(addr string, logger logging.Logger) (*grpc.Server, error) {
-	lis, err := net.Listen("tcp", addr)
+// Additional services can be registered via Registrars in the config.
+func StartGRPCServer(cfg GRPCServerConfig) (*grpc.Server, error) {
+	lis, err := net.Listen("tcp", cfg.Addr)
 	if err != nil {
 		return nil, err
 	}
@@ -427,19 +430,46 @@ func StartGRPCServer(addr string, logger logging.Logger) (*grpc.Server, error) {
 		})
 		opts = append(opts, grpc.Creds(creds))
 
-		logger.WithFields(logging.Fields{
+		cfg.Logger.WithFields(logging.Fields{
 			"cert_file": certFile,
 			"key_file":  keyFile,
 		}).Info("Starting gRPC server with TLS")
 	} else {
-		logger.Info("Starting gRPC server with insecure connection")
+		cfg.Logger.Info("Starting gRPC server with insecure connection")
+	}
+
+	// Add auth interceptor if SERVICE_TOKEN is configured
+	if cfg.ServiceToken != "" {
+		authInterceptor := middleware.GRPCAuthInterceptor(middleware.GRPCAuthConfig{
+			ServiceToken: cfg.ServiceToken,
+			Logger:       cfg.Logger,
+			SkipMethods: []string{
+				"/grpc.health.v1.Health/Check",
+				"/grpc.health.v1.Health/Watch",
+				// HelmsmanControl uses bootstrap token validated in-method
+				"/proto.HelmsmanControl/Connect",
+			},
+		})
+		opts = append(opts, grpc.UnaryInterceptor(authInterceptor))
 	}
 
 	srv := grpc.NewServer(opts...)
 	pb.RegisterHelmsmanControlServer(srv, &Server{})
+
+	// gRPC health service for control plane
+	hs := health.NewServer()
+	hs.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)
+	hs.SetServingStatus(pb.HelmsmanControl_ServiceDesc.ServiceName, grpc_health_v1.HealthCheckResponse_SERVING)
+	grpc_health_v1.RegisterHealthServer(srv, hs)
+
+	// Register additional services
+	for _, reg := range cfg.Registrars {
+		reg(srv)
+	}
+
 	go func() {
 		if err := srv.Serve(lis); err != nil {
-			logger.WithError(err).Error("Control gRPC server exited")
+			cfg.Logger.WithError(err).Error("Control gRPC server exited")
 		}
 	}()
 	return srv, nil
@@ -454,11 +484,6 @@ func processNodeUpdate(update *pb.NodeLifecycleUpdate, logger logging.Logger) {
 
 	// Apply full node lifecycle with write-through
 	_ = state.DefaultManager().ApplyNodeLifecycle(streamCtx(), update)
-
-	// Track node outputs for DTSC URI resolution and update unified node state
-	if outputsJSON := update.GetOutputsJson(); outputsJSON != "" {
-		go updateNodeOutputs(update.GetNodeId(), update.GetBaseUrl(), outputsJSON, logger)
-	}
 
 	// Trigger sidecar to perform immediate JSON metrics poll & upload
 	go func() {
@@ -516,6 +541,21 @@ func handleClipDone(done *pb.ClipDone, nodeID string, logger logging.Logger) {
 	}).Info("Clip processing completed")
 
 	_ = state.DefaultManager().ApplyClipDone(streamCtx(), requestID, status, filePath, sizeBytes, errorMsg, nodeID)
+}
+
+// handleArtifactDeleted processes artifact deletion notifications from Helmsman nodes
+func handleArtifactDeleted(deleted *pb.ArtifactDeleted, nodeID string, logger logging.Logger) {
+	clipHash := deleted.GetClipHash()
+	reason := deleted.GetReason()
+
+	logger.WithFields(logging.Fields{
+		"clip_hash": clipHash,
+		"reason":    reason,
+		"node_id":   nodeID,
+	}).Info("Artifact deleted on node")
+
+	// Update state manager
+	_ = state.DefaultManager().ApplyArtifactDeleted(streamCtx(), clipHash, nodeID)
 }
 
 // processDVRStartRequest handles DVR start requests from ingest Helmsman
@@ -678,12 +718,11 @@ func processDVRStopped(stopped *pb.DVRStopped, storageNodeID string, logger logg
 
 // findStorageNodeForDVR finds an available storage node with DVR capabilities for the given tenant
 func findStorageNodeForDVR(tenantID string, logger logging.Logger) (string, string, error) {
-	// Get the load balancer from handlers package
-	// This accesses the same load balancer used for regular node routing
-	nodes := getLoadBalancerNodes()
-	if nodes == nil {
+	if loadBalancerInstance == nil {
 		return "", "", fmt.Errorf("load balancer not available")
 	}
+
+	nodes := loadBalancerInstance.GetNodes()
 
 	// Find nodes with storage capabilities
 	var bestNode *balancerNode
@@ -691,12 +730,12 @@ func findStorageNodeForDVR(tenantID string, logger logging.Logger) (string, stri
 
 	for baseURL, node := range nodes {
 		// Skip non-storage nodes
-		if !node.IsStorageCapable() {
+		if !node.CapStorage {
 			continue
 		}
 
 		// Skip inactive nodes
-		if !node.IsActive() {
+		if !node.IsHealthy {
 			continue
 		}
 
@@ -705,22 +744,29 @@ func findStorageNodeForDVR(tenantID string, logger logging.Logger) (string, stri
 		storageScore := uint64(0)
 
 		// Factor in available storage space
-		capacityBytes := node.GetStorageCapacityBytes()
-		usedBytes := node.GetStorageUsedBytes()
+		capacityBytes := node.StorageCapacityBytes
+		usedBytes := node.StorageUsedBytes
+
+		// Use real-time disk usage if available
+		if node.DiskTotalBytes > 0 {
+			capacityBytes = node.DiskTotalBytes
+			usedBytes = node.DiskUsedBytes
+		}
+
 		if capacityBytes > usedBytes {
 			availableStorage := capacityBytes - usedBytes
 			storageScore += availableStorage / (1024 * 1024 * 1024) // Convert to GB for scoring
 		}
 
 		// Factor in CPU availability (lower CPU usage = higher score)
-		cpu := node.GetCPU()
-		if cpu < 800 { // Less than 80% CPU usage
+		cpu := uint64(node.CPU)
+		if cpu < 800 { // Less than 80% CPU usage (assuming tenths)
 			storageScore += (1000 - cpu) / 10 // 0-20 point bonus
 		}
 
 		// Factor in RAM availability
-		ramMax := node.GetRAMMax()
-		ramCurrent := node.GetRAMCurrent()
+		ramMax := uint64(node.RAMMax)
+		ramCurrent := uint64(node.RAMCurrent)
 		if ramMax > ramCurrent {
 			availableRAM := ramMax - ramCurrent
 			storageScore += availableRAM / 1024 // Convert MB to GB-ish for scoring
@@ -730,7 +776,7 @@ func findStorageNodeForDVR(tenantID string, logger logging.Logger) (string, stri
 			bestScore = storageScore
 			bestNode = &balancerNode{
 				BaseURL: baseURL,
-				NodeID:  getNodeIDFromLoadBalancer(baseURL),
+				NodeID:  node.NodeID,
 			}
 		}
 	}
@@ -792,38 +838,14 @@ var loadBalancerInstance LoadBalancerInterface
 
 // LoadBalancerInterface defines methods needed from the load balancer
 type LoadBalancerInterface interface {
-	GetNodes() map[string]NodeInterface
+	GetNodes() map[string]state.NodeState
 	GetNodeByID(nodeID string) (string, error)
 	GetNodeIDByHost(host string) string
-}
-
-// NodeInterface defines the node properties we need for DVR selection
-type NodeInterface interface {
-	IsStorageCapable() bool
-	IsActive() bool
-	GetStorageCapacityBytes() uint64
-	GetStorageUsedBytes() uint64
-	GetCPU() uint64
-	GetRAMMax() uint64
-	GetRAMCurrent() uint64
 }
 
 // SetLoadBalancer allows handlers package to inject the load balancer instance
 func SetLoadBalancer(lb LoadBalancerInterface) {
 	loadBalancerInstance = lb
-}
-
-// getLoadBalancerNodes returns nodes from the load balancer with type conversion
-func getLoadBalancerNodes() map[string]NodeInterface {
-	if loadBalancerInstance == nil {
-		return nil
-	}
-
-	nodes := make(map[string]NodeInterface)
-	for baseURL, node := range loadBalancerInstance.GetNodes() {
-		nodes[baseURL] = node
-	}
-	return nodes
 }
 
 // getNodeBaseURLFromLoadBalancer gets base URL for a node ID
@@ -846,31 +868,6 @@ func getNodeIDFromLoadBalancer(baseURL string) string {
 	}
 
 	return loadBalancerInstance.GetNodeIDByHost(baseURL)
-}
-
-// updateStreamHealthTracking updates the stream health map for DVR readiness checks
-func updateStreamHealthTracking(internalName, nodeID string, isHealthy bool, bufferState, status string, logger logging.Logger) {
-	// Reflect into unified state manager
-	if status == "live" {
-		_ = state.DefaultManager().UpdateStreamFromBuffer(internalName, internalName, nodeID, "", bufferState, "")
-	} else if status == "offline" {
-		state.DefaultManager().SetOffline(internalName, nodeID)
-	}
-
-	// Maintain legacy map temporarily for callers still reading it
-	streamHealthMutex.Lock()
-	// Get DTSC output URI from node configuration
-	sourceBaseURL := getDTSCOutputURI(nodeID, logger)
-	streamHealthMap[internalName] = &StreamHealthStatus{
-		InternalName:  internalName,
-		IsHealthy:     isHealthy,
-		BufferState:   bufferState,
-		Status:        status,
-		LastUpdate:    time.Now(),
-		SourceNodeID:  nodeID,
-		SourceBaseURL: sourceBaseURL,
-	}
-	streamHealthMutex.Unlock()
 }
 
 // processDVRReadyRequest handles DVR readiness checks from storage Helmsman
@@ -907,11 +904,9 @@ func processDVRReadyRequest(req *pb.DVRReadyRequest, requestingNodeID string, st
 	}
 
 	// Check stream health status
-	streamHealthMutex.RLock()
-	streamHealth, exists := streamHealthMap[internalName]
-	streamHealthMutex.RUnlock()
+	streamState := state.DefaultManager().GetStreamState(internalName)
 
-	if !exists {
+	if streamState == nil {
 		logger.WithFields(logging.Fields{
 			"dvr_hash":      dvrHash,
 			"internal_name": internalName,
@@ -927,15 +922,15 @@ func processDVRReadyRequest(req *pb.DVRReadyRequest, requestingNodeID string, st
 	}
 
 	// Check if stream is ready for DVR (healthy and buffer full/recovering)
-	isReady := streamHealth.IsHealthy &&
-		(streamHealth.BufferState == "FULL" || streamHealth.BufferState == "RECOVER") &&
-		streamHealth.Status == "live"
+	isReady := !streamState.HasIssues &&
+		(streamState.BufferState == "FULL" || streamState.BufferState == "RECOVER") &&
+		streamState.Status == "live"
 
 	if !isReady {
 		var reason string
-		if !streamHealth.IsHealthy {
+		if streamState.HasIssues {
 			reason = "stream_unhealthy"
-		} else if streamHealth.Status != "live" {
+		} else if streamState.Status != "live" {
 			reason = "stream_offline"
 		} else {
 			reason = "stream_booting"
@@ -944,9 +939,9 @@ func processDVRReadyRequest(req *pb.DVRReadyRequest, requestingNodeID string, st
 		logger.WithFields(logging.Fields{
 			"dvr_hash":      dvrHash,
 			"internal_name": internalName,
-			"is_healthy":    streamHealth.IsHealthy,
-			"buffer_state":  streamHealth.BufferState,
-			"status":        streamHealth.Status,
+			"has_issues":    streamState.HasIssues,
+			"buffer_state":  streamState.BufferState,
+			"status":        streamState.Status,
 			"reason":        reason,
 		}).Debug("Stream not ready for DVR")
 
@@ -960,7 +955,7 @@ func processDVRReadyRequest(req *pb.DVRReadyRequest, requestingNodeID string, st
 	}
 
 	// Stream is ready! Build source URI and potentially mutate config
-	sourceURI := BuildDTSCURI(streamHealth.SourceNodeID, internalName, true, logger)
+	sourceURI := BuildDTSCURI(streamState.NodeID, internalName, true, logger)
 
 	// Tag storage node (requesting node) instance as ready with source URI
 	state.DefaultManager().UpdateStreamInstanceInfo(internalName, requestingNodeID, map[string]interface{}{
@@ -1037,51 +1032,22 @@ func sendDVRReadyResponse(stream pb.HelmsmanControl_ConnectServer, response *pb.
 	}
 }
 
-// updateNodeOutputs updates the node outputs map for DTSC URI resolution
-func updateNodeOutputs(nodeID, baseURL, outputsJSON string, logger logging.Logger) {
-	nodeOutputsMutex.Lock()
-	defer nodeOutputsMutex.Unlock()
-
-	// Parse the outputs JSON
-	var outputs map[string]interface{}
-	if err := json.Unmarshal([]byte(outputsJSON), &outputs); err != nil {
-		logger.WithFields(logging.Fields{
-			"node_id": nodeID,
-			"error":   err,
-		}).Error("Failed to parse node outputs JSON")
-		return
-	}
-
-	nodeOutputsMap[nodeID] = &NodeOutputs{
-		NodeID:      nodeID,
-		BaseURL:     baseURL,
-		OutputsJSON: outputsJSON,
-		Outputs:     outputs,
-		LastUpdate:  time.Now(),
-	}
-
-	// also reflect in unified node state
-	state.DefaultManager().SetNodeInfo(nodeID, baseURL, true, nil, nil, "", outputsJSON, outputs)
-
-	logger.WithFields(logging.Fields{
-		"node_id":  nodeID,
-		"base_url": baseURL,
-	}).Debug("Updated node outputs tracking")
-}
-
 // getDTSCOutputURI constructs the DTSC output URI for a given node using MistServer outputs configuration
 func getDTSCOutputURI(nodeID string, logger logging.Logger) string {
-	nodeOutputsMutex.RLock()
-	nodeOutput, exists := nodeOutputsMap[nodeID]
-	nodeOutputsMutex.RUnlock()
+	// Get node state from unified state manager
+	nodeState := state.DefaultManager().GetNodeState(nodeID)
+	if nodeState == nil {
+		logger.WithField("node_id", nodeID).Debug("Node state not found")
+		return ""
+	}
 
-	if !exists {
-		logger.WithField("node_id", nodeID).Debug("Node outputs not tracked yet")
+	if nodeState.Outputs == nil {
+		logger.WithField("node_id", nodeID).Debug("No outputs found in node state")
 		return ""
 	}
 
 	// Look for DTSC output in the outputs map
-	dtscOutput, exists := nodeOutput.Outputs["DTSC"]
+	dtscOutput, exists := nodeState.Outputs["DTSC"]
 	if !exists {
 		logger.WithField("node_id", nodeID).Debug("No DTSC output found in node outputs")
 		return ""
@@ -1099,7 +1065,7 @@ func getDTSCOutputURI(nodeID string, logger logging.Logger) string {
 
 	// Replace HOST with the actual node hostname
 	// Extract hostname from base URL (e.g., "https://mist-seattle.stronk.rocks" -> "mist-seattle.stronk.rocks")
-	hostname := nodeOutput.BaseURL
+	hostname := nodeState.BaseURL
 	if strings.HasPrefix(hostname, "https://") {
 		hostname = strings.TrimPrefix(hostname, "https://")
 	}
@@ -1159,12 +1125,7 @@ func GetNodeOutputs(nodeID string) (*NodeOutputs, bool) {
 			LastUpdate:  ns.LastUpdate,
 		}, true
 	}
-
-	nodeOutputsMutex.RLock()
-	defer nodeOutputsMutex.RUnlock()
-
-	outputs, exists := nodeOutputsMap[nodeID]
-	return outputs, exists
+	return nil, false
 }
 
 // Global handlers set by handlers package for trigger processing
@@ -1174,11 +1135,6 @@ var mistTriggerProcessor MistTriggerProcessor
 type MistTriggerProcessor interface {
 	ProcessTrigger(triggerType string, rawPayload []byte, nodeID string) (string, bool, error)
 	ProcessTypedTrigger(trigger *pb.MistTrigger) (string, bool, error)
-}
-
-// SetMistTriggerProcessor sets the trigger processor (called by handlers package)
-func SetMistTriggerProcessor(processor MistTriggerProcessor) {
-	mistTriggerProcessor = processor
 }
 
 // processMistTrigger processes typed MistServer triggers forwarded from Helmsman

@@ -1,9 +1,10 @@
 module frameworks/pkg
 
-go 1.23.8
+go 1.24.0
 
 require (
 	github.com/ClickHouse/clickhouse-go/v2 v2.17.1
+	github.com/failsafe-go/failsafe-go v0.9.3
 	github.com/gin-gonic/gin v1.9.1
 	github.com/golang-jwt/jwt/v5 v5.2.0
 	github.com/google/uuid v1.6.0
@@ -23,6 +24,7 @@ require (
 	github.com/ClickHouse/ch-go v0.58.2 // indirect
 	github.com/andybalholm/brotli v1.0.6 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
+	github.com/bits-and-blooms/bitset v1.24.4 // indirect
 	github.com/bytedance/sonic v1.9.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/chenzhuoyu/base64x v0.0.0-20221115062448-fe3a3abad311 // indirect

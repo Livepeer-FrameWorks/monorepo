@@ -1,0 +1,878 @@
+syntax = "proto3";
+
+package quartermaster;
+
+option go_package = "frameworks/pkg/proto";
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
+import "google/protobuf/struct.proto";
+import "common.proto";
+
+// ============================================================================
+// QUARTERMASTER CONTROL PLANE - TENANT & INFRASTRUCTURE MANAGEMENT
+//
+// Called by:
+// - Foghorn (bootstrap edge nodes, resolve tenant routing, node fingerprint)
+// - Commodore (validate tenant, get routing for stream events)
+// - Gateway (cluster management, node views)
+//
+// Field sources documented inline for verification.
+// ============================================================================
+
+// TenantService handles tenant resolution and validation
+service TenantService {
+  // Get tenant info by ID
+  rpc GetTenant(GetTenantRequest) returns (GetTenantResponse);
+
+  // Validate tenant exists and is active
+  // Source: pkg/api/quartermaster/types.go:ValidateTenantRequest
+  rpc ValidateTenant(ValidateTenantRequest) returns (ValidateTenantResponse);
+
+  // Resolve tenant by domain/subdomain
+  // Source: pkg/api/quartermaster/types.go:ResolveTenantRequest (alias to models)
+  rpc ResolveTenant(ResolveTenantRequest) returns (ResolveTenantResponse);
+
+  // Resolve cluster routing for a tenant/stream
+  // Source: pkg/api/quartermaster/types.go:GetClusterRoutingRequest
+  rpc GetClusterRouting(GetClusterRoutingRequest) returns (ClusterRoutingResponse);
+
+  // List tenants (admin)
+  rpc ListTenants(ListTenantsRequest) returns (ListTenantsResponse);
+
+  // Create tenant (admin)
+  rpc CreateTenant(CreateTenantRequest) returns (CreateTenantResponse);
+
+  // Update tenant
+  rpc UpdateTenant(UpdateTenantRequest) returns (Tenant);
+
+  // Delete (soft delete) tenant
+  rpc DeleteTenant(DeleteTenantRequest) returns (google.protobuf.Empty);
+
+  // Get tenant cluster/deployment info
+  rpc GetTenantCluster(GetTenantClusterRequest) returns (GetTenantResponse);
+
+  // Update tenant cluster assignment
+  rpc UpdateTenantCluster(UpdateTenantClusterRequest) returns (google.protobuf.Empty);
+
+  // Batch get tenants by IDs
+  rpc GetTenantsBatch(GetTenantsBatchRequest) returns (ListTenantsResponse);
+
+  // Get tenants assigned to a cluster
+  rpc GetTenantsByCluster(GetTenantsByClusterRequest) returns (GetTenantsByClusterResponse);
+}
+
+// ClusterService handles infrastructure cluster management
+service ClusterService {
+  rpc GetCluster(GetClusterRequest) returns (ClusterResponse);
+  rpc ListClusters(ListClustersRequest) returns (ListClustersResponse);
+  rpc CreateCluster(CreateClusterRequest) returns (ClusterResponse);
+  rpc UpdateCluster(UpdateClusterRequest) returns (ClusterResponse);
+
+  // Get clusters accessible to a tenant
+  rpc ListClustersForTenant(ListClustersForTenantRequest) returns (ClustersAccessResponse);
+
+  // Get clusters available for tenant onboarding
+  rpc ListClustersAvailable(ListClustersAvailableRequest) returns (ClustersAvailableResponse);
+
+  // Grant cluster access to tenant
+  rpc GrantClusterAccess(GrantClusterAccessRequest) returns (google.protobuf.Empty);
+
+  // Subscribe to a public/shared cluster
+  rpc SubscribeToCluster(SubscribeToClusterRequest) returns (google.protobuf.Empty);
+
+  // Unsubscribe from a cluster
+  rpc UnsubscribeFromCluster(UnsubscribeFromClusterRequest) returns (google.protobuf.Empty);
+
+  // List clusters the tenant is subscribed to
+  rpc ListMySubscriptions(ListMySubscriptionsRequest) returns (ListClustersResponse);
+}
+
+// NodeService handles infrastructure node management
+service NodeService {
+  rpc GetNode(GetNodeRequest) returns (NodeResponse);
+  rpc ListNodes(ListNodesRequest) returns (ListNodesResponse);
+  rpc CreateNode(CreateNodeRequest) returns (NodeResponse);
+  rpc UpdateNodeHealth(UpdateNodeHealthRequest) returns (google.protobuf.Empty);
+
+  // Resolve node fingerprint for identity binding
+  // Source: pkg/api/quartermaster/types.go:ResolveNodeFingerprintRequest
+  rpc ResolveNodeFingerprint(ResolveNodeFingerprintRequest) returns (ResolveNodeFingerprintResponse);
+
+  // Get node owner (tenant) from node ID
+  // Source: pkg/api/quartermaster/types.go:NodeOwnerResponse
+  rpc GetNodeOwner(GetNodeOwnerRequest) returns (NodeOwnerResponse);
+}
+
+// BootstrapService handles node enrollment and service discovery
+service BootstrapService {
+  // Bootstrap an edge node with enrollment token
+  // Source: pkg/api/quartermaster/types.go:BootstrapEdgeNodeRequest
+  rpc BootstrapEdgeNode(BootstrapEdgeNodeRequest) returns (BootstrapEdgeNodeResponse);
+
+  // Bootstrap a core service
+  // Source: pkg/api/quartermaster/types.go:BootstrapServiceRequest
+  rpc BootstrapService(BootstrapServiceRequest) returns (BootstrapServiceResponse);
+
+  // Service discovery - find instances of a service type
+  rpc DiscoverServices(ServiceDiscoveryRequest) returns (ServiceDiscoveryResponse);
+
+  // Create/list bootstrap tokens
+  rpc CreateBootstrapToken(CreateBootstrapTokenRequest) returns (CreateBootstrapTokenResponse);
+  rpc ListBootstrapTokens(ListBootstrapTokensRequest) returns (ListBootstrapTokensResponse);
+  rpc RevokeBootstrapToken(RevokeBootstrapTokenRequest) returns (google.protobuf.Empty);
+}
+
+// MeshService handles WireGuard mesh synchronization
+service MeshService {
+  // Infrastructure sync for WireGuard mesh
+  // Source: pkg/api/quartermaster/types.go:InfrastructureSyncRequest
+  rpc SyncMesh(InfrastructureSyncRequest) returns (InfrastructureSyncResponse);
+}
+
+// ============================================================================
+// TENANT MESSAGES
+// ============================================================================
+
+message GetTenantRequest {
+  string tenant_id = 1;
+}
+
+// Matches pkg/api/quartermaster/types.go:GetTenantResponse (lines 38-41)
+message GetTenantResponse {
+  Tenant tenant = 1;                    // json:"tenant,omitempty"
+  string error = 2;                     // json:"error,omitempty"
+}
+
+// Matches pkg/api/quartermaster/types.go:ValidateTenantRequest (lines 44-47)
+message ValidateTenantRequest {
+  string tenant_id = 1;                 // json:"tenant_id"
+  string user_id = 2;                   // json:"user_id"
+}
+
+// ValidateTenantResponse - tenant validation result
+// Source: quartermaster.tenants table (name, is_active columns)
+message ValidateTenantResponse {
+  bool valid = 1;           // true if tenant exists and is_active
+  string tenant_id = 2;
+  string tenant_name = 3;   // tenants.name
+  string error = 4;
+  bool is_active = 5;       // tenants.is_active
+}
+
+// Matches pkg/api/quartermaster/types.go:TenantInfo (lines 29-35)
+message TenantInfo {
+  string id = 1;                        // json:"id"
+  string name = 2;                      // json:"name"
+  bool is_active = 3;                   // json:"is_active"
+  string domain = 4;                    // json:"domain,omitempty"
+  optional string primary_cluster_id = 5; // json:"primary_cluster_id,omitempty"
+}
+
+// Matches pkg/models/tenants.go:Tenant (lines 8-33)
+message Tenant {
+  string id = 1;                        // json:"id"
+  string name = 2;                      // json:"name"
+  optional string subdomain = 3;        // json:"subdomain,omitempty"
+  optional string custom_domain = 4;    // json:"custom_domain,omitempty"
+  optional string logo_url = 5;         // json:"logo_url,omitempty"
+  string primary_color = 6;             // json:"primary_color"
+  string secondary_color = 7;           // json:"secondary_color"
+  string deployment_tier = 8;           // json:"deployment_tier"
+  string deployment_model = 9;          // json:"deployment_model"
+  string primary_deployment_tier = 10;  // json:"primary_deployment_tier"
+  optional string primary_cluster_id = 12; // json:"primary_cluster_id,omitempty"
+  optional string kafka_topic_prefix = 13; // json:"kafka_topic_prefix,omitempty"
+  repeated string kafka_brokers = 14;   // json:"kafka_brokers,omitempty"
+  optional string database_url = 15;    // json:"database_url,omitempty"
+  bool is_active = 16;                  // json:"is_active"
+  google.protobuf.Timestamp created_at = 17; // json:"created_at"
+  google.protobuf.Timestamp updated_at = 18; // json:"updated_at"
+}
+
+message ListTenantsRequest {
+  common.CursorPaginationRequest pagination = 1;
+}
+
+message ListTenantsResponse {
+  repeated Tenant tenants = 1;
+  common.CursorPaginationResponse pagination = 2;
+}
+
+// Matches pkg/api/quartermaster/types.go:CreateTenantRequest (lines 50-61)
+message CreateTenantRequest {
+  string name = 1;                      // json:"name" required
+  optional string subdomain = 2;        // json:"subdomain,omitempty"
+  optional string custom_domain = 3;    // json:"custom_domain,omitempty"
+  optional string logo_url = 4;         // json:"logo_url,omitempty"
+  string primary_color = 5;             // json:"primary_color"
+  string secondary_color = 6;           // json:"secondary_color"
+  string deployment_tier = 7;           // json:"deployment_tier"
+  string deployment_model = 8;          // json:"deployment_model"
+  string primary_deployment_tier = 9;   // json:"primary_deployment_tier"
+}
+
+// Matches pkg/api/quartermaster/types.go:CreateTenantResponse (lines 64-67)
+message CreateTenantResponse {
+  Tenant tenant = 1;                    // json:"tenant"
+  string error = 2;                     // json:"error,omitempty"
+}
+
+// Matches pkg/api/quartermaster/types.go:UpdateTenantRequest (lines 121-134)
+message UpdateTenantRequest {
+  string tenant_id = 1;                 // target tenant
+  optional string name = 2;             // json:"name,omitempty"
+  optional string subdomain = 3;        // json:"subdomain,omitempty"
+  optional string custom_domain = 4;    // json:"custom_domain,omitempty"
+  optional string logo_url = 5;         // json:"logo_url,omitempty"
+  optional string primary_color = 6;    // json:"primary_color,omitempty"
+  optional string secondary_color = 7;  // json:"secondary_color,omitempty"
+  optional string deployment_tier = 8;  // json:"deployment_tier,omitempty"
+  optional string deployment_model = 9; // json:"deployment_model,omitempty"
+  optional string primary_deployment_tier = 10; // json:"primary_deployment_tier,omitempty"
+  optional string primary_cluster_id = 12; // json:"primary_cluster_id,omitempty"
+  optional bool is_active = 13;         // json:"is_active,omitempty"
+}
+
+message DeleteTenantRequest {
+  string tenant_id = 1;
+}
+
+message GetTenantClusterRequest {
+  string tenant_id = 1;
+}
+
+message UpdateTenantClusterRequest {
+  string tenant_id = 1;
+  optional string primary_cluster_id = 2;
+  optional string deployment_model = 3;
+  optional string primary_deployment_tier = 4;
+}
+
+message GetTenantsBatchRequest {
+  repeated string tenant_ids = 1;
+}
+
+message GetTenantsByClusterRequest {
+  string cluster_id = 1;
+  common.CursorPaginationRequest pagination = 2;
+}
+
+message GetTenantsByClusterResponse {
+  string cluster_id = 1;
+  repeated Tenant tenants = 2;
+  common.CursorPaginationResponse pagination = 3;
+}
+
+// ============================================================================
+// CLUSTER ROUTING MESSAGES
+// ============================================================================
+
+// Matches pkg/api/quartermaster/types.go:GetClusterRoutingRequest (lines 137-143)
+message GetClusterRoutingRequest {
+  string tenant_id = 1;                 // json:"tenant_id" required
+  string stream_id = 2;                 // json:"stream_id,omitempty"
+  int32 estimated_viewers = 3;          // json:"estimated_viewers,omitempty"
+  int32 estimated_mbps = 4;             // json:"estimated_mbps,omitempty"
+  string region = 5;                    // json:"region,omitempty"
+}
+
+// Source: models.ClusterRouting (pkg/models/service_types.go lines 18-30)
+message ClusterRoutingResponse {
+  string cluster_id = 1;
+  string cluster_name = 2;
+  string cluster_type = 3;
+  string base_url = 4;
+  optional string periscope_url = 5;
+  optional string database_url = 6;
+  repeated string kafka_brokers = 7;
+  string topic_prefix = 8;
+  int32 max_streams = 9;
+  int32 current_streams = 10;
+  string health_status = 11;
+}
+
+// ============================================================================
+// CLUSTER MANAGEMENT MESSAGES
+// ============================================================================
+
+message GetClusterRequest {
+  string cluster_id = 1;
+}
+
+// Matches pkg/models/infrastructure.go:InfrastructureCluster (lines 8-42)
+message InfrastructureCluster {
+  string id = 1;                        // json:"id"
+  string cluster_id = 2;                // json:"cluster_id"
+  string cluster_name = 3;              // json:"cluster_name"
+  string cluster_type = 4;              // json:"cluster_type"
+  optional string owner_tenant_id = 5;  // json:"owner_tenant_id,omitempty"
+  string deployment_model = 6;          // json:"deployment_model"
+  string base_url = 7;                  // json:"base_url"
+  optional string database_url = 8;     // json:"database_url,omitempty"
+  optional string periscope_url = 9;    // json:"periscope_url,omitempty"
+  repeated string kafka_brokers = 10;   // json:"kafka_brokers,omitempty"
+  int32 max_concurrent_streams = 11;    // json:"max_concurrent_streams"
+  int32 max_concurrent_viewers = 12;    // json:"max_concurrent_viewers"
+  int32 max_bandwidth_mbps = 13;        // json:"max_bandwidth_mbps"
+  int32 current_stream_count = 14;      // json:"current_stream_count"
+  int32 current_viewer_count = 15;      // json:"current_viewer_count"
+  int32 current_bandwidth_mbps = 16;    // json:"current_bandwidth_mbps"
+  string health_status = 17;            // json:"health_status"
+  bool is_active = 18;                  // json:"is_active"
+  google.protobuf.Timestamp created_at = 19; // json:"created_at"
+  google.protobuf.Timestamp updated_at = 20; // json:"updated_at"
+  bool is_default_cluster = 21; // new field, json:"is_default_cluster"
+}
+
+message ClusterResponse {
+  InfrastructureCluster cluster = 1;
+}
+
+message ListClustersRequest {
+  common.CursorPaginationRequest pagination = 1;
+  string cluster_id = 2;
+  string cluster_name = 3;
+  string cluster_type = 4;
+  string deployment_model = 5;
+}
+
+message ListClustersResponse {
+  repeated InfrastructureCluster clusters = 1;
+  common.CursorPaginationResponse pagination = 2;
+}
+
+// Matches pkg/api/quartermaster/types.go:CreateClusterRequest (lines 365-376)
+message CreateClusterRequest {
+  string cluster_id = 1;                // json:"cluster_id" required
+  string cluster_name = 2;              // json:"cluster_name" required
+  string cluster_type = 3;              // json:"cluster_type" required
+  string base_url = 4;                  // json:"base_url" required
+  optional string database_url = 5;     // json:"database_url,omitempty"
+  optional string periscope_url = 6;    // json:"periscope_url,omitempty"
+  repeated string kafka_brokers = 7;    // json:"kafka_brokers,omitempty"
+  int32 max_concurrent_streams = 8;     // json:"max_concurrent_streams"
+  int32 max_concurrent_viewers = 9;     // json:"max_concurrent_viewers"
+  int32 max_bandwidth_mbps = 10;        // json:"max_bandwidth_mbps"
+}
+
+// Matches pkg/api/quartermaster/types.go:UpdateClusterRequest (lines 378-392)
+message UpdateClusterRequest {
+  string cluster_id = 1;                // target cluster
+  optional string cluster_name = 2;     // json:"cluster_name,omitempty"
+  optional string base_url = 3;         // json:"base_url,omitempty"
+  optional string database_url = 4;     // json:"database_url,omitempty"
+  optional string periscope_url = 5;    // json:"periscope_url,omitempty"
+  repeated string kafka_brokers = 6;    // json:"kafka_brokers,omitempty"
+  optional int32 max_concurrent_streams = 7;  // json:"max_concurrent_streams,omitempty"
+  optional int32 max_concurrent_viewers = 8;  // json:"max_concurrent_viewers,omitempty"
+  optional int32 max_bandwidth_mbps = 9;      // json:"max_bandwidth_mbps,omitempty"
+  optional int32 current_stream_count = 10;   // json:"current_stream_count,omitempty"
+  optional int32 current_viewer_count = 11;   // json:"current_viewer_count,omitempty"
+  optional int32 current_bandwidth_mbps = 12; // json:"current_bandwidth_mbps,omitempty"
+  optional string health_status = 13;   // json:"health_status,omitempty"
+  optional bool is_active = 14;         // json:"is_active,omitempty"
+}
+
+message ListClustersForTenantRequest {
+  string tenant_id = 1;
+  common.CursorPaginationRequest pagination = 2;
+}
+
+// Matches pkg/api/quartermaster/types.go:ClusterAccessEntry (lines 281-286)
+message ClusterAccessEntry {
+  string cluster_id = 1;                // json:"cluster_id"
+  string cluster_name = 2;              // json:"cluster_name"
+  string access_level = 3;              // json:"access_level"
+  google.protobuf.Struct resource_limits = 4; // json:"resource_limits"
+}
+
+message ClustersAccessResponse {
+  repeated ClusterAccessEntry clusters = 1;
+  common.CursorPaginationResponse pagination = 2;
+}
+
+// Matches pkg/api/quartermaster/types.go:GrantClusterAccessRequest (lines 112-118)
+message GrantClusterAccessRequest {
+  string tenant_id = 1;                 // json:"tenant_id" required
+  string cluster_id = 2;                // json:"cluster_id" required
+  string access_level = 3;              // json:"access_level"
+  google.protobuf.Struct resource_limits = 4; // json:"resource_limits"
+  optional google.protobuf.Timestamp expires_at = 5; // json:"expires_at,omitempty"
+}
+
+message SubscribeToClusterRequest {
+  string tenant_id = 1;
+  string cluster_id = 2;
+}
+
+message UnsubscribeFromClusterRequest {
+  string tenant_id = 1;
+  string cluster_id = 2;
+}
+
+message ListMySubscriptionsRequest {
+  string tenant_id = 1;
+  common.CursorPaginationRequest pagination = 2;
+}
+
+// ============================================================================
+// NODE MANAGEMENT MESSAGES
+// ============================================================================
+
+message GetNodeRequest {
+  string node_id = 1;
+}
+
+// Matches pkg/models/infrastructure.go:InfrastructureNode (lines 44-67)
+message InfrastructureNode {
+  string id = 1;                        // json:"id"
+  string node_id = 2;                   // json:"node_id"
+  string cluster_id = 3;                // json:"cluster_id"
+  string node_name = 4;                 // json:"node_name"
+  string node_type = 5;                 // json:"node_type"
+  optional string internal_ip = 6;      // json:"internal_ip,omitempty"
+  optional string external_ip = 7;      // json:"external_ip,omitempty"
+  optional string wireguard_ip = 8;     // json:"wireguard_ip,omitempty"
+  optional string wireguard_public_key = 9; // json:"wireguard_public_key,omitempty"
+  optional string region = 10;          // json:"region,omitempty"
+  optional string availability_zone = 11; // json:"availability_zone,omitempty"
+  optional double latitude = 12;        // json:"latitude,omitempty"
+  optional double longitude = 13;       // json:"longitude,omitempty"
+  optional int32 cpu_cores = 14;        // json:"cpu_cores,omitempty"
+  optional int32 memory_gb = 15;        // json:"memory_gb,omitempty"
+  optional int32 disk_gb = 16;          // json:"disk_gb,omitempty"
+  string status = 17;                   // json:"status"
+  // REMOVED: health_score = 18 (no data source - derive from status/heartbeat if needed)
+  optional google.protobuf.Timestamp last_heartbeat = 19; // json:"last_heartbeat,omitempty"
+  google.protobuf.Struct tags = 20;     // json:"tags,omitempty"
+  google.protobuf.Struct metadata = 21; // json:"metadata,omitempty"
+  google.protobuf.Timestamp created_at = 22; // json:"created_at"
+  google.protobuf.Timestamp updated_at = 23; // json:"updated_at"
+}
+
+message NodeResponse {
+  InfrastructureNode node = 1;
+}
+
+message ListNodesRequest {
+  string cluster_id = 1;                // filter by cluster
+  string node_type = 2;                 // filter by type
+  string region = 3;                    // filter by region
+  common.CursorPaginationRequest pagination = 4;
+}
+
+message ListNodesResponse {
+  repeated InfrastructureNode nodes = 1;
+  string cluster_id = 2;                // applied filter
+  string node_type = 3;                 // applied filter
+  string region = 4;                    // applied filter
+  common.CursorPaginationResponse pagination = 5;
+}
+
+// Matches pkg/api/quartermaster/types.go:CreateNodeRequest (lines 394-412)
+message CreateNodeRequest {
+  string node_id = 1;                   // json:"node_id" required
+  string cluster_id = 2;                // json:"cluster_id" required
+  string node_name = 3;                 // json:"node_name" required
+  string node_type = 4;                 // json:"node_type" required
+  optional string internal_ip = 5;      // json:"internal_ip,omitempty"
+  optional string external_ip = 6;      // json:"external_ip,omitempty"
+  optional string wireguard_ip = 7;     // json:"wireguard_ip,omitempty"
+  optional string wireguard_public_key = 8; // json:"wireguard_public_key,omitempty"
+  optional string region = 9;           // json:"region,omitempty"
+  optional string availability_zone = 10; // json:"availability_zone,omitempty"
+  optional double latitude = 11;        // json:"latitude,omitempty"
+  optional double longitude = 12;       // json:"longitude,omitempty"
+  optional int32 cpu_cores = 13;        // json:"cpu_cores,omitempty"
+  optional int32 memory_gb = 14;        // json:"memory_gb,omitempty"
+  optional int32 disk_gb = 15;          // json:"disk_gb,omitempty"
+  google.protobuf.Struct tags = 16;     // json:"tags,omitempty"
+  google.protobuf.Struct metadata = 17; // json:"metadata,omitempty"
+}
+
+// Matches pkg/api/quartermaster/types.go:UpdateNodeHealthRequest (lines 414-421)
+message UpdateNodeHealthRequest {
+  string node_id = 1;                   // target node
+  // REMOVED: health_score = 2 (no data source - use status instead)
+  optional string status = 3;           // json:"status,omitempty"
+  optional double cpu_usage = 4;        // json:"cpu_usage,omitempty"
+  optional double memory_usage = 5;     // json:"memory_usage,omitempty"
+  optional double disk_usage = 6;       // json:"disk_usage,omitempty"
+  google.protobuf.Struct metadata = 7;  // json:"metadata,omitempty"
+}
+
+// Matches pkg/api/quartermaster/types.go:ResolveNodeFingerprintRequest (lines 180-190)
+message ResolveNodeFingerprintRequest {
+  string peer_ip = 1;                   // json:"peer_ip"
+  string geo_country = 2;               // json:"geo_country,omitempty"
+  string geo_city = 3;                  // json:"geo_city,omitempty"
+  double geo_latitude = 4;              // json:"geo_latitude,omitempty"
+  double geo_longitude = 5;             // json:"geo_longitude,omitempty"
+  repeated string local_ipv4 = 6;       // json:"local_ipv4,omitempty"
+  repeated string local_ipv6 = 7;       // json:"local_ipv6,omitempty"
+  optional string macs_sha256 = 8;      // json:"macs_sha256,omitempty"
+  optional string machine_id_sha256 = 9; // json:"machine_id_sha256,omitempty"
+}
+
+// Matches pkg/api/quartermaster/types.go:ResolveNodeFingerprintResponse (lines 192-195)
+message ResolveNodeFingerprintResponse {
+  string tenant_id = 1;                 // json:"tenant_id"
+  string canonical_node_id = 2;         // json:"canonical_node_id"
+}
+
+message GetNodeOwnerRequest {
+  string node_id = 1;
+}
+
+// Matches pkg/api/quartermaster/types.go:NodeOwnerResponse (lines 431-437)
+message NodeOwnerResponse {
+  string node_id = 1;                   // json:"node_id"
+  string cluster_id = 2;                // json:"cluster_id"
+  string cluster_name = 3;              // json:"cluster_name"
+  optional string owner_tenant_id = 4;  // json:"owner_tenant_id,omitempty"
+  optional string tenant_name = 5;      // json:"tenant_name,omitempty"
+}
+
+// ============================================================================
+// BOOTSTRAP & DISCOVERY MESSAGES
+// ============================================================================
+
+// Matches pkg/api/quartermaster/types.go:BootstrapEdgeNodeRequest (lines 235-245)
+message BootstrapEdgeNodeRequest {
+  string token = 1;                     // json:"token" required
+  string hostname = 2;                  // json:"hostname"
+  repeated string ips = 3;              // json:"ips,omitempty"
+  google.protobuf.Struct labels = 4;    // json:"labels,omitempty"
+  repeated string local_ipv4 = 5;       // json:"local_ipv4,omitempty"
+  repeated string local_ipv6 = 6;       // json:"local_ipv6,omitempty"
+  optional string macs_sha256 = 7;      // json:"macs_sha256,omitempty"
+  optional string machine_id_sha256 = 8; // json:"machine_id_sha256,omitempty"
+}
+
+// Matches pkg/api/quartermaster/types.go:BootstrapEdgeNodeResponse (lines 247-251)
+message BootstrapEdgeNodeResponse {
+  string node_id = 1;                   // json:"node_id"
+  string tenant_id = 2;                 // json:"tenant_id"
+  string cluster_id = 3;                // json:"cluster_id"
+}
+
+// Matches pkg/api/quartermaster/types.go:BootstrapServiceRequest (lines 254-265)
+message BootstrapServiceRequest {
+  optional string token = 1;            // json:"token,omitempty"
+  optional string service_token = 2;    // json:"service_token,omitempty"
+  string type = 3;                      // json:"type" required
+  string version = 4;                   // json:"version"
+  optional string base_url = 5;         // json:"base_url,omitempty"
+  string protocol = 6;                  // json:"protocol,omitempty" http|grpc
+  optional string health_endpoint = 7;  // json:"health_endpoint,omitempty"
+  optional string advertise_host = 8;   // json:"advertise_host,omitempty"
+  string host = 9;                      // json:"host"
+  int32 port = 10;                      // json:"port"
+}
+
+// Matches pkg/api/quartermaster/types.go:BootstrapServiceResponse (lines 267-272)
+message BootstrapServiceResponse {
+  string service_id = 1;                // json:"service_id"
+  string instance_id = 2;               // json:"instance_id"
+  string cluster_id = 3;                // json:"cluster_id"
+  optional string node_id = 4;          // json:"node_id,omitempty"
+}
+
+message ServiceDiscoveryRequest {
+  string service_type = 1;              // e.g., foghorn, periscope_ingest
+  string cluster_id = 2;                // optional cluster filter
+  common.CursorPaginationRequest pagination = 3;
+}
+
+// Matches pkg/api/quartermaster/types.go:ServiceDiscoveryResponse (lines 275-278)
+message ServiceDiscoveryResponse {
+  repeated ServiceInstance instances = 1;
+  common.CursorPaginationResponse pagination = 2;
+}
+
+// Matches pkg/models/infrastructure.go:ServiceInstance (lines 111-130)
+message ServiceInstance {
+  string id = 1;
+  string instance_id = 2;
+  string service_id = 3;
+  string cluster_id = 4;
+  optional string node_id = 5;
+  optional string version = 6;
+  optional int32 port = 7;
+  optional int32 process_id = 8;
+  optional string container_id = 9;
+  string status = 10;
+  string health_status = 11;
+  optional google.protobuf.Timestamp started_at = 12;
+  optional google.protobuf.Timestamp stopped_at = 13;
+  optional google.protobuf.Timestamp last_health_check = 14;
+  optional double cpu_usage_percent = 15;
+  optional int32 memory_usage_mb = 16;
+  google.protobuf.Timestamp created_at = 17;
+  google.protobuf.Timestamp updated_at = 18;
+  // Additional fields for service discovery
+  string protocol = 19;                 // http or grpc
+  optional string host = 20;            // host address
+  optional string health_endpoint = 21; // health check endpoint
+}
+
+// ============================================================================
+// BOOTSTRAP TOKEN MESSAGES
+// ============================================================================
+
+// Matches pkg/api/quartermaster/types.go:CreateBootstrapTokenRequest (lines 344-353)
+message CreateBootstrapTokenRequest {
+  string name = 1;                      // json:"name" required
+  string kind = 2;                      // json:"kind" required (edge_node|service)
+  optional string tenant_id = 3;        // json:"tenant_id,omitempty"
+  optional string cluster_id = 4;       // json:"cluster_id,omitempty"
+  optional string expected_ip = 5;      // json:"expected_ip,omitempty"
+  google.protobuf.Struct metadata = 6;  // json:"metadata,omitempty"
+  optional int32 usage_limit = 7;       // json:"usage_limit,omitempty"
+  string ttl = 8;                       // json:"ttl" e.g., "24h"
+}
+
+// Matches pkg/api/quartermaster/types.go:BootstrapToken (lines 327-342)
+message BootstrapToken {
+  string id = 1;                        // json:"id"
+  string name = 2;                      // json:"name"
+  string token = 3;                     // json:"token"
+  string kind = 4;                      // json:"kind"
+  optional string tenant_id = 5;        // json:"tenant_id,omitempty"
+  optional string cluster_id = 6;       // json:"cluster_id,omitempty"
+  optional string expected_ip = 7;      // json:"expected_ip,omitempty"
+  google.protobuf.Struct metadata = 8;  // json:"metadata,omitempty"
+  optional int32 usage_limit = 9;       // json:"usage_limit,omitempty"
+  int32 usage_count = 10;               // json:"usage_count"
+  google.protobuf.Timestamp expires_at = 11; // json:"expires_at"
+  optional google.protobuf.Timestamp used_at = 12; // json:"used_at,omitempty"
+  optional string created_by = 13;      // json:"created_by,omitempty"
+  google.protobuf.Timestamp created_at = 14; // json:"created_at"
+}
+
+message CreateBootstrapTokenResponse {
+  BootstrapToken token = 1;
+}
+
+message ListBootstrapTokensRequest {
+  string kind = 1;                      // filter by kind
+  string tenant_id = 2;                 // filter by tenant
+  common.CursorPaginationRequest pagination = 3;
+}
+
+message ListBootstrapTokensResponse {
+  repeated BootstrapToken tokens = 1;
+  common.CursorPaginationResponse pagination = 2;
+}
+
+message RevokeBootstrapTokenRequest {
+  string token_id = 1;
+}
+
+// ============================================================================
+// MESH SYNC MESSAGES (WireGuard)
+// ============================================================================
+
+// Matches pkg/api/quartermaster/types.go:InfrastructureSyncRequest (lines 440-444)
+message InfrastructureSyncRequest {
+  string node_id = 1;                   // json:"node_id" required
+  string public_key = 2;                // json:"public_key" required (WireGuard)
+  int32 listen_port = 3;                // json:"listen_port"
+}
+
+// Matches pkg/api/quartermaster/types.go:InfrastructurePeer (lines 447-453)
+message InfrastructurePeer {
+  string node_name = 1;                 // json:"node_name" (DNS hostname)
+  string public_key = 2;                // json:"public_key"
+  string endpoint = 3;                  // json:"endpoint" (IP:Port)
+  repeated string allowed_ips = 4;      // json:"allowed_ips"
+  int32 keep_alive = 5;                 // json:"keep_alive" (seconds)
+}
+
+// Matches pkg/api/quartermaster/types.go:InfrastructureSyncResponse (lines 456-461)
+message InfrastructureSyncResponse {
+  string wireguard_ip = 1;              // json:"wireguard_ip"
+  int32 wireguard_port = 2;             // json:"wireguard_port"
+  repeated InfrastructurePeer peers = 3; // json:"peers"
+  map<string, ServiceEndpoints> service_endpoints = 4; // json:"service_endpoints"
+}
+
+// Helper for map value in InfrastructureSyncResponse
+message ServiceEndpoints {
+  repeated string ips = 1;
+}
+
+// ============================================================================
+// SERVICE REGISTRY SERVICE (Gateway → Quartermaster)
+// Source: pkg/api/quartermaster/types.go
+// ============================================================================
+
+service ServiceRegistryService {
+  // List all services in the catalog
+  rpc ListServices(ListServicesRequest) returns (ListServicesResponse);
+
+  // Get services assigned to a cluster
+  rpc ListClusterServices(ListClusterServicesRequest) returns (ListClusterServicesResponse);
+
+  // Get running service instances
+  rpc ListServiceInstances(ListServiceInstancesRequest) returns (ListServiceInstancesResponse);
+
+  // Get health of all service instances
+  rpc ListServicesHealth(ListServicesHealthRequest) returns (ListServicesHealthResponse);
+
+  // Get health of specific service instances
+  rpc GetServiceHealth(GetServiceHealthRequest) returns (ListServicesHealthResponse);
+}
+
+// ============================================================================
+// RESOLVE TENANT MESSAGES
+// ============================================================================
+
+// Source: pkg/models/tenants.go:ResolveTenantRequest (alias in types.go)
+message ResolveTenantRequest {
+  string subdomain = 1;                 // json:"subdomain,omitempty"
+  string domain = 2;                    // json:"domain,omitempty"
+}
+
+// Source: pkg/models/tenants.go:ResolveTenantResponse (alias in types.go)
+message ResolveTenantResponse {
+  bool found = 1;                       // json:"found"
+  string tenant_id = 2;                 // json:"tenant_id,omitempty"
+  string tenant_name = 3;               // json:"tenant_name,omitempty"
+  string primary_cluster_id = 4;        // json:"primary_cluster_id,omitempty"
+  string error = 5;                     // json:"error,omitempty"
+}
+
+// ============================================================================
+// CLUSTERS AVAILABLE MESSAGES
+// ============================================================================
+
+message ListClustersAvailableRequest {
+  common.CursorPaginationRequest pagination = 1;
+}
+
+// Matches pkg/api/quartermaster/types.go:AvailableClusterEntry (lines 294-299)
+message AvailableClusterEntry {
+  string cluster_id = 1;                // json:"cluster_id"
+  string cluster_name = 2;              // json:"cluster_name"
+  repeated string tiers = 3;            // json:"tiers"
+  bool auto_enroll = 4;                 // json:"auto_enroll"
+}
+
+// Matches pkg/api/quartermaster/types.go:ClustersAvailableResponse (lines 301-304)
+message ClustersAvailableResponse {
+  repeated AvailableClusterEntry clusters = 1;
+  common.CursorPaginationResponse pagination = 2;
+}
+
+// ============================================================================
+// SERVICE REGISTRY MESSAGES
+// ============================================================================
+
+message ListServicesRequest {
+  common.CursorPaginationRequest pagination = 1;
+}
+
+// Matches pkg/models/infrastructure.go:Service (lines 71-86)
+message Service {
+  string id = 1;
+  string service_id = 2;
+  string name = 3;
+  string plane = 4;
+  optional string description = 5;
+  optional int32 default_port = 6;
+  optional string health_check_path = 7;
+  optional string docker_image = 8;
+  optional string version = 9;
+  repeated string dependencies = 10;
+  google.protobuf.Struct tags = 11;
+  bool is_active = 12;
+  google.protobuf.Timestamp created_at = 13;
+  google.protobuf.Timestamp updated_at = 14;
+  // Additional fields used by ListServices handler
+  string type = 15;                     // service type (e.g., "foghorn", "periscope")
+  string protocol = 16;                 // http or grpc
+}
+
+// Matches pkg/api/quartermaster/types.go:ServicesResponse (lines 198-201)
+message ListServicesResponse {
+  repeated Service services = 1;
+  common.CursorPaginationResponse pagination = 2;
+}
+
+message ListClusterServicesRequest {
+  string cluster_id = 1;
+  common.CursorPaginationRequest pagination = 2;
+}
+
+// Matches pkg/models/infrastructure.go:ClusterService (lines 88-108)
+message ClusterServiceAssignment {
+  string id = 1;
+  string cluster_id = 2;
+  string service_id = 3;
+  string desired_state = 4;
+  int32 desired_replicas = 5;
+  int32 current_replicas = 6;
+  google.protobuf.Struct config_blob = 7;
+  google.protobuf.Struct environment_vars = 8;
+  optional double cpu_limit = 9;
+  optional int32 memory_limit_mb = 10;
+  string health_status = 11;
+  optional google.protobuf.Timestamp last_deployed = 12;
+  google.protobuf.Timestamp created_at = 13;
+  google.protobuf.Timestamp updated_at = 14;
+  // Joined service details
+  string service_name = 15;
+  string service_plane = 16;
+}
+
+// Matches pkg/api/quartermaster/types.go:ClusterServicesResponse (lines 208-212)
+message ListClusterServicesResponse {
+  string cluster_id = 1;
+  repeated ClusterServiceAssignment services = 2;
+  common.CursorPaginationResponse pagination = 3;
+}
+
+message ListServiceInstancesRequest {
+  string cluster_id = 1;                // optional filter
+  string service_id = 2;                // optional filter
+  string node_id = 3;                   // optional filter by node
+  common.CursorPaginationRequest pagination = 4;
+}
+
+// Matches pkg/api/quartermaster/types.go:ServiceInstancesResponse (lines 221-225)
+message ListServiceInstancesResponse {
+  repeated ServiceInstance instances = 1;
+  string cluster_id = 2;                // applied filter
+  string service_id = 3;                // applied filter
+  string node_id = 4;                   // applied filter
+  common.CursorPaginationResponse pagination = 5;
+}
+
+message ListServicesHealthRequest {
+  common.CursorPaginationRequest pagination = 1;
+}
+
+message GetServiceHealthRequest {
+  string service_id = 1;
+}
+
+// Matches pkg/api/quartermaster/types.go:ServiceInstanceHealth (lines 308-318)
+message ServiceInstanceHealth {
+  string instance_id = 1;               // json:"instance_id"
+  string service_id = 2;                // json:"service_id"
+  string cluster_id = 3;                // json:"cluster_id"
+  string protocol = 4;                  // json:"protocol"
+  optional string host = 5;             // json:"host,omitempty"
+  int32 port = 6;                       // json:"port"
+  optional string health_endpoint = 7;  // json:"health_endpoint,omitempty"
+  string status = 8;                    // json:"status"
+  optional google.protobuf.Timestamp last_health_check = 9; // json:"last_health_check,omitempty"
+}
+
+// Matches pkg/api/quartermaster/types.go:ServicesHealthResponse (lines 320-323)
+message ListServicesHealthResponse {
+  repeated ServiceInstanceHealth instances = 1;
+  common.CursorPaginationResponse pagination = 2;
+}

@@ -1,0 +1,41 @@
+query GetRoutingEvents(
+  $stream: String
+  $timeRange: TimeRangeInput
+  $first: Int = 100
+  $after: String
+  $noCache: Boolean = false
+) {
+  routingEventsConnection(
+    stream: $stream
+    timeRange: $timeRange
+    first: $first
+    after: $after
+    noCache: $noCache
+  ) @paginate {
+    edges {
+      cursor
+      node {
+        timestamp
+        streamName
+        selectedNode
+        status
+        details
+        score
+        clientCountry
+        clientLatitude
+        clientLongitude
+        clientBucket { h3Index resolution }
+        nodeLatitude
+        nodeLongitude
+        nodeName
+        nodeBucket { h3Index resolution }
+        routingDistance
+      }
+    }
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+    totalCount
+  }
+}

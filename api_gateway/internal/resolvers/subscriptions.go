@@ -5,15 +5,15 @@ import (
 	"fmt"
 	"time"
 
-	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/demo"
 	"frameworks/api_gateway/internal/middleware"
-	"frameworks/pkg/api/periscope"
 	"frameworks/pkg/logging"
+	pb "frameworks/pkg/proto"
 )
 
 // DoStreamUpdates handles real-time stream updates via WebSocket
-func (r *Resolver) DoStreamUpdates(ctx context.Context, streamID *string) (<-chan *periscope.StreamEvent, error) {
+// Returns proto.StreamEvent directly (bound to GraphQL StreamEvent)
+func (r *Resolver) DoStreamUpdates(ctx context.Context, streamID *string) (<-chan *pb.StreamEvent, error) {
 	if r.Metrics != nil {
 		r.Metrics.Operations.WithLabelValues("subscription_streams", "requested").Inc()
 		defer func() {
@@ -26,7 +26,7 @@ func (r *Resolver) DoStreamUpdates(ctx context.Context, streamID *string) (<-cha
 		if r.Metrics != nil {
 			r.Metrics.Operations.WithLabelValues("subscription_streams", "demo").Inc()
 		}
-		ch := make(chan *periscope.StreamEvent, 10)
+		ch := make(chan *pb.StreamEvent, 10)
 		go func() {
 			defer close(ch)
 			events := demo.GenerateStreamEvents()
@@ -60,7 +60,7 @@ func (r *Resolver) DoStreamUpdates(ctx context.Context, streamID *string) (<-cha
 
 	config := ConnectionConfig{UserID: user.UserID, TenantID: user.TenantID, JWT: jwtToken}
 
-	ch, err := r.WSManager.SubscribeToStreams(ctx, config, streamID)
+	ch, err := r.SubManager.SubscribeToStreams(ctx, config, streamID)
 	if err != nil {
 		if r.Metrics != nil {
 			r.Metrics.Operations.WithLabelValues("subscription_streams", "error").Inc()
@@ -86,10 +86,11 @@ func (r *Resolver) DoStreamUpdates(ctx context.Context, streamID *string) (<-cha
 }
 
 // DoAnalyticsUpdates handles real-time analytics updates via WebSocket
-func (r *Resolver) DoAnalyticsUpdates(ctx context.Context, streamID string) (<-chan *model.ViewerMetrics, error) {
+// Returns proto.ClientLifecycleUpdate (bound to GraphQL ViewerMetrics)
+func (r *Resolver) DoAnalyticsUpdates(ctx context.Context, streamID string) (<-chan *pb.ClientLifecycleUpdate, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo analytics subscription")
-		ch := make(chan *model.ViewerMetrics, 10)
+		ch := make(chan *pb.ClientLifecycleUpdate, 10)
 		go func() {
 			defer close(ch)
 			events := demo.GenerateViewerMetricsEvents()
@@ -128,9 +129,9 @@ func (r *Resolver) DoAnalyticsUpdates(ctx context.Context, streamID string) (<-c
 		JWT:      jwtToken,
 	}
 
-	// Use WebSocket manager to subscribe to analytics updates
+	// Use subscription manager to subscribe to analytics updates
 	// TODO: Update SubscribeToAnalytics to accept stream filter parameter
-	ch, err := r.WSManager.SubscribeToAnalytics(ctx, config)
+	ch, err := r.SubManager.SubscribeToAnalytics(ctx, config)
 	if err != nil {
 		r.Logger.WithError(err).WithFields(logging.Fields{
 			"user_id":   user.UserID,
@@ -150,10 +151,11 @@ func (r *Resolver) DoAnalyticsUpdates(ctx context.Context, streamID string) (<-c
 }
 
 // DoSystemUpdates handles real-time system updates via WebSocket
-func (r *Resolver) DoSystemUpdates(ctx context.Context) (<-chan *model.SystemHealthEvent, error) {
+// Returns proto.NodeLifecycleUpdate (bound to GraphQL SystemHealthEvent)
+func (r *Resolver) DoSystemUpdates(ctx context.Context) (<-chan *pb.NodeLifecycleUpdate, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo system health subscription")
-		ch := make(chan *model.SystemHealthEvent, 10)
+		ch := make(chan *pb.NodeLifecycleUpdate, 10)
 		go func() {
 			defer close(ch)
 			events := demo.GenerateSystemHealthEvents()
@@ -196,15 +198,16 @@ func (r *Resolver) DoSystemUpdates(ctx context.Context) (<-chan *model.SystemHea
 		JWT:      jwtToken,
 	}
 
-	// Use WebSocket manager to subscribe to system updates
-	return r.WSManager.SubscribeToSystem(ctx, config)
+	// Use subscription manager to subscribe to system updates
+	return r.SubManager.SubscribeToSystem(ctx, config)
 }
 
 // DoTrackListUpdates handles real-time track list updates via WebSocket
-func (r *Resolver) DoTrackListUpdates(ctx context.Context, streamID string) (<-chan *periscope.AnalyticsTrackListEvent, error) {
+// Returns proto.StreamTrackListTrigger directly (bound to GraphQL TrackListEvent)
+func (r *Resolver) DoTrackListUpdates(ctx context.Context, streamID string) (<-chan *pb.StreamTrackListTrigger, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo track list subscription")
-		ch := make(chan *periscope.AnalyticsTrackListEvent, 10)
+		ch := make(chan *pb.StreamTrackListTrigger, 10)
 		go func() {
 			defer close(ch)
 			events := demo.GenerateTrackListEvents()
@@ -234,5 +237,5 @@ func (r *Resolver) DoTrackListUpdates(ctx context.Context, streamID string) (<-c
 	}
 
 	config := ConnectionConfig{UserID: user.UserID, TenantID: user.TenantID, JWT: jwtToken}
-	return r.WSManager.SubscribeToTrackList(ctx, config, streamID)
+	return r.SubManager.SubscribeToTrackList(ctx, config, streamID)
 }

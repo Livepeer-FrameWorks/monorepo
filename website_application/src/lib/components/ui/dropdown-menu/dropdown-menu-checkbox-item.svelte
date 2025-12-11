@@ -31,9 +31,9 @@
 	{#snippet children({ checked, indeterminate })}
 		<span class="pointer-events-none absolute left-2 flex size-3.5 items-center justify-center">
 			{#if indeterminate}
-				<Minus class="size-4" />
+				<MinusIcon class="size-4" />
 			{:else}
-				<Check class={cn("size-4", !checked && "text-transparent")} />
+				<CheckIcon class={cn("size-4", !checked && "text-transparent")} />
 			{/if}
 		</span>
 		{@render childrenProp?.()}

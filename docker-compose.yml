@@ -28,26 +28,21 @@ services:
       context: .
       dockerfile: api_gateway/Dockerfile
     environment:
-      BRIDGE_PORT: ${BRIDGE_PORT}
+      BUILD_ENV: ${BUILD_ENV}
+      PORT: ${BRIDGE_PORT}
       LOG_LEVEL: ${LOG_LEVEL}
       GIN_MODE: ${GIN_MODE}
       GRAPHQL_PLAYGROUND_ENABLED: ${GRAPHQL_PLAYGROUND_ENABLED}
       GRAPHQL_COMPLEXITY_LIMIT: ${GRAPHQL_COMPLEXITY_LIMIT}
-      COMMODORE_URL: ${COMMODORE_URL}
-      QUARTERMASTER_URL: ${QUARTERMASTER_URL}
-      PERISCOPE_QUERY_URL: ${PERISCOPE_QUERY_URL}
-      PURSER_URL: ${PURSER_URL}
-      SIGNALMAN_WS_URL: ${SIGNALMAN_WS_URL}
+      # gRPC addresses (internal service-to-service)
+      COMMODORE_GRPC_ADDR: ${COMMODORE_GRPC_ADDR}
+      QUARTERMASTER_GRPC_ADDR: ${QUARTERMASTER_GRPC_ADDR}
+      PURSER_GRPC_ADDR: ${PURSER_GRPC_ADDR}
+      PERISCOPE_GRPC_ADDR: ${PERISCOPE_GRPC_ADDR}
+      SIGNALMAN_GRPC_ADDR: ${SIGNALMAN_GRPC_ADDR}
       WS_MAX_CONNECTIONS_PER_TENANT: ${WS_MAX_CONNECTIONS_PER_TENANT}
       JWT_SECRET: ${JWT_SECRET}
       SERVICE_TOKEN: ${SERVICE_TOKEN}
-      DECKLOG_URL: ${DECKLOG_URL}
-      DECKLOG_ALLOW_INSECURE: ${DECKLOG_ALLOW_INSECURE}
-      DECKLOG_USE_TLS: ${DECKLOG_USE_TLS}
-      FOGHORN_URL: ${FOGHORN_URL}
-      FOGHORN_CONTROL_ADDR: ${FOGHORN_CONTROL_ADDR}
-      EDGE_PUBLIC_HOSTNAME: ${EDGE_PUBLIC_HOSTNAME}
-      MISTSERVER_URL: ${MISTSERVER_URL}
     ports:
       - "18000:18000"
     depends_on:
@@ -87,12 +82,18 @@ services:
       POSTGRES_DB: ${POSTGRES_DB}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./database/init_quartermaster.sql:/docker-entrypoint-initdb.d/10_init_quartermaster.sql:ro
-      - ./database/init_purser.sql:/docker-entrypoint-initdb.d/20_init_purser.sql:ro
-      - ./database/init_foghorn.sql:/docker-entrypoint-initdb.d/30_init_foghorn.sql:ro
-      - ./database/init_commodore.sql:/docker-entrypoint-initdb.d/40_init_commodore.sql:ro
-      - ./database/init_periscope.sql:/docker-entrypoint-initdb.d/50_init_periscope.sql:ro
-      - ./database/init_demo.sql:/docker-entrypoint-initdb.d/99_init_demo.sql:ro
+      # Schema
+      - ./pkg/database/sql/schema/quartermaster.sql:/docker-entrypoint-initdb.d/10_init_quartermaster.sql:ro
+      - ./pkg/database/sql/schema/purser.sql:/docker-entrypoint-initdb.d/20_init_purser.sql:ro
+      - ./pkg/database/sql/schema/foghorn.sql:/docker-entrypoint-initdb.d/30_init_foghorn.sql:ro
+      - ./pkg/database/sql/schema/commodore.sql:/docker-entrypoint-initdb.d/40_init_commodore.sql:ro
+      - ./pkg/database/sql/schema/periscope.sql:/docker-entrypoint-initdb.d/50_init_periscope.sql:ro
+      - ./pkg/database/sql/schema/listmonk.sql:/docker-entrypoint-initdb.d/60_init_listmonk.sql:ro
+      - ./pkg/database/sql/schema/navigator.sql:/docker-entrypoint-initdb.d/70_init_navigator.sql:ro
+      # Static Seeds (Prod)
+      - ./pkg/database/sql/seeds/static/purser_tiers.sql:/docker-entrypoint-initdb.d/80_seed_purser_tiers.sql:ro
+      # Demo Seeds (Dev/Demo only - loaded by default in this compose profile)
+      - ./pkg/database/sql/seeds/demo/demo_data.sql:/docker-entrypoint-initdb.d/99_init_demo.sql:ro
       # - ./database/migrations:/docker-entrypoint-initdb.d/migrations:ro
     ports:
       - "5432:5432"
@@ -153,12 +154,6 @@ services:
       options:
         max-size: "50m"
         max-file: "3"
-    healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:4242/"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
 
   # Foghorn Load Balancer (Regional/Central)
   foghorn:
@@ -175,10 +170,13 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL}
       PORT: ${FOGHORN_PORT}
-      FOGHORN_CONTROL_ADDR: ${FOGHORN_CONTROL_BIND_ADDR}
+      FOGHORN_CONTROL_BIND_ADDR: ${FOGHORN_CONTROL_BIND_ADDR}
       LOG_LEVEL: ${LOG_LEVEL}
       GIN_MODE: ${GIN_MODE}
-      COMMODORE_URL: ${COMMODORE_URL}
+      # gRPC addresses (internal)
+      COMMODORE_GRPC_ADDR: ${COMMODORE_GRPC_ADDR}
+      QUARTERMASTER_GRPC_ADDR: ${QUARTERMASTER_GRPC_ADDR}
+      # Cache settings
       COMMODORE_CACHE_TTL: ${COMMODORE_CACHE_TTL}
       COMMODORE_CACHE_SWR: ${COMMODORE_CACHE_SWR}
       COMMODORE_CACHE_NEG_TTL: ${COMMODORE_CACHE_NEG_TTL}
@@ -188,20 +186,19 @@ services:
       GEOIP_CACHE_SWR: ${GEOIP_CACHE_SWR}
       GEOIP_CACHE_NEG_TTL: ${GEOIP_CACHE_NEG_TTL}
       GEOIP_CACHE_MAX: ${GEOIP_CACHE_MAX}
+      # Decklog connection
       DECKLOG_URL: ${DECKLOG_URL}
-      DECKLOG_ALLOW_INSECURE: ${DECKLOG_ALLOW_INSECURE}  # For local development only
-      # gRPC Security Configuration
-      GRPC_USE_TLS: ${FOGHORN_GRPC_USE_TLS}  # Set to true for production TLS
-      GRPC_TLS_CERT_PATH: ${FOGHORN_GRPC_TLS_CERT_PATH}  # Path to TLS certificate
-      GRPC_TLS_KEY_PATH: ${FOGHORN_GRPC_TLS_KEY_PATH}    # Path to TLS private key
-      DECKLOG_USE_TLS: ${DECKLOG_USE_TLS}  # Set to true for secure Decklog connections
-      QUARTERMASTER_URL: ${QUARTERMASTER_URL}
+      DECKLOG_USE_TLS: ${DECKLOG_USE_TLS}
+      # gRPC TLS configuration
+      GRPC_USE_TLS: ${FOGHORN_GRPC_USE_TLS}
+      GRPC_TLS_CERT_PATH: ${FOGHORN_GRPC_TLS_CERT_PATH}
+      GRPC_TLS_KEY_PATH: ${FOGHORN_GRPC_TLS_KEY_PATH}
+      # Load balancing weights
       CPU_WEIGHT: ${CPU_WEIGHT}
       RAM_WEIGHT: ${RAM_WEIGHT}
       BANDWIDTH_WEIGHT: ${BANDWIDTH_WEIGHT}
       GEO_WEIGHT: ${GEO_WEIGHT}
       STREAM_BONUS: ${STREAM_BONUS}
-      MISTSERVER_URL: ${MISTSERVER_URL}
       SERVICE_TOKEN: ${SERVICE_TOKEN}
     ports:
       - "18008:18008"
@@ -315,7 +312,8 @@ services:
     command: |
       "
       echo 'Creating Kafka topics...'
-      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic analytics_events --partitions 3 --replication-factor 1
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic ${ANALYTICS_KAFKA_TOPIC} --partitions 3 --replication-factor 1
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic ${BILLING_KAFKA_TOPIC} --partitions 3 --replication-factor 1
       echo 'Topics created successfully'
       "
     networks:
@@ -353,10 +351,12 @@ services:
       context: .
       dockerfile: api_tenants/Dockerfile
     ports:
-      - "18002:18002"
+      - "18002:18002"   # HTTP (health)
+      - "19002:19002"   # gRPC (internal)
     environment:
       DATABASE_URL: ${DATABASE_URL}
       PORT: ${QUARTERMASTER_PORT}
+      GRPC_PORT: ${QUARTERMASTER_GRPC_PORT}
       LOG_LEVEL: ${LOG_LEVEL}
       JWT_SECRET: ${JWT_SECRET}
       SERVICE_TOKEN: ${SERVICE_TOKEN}
@@ -392,6 +392,7 @@ services:
     environment:
       KAFKA_BROKERS: ${KAFKA_BROKERS}
       KAFKA_CLUSTER_ID: ${KAFKA_CLUSTER_ID}
+      ANALYTICS_KAFKA_TOPIC: ${ANALYTICS_KAFKA_TOPIC}
       REGION: ${REGION}
       PORT: ${DECKLOG_PORT}
       LOG_LEVEL: ${LOG_LEVEL}
@@ -445,19 +446,20 @@ services:
         condition: service_started
     environment:
       PORT: ${SIGNALMAN_PORT}
+      GRPC_PORT: ${SIGNALMAN_GRPC_PORT}
       DATABASE_URL: ${DATABASE_URL}
       KAFKA_BROKERS: ${KAFKA_BROKERS}
-      KAFKA_TOPICS: ${KAFKA_TOPICS}
+      ANALYTICS_KAFKA_TOPIC: ${ANALYTICS_KAFKA_TOPIC}
       KAFKA_GROUP_ID: ${SIGNALMAN_KAFKA_GROUP_ID}
       KAFKA_CLUSTER_ID: ${KAFKA_CLUSTER_ID}
       KAFKA_CLIENT_ID: ${SIGNALMAN_KAFKA_CLIENT_ID}
       LOG_LEVEL: ${LOG_LEVEL}
       REGION: ${REGION}
-      QUARTERMASTER_URL: ${QUARTERMASTER_URL}
       JWT_SECRET: ${JWT_SECRET}
       SERVICE_TOKEN: ${SERVICE_TOKEN}
     ports:
       - "18009:18009"
+      - "19005:19005"
     networks:
       - frameworks
     mem_limit: 512m
@@ -485,15 +487,19 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL}
       JWT_SECRET: ${JWT_SECRET}
-      FOGHORN_URL: ${FOGHORN_URL}
+      PASSWORD_RESET_SECRET: ${PASSWORD_RESET_SECRET}
       PORT: ${COMMODORE_PORT}
-      QUARTERMASTER_URL: ${QUARTERMASTER_URL}
-      PURSER_URL: ${PURSER_URL}
+      GRPC_PORT: ${COMMODORE_GRPC_PORT}
+      # gRPC addresses (internal)
+      FOGHORN_CONTROL_ADDR: ${FOGHORN_CONTROL_ADDR}
+      QUARTERMASTER_GRPC_ADDR: ${QUARTERMASTER_GRPC_ADDR}
+      PURSER_GRPC_ADDR: ${PURSER_GRPC_ADDR}
       WEBAPP_PUBLIC_URL: ${WEBAPP_PUBLIC_URL}
       SERVICE_TOKEN: ${SERVICE_TOKEN}
       TURNSTILE_AUTH_SECRET_KEY: ${TURNSTILE_AUTH_SECRET_KEY}
     ports:
-      - "18001:18001"
+      - "18001:18001"   # HTTP (auth, webhooks, health)
+      - "19001:19001"   # gRPC (internal)
     depends_on:
       postgres:
         condition: service_healthy
@@ -532,13 +538,11 @@ services:
       MIST_PASSWORD: ${MIST_PASSWORD}
       MIST_API_USERNAME: ${MIST_API_USERNAME}
       MIST_API_PASSWORD: ${MIST_API_PASSWORD}
-      CLUSTER_ID: ${HELMSMAN_CLUSTER_ID}
       NODE_ID: ${HELMSMAN_NODE_ID}
       PORT: ${HELMSMAN_PORT}
       LOG_LEVEL: ${LOG_LEVEL}
       SERVICE_TOKEN: ${SERVICE_TOKEN}
-      QUARTERMASTER_URL: ${QUARTERMASTER_URL}
-      GRPC_USE_TLS: ${HELMSMAN_GRPC_USE_TLS}  # Set to true for production TLS
+      GRPC_USE_TLS: ${HELMSMAN_GRPC_USE_TLS}
       GRPC_TLS_CERT_PATH: ${HELMSMAN_GRPC_TLS_CERT_PATH}
       GRPC_TLS_KEY_PATH: ${HELMSMAN_GRPC_TLS_KEY_PATH}
     volumes:
@@ -585,7 +589,7 @@ services:
       KAFKA_BROKERS: ${KAFKA_BROKERS}
       KAFKA_GROUP_ID: ${PERISCOPE_INGEST_KAFKA_GROUP_ID}
       KAFKA_CLUSTER_ID: ${KAFKA_CLUSTER_ID}
-      KAFKA_TOPICS: ${KAFKA_TOPICS}
+      ANALYTICS_KAFKA_TOPIC: ${ANALYTICS_KAFKA_TOPIC}
       KAFKA_CLIENT_ID: ${PERISCOPE_INGEST_KAFKA_CLIENT_ID}
       LOG_LEVEL: ${LOG_LEVEL}
       ENABLE_HEALTH_ENDPOINT: ${PERISCOPE_INGEST_ENABLE_HEALTH_ENDPOINT}
@@ -633,20 +637,23 @@ services:
       dockerfile: api_analytics_query/Dockerfile
     ports:
       - "18004:18004"
+      - "19004:19004"
     environment:
       DATABASE_URL: ${DATABASE_URL}
+      KAFKA_BROKERS: ${KAFKA_BROKERS}
+      BILLING_KAFKA_TOPIC: ${BILLING_KAFKA_TOPIC}
       PORT: ${PERISCOPE_QUERY_PORT}
+      GRPC_PORT: ${PERISCOPE_QUERY_GRPC_PORT}
       LOG_LEVEL: ${LOG_LEVEL}
       GIN_MODE: ${GIN_MODE}
       JWT_SECRET: ${JWT_SECRET}
       SERVICE_TOKEN: ${SERVICE_TOKEN}
-      PURSER_URL: ${PURSER_URL}
+      QUARTERMASTER_GRPC_ADDR: ${QUARTERMASTER_GRPC_ADDR}
       CLICKHOUSE_HOST: ${CLICKHOUSE_HOST}
       CLICKHOUSE_PORT: ${CLICKHOUSE_PORT}
       CLICKHOUSE_DB: ${CLICKHOUSE_DB}
       CLICKHOUSE_USER: ${CLICKHOUSE_USER}
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
-      QUARTERMASTER_URL: ${QUARTERMASTER_URL}
     depends_on:
       postgres:
         condition: service_healthy
@@ -682,17 +689,23 @@ services:
       context: .
       dockerfile: api_billing/Dockerfile
     ports:
-      - "18003:18003"
+      - "18003:18003"   # HTTP (webhooks, health)
+      - "19003:19003"   # gRPC (internal)
     environment:
       DATABASE_URL: ${DATABASE_URL}
+      KAFKA_BROKERS: ${KAFKA_BROKERS}
+      BILLING_KAFKA_TOPIC: ${BILLING_KAFKA_TOPIC}
+      KAFKA_GROUP_ID: ${PURSER_KAFKA_GROUP_ID}
+      KAFKA_CLIENT_ID: ${PURSER_KAFKA_CLIENT_ID}
       PORT: ${PURSER_PORT}
+      GRPC_PORT: ${PURSER_GRPC_PORT}
       LOG_LEVEL: ${LOG_LEVEL}
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY}
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET}
       GIN_MODE: ${GIN_MODE}
       JWT_SECRET: ${JWT_SECRET}
       SERVICE_TOKEN: ${SERVICE_TOKEN}
-      QUARTERMASTER_URL: ${QUARTERMASTER_URL}
+      QUARTERMASTER_GRPC_ADDR: ${QUARTERMASTER_GRPC_ADDR}
       # Optional: Crypto payment providers (uncomment when needed)
       # - MOLLIE_API_KEY=${MOLLIE_API_KEY}
       # - ETHERSCAN_API_KEY=${ETHERSCAN_API_KEY}
@@ -750,6 +763,11 @@ services:
       SMTP_PASSWORD: ${SMTP_PASSWORD}
       FROM_EMAIL: ${FROM_EMAIL}
       TO_EMAIL: ${TO_EMAIL}
+      # Listmonk Integration
+      LISTMONK_URL: http://listmonk:9000
+      LISTMONK_USERNAME: ${LISTMONK_ADMIN_USER:-admin}
+      LISTMONK_PASSWORD: ${LISTMONK_ADMIN_PASSWORD:-admin}
+      DEFAULT_MAILING_LIST_ID: ${DEFAULT_MAILING_LIST_ID:-1}
     restart: unless-stopped
     networks:
       - frameworks
@@ -780,14 +798,16 @@ services:
         - VITE_AUTH_URL=${VITE_AUTH_URL}
         - VITE_GRAPHQL_HTTP_URL=${VITE_GRAPHQL_HTTP_URL}
         - VITE_GRAPHQL_WS_URL=${VITE_GRAPHQL_WS_URL}
-        - VITE_RTMP_DOMAIN=${VITE_RTMP_DOMAIN}
-        - VITE_HTTP_DOMAIN=${VITE_HTTP_DOMAIN}
-        - VITE_CDN_DOMAIN=${VITE_CDN_DOMAIN}
-        - VITE_RTMP_PATH=${VITE_RTMP_PATH}
-        - VITE_HLS_PATH=${VITE_HLS_PATH}
-        - VITE_WEBRTC_PATH=${VITE_WEBRTC_PATH}
-        - VITE_EMBED_PATH=${VITE_EMBED_PATH}
+        - VITE_STREAMING_INGEST_URL=${VITE_STREAMING_INGEST_URL}
+        - VITE_STREAMING_EDGE_URL=${VITE_STREAMING_EDGE_URL}
+        - VITE_STREAMING_RTMP_PORT=${VITE_STREAMING_RTMP_PORT}
+        - VITE_STREAMING_SRT_PORT=${VITE_STREAMING_SRT_PORT}
+        - VITE_STREAMING_RTMP_PATH=${VITE_STREAMING_RTMP_PATH}
+        - VITE_STREAMING_HLS_PATH=${VITE_STREAMING_HLS_PATH}
+        - VITE_STREAMING_WEBRTC_PATH=${VITE_STREAMING_WEBRTC_PATH}
+        - VITE_STREAMING_EMBED_PATH=${VITE_STREAMING_EMBED_PATH}
         - VITE_MARKETING_SITE_URL=${VITE_MARKETING_SITE_URL}
+        - VITE_DOCS_SITE_URL=${VITE_DOCS_SITE_URL}
         - VITE_TURNSTILE_AUTH_SITE_KEY=${VITE_TURNSTILE_AUTH_SITE_KEY}
         - BASE_PATH=${BASE_PATH}
     depends_on:
@@ -825,6 +845,8 @@ services:
         - VITE_LIVEPEER_URL=${VITE_LIVEPEER_URL}
         - VITE_LIVEPEER_EXPLORER_URL=${VITE_LIVEPEER_EXPLORER_URL}
         - VITE_CONTACT_EMAIL=${VITE_CONTACT_EMAIL}
+        - VITE_FORUM_URL=${VITE_FORUM_URL}
+        - VITE_DISCORD_URL=${VITE_DISCORD_URL}
         - VITE_DEMO_STREAM_NAME=${VITE_DEMO_STREAM_NAME}
         - VITE_COMPANY_NAME=${VITE_COMPANY_NAME}
         - VITE_TURNSTILE_FORMS_SITE_KEY=${VITE_TURNSTILE_FORMS_SITE_KEY}
@@ -853,6 +875,49 @@ services:
         max-file: "3"
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:18031/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Documentation Website
+  website_docs:
+    container_name: frameworks-website-docs
+    build:
+      context: .
+      dockerfile: website_docs/Dockerfile
+      args:
+        - BUILD_ENV=${BUILD_ENV}
+        - APP_PORT=${WEBSITE_DOCS_PORT}
+        - PUBLIC_DOCS_URL=${DOCS_PUBLIC_URL}
+        - WEBAPP_PUBLIC_URL=${WEBAPP_PUBLIC_URL}
+        - MARKETING_PUBLIC_URL=${MARKETING_PUBLIC_URL}
+        - GATEWAY_PUBLIC_URL=${GATEWAY_PUBLIC_URL}
+        - STREAMING_INGEST_URL=${STREAMING_INGEST_URL}
+        - STREAMING_EDGE_URL=${STREAMING_EDGE_URL}
+        - STREAMING_HLS_PATH=${STREAMING_HLS_PATH}
+        - STREAMING_WEBRTC_PATH=${STREAMING_WEBRTC_PATH}
+        - DISCORD_URL=${DISCORD_URL}
+        - GITHUB_URL=${GITHUB_URL}
+    hostname: website-docs
+    environment:
+      - NODE_ENV=${NODE_ENV}
+      - PORT=${WEBSITE_DOCS_PORT}
+      - HOST=0.0.0.0
+    ports:
+      - "${WEBSITE_DOCS_PORT:-18033}:${WEBSITE_DOCS_PORT:-18033}"
+    networks:
+      - frameworks
+    mem_limit: 256m
+    mem_reservation: 128m
+    cpus: 0.5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:${WEBSITE_DOCS_PORT:-18033}/"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -914,11 +979,13 @@ services:
       - clickhouse_data:/var/lib/clickhouse
       - ./infrastructure/clickhouse/users.xml:/etc/clickhouse-server/users.xml:ro
       - ./infrastructure/clickhouse/config.xml:/etc/clickhouse-server/config.d/frameworks.xml:ro
-      - ./database/init_clickhouse_periscope.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      # Schema first, then demo seed data (ordering by filename)
+      - ./pkg/database/sql/clickhouse/periscope.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
+      - ./pkg/database/sql/seeds/demo/clickhouse_demo_data.sql:/docker-entrypoint-initdb.d/02_seed_demo.sql:ro
     environment:
       # Start with default user for initialization
       CLICKHOUSE_USER: default
-      CLICKHOUSE_DB: frameworks
+      CLICKHOUSE_DB: periscope
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
       # Environment variables for users.xml
       CLICKHOUSE_PASSWORD: frameworks_dev  # For frameworks user
@@ -1018,3 +1085,36 @@ services:
       timeout: 5s
       retries: 3
       start_period: 20s
+
+  # Listmonk Newsletter Manager
+  listmonk:
+    image: listmonk/listmonk:v4.0.1
+    container_name: frameworks-listmonk
+    hostname: listmonk
+    ports:
+      - "9001:9000"
+    entrypoint: [ "sh", "-c", "./listmonk --install --idempotent --yes && ./listmonk" ]
+    environment:
+      LISTMONK_app__address: "0.0.0.0:9000"
+      LISTMONK_app__admin_username: ${LISTMONK_ADMIN_USER:-admin}
+      LISTMONK_app__admin_password: ${LISTMONK_ADMIN_PASSWORD:-admin}
+      LISTMONK_db__host: postgres
+      LISTMONK_db__port: 5432
+      LISTMONK_db__user: listmonk
+      LISTMONK_db__password: listmonk_dev
+      LISTMONK_db__database: listmonk
+      LISTMONK_db__ssl_mode: disable
+      # SMTP Configuration
+      LISTMONK_app__smtp__host: ${SMTP_HOST}
+      LISTMONK_app__smtp__port: ${SMTP_PORT}
+      LISTMONK_app__smtp__username: ${SMTP_USER}
+      LISTMONK_app__smtp__password: ${SMTP_PASSWORD}
+      LISTMONK_app__smtp__auth_protocol: "login"
+      LISTMONK_app__smtp__tls_type: "STARTTLS"
+      LISTMONK_app__from_email: ${FROM_EMAIL}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - frameworks
+    restart: unless-stopped

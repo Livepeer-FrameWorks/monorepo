@@ -1,28 +1,35 @@
 <script lang="ts">
-  import { healthService } from '$lib/graphql/services/health.js';
+  type SizeKey = 'sm' | 'md' | 'lg';
 
   interface Props {
-    healthScore?: number;
-    size?: string;
+    healthScore?: number | null;
+    size?: SizeKey;
     showLabel?: boolean;
   }
 
   let { healthScore = 0, size = 'md', showLabel = true }: Props = $props();
 
-  let formattedScore = $derived(Math.round(healthScore * 100));
-  let colorClass = $derived(healthService.getHealthScoreColor(healthScore));
-  
-  let sizeClasses = $derived({
+  function getHealthScoreColor(score: number): string {
+    if (score >= 0.9) return "text-success";
+    if (score >= 0.7) return "text-warning";
+    if (score >= 0.5) return "text-warning-alt";
+    return "text-error";
+  }
+
+  let formattedScore = $derived(Math.round((healthScore ?? 0) * 100));
+  let colorClass = $derived(getHealthScoreColor(healthScore ?? 0));
+
+  const sizeClasses: Record<SizeKey, string> = {
     sm: 'w-8 h-8 text-xs',
     md: 'w-12 h-12 text-sm',
     lg: 'w-16 h-16 text-base'
-  });
+  };
 
-  let labelSizes = $derived({
+  const labelSizes: Record<SizeKey, string> = {
     sm: 'text-xs',
     md: 'text-sm',
     lg: 'text-base'
-  });
+  };
 
   // Calculate stroke-dasharray for circular progress
   let circumference = $derived(2 * Math.PI * 18); // radius = 18
@@ -40,7 +47,7 @@
         stroke="currentColor"
         stroke-width="2"
         fill="transparent"
-        class="text-tokyo-night-selection"
+        class="text-muted"
       />
       <!-- Progress circle -->
       <circle
@@ -69,7 +76,7 @@
       <span class={`font-medium ${colorClass} ${labelSizes[size]}`}>
         Health Score
       </span>
-      <span class={`text-tokyo-night-comment ${labelSizes[size]}`}>
+      <span class={`text-muted-foreground ${labelSizes[size]}`}>
         {#if formattedScore >= 90}
           Excellent
         {:else if formattedScore >= 70}

@@ -8,14 +8,20 @@ import (
 )
 
 type ContactRequest struct {
-	Name          string                 `json:"name"`
-	Email         string                 `json:"email"`
-	Company       string                 `json:"company"`
-	Message       string                 `json:"message"`
-	PhoneNumber   string                 `json:"phone_number"`
-	HumanCheck    string                 `json:"human_check"`
-	Behavior      map[string]interface{} `json:"behavior"`
-	TurnstileToken string                `json:"turnstileToken"`
+	Name           string                 `json:"name"`
+	Email          string                 `json:"email"`
+	Company        string                 `json:"company"`
+	Message        string                 `json:"message"`
+	PhoneNumber    string                 `json:"phone_number"`
+	HumanCheck     string                 `json:"human_check"`
+	Behavior       map[string]interface{} `json:"behavior"`
+	TurnstileToken string                 `json:"turnstileToken"`
+}
+
+type BotCheckParams struct {
+	PhoneNumber string
+	HumanCheck  string
+	Behavior    map[string]interface{}
 }
 
 var emailRegex = regexp.MustCompile(`^[^\s@]+@[^\s@]+\.[^\s@]+$`)
@@ -24,27 +30,37 @@ var spamKeywords = []string{
 	"crypto", "bitcoin", "investment", "loan", "casino", "viagra", "pharmacy",
 }
 
+func ValidateBot(params BotCheckParams) []string {
+	var errors []string
+
+	if strings.TrimSpace(params.PhoneNumber) != "" {
+		errors = append(errors, "Honeypot field filled (bot detected)")
+	}
+
+	if params.HumanCheck != "human" {
+		errors = append(errors, "Human verification not selected")
+	}
+
+	if params.Behavior != nil {
+		if err := validateBehavior(params.Behavior); err != nil {
+			errors = append(errors, err.Error())
+		}
+	} else {
+		errors = append(errors, "Missing behavioral data")
+	}
+
+	return errors
+}
+
 func ValidateSubmission(req *ContactRequest, turnstileEnabled bool) []string {
 	var errors []string
 
-	legacyBotChecksEnabled := !turnstileEnabled
-
-	if legacyBotChecksEnabled {
-		if strings.TrimSpace(req.PhoneNumber) != "" {
-			errors = append(errors, "Honeypot field filled (bot detected)")
-		}
-
-		if req.HumanCheck != "human" {
-			errors = append(errors, "Human verification not selected")
-		}
-
-		if req.Behavior != nil {
-			if err := validateBehavior(req.Behavior); err != nil {
-				errors = append(errors, err.Error())
-			}
-		} else {
-			errors = append(errors, "Missing behavioral data")
-		}
+	if !turnstileEnabled {
+		errors = append(errors, ValidateBot(BotCheckParams{
+			PhoneNumber: req.PhoneNumber,
+			HumanCheck:  req.HumanCheck,
+			Behavior:    req.Behavior,
+		})...)
 	}
 
 	if len(strings.TrimSpace(req.Name)) < 2 {

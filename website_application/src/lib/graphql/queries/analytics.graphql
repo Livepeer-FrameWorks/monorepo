@@ -3,7 +3,6 @@ query GetStreamAnalytics($stream: String!, $timeRange: TimeRangeInput) {
   streamAnalytics(stream: $stream, timeRange: $timeRange) {
     # Core identifiers
     id
-    tenantId
     streamId
     internalName
 
@@ -69,6 +68,10 @@ query GetStreamAnalytics($stream: String!, $timeRange: TimeRangeInput) {
     avgBufferHealth
     avgBitrate
     packetLossRate
+
+    # Aggregate viewer counts
+    totalViews
+    uniqueViewers
   }
 }
 
@@ -79,12 +82,30 @@ query GetViewerMetrics($stream: String, $timeRange: TimeRangeInput) {
   }
 }
 
+# Time-bucketed viewer counts for charts (efficient ClickHouse aggregation)
+query GetViewerCountTimeSeries(
+  $stream: String
+  $timeRange: TimeRangeInput
+  $interval: String = "5m"
+) {
+  viewerCountTimeSeries(stream: $stream, timeRange: $timeRange, interval: $interval) {
+    timestamp
+    viewerCount
+    stream
+  }
+}
+
 query GetPlatformOverview($timeRange: TimeRangeInput) {
   platformOverview(timeRange: $timeRange) {
     totalStreams
     totalViewers
     totalBandwidth
     totalUsers
+    streamHours
+    egressGb
+    peakViewers
+    totalUploadBytes
+    totalDownloadBytes
     timeRange {
       start
       end
@@ -95,10 +116,11 @@ query GetPlatformOverview($timeRange: TimeRangeInput) {
 query GetUsageRecords($timeRange: TimeRangeInput) {
   usageRecords(timeRange: $timeRange) {
     id
-    resourceType
-    quantity
-    unit
-    cost
+    clusterId
+    clusterName
+    usageType
+    usageValue
+    billingMonth
     timestamp
   }
 }
@@ -120,8 +142,12 @@ query GetViewerGeographics($stream: String, $timeRange: TimeRangeInput) {
   }
 }
 
-query GetGeographicDistribution($stream: String, $timeRange: TimeRangeInput) {
-  geographicDistribution(stream: $stream, timeRange: $timeRange) {
+query GetGeographicDistribution(
+  $stream: String
+  $timeRange: TimeRangeInput
+  $topN: Int = 10
+) {
+  geographicDistribution(stream: $stream, timeRange: $timeRange, topN: $topN) {
     timeRange {
       start
       end
@@ -131,14 +157,6 @@ query GetGeographicDistribution($stream: String, $timeRange: TimeRangeInput) {
       countryCode
       viewerCount
       percentage
-      cities {
-        city
-        countryCode
-        viewerCount
-        percentage
-        latitude
-        longitude
-      }
     }
     topCities {
       city
@@ -165,17 +183,23 @@ query GetLoadBalancingMetrics($timeRange: TimeRangeInput) {
     stream
     selectedNode
     nodeId
-    clientIp
     clientCountry
     clientLatitude
     clientLongitude
+    clientBucket { h3Index resolution }
     nodeLatitude
     nodeLongitude
+    nodeBucket { h3Index resolution }
+    nodeName
     score
     status
     details
     routingDistance
     eventType
     source
+    # Routing decision metadata
+    algorithm
+    candidatesCount
+    latencyMs
   }
 }

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -13,9 +14,10 @@ import (
 	fwcfg "frameworks/cli/internal/config"
 	"frameworks/cli/internal/services"
 	"frameworks/cli/internal/xexec"
-	qmapi "frameworks/pkg/api/quartermaster"
 	qmclient "frameworks/pkg/clients/quartermaster"
 	"frameworks/pkg/configgen"
+	"frameworks/pkg/logging"
+
 	"github.com/spf13/cobra"
 )
 
@@ -34,88 +36,182 @@ func newServicesCmd() *cobra.Command {
 	return svc
 }
 
-func newQMClientFromContext() (*qmclient.Client, fwcfg.Context, error) {
+func newQMGRPCClientFromContext() (*qmclient.GRPCClient, fwcfg.Context, error) {
 	cfg, _, err := fwcfg.Load()
 	if err != nil {
 		return nil, fwcfg.Context{}, err
 	}
-	ctx := fwcfg.GetCurrent(cfg)
-	qc := qmclient.NewClient(qmclient.Config{BaseURL: ctx.Endpoints.QuartermasterURL, ServiceToken: ctx.Auth.ServiceToken, Timeout: 15 * time.Second})
-	return qc, ctx, nil
+	ctxCfg := fwcfg.GetCurrent(cfg)
+
+	grpcAddr, err := fwcfg.RequireEndpoint(ctxCfg, "quartermaster_grpc_addr", ctxCfg.Endpoints.QuartermasterGRPCAddr, false)
+	if err != nil {
+		return nil, fwcfg.Context{}, err
+	}
+
+	qc, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
+		GRPCAddr: grpcAddr,
+		Timeout:  15 * time.Second,
+		Logger:   logging.NewLogger(),
+	})
+	if err != nil {
+		return nil, fwcfg.Context{}, fmt.Errorf("failed to connect to Quartermaster gRPC: %w", err)
+	}
+	return qc, ctxCfg, nil
 }
 
 func newServicesHealthCmd() *cobra.Command {
 	var serviceID string
 	var svcType string
 	cmd := &cobra.Command{Use: "health", Short: "Show aggregated service health", RunE: func(cmd *cobra.Command, args []string) error {
-		qc, _, err := newQMClientFromContext()
+		qc, _, err := newQMGRPCClientFromContext()
 		if err != nil {
 			return err
 		}
+		defer qc.Close()
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		var resp *qmapi.ServicesHealthResponse
+
+		// Use gRPC to get services health
+		var resp interface{}
+		var instances []struct {
+			ServiceID      string
+			InstanceID     string
+			Status         string
+			Host           string
+			Port           int32
+			HealthEndpoint string
+		}
+
 		if strings.TrimSpace(serviceID) != "" {
-			resp, err = qc.GetServiceHealth(ctx, serviceID)
+			// Get health for specific service
+			healthResp, err := qc.GetServiceHealth(ctx, serviceID)
 			if err != nil {
 				return err
+			}
+			resp = healthResp
+			for _, h := range healthResp.Instances {
+				host := ""
+				if h.Host != nil {
+					host = *h.Host
+				}
+				ep := ""
+				if h.HealthEndpoint != nil {
+					ep = *h.HealthEndpoint
+				}
+				instances = append(instances, struct {
+					ServiceID      string
+					InstanceID     string
+					Status         string
+					Host           string
+					Port           int32
+					HealthEndpoint string
+				}{
+					ServiceID:      h.ServiceId,
+					InstanceID:     h.InstanceId,
+					Status:         h.Status,
+					Host:           host,
+					Port:           h.Port,
+					HealthEndpoint: ep,
+				})
 			}
 		} else if strings.TrimSpace(svcType) != "" {
-			// Discover to find service IDs for this type
-			disc, err := qc.ServiceDiscovery(ctx, svcType, nil)
+			// Discover services by type first, then get health for each service
+			discResp, err := qc.DiscoverServices(ctx, svcType, "", nil)
 			if err != nil {
 				return err
 			}
+			// Get unique service IDs
 			ids := map[string]struct{}{}
-			for _, inst := range disc.Instances {
-				ids[inst.ServiceID] = struct{}{}
+			for _, inst := range discResp.Instances {
+				ids[inst.ServiceId] = struct{}{}
 			}
-			agg := qmapi.ServicesHealthResponse{}
 			for id := range ids {
-				r, err := qc.GetServiceHealth(ctx, id)
+				healthResp, err := qc.GetServiceHealth(ctx, id)
 				if err != nil {
 					return err
 				}
-				agg.Instances = append(agg.Instances, r.Instances...)
+				for _, h := range healthResp.Instances {
+					host := ""
+					if h.Host != nil {
+						host = *h.Host
+					}
+					ep := ""
+					if h.HealthEndpoint != nil {
+						ep = *h.HealthEndpoint
+					}
+					instances = append(instances, struct {
+						ServiceID      string
+						InstanceID     string
+						Status         string
+						Host           string
+						Port           int32
+						HealthEndpoint string
+					}{
+						ServiceID:      h.ServiceId,
+						InstanceID:     h.InstanceId,
+						Status:         h.Status,
+						Host:           host,
+						Port:           h.Port,
+						HealthEndpoint: ep,
+					})
+				}
 			}
-			agg.Count = len(agg.Instances)
-			resp = &agg
+			resp = map[string]interface{}{"instances": instances, "total": len(instances)}
 		} else {
-			resp, err = qc.GetServicesHealth(ctx)
+			// Get all services health
+			healthResp, err := qc.ListServicesHealth(ctx, nil)
 			if err != nil {
 				return err
 			}
+			resp = healthResp
+			for _, h := range healthResp.Instances {
+				host := ""
+				if h.Host != nil {
+					host = *h.Host
+				}
+				ep := ""
+				if h.HealthEndpoint != nil {
+					ep = *h.HealthEndpoint
+				}
+				instances = append(instances, struct {
+					ServiceID      string
+					InstanceID     string
+					Status         string
+					Host           string
+					Port           int32
+					HealthEndpoint string
+				}{
+					ServiceID:      h.ServiceId,
+					InstanceID:     h.InstanceId,
+					Status:         h.Status,
+					Host:           host,
+					Port:           h.Port,
+					HealthEndpoint: ep,
+				})
+			}
 		}
+
 		// Output
 		if output == "json" {
 			enc := json.NewEncoder(cmd.OutOrStdout())
 			enc.SetIndent("", "  ")
 			return enc.Encode(resp)
 		}
-		// text
-		// Sort by service then status
-		list := resp.Instances
-		sort.SliceStable(list, func(i, j int) bool {
-			if list[i].ServiceID == list[j].ServiceID {
-				return list[i].InstanceID < list[j].InstanceID
+
+		// Sort by service then instance
+		sort.SliceStable(instances, func(i, j int) bool {
+			if instances[i].ServiceID == instances[j].ServiceID {
+				return instances[i].InstanceID < instances[j].InstanceID
 			}
-			return list[i].ServiceID < list[j].ServiceID
+			return instances[i].ServiceID < instances[j].ServiceID
 		})
-		fmt.Fprintf(cmd.OutOrStdout(), "Service Health (%d instances)\n", resp.Count)
-		for _, h := range list {
+		fmt.Fprintf(cmd.OutOrStdout(), "Service Health (%d instances)\n", len(instances))
+		for _, h := range instances {
 			mark := "✗"
 			if strings.ToLower(h.Status) == "ok" || strings.ToLower(h.Status) == "healthy" {
 				mark = "✓"
 			}
-			host := ""
-			if h.Host != nil {
-				host = *h.Host
-			}
-			ep := ""
-			if h.HealthEndpoint != nil {
-				ep = *h.HealthEndpoint
-			}
-			fmt.Fprintf(cmd.OutOrStdout(), " %s %-12s inst=%-10s %s:%d %s [%s]\n", mark, h.ServiceID, h.InstanceID, host, h.Port, ep, h.Status)
+			fmt.Fprintf(cmd.OutOrStdout(), " %s %-12s inst=%-10s %s:%d %s [%s]\n", mark, h.ServiceID, h.InstanceID, h.Host, h.Port, h.HealthEndpoint, h.Status)
 		}
 		return nil
 	}}
@@ -131,17 +227,16 @@ func newServicesDiscoverCmd() *cobra.Command {
 		if strings.TrimSpace(svcType) == "" {
 			return fmt.Errorf("--type is required")
 		}
-		qc, _, err := newQMClientFromContext()
+		qc, _, err := newQMGRPCClientFromContext()
 		if err != nil {
 			return err
 		}
+		defer qc.Close()
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		var cid *string
-		if strings.TrimSpace(clusterID) != "" {
-			cid = &clusterID
-		}
-		resp, err := qc.ServiceDiscovery(ctx, svcType, cid)
+
+		// Use gRPC DiscoverServices
+		resp, err := qc.DiscoverServices(ctx, svcType, clusterID, nil)
 		if err != nil {
 			return err
 		}
@@ -150,19 +245,19 @@ func newServicesDiscoverCmd() *cobra.Command {
 			enc.SetIndent("", "  ")
 			return enc.Encode(resp)
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Discovered %d instance(s) of %s\n", resp.Count, svcType)
-		sort.SliceStable(resp.Instances, func(i, j int) bool { return resp.Instances[i].InstanceID < resp.Instances[j].InstanceID })
+		fmt.Fprintf(cmd.OutOrStdout(), "Discovered %d instance(s) of %s\n", len(resp.Instances), svcType)
+		sort.SliceStable(resp.Instances, func(i, j int) bool { return resp.Instances[i].InstanceId < resp.Instances[j].InstanceId })
 		for _, inst := range resp.Instances {
 			ver := ""
 			if inst.Version != nil {
 				ver = *inst.Version
 			}
-			port := 0
+			port := int32(0)
 			if inst.Port != nil {
 				port = *inst.Port
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), " - inst=%-10s svc=%-12s cluster=%-8s version=%-8s port=%d status=%s\n",
-				inst.InstanceID, inst.ServiceID, inst.ClusterID, ver, port, inst.HealthStatus)
+				inst.InstanceId, inst.ServiceId, inst.ClusterId, ver, port, inst.HealthStatus)
 		}
 		return nil
 	}}
@@ -301,19 +396,54 @@ func newServicesDownCmd() *cobra.Command {
 	var dir string
 	var only string
 	var sshTarget string
+	var yes bool
 	cmd := &cobra.Command{Use: "down", Short: "Stop selected central services", RunE: func(cmd *cobra.Command, args []string) error {
 		if dir == "" {
 			dir = "."
 		}
+
+		// Determine what services will be stopped
+		var servicesToStop []string
 		var err error
 		if strings.TrimSpace(only) == "" {
-			// down all fragments in plan or dir
-			list, err := services.ResolveServiceList(dir, nil)
+			servicesToStop, err = services.ResolveServiceList(dir, nil)
 			if err != nil {
 				return err
 			}
+		} else {
+			for _, s := range strings.Split(only, ",") {
+				s = strings.TrimSpace(s)
+				if s != "" {
+					servicesToStop = append(servicesToStop, s)
+				}
+			}
+		}
+
+		if len(servicesToStop) == 0 {
+			fmt.Fprintln(cmd.OutOrStdout(), "No services to stop")
+			return nil
+		}
+
+		// Require confirmation for stopping services (destructive operation)
+		if !yes {
+			fmt.Fprintf(os.Stderr, "\nThis will stop the following services: %s\n", strings.Join(servicesToStop, ", "))
+			fmt.Fprintf(os.Stderr, "Continue? [y/N]: ")
+			reader := bufio.NewReader(os.Stdin)
+			response, err := reader.ReadString('\n')
+			if err != nil {
+				return fmt.Errorf("failed to read confirmation: %w", err)
+			}
+			response = strings.TrimSpace(strings.ToLower(response))
+			if response != "y" && response != "yes" {
+				fmt.Fprintln(cmd.OutOrStdout(), "Cancelled")
+				return nil
+			}
+		}
+
+		if strings.TrimSpace(only) == "" {
+			// down all fragments in plan or dir
 			dockerArgs := []string{"compose"}
-			for _, s := range list {
+			for _, s := range servicesToStop {
 				dockerArgs = append(dockerArgs, "-f", fmt.Sprintf("svc-%s.yml", strings.TrimSpace(s)))
 			}
 			dockerArgs = append(dockerArgs, "--env-file", ".central.env", "down")
@@ -331,12 +461,7 @@ func newServicesDownCmd() *cobra.Command {
 			return nil
 		}
 		// Stop specific services
-		svcs := strings.Split(only, ",")
-		for _, s := range svcs {
-			s = strings.TrimSpace(s)
-			if s == "" {
-				continue
-			}
+		for _, s := range servicesToStop {
 			dockerArgs := []string{"compose", "-f", fmt.Sprintf("svc-%s.yml", s), "--env-file", ".central.env", "stop", s}
 			var out, errOut string
 			if strings.TrimSpace(sshTarget) != "" {
@@ -354,6 +479,7 @@ func newServicesDownCmd() *cobra.Command {
 	cmd.Flags().StringVar(&dir, "dir", ".", "directory containing generated compose")
 	cmd.Flags().StringVar(&only, "only", "", "comma-separated services to stop")
 	cmd.Flags().StringVar(&sshTarget, "ssh", "", "run remotely on user@host via SSH")
+	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "Skip confirmation prompt")
 	return cmd
 }
 

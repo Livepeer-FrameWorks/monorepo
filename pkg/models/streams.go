@@ -4,62 +4,7 @@ import (
 	"time"
 )
 
-// StreamAnalytics represents a stream's analytics data
-type StreamAnalytics struct {
-	ID                   string     `json:"id"`
-	TenantID             string     `json:"tenant_id"`
-	StreamID             string     `json:"stream_id"`
-	InternalName         string     `json:"internal_name"`
-	SessionStartTime     *time.Time `json:"session_start_time"`
-	SessionEndTime       *time.Time `json:"session_end_time"`
-	TotalSessionDuration int        `json:"total_session_duration"`
-	CurrentViewers       int        `json:"current_viewers"`
-	PeakViewers          int        `json:"peak_viewers"`
-	TotalConnections     int        `json:"total_connections"`
-	BandwidthIn          int64      `json:"bandwidth_in"`
-	BandwidthOut         int64      `json:"bandwidth_out"`
-	TotalBandwidthGB     float64    `json:"total_bandwidth_gb"`
-	BitrateKbps          *int       `json:"bitrate_kbps"`
-	Resolution           *string    `json:"resolution"`
-	PacketsSent          int64      `json:"packets_sent"`
-	PacketsLost          int64      `json:"packets_lost"`
-	PacketsRetrans       int64      `json:"packets_retrans"`
-	Upbytes              int64      `json:"upbytes"`
-	Downbytes            int64      `json:"downbytes"`
-	FirstMs              *int       `json:"first_ms"`
-	LastMs               *int       `json:"last_ms"`
-	TrackCount           int        `json:"track_count"`
-	Inputs               int        `json:"inputs"`
-	Outputs              int        `json:"outputs"`
-	NodeID               *string    `json:"node_id"`
-	NodeName             *string    `json:"node_name"`
-	Latitude             *float64   `json:"latitude"`
-	Longitude            *float64   `json:"longitude"`
-	Location             *string    `json:"location"`
-	Status               *string    `json:"status"`
-	LastUpdated          time.Time  `json:"last_updated"`
-	CreatedAt            time.Time  `json:"created_at"`
-
-	// Current health state (from STREAM_BUFFER events)
-	CurrentHealthScore *float64 `json:"current_health_score,omitempty"`
-	CurrentBufferState *string  `json:"current_buffer_state,omitempty"`
-	CurrentIssues      *string  `json:"current_issues,omitempty"`
-	CurrentCodec       *string  `json:"current_codec,omitempty"`
-	CurrentFPS         *float64 `json:"current_fps,omitempty"`
-	CurrentResolution  *string  `json:"current_resolution,omitempty"`
-	MistStatus         *string  `json:"mist_status,omitempty"`
-	QualityTier        *string  `json:"quality_tier,omitempty"`
-
-	// Enriched metrics for API responses (computed from ClickHouse)
-	AvgViewers      float64 `json:"avg_viewers,omitempty"`
-	UniqueCountries int     `json:"unique_countries,omitempty"`
-	UniqueCities    int     `json:"unique_cities,omitempty"`
-	AvgBufferHealth float32 `json:"avg_buffer_health,omitempty"`
-	AvgBitrate      int     `json:"avg_bitrate,omitempty"`
-	PacketLossRate  float32 `json:"packet_loss_rate,omitempty"`
-}
-
-// ViewerMetrics represents viewer metrics for analytics
+// ViewerSession represents viewer metrics for analytics
 type ViewerSession struct {
 	ID             string     `json:"id"`
 	TenantID       string     `json:"tenant_id"`
@@ -126,9 +71,7 @@ type Stream struct {
 	IsLive             bool       `json:"is_live"`
 	IsRecording        bool       `json:"record"`               // Map to GraphQL 'record' field
 	IsRecordingEnabled bool       `json:"is_recording_enabled"` // Alias for IsRecording
-	IsPublic           bool       `json:"is_public"`
-	Status             string     `json:"status"` // Stream status (offline, live, terminated)
-	MaxViewers         int        `json:"max_viewers"`
+	Status             string     `json:"status"`               // Stream status (offline, live, terminated)
 	CurrentViewers     int        `json:"current_viewers"`
 	TotalViews         int        `json:"total_views"`
 	Duration           int        `json:"duration"`
@@ -154,3 +97,10 @@ type StreamKey struct {
 	CreatedAt  time.Time  `json:"createdAt"`
 	UpdatedAt  time.Time  `json:"updated_at"`
 }
+
+// GraphQL union type marker methods for Stream
+func (Stream) IsCreateStreamResult() {}
+func (Stream) IsUpdateStreamResult() {}
+
+// GraphQL union type marker methods for StreamKey
+func (StreamKey) IsCreateStreamKeyResult() {}

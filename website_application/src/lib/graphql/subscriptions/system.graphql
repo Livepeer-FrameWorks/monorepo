@@ -4,12 +4,16 @@
 subscription SystemHealth {
   systemHealth {
     node
-    cluster
+    location
     status
-    cpuUsage
-    memoryUsage
-    diskUsage
-    healthScore
+    cpuTenths
+    isHealthy
+    ramMax
+    ramCurrent
+    diskTotalBytes
+    diskUsedBytes
+    shmTotalBytes
+    shmUsedBytes
     timestamp
   }
 }

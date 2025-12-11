@@ -41,13 +41,15 @@ func NewRootCmd() *cobra.Command {
 	// Subcommands (groups)
 	rootCmd.AddCommand(newMenuCmd())
 	rootCmd.AddCommand(newEdgeCmd())
+	rootCmd.AddCommand(newClusterCmd())
 	rootCmd.AddCommand(newServicesCmd())
 	rootCmd.AddCommand(newContextCmd())
 	rootCmd.AddCommand(newLoginCmd())
 	rootCmd.AddCommand(newAdminCmd())
 	rootCmd.AddCommand(newVersionCmd())
 	rootCmd.AddCommand(newConfigCmd())
-
+	rootCmd.AddCommand(newDNSCmd())
+	rootCmd.AddCommand(newMeshCmd())
 	return rootCmd
 }
 

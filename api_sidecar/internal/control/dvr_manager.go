@@ -116,6 +116,10 @@ func (dm *DVRManager) StartRecording(dvrHash, internalName, sourceURL string, co
 
 	// Start the recording process via MistServer push
 	if err := dm.startDVRPush(job); err != nil {
+		// Cleanup created directory on failure
+		if rmErr := os.RemoveAll(outputDir); rmErr != nil {
+			dm.logger.WithError(rmErr).WithField("path", outputDir).Warn("Failed to cleanup DVR directory after failed start")
+		}
 		return fmt.Errorf("failed to start DVR push: %v", err)
 	}
 

@@ -8,6 +8,7 @@ import (
 	"syscall"
 	"time"
 
+	"frameworks/api_sidecar/internal/control"
 	"frameworks/pkg/logging"
 )
 
@@ -363,6 +364,11 @@ func (cm *CleanupMonitor) cleanupClip(clip ClipCleanupInfo) error {
 		prometheusMonitor.mutex.Lock()
 		delete(prometheusMonitor.artifactIndex, clip.ClipHash)
 		prometheusMonitor.mutex.Unlock()
+	}
+
+	// Notify Foghorn about the deletion
+	if err := control.SendArtifactDeleted(clip.ClipHash, clip.FilePath, "cleanup", clip.SizeBytes); err != nil {
+		cm.logger.WithError(err).WithField("clip_hash", clip.ClipHash).Warn("Failed to notify Foghorn of artifact deletion")
 	}
 
 	return nil

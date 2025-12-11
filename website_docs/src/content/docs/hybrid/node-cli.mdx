@@ -1,0 +1,232 @@
+---
+title: "Node CLI"
+description: "Day-to-day management of your edge nodes."
+draft: true
+sidebar:
+  order: 4
+---
+
+Managing edge nodes shouldn't be a chore. The FrameWorks CLI provides a focused set of commands for monitoring status, viewing logs, and managing the lifecycle of your edge services.
+
+## Status
+
+```bash
+frameworks edge status
+```
+
+Shows:
+- Container status (MistServer, Helmsman, edge-proxy)
+- HTTPS health check against your configured domain
+
+## Logs
+
+```bash
+# All containers, follow mode
+frameworks edge logs --follow
+
+# Specific container (positional argument)
+frameworks edge logs helmsman --tail 100
+
+# Multiple options
+frameworks edge logs --follow --tail 50
+```
+
+Service names: `mistserver`, `helmsman`, `caddy` (the proxy service)
+
+## Updates
+
+Pull the latest images and restart:
+
+```bash
+frameworks edge update
+```
+
+This:
+1. Pulls new images from the registry
+2. Recreates containers with new images
+3. Preserves configuration and data
+
+For a specific version, edit `.edge.env` to pin image tags before running update.
+
+Check current version:
+```bash
+frameworks version
+```
+
+## Certificates
+
+Check TLS status:
+```bash
+frameworks edge cert
+```
+
+Shows certificate expiration and issuer. Caddy handles renewal automatically, but if something goes wrong:
+
+```bash
+# Reload Caddy to pick up new certificates
+frameworks edge cert --reload
+```
+
+## Restarting Services
+
+```bash
+cd /opt/frameworks-edge
+
+# Restart everything
+docker compose -f docker-compose.edge.yml restart
+
+# Restart specific container
+docker compose -f docker-compose.edge.yml restart helmsman
+```
+
+## Stopping the Node
+
+Stop the containers:
+```bash
+docker compose -f docker-compose.edge.yml stop
+```
+
+Bring down the stack:
+```bash
+docker compose -f docker-compose.edge.yml down
+```
+
+Start again:
+```bash
+docker compose -f docker-compose.edge.yml up -d
+```
+
+## Diagnostics
+
+Full health check:
+```bash
+frameworks edge doctor
+```
+
+Runs:
+- Host checks (ports, DNS, sysctls)
+- Container health
+- HTTPS reachability
+- Control plane connectivity
+- Event forwarding test
+
+Network diagnostics:
+```bash
+# Check connectivity to control plane
+frameworks context check
+
+# Test API endpoint
+curl -I %API_URL%/health
+```
+
+## Resource Usage
+
+Check what your node is using:
+
+```bash
+docker stats mistserver helmsman edge-proxy
+```
+
+MistServer metrics are available at:
+```bash
+curl http://localhost:4242/api/stats
+```
+
+Helmsman exposes Prometheus metrics:
+```bash
+curl http://localhost:18007/metrics
+```
+
+## Configuration Changes
+
+Most config lives in `.edge.env`. After editing:
+
+```bash
+cd /opt/frameworks-edge
+
+# Apply changes by restarting
+docker compose -f docker-compose.edge.yml restart
+```
+
+Changes that require restart:
+- Capability toggles
+- Decklog/Commodore endpoints
+- Node identity
+
+Changes that take effect immediately:
+- Most MistServer settings via its API
+
+## Backup and Recovery
+
+**What to backup:**
+- `.edge.env` - Your configuration
+- MistServer recordings (if enabled)
+- Any custom Caddyfile modifications
+
+**Recovery:**
+1. Install Docker on new host
+2. Run `frameworks edge preflight`
+3. Copy your `.edge.env`
+4. Run `frameworks edge init --dir .` to regenerate compose file
+5. Start with `frameworks edge enroll --dir .`
+
+## Common Tasks
+
+### Change node capacity
+
+Edit `.edge.env`:
+```bash
+HELMSMAN_MAX_TRANSCODES=10
+```
+
+Then restart Helmsman:
+```bash
+docker compose -f docker-compose.edge.yml restart helmsman
+```
+
+### Disable ingest temporarily
+
+```bash
+# Edit .edge.env
+HELMSMAN_CAP_INGEST=false
+
+# Restart
+docker compose -f docker-compose.edge.yml restart helmsman
+```
+
+Foghorn will stop routing new ingest to this node.
+
+### Check active streams
+
+```bash
+curl http://localhost:4242/api/streams
+```
+
+Or via the dashboard under **Infrastructure → Nodes → [your node]**.
+
+### Clear recordings storage
+
+```bash
+# Check usage
+du -sh /var/lib/mistserver/recordings
+
+# Remove old recordings (careful!)
+find /var/lib/mistserver/recordings -mtime +30 -delete
+```
+
+## Automation
+
+For multiple nodes, consider:
+- Ansible playbooks using the CLI commands
+- Docker Swarm or Kubernetes with our Helm chart (coming soon)
+- Custom scripts wrapping `frameworks edge` commands
+
+Example health check script:
+```bash
+#!/bin/bash
+cd /opt/frameworks-edge
+if ! docker compose -f docker-compose.edge.yml ps | grep -q "Up"; then
+  echo "Containers not running, attempting restart"
+  docker compose -f docker-compose.edge.yml up -d
+fi
+```

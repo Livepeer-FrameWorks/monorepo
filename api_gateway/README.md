@@ -26,8 +26,8 @@ The Bridge is the GraphQL API Gateway that provides a unified interface for all 
 - HTTP: 18000 (see root README “Ports”)
 - GraphQL: `POST /graphql`, WS: `/graphql/ws` (Playground optional in non‑release builds)
 
-Configuration relies on the shared env layers under `config/env`. Generate `.env` with `make env` (or `frameworks config env generate`) and keep secrets in `config/env/secrets.env`. See `docs/configuration.md`. Do not commit secrets.
+Configuration relies on the shared env layers under `config/env`. Generate `.env` with `make env` (or `frameworks config env generate`) and keep secrets in `config/env/secrets.env`. Do not commit secrets.
 
 ## Related
 - Root `README.md` (ports, stack overview)
-- `docs/IMPLEMENTATION.md` (service boundaries)
+- `website_docs/` (architecture, service boundaries)

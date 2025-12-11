@@ -13,6 +13,7 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
+      - /etc/frameworks/certs:/etc/frameworks/certs:ro
     restart: unless-stopped
 
   mistserver:

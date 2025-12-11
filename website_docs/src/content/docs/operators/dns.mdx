@@ -1,0 +1,128 @@
+---
+title: "DNS Automation"
+description: "Automated DNS management and certificate issuance with Navigator."
+sidebar:
+  order: 10
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+<Aside type="tip" title="Automated DNS Management">
+**Navigator (`api_dns`)** provides automated DNS management for FrameWorks. It syncs DNS records based on Quartermaster node inventory:
+- **Single healthy node** → A record (direct IP)
+- **Multiple healthy nodes** → Cloudflare load balancer pool with geo-routing
+
+Navigator also handles ACME certificate issuance via DNS-01 validation.
+</Aside>
+
+FrameWorks automates the complex dance of DNS records and SSL certificates so you don't have to. Using the Navigator service, the platform ensures your public endpoints are always in sync with your active infrastructure.
+
+---
+
+## DNS Architecture
+
+Robust DNS is the first line of defense for reliability and performance. FrameWorks uses a two-layer routing strategy:
+
+- **DNS layer (Cloudflare)**: Infrastructure-level geo-routing to nearest region
+- **Application layer (Foghorn)**: Capacity-aware routing to optimal edge node
+
+> **Note**: While FrameWorks currently leverages Cloudflare for ease of deployment, the architecture is designed to support a transition to a fully self-hosted Anycast DNS solution in the future.
+
+### How Navigator Works
+
+Navigator (`api_dns`) automatically manages Cloudflare DNS based on node inventory from Quartermaster:
+
+1. Polls Quartermaster for active nodes with external IPs
+2. Groups nodes by role (edge, gateway, etc.)
+3. Updates Cloudflare DNS:
+   - Single node → A record
+   - Multiple nodes → Load balancer pool with geo-steering
+4. Handles ACME certificate issuance via DNS-01 challenges
+
+### Verifying DNS State
+
+Use the CLI to verify public DNS matches your inventory:
+
+```bash
+frameworks dns doctor --domain yourdomain.com
+```
+
+This checks:
+- Each subdomain resolves to expected IPs from inventory
+- Reports mismatches between public DNS and Quartermaster
+
+---
+
+## Recommended DNS Structure
+
+### Public Endpoints (GeoDNS)
+
+| Subdomain | Purpose | Service |
+|-----------|---------|---------|
+| `example.com` | Marketing site | Static |
+| `app.example.com` | Web console | Webapp |
+| `api.example.com` | GraphQL API | Bridge |
+| `play.example.com` | Viewer routing | Foghorn |
+| `ingest.example.com` | Stream ingest | Edge nodes |
+
+### Internal Services (WireGuard Mesh)
+
+These services communicate over the WireGuard mesh and do **not** need public DNS:
+
+- Commodore, Purser, Periscope, Quartermaster, Signalman
+- PostgreSQL, ClickHouse, Kafka, Zookeeper
+
+Configure via environment variables with mesh IPs:
+```bash
+export COMMODORE_URL=http://10.0.1.10:18001
+export PURSER_URL=http://10.0.1.11:18003
+```
+
+### Tenant Subdomains
+
+Tenant-specific subdomains CNAME to the shared infrastructure:
+
+```
+tenant1.example.com         → CNAME → play.example.com
+tenant1.ingest.example.com  → CNAME → ingest.example.com
+```
+
+---
+
+## Cloudflare Configuration
+
+Navigator requires a Cloudflare API token with these permissions:
+
+- **Zone.DNS**: Edit
+- **Account.Load Balancers**: Edit (for multi-node setups)
+- **Zone.Load Balancers**: Edit
+
+Environment variables for Navigator:
+```bash
+CLOUDFLARE_API_TOKEN="your-api-token"
+CLOUDFLARE_ZONE_ID="your-zone-id"
+CLOUDFLARE_ACCOUNT_ID="your-account-id"
+```
+
+---
+
+## Verifying DNS Configuration
+
+```bash
+frameworks dns doctor --domain yourdomain.com
+
+# Output:
+# DOMAIN                EXPECTED IPs    ACTUAL IPs      STATUS
+# edge.example.com      192.0.2.10,..   192.0.2.10,..   ✅ OK
+# api.example.com       192.0.2.20      192.0.2.20      ✅ OK
+```
+
+You can also verify DNS resolution manually:
+
+```bash
+# Check A records
+dig +short edge.example.com
+
+# Check Cloudflare load balancer
+dig +short play.example.com
+```

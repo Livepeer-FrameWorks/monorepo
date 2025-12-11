@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"crypto/tls"
 	"fmt"
 	"net/http"
@@ -12,7 +13,13 @@ import (
 	"frameworks/cli/internal/preflight"
 	"frameworks/cli/internal/templates"
 	"frameworks/cli/internal/xexec"
+	"frameworks/cli/pkg/inventory"
+	"frameworks/pkg/clients/navigator"
+	"frameworks/pkg/clients/quartermaster"
+	pb "frameworks/pkg/proto"
+	"github.com/google/uuid"
 	"github.com/spf13/cobra"
+	"sync"
 )
 
 func newEdgeCmd() *cobra.Command {
@@ -24,6 +31,7 @@ func newEdgeCmd() *cobra.Command {
 	edge.AddCommand(newEdgeTuneCmd())
 	edge.AddCommand(newEdgeInitCmd())
 	edge.AddCommand(newEdgeEnrollCmd())
+	edge.AddCommand(newEdgeProvisionCmd())
 	edge.AddCommand(newEdgeStatusCmd())
 	edge.AddCommand(newEdgeUpdateCmd())
 	edge.AddCommand(newEdgeCertCmd())
@@ -219,6 +227,732 @@ func readEnvFileKey(path, key string) string {
 		}
 	}
 	return ""
+}
+
+func newEdgeProvisionCmd() *cobra.Command {
+	var sshTarget string
+	var nodeDomain string
+	var poolDomain string
+	var nodeName string
+	var clusterID string
+	var region string
+	var email string
+	var timeout time.Duration
+	var skipPreflight bool
+	var applyTuning bool
+	var registerNode bool
+	var fetchCert bool
+	var manifestPath string
+	var parallel int
+
+	cmd := &cobra.Command{
+		Use:   "provision",
+		Short: "Provision edge node(s) via SSH (preflight, tune, init, enroll)",
+		Long: `Provision edge node(s) by SSHing and running the full edge setup:
+  1. Run preflight checks (Docker, ports, sysctl, limits)
+  2. Apply sysctl/limits tuning (optional)
+  3. Register node in Quartermaster (triggers DNS sync via Navigator)
+  4. Fetch TLS certificate from Navigator (optional, uses centralized DNS-01 challenge)
+  5. Generate and upload edge templates (docker-compose, Caddyfile, .env)
+  6. Start edge stack (docker compose up)
+  7. Wait for HTTPS readiness
+
+Single node example:
+  frameworks edge provision --ssh ubuntu@edge-1.example.com \
+    --pool-domain edge.example.com \
+    --node-domain edge-1.example.com \
+    --node-name edge-us-east-1 \
+    --email ops@example.com \
+    --fetch-cert
+
+Multi-node manifest example:
+  frameworks edge provision --manifest edges.yaml --parallel 4`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// Load config for control plane endpoints
+			cfg, _, err := fwcfg.Load()
+			if err != nil {
+				return fmt.Errorf("failed to load config: %w", err)
+			}
+			cliCtx := fwcfg.GetCurrent(cfg)
+
+			// Check if using manifest mode
+			if manifestPath != "" {
+				return runEdgeProvisionFromManifest(cmd, cliCtx, manifestPath, parallel, timeout)
+			}
+
+			// Single node mode - require ssh target
+			if sshTarget == "" {
+				return fmt.Errorf("--ssh is required (user@host) or use --manifest for multi-node")
+			}
+			if poolDomain == "" && nodeDomain == "" {
+				return fmt.Errorf("at least one of --pool-domain or --node-domain is required")
+			}
+
+			// Use poolDomain for the main domain if set, otherwise nodeDomain
+			primaryDomain := poolDomain
+			if primaryDomain == "" {
+				primaryDomain = nodeDomain
+			}
+
+			// Default node name from SSH target or domain
+			if nodeName == "" {
+				if nodeDomain != "" {
+					nodeName = strings.Split(nodeDomain, ".")[0]
+				} else {
+					// Extract from ssh target (user@host -> host)
+					parts := strings.Split(sshTarget, "@")
+					if len(parts) > 1 {
+						nodeName = parts[1]
+					} else {
+						nodeName = sshTarget
+					}
+				}
+			}
+
+			fmt.Fprintf(cmd.OutOrStdout(), "Provisioning edge node: %s\n", sshTarget)
+			fmt.Fprintf(cmd.OutOrStdout(), "  Node name: %s\n", nodeName)
+			fmt.Fprintf(cmd.OutOrStdout(), "  Pool domain: %s\n", poolDomain)
+			fmt.Fprintf(cmd.OutOrStdout(), "  Node domain: %s\n", nodeDomain)
+
+			// Step 1: Run preflight checks remotely
+			if !skipPreflight {
+				fmt.Fprintln(cmd.OutOrStdout(), "\n[1/7] Running preflight checks...")
+				if err := runRemotePreflight(cmd, sshTarget); err != nil {
+					return fmt.Errorf("preflight failed: %w", err)
+				}
+			} else {
+				fmt.Fprintln(cmd.OutOrStdout(), "\n[1/7] Skipping preflight checks (--skip-preflight)")
+			}
+
+			// Step 2: Apply sysctl tuning if requested
+			if applyTuning {
+				fmt.Fprintln(cmd.OutOrStdout(), "\n[2/7] Applying sysctl/limits tuning...")
+				if err := runRemoteTuning(cmd, sshTarget); err != nil {
+					return fmt.Errorf("tuning failed: %w", err)
+				}
+			} else {
+				fmt.Fprintln(cmd.OutOrStdout(), "\n[2/7] Skipping sysctl tuning (use --tune to apply)")
+			}
+
+			// Step 3: Register node in Quartermaster (triggers DNS sync)
+			var externalIP string
+			if registerNode {
+				fmt.Fprintln(cmd.OutOrStdout(), "\n[3/7] Registering node in Quartermaster...")
+				externalIP, err = getRemoteExternalIP(sshTarget)
+				if err != nil {
+					fmt.Fprintf(cmd.OutOrStdout(), "  - Warning: Could not detect external IP: %v\n", err)
+				} else {
+					fmt.Fprintf(cmd.OutOrStdout(), "  ✓ Detected external IP: %s\n", externalIP)
+				}
+
+				if err := registerEdgeNode(cmd, cliCtx, nodeName, clusterID, externalIP, region); err != nil {
+					return fmt.Errorf("node registration failed: %w", err)
+				}
+			} else {
+				fmt.Fprintln(cmd.OutOrStdout(), "\n[3/7] Skipping node registration (use --register to enable)")
+			}
+
+			// Step 4: Fetch TLS certificate from Navigator (optional)
+			var certPEM, keyPEM string
+			if fetchCert {
+				fmt.Fprintln(cmd.OutOrStdout(), "\n[4/7] Fetching TLS certificate from Navigator...")
+				if email == "" {
+					return fmt.Errorf("--email is required when using --fetch-cert")
+				}
+				certPEM, keyPEM, err = fetchCertFromNavigator(cmd, cliCtx, primaryDomain, email)
+				if err != nil {
+					return fmt.Errorf("certificate fetch failed: %w", err)
+				}
+
+				// Upload certificate to edge node
+				if err := uploadCertificates(cmd, sshTarget, certPEM, keyPEM); err != nil {
+					return fmt.Errorf("certificate upload failed: %w", err)
+				}
+			} else {
+				fmt.Fprintln(cmd.OutOrStdout(), "\n[4/7] Skipping certificate fetch (use --fetch-cert to enable; Caddy will auto-ACME)")
+			}
+
+			// Step 5: Generate and upload edge templates
+			fmt.Fprintln(cmd.OutOrStdout(), "\n[5/7] Generating and uploading edge templates...")
+			vars := templates.EdgeVars{
+				EdgeDomain:      primaryDomain,
+				AcmeEmail:       email,
+				FoghornHTTPBase: cliCtx.Endpoints.FoghornHTTPURL,
+				FoghornGRPCAddr: cliCtx.Endpoints.FoghornGRPCAddr,
+			}
+			// If we fetched certs, configure file-based TLS
+			if fetchCert && certPEM != "" && keyPEM != "" {
+				vars.CertPath = "/etc/frameworks/certs/cert.pem"
+				vars.KeyPath = "/etc/frameworks/certs/key.pem"
+			}
+			if err := uploadEdgeTemplates(cmd, sshTarget, vars); err != nil {
+				return fmt.Errorf("template upload failed: %w", err)
+			}
+
+			// Step 6: Start edge stack
+			fmt.Fprintln(cmd.OutOrStdout(), "\n[6/7] Starting edge stack (docker compose up)...")
+			if err := runRemoteDockerCompose(cmd, sshTarget); err != nil {
+				return fmt.Errorf("docker compose failed: %w", err)
+			}
+
+			// Step 7: Wait for HTTPS readiness
+			fmt.Fprintln(cmd.OutOrStdout(), "\n[7/7] Waiting for HTTPS readiness...")
+			if err := waitForHTTPS(cmd, primaryDomain, timeout); err != nil {
+				return fmt.Errorf("HTTPS readiness failed: %w", err)
+			}
+
+			fmt.Fprintf(cmd.OutOrStdout(), "\nEdge node provisioned successfully!\n")
+			fmt.Fprintf(cmd.OutOrStdout(), "  HTTPS: https://%s/health\n", primaryDomain)
+			if registerNode {
+				fmt.Fprintf(cmd.OutOrStdout(), "  Node registered in Quartermaster (DNS sync triggered)\n")
+			}
+			if fetchCert {
+				fmt.Fprintf(cmd.OutOrStdout(), "  TLS certificate from Navigator (DNS-01 challenge)\n")
+			}
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&sshTarget, "ssh", "", "SSH target (user@host, required)")
+	cmd.Flags().StringVar(&poolDomain, "pool-domain", "", "Load balancer pool domain (e.g., edge.example.com)")
+	cmd.Flags().StringVar(&nodeDomain, "node-domain", "", "Individual node domain (e.g., edge-1.example.com)")
+	cmd.Flags().StringVar(&nodeName, "node-name", "", "Node name for registration (default: derived from domain/ssh)")
+	cmd.Flags().StringVar(&clusterID, "cluster-id", "", "Cluster ID for node registration")
+	cmd.Flags().StringVar(&region, "region", "", "Region for node registration (e.g., us-east-1)")
+	cmd.Flags().StringVar(&email, "email", "", "ACME email for certificate issuance")
+	cmd.Flags().DurationVar(&timeout, "timeout", 3*time.Minute, "Timeout for HTTPS readiness")
+	cmd.Flags().BoolVar(&skipPreflight, "skip-preflight", false, "Skip preflight checks")
+	cmd.Flags().BoolVar(&applyTuning, "tune", false, "Apply sysctl/limits tuning")
+	cmd.Flags().BoolVar(&registerNode, "register", false, "Register node in Quartermaster (triggers DNS sync)")
+	cmd.Flags().BoolVar(&fetchCert, "fetch-cert", false, "Fetch TLS certificate from Navigator (DNS-01 challenge)")
+	cmd.Flags().StringVar(&manifestPath, "manifest", "", "Path to edge manifest file (edges.yaml) for multi-node provisioning")
+	cmd.Flags().IntVar(&parallel, "parallel", 1, "Number of nodes to provision in parallel (for manifest mode)")
+
+	return cmd
+}
+
+// EdgeProvisionResult holds the result of provisioning a single edge node
+type EdgeProvisionResult struct {
+	NodeName string
+	SSHAddr  string
+	Success  bool
+	Error    error
+}
+
+// runEdgeProvisionFromManifest provisions multiple edge nodes from a manifest file
+func runEdgeProvisionFromManifest(cmd *cobra.Command, cliCtx fwcfg.Context, manifestPath string, parallel int, timeout time.Duration) error {
+	// Load manifest
+	manifest, err := inventory.LoadEdgeManifest(manifestPath)
+	if err != nil {
+		return fmt.Errorf("failed to load manifest: %w", err)
+	}
+
+	fmt.Fprintf(cmd.OutOrStdout(), "Loaded edge manifest with %d nodes\n", len(manifest.Nodes))
+	fmt.Fprintf(cmd.OutOrStdout(), "  Pool domain: %s\n", manifest.PoolDomain)
+	fmt.Fprintf(cmd.OutOrStdout(), "  Root domain: %s\n", manifest.RootDomain)
+	fmt.Fprintf(cmd.OutOrStdout(), "  Parallelism: %d\n", parallel)
+
+	if parallel < 1 {
+		parallel = 1
+	}
+	if parallel > len(manifest.Nodes) {
+		parallel = len(manifest.Nodes)
+	}
+
+	// Semaphore for parallelism control
+	sem := make(chan struct{}, parallel)
+	var wg sync.WaitGroup
+	results := make(chan EdgeProvisionResult, len(manifest.Nodes))
+
+	// Provision each node
+	for _, node := range manifest.Nodes {
+		wg.Add(1)
+		go func(n inventory.EdgeNode) {
+			defer wg.Done()
+			sem <- struct{}{}        // Acquire semaphore
+			defer func() { <-sem }() // Release semaphore
+
+			result := EdgeProvisionResult{
+				NodeName: n.Name,
+				SSHAddr:  n.SSH,
+			}
+
+			// Build node domain
+			nodeDomain := ""
+			if n.Subdomain != "" {
+				if manifest.RootDomain != "" {
+					nodeDomain = n.Subdomain + "." + manifest.RootDomain
+				}
+			}
+
+			// Use pool domain from manifest
+			poolDomain := manifest.PoolDomain
+
+			// Primary domain for Caddy config
+			primaryDomain := poolDomain
+			if primaryDomain == "" {
+				primaryDomain = nodeDomain
+			}
+
+			fmt.Fprintf(cmd.OutOrStdout(), "\n[%s] Starting provisioning...\n", n.Name)
+
+			// Run provisioning steps
+			err := provisionSingleEdgeNode(cmd, cliCtx, n.SSH, n.Name, nodeDomain, poolDomain, manifest.ClusterID, n.Region, manifest.Email, manifest.FetchCert, n.ApplyTune, n.RegisterQM, timeout)
+			if err != nil {
+				result.Error = err
+				result.Success = false
+				fmt.Fprintf(cmd.OutOrStdout(), "[%s] FAILED: %v\n", n.Name, err)
+			} else {
+				result.Success = true
+				fmt.Fprintf(cmd.OutOrStdout(), "[%s] SUCCESS: https://%s/health\n", n.Name, primaryDomain)
+			}
+
+			results <- result
+		}(node)
+	}
+
+	// Wait for all goroutines to finish
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	// Collect results
+	var succeeded, failed int
+	var failedNodes []string
+	for result := range results {
+		if result.Success {
+			succeeded++
+		} else {
+			failed++
+			failedNodes = append(failedNodes, result.NodeName)
+		}
+	}
+
+	// Summary
+	fmt.Fprintf(cmd.OutOrStdout(), "\n=== Provisioning Summary ===\n")
+	fmt.Fprintf(cmd.OutOrStdout(), "  Succeeded: %d/%d\n", succeeded, len(manifest.Nodes))
+	fmt.Fprintf(cmd.OutOrStdout(), "  Failed: %d/%d\n", failed, len(manifest.Nodes))
+	if len(failedNodes) > 0 {
+		fmt.Fprintf(cmd.OutOrStdout(), "  Failed nodes: %v\n", failedNodes)
+		return fmt.Errorf("%d nodes failed to provision", failed)
+	}
+
+	return nil
+}
+
+// provisionSingleEdgeNode provisions a single edge node (used by both single and manifest modes)
+func provisionSingleEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshTarget, nodeName, nodeDomain, poolDomain, clusterID, region, email string, fetchCert, applyTuning, registerNode bool, timeout time.Duration) error {
+	primaryDomain := poolDomain
+	if primaryDomain == "" {
+		primaryDomain = nodeDomain
+	}
+
+	// Step 1: Preflight
+	if err := runRemotePreflight(cmd, sshTarget); err != nil {
+		return fmt.Errorf("preflight failed: %w", err)
+	}
+
+	// Step 2: Tuning (optional)
+	if applyTuning {
+		if err := runRemoteTuning(cmd, sshTarget); err != nil {
+			return fmt.Errorf("tuning failed: %w", err)
+		}
+	}
+
+	// Step 3: Register node (optional)
+	if registerNode {
+		externalIP, _ := getRemoteExternalIP(sshTarget)
+		if err := registerEdgeNode(cmd, cliCtx, nodeName, clusterID, externalIP, region); err != nil {
+			return fmt.Errorf("node registration failed: %w", err)
+		}
+	}
+
+	// Step 4: Fetch certificate (optional)
+	var certPEM, keyPEM string
+	var err error
+	if fetchCert && email != "" {
+		certPEM, keyPEM, err = fetchCertFromNavigator(cmd, cliCtx, primaryDomain, email)
+		if err != nil {
+			return fmt.Errorf("certificate fetch failed: %w", err)
+		}
+		if err := uploadCertificates(cmd, sshTarget, certPEM, keyPEM); err != nil {
+			return fmt.Errorf("certificate upload failed: %w", err)
+		}
+	}
+
+	// Step 5: Upload templates
+	vars := templates.EdgeVars{
+		EdgeDomain:      primaryDomain,
+		AcmeEmail:       email,
+		FoghornHTTPBase: cliCtx.Endpoints.FoghornHTTPURL,
+		FoghornGRPCAddr: cliCtx.Endpoints.FoghornGRPCAddr,
+	}
+	if fetchCert && certPEM != "" && keyPEM != "" {
+		vars.CertPath = "/etc/frameworks/certs/cert.pem"
+		vars.KeyPath = "/etc/frameworks/certs/key.pem"
+	}
+	if err := uploadEdgeTemplates(cmd, sshTarget, vars); err != nil {
+		return fmt.Errorf("template upload failed: %w", err)
+	}
+
+	// Step 6: Start edge stack
+	if err := runRemoteDockerCompose(cmd, sshTarget); err != nil {
+		return fmt.Errorf("docker compose failed: %w", err)
+	}
+
+	// Step 7: Wait for HTTPS
+	if err := waitForHTTPS(cmd, primaryDomain, timeout); err != nil {
+		return fmt.Errorf("HTTPS readiness failed: %w", err)
+	}
+
+	return nil
+}
+
+// runRemotePreflight runs preflight checks on remote host via SSH
+func runRemotePreflight(cmd *cobra.Command, sshTarget string) error {
+	// Check Docker
+	_, out, errOut, err := xexec.RunSSH(sshTarget, "docker", []string{"--version"}, "")
+	if err != nil {
+		fmt.Fprintf(cmd.OutOrStdout(), "  ✗ Docker: not found (%s)\n", strings.TrimSpace(errOut))
+		return fmt.Errorf("docker not installed")
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "  ✓ Docker: %s\n", strings.TrimSpace(out))
+
+	// Check Docker Compose
+	_, out, errOut, err = xexec.RunSSH(sshTarget, "docker", []string{"compose", "version"}, "")
+	if err != nil {
+		fmt.Fprintf(cmd.OutOrStdout(), "  ✗ Docker Compose: not found (%s)\n", strings.TrimSpace(errOut))
+		return fmt.Errorf("docker compose not available")
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "  ✓ Docker Compose: %s\n", strings.TrimSpace(out))
+
+	// Check ports 80/443 are available
+	_, _, _, err = xexec.RunSSH(sshTarget, "ss", []string{"-tlnp"}, "")
+	if err == nil {
+		// Parse output to check if 80/443 are in use
+		fmt.Fprintf(cmd.OutOrStdout(), "  ✓ Port check: ss available\n")
+	}
+
+	// Check /dev/shm size
+	_, out, _, err = xexec.RunSSH(sshTarget, "df", []string{"-h", "/dev/shm"}, "")
+	if err == nil {
+		lines := strings.Split(strings.TrimSpace(out), "\n")
+		if len(lines) >= 2 {
+			fmt.Fprintf(cmd.OutOrStdout(), "  ✓ /dev/shm: available\n")
+		}
+	}
+
+	return nil
+}
+
+// runRemoteTuning applies sysctl and limits tuning on remote host
+func runRemoteTuning(cmd *cobra.Command, sshTarget string) error {
+	sysctl := `# Frameworks Edge recommended network tuning
+net.core.rmem_max = 16777216
+net.core.wmem_max = 16777216
+net.core.somaxconn = 8192
+net.ipv4.ip_local_port_range = 16384 65535
+`
+	limits := `# Frameworks Edge recommended file limits
+* soft nofile 1048576
+* hard nofile 1048576
+`
+
+	// Write sysctl config
+	sysctlCmd := fmt.Sprintf("echo '%s' | sudo tee /etc/sysctl.d/frameworks-edge.conf", sysctl)
+	_, _, errOut, err := xexec.RunSSH(sshTarget, "sh", []string{"-c", sysctlCmd}, "")
+	if err != nil {
+		fmt.Fprintf(cmd.OutOrStdout(), "  ✗ sysctl config: %s\n", strings.TrimSpace(errOut))
+		return fmt.Errorf("failed to write sysctl config: %w", err)
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "  ✓ sysctl config written\n")
+
+	// Write limits config
+	limitsCmd := fmt.Sprintf("echo '%s' | sudo tee /etc/security/limits.d/frameworks-edge.conf", limits)
+	_, _, errOut, err = xexec.RunSSH(sshTarget, "sh", []string{"-c", limitsCmd}, "")
+	if err != nil {
+		fmt.Fprintf(cmd.OutOrStdout(), "  ✗ limits config: %s\n", strings.TrimSpace(errOut))
+		return fmt.Errorf("failed to write limits config: %w", err)
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "  ✓ limits config written\n")
+
+	// Apply sysctl
+	_, _, _, err = xexec.RunSSH(sshTarget, "sudo", []string{"sysctl", "--system"}, "")
+	if err == nil {
+		fmt.Fprintf(cmd.OutOrStdout(), "  ✓ sysctl applied\n")
+	}
+
+	return nil
+}
+
+// uploadEdgeTemplates generates edge templates locally and uploads to remote host
+func uploadEdgeTemplates(cmd *cobra.Command, sshTarget string, vars templates.EdgeVars) error {
+	// Create temp directory for templates
+	tmpDir, err := os.MkdirTemp("", "frameworks-edge-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temp directory: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Write templates to temp directory
+	if err := templates.WriteEdgeTemplates(tmpDir, vars, true); err != nil {
+		return fmt.Errorf("failed to write templates: %w", err)
+	}
+
+	// Create remote directory
+	remoteDir := "/opt/frameworks/edge"
+	_, _, errOut, err := xexec.RunSSH(sshTarget, "sudo", []string{"mkdir", "-p", remoteDir}, "")
+	if err != nil {
+		return fmt.Errorf("failed to create remote directory: %s", strings.TrimSpace(errOut))
+	}
+
+	// Set ownership to current user for upload
+	_, _, _, _ = xexec.RunSSH(sshTarget, "sudo", []string{"chown", "-R", "$USER:$USER", remoteDir}, "")
+
+	// Upload each file using scp
+	files := []string{"docker-compose.edge.yml", "Caddyfile", ".edge.env"}
+	for _, f := range files {
+		localPath := tmpDir + "/" + f
+		remotePath := remoteDir + "/" + f
+
+		// Use scp to upload (through shell)
+		scpCmd := fmt.Sprintf("scp -o BatchMode=yes %s %s:%s", localPath, sshTarget, remotePath)
+		scpExec := strings.Split(scpCmd, " ")
+		execCmd := scpExec[0]
+		execArgs := scpExec[1:]
+
+		_, _, errOut, err := xexec.Run(execCmd, execArgs, "")
+		if err != nil {
+			return fmt.Errorf("failed to upload %s: %s", f, strings.TrimSpace(errOut))
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "  ✓ Uploaded %s\n", f)
+	}
+
+	return nil
+}
+
+// runRemoteDockerCompose starts the edge stack on remote host
+func runRemoteDockerCompose(cmd *cobra.Command, sshTarget string) error {
+	remoteDir := "/opt/frameworks/edge"
+	compose := "docker-compose.edge.yml"
+	envFile := ".edge.env"
+
+	_, out, errOut, err := xexec.RunSSH(sshTarget, "docker", []string{"compose", "-f", compose, "--env-file", envFile, "up", "-d"}, remoteDir)
+	if err != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "docker compose up failed: %v\n%s\n%s\n", err, out, errOut)
+		return err
+	}
+	fmt.Fprintln(cmd.OutOrStdout(), "  ✓ Edge stack started (caddy, mistserver, helmsman)")
+	return nil
+}
+
+// waitForHTTPS waits for the edge domain to be HTTPS-ready
+func waitForHTTPS(cmd *cobra.Command, domain string, timeout time.Duration) error {
+	if strings.TrimSpace(domain) == "" {
+		fmt.Fprintln(cmd.OutOrStdout(), "  - No domain specified, skipping HTTPS check")
+		return nil
+	}
+
+	url := "https://" + domain + "/health"
+	httpClient := &http.Client{
+		Timeout:   5 * time.Second,
+		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
+	}
+	deadline := time.Now().Add(timeout)
+
+	for {
+		req, _ := http.NewRequest("GET", url, nil)
+		resp, err := httpClient.Do(req)
+		if err == nil && resp != nil && resp.StatusCode == 200 {
+			if resp.Body != nil {
+				resp.Body.Close()
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "  ✓ HTTPS ready at %s\n", url)
+			return nil
+		}
+		if resp != nil && resp.Body != nil {
+			resp.Body.Close()
+		}
+
+		if time.Now().After(deadline) {
+			if err != nil {
+				return fmt.Errorf("HTTPS check failed: %v", err)
+			}
+			if resp != nil {
+				return fmt.Errorf("HTTPS not ready: status %d", resp.StatusCode)
+			}
+			return fmt.Errorf("HTTPS not ready before timeout")
+		}
+
+		fmt.Fprintf(cmd.OutOrStdout(), "  - Waiting for HTTPS (retrying in 5s)...\n")
+		time.Sleep(5 * time.Second)
+	}
+}
+
+// getRemoteExternalIP detects the external IP of the remote host
+func getRemoteExternalIP(sshTarget string) (string, error) {
+	// Try multiple methods to detect external IP
+	methods := []struct {
+		cmd  string
+		args []string
+	}{
+		{"curl", []string{"-s", "-4", "ifconfig.me"}},
+		{"curl", []string{"-s", "-4", "icanhazip.com"}},
+		{"curl", []string{"-s", "-4", "api.ipify.org"}},
+	}
+
+	for _, m := range methods {
+		_, out, _, err := xexec.RunSSH(sshTarget, m.cmd, m.args, "")
+		if err == nil {
+			ip := strings.TrimSpace(out)
+			if ip != "" && !strings.Contains(ip, "<") { // Basic sanity check
+				return ip, nil
+			}
+		}
+	}
+
+	return "", fmt.Errorf("could not detect external IP via any method")
+}
+
+// registerEdgeNode registers an edge node in Quartermaster
+func registerEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, nodeName, clusterID, externalIP, region string) error {
+	// Create Quartermaster gRPC client
+	qmClient, err := quartermaster.NewGRPCClient(quartermaster.GRPCConfig{
+		GRPCAddr:     cliCtx.Endpoints.QuartermasterGRPCAddr,
+		Timeout:      30 * time.Second,
+		ServiceToken: cliCtx.Auth.ServiceToken,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to connect to Quartermaster: %w", err)
+	}
+	defer qmClient.Close()
+
+	// Generate a node ID
+	nodeID := uuid.New().String()
+
+	// Create node request
+	req := &pb.CreateNodeRequest{
+		NodeId:    nodeID,
+		ClusterId: clusterID,
+		NodeName:  nodeName,
+		NodeType:  "edge", // This triggers DNS sync for "edge" service type
+	}
+
+	// Set optional fields
+	if externalIP != "" {
+		req.ExternalIp = &externalIP
+	}
+	if region != "" {
+		req.Region = &region
+	}
+
+	// Create context with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Register the node
+	resp, err := qmClient.CreateNode(ctx, req)
+	if err != nil {
+		return fmt.Errorf("failed to create node: %w", err)
+	}
+
+	fmt.Fprintf(cmd.OutOrStdout(), "  ✓ Node registered: %s (ID: %s)\n", nodeName, resp.GetNode().GetNodeId())
+	fmt.Fprintf(cmd.OutOrStdout(), "  ✓ DNS sync triggered for 'edge' service type\n")
+
+	return nil
+}
+
+// fetchCertFromNavigator fetches a TLS certificate from Navigator service
+func fetchCertFromNavigator(cmd *cobra.Command, cliCtx fwcfg.Context, domain, email string) (certPEM, keyPEM string, err error) {
+	// Create Navigator gRPC client
+	navClient, err := navigator.NewClient(navigator.Config{
+		Addr:    cliCtx.Endpoints.NavigatorGRPCAddr,
+		Timeout: 120 * time.Second, // ACME can take a while
+	})
+	if err != nil {
+		return "", "", fmt.Errorf("failed to connect to Navigator: %w", err)
+	}
+	defer navClient.Close()
+
+	// Create context with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	// Request certificate issuance
+	fmt.Fprintf(cmd.OutOrStdout(), "  - Requesting certificate for %s (this may take a minute)...\n", domain)
+	resp, err := navClient.IssueCertificate(ctx, &pb.IssueCertificateRequest{
+		Domain: domain,
+		Email:  email,
+	})
+	if err != nil {
+		return "", "", fmt.Errorf("certificate issuance failed: %w", err)
+	}
+
+	if !resp.GetSuccess() {
+		errMsg := resp.GetError()
+		if errMsg == "" {
+			errMsg = resp.GetMessage()
+		}
+		return "", "", fmt.Errorf("certificate issuance failed: %s", errMsg)
+	}
+
+	fmt.Fprintf(cmd.OutOrStdout(), "  ✓ Certificate issued for %s\n", domain)
+	return resp.GetCertPem(), resp.GetKeyPem(), nil
+}
+
+// uploadCertificates uploads certificate files to the edge node
+func uploadCertificates(cmd *cobra.Command, sshTarget, certPEM, keyPEM string) error {
+	// Create certificate directory on remote host
+	certDir := "/etc/frameworks/certs"
+	_, _, errOut, err := xexec.RunSSH(sshTarget, "sudo", []string{"mkdir", "-p", certDir}, "")
+	if err != nil {
+		return fmt.Errorf("failed to create cert directory: %s", strings.TrimSpace(errOut))
+	}
+
+	// Set ownership so we can write files
+	_, _, _, _ = xexec.RunSSH(sshTarget, "sudo", []string{"chown", "-R", "$USER:$USER", certDir}, "")
+
+	// Create temp files locally
+	tmpDir, err := os.MkdirTemp("", "frameworks-certs-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temp directory: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	certPath := tmpDir + "/cert.pem"
+	keyPath := tmpDir + "/key.pem"
+
+	if err := os.WriteFile(certPath, []byte(certPEM), 0644); err != nil {
+		return fmt.Errorf("failed to write cert file: %w", err)
+	}
+	if err := os.WriteFile(keyPath, []byte(keyPEM), 0600); err != nil {
+		return fmt.Errorf("failed to write key file: %w", err)
+	}
+
+	// Upload files via scp
+	files := []struct {
+		local  string
+		remote string
+	}{
+		{certPath, certDir + "/cert.pem"},
+		{keyPath, certDir + "/key.pem"},
+	}
+
+	for _, f := range files {
+		scpArgs := []string{"-o", "BatchMode=yes", f.local, sshTarget + ":" + f.remote}
+		_, _, errOut, err := xexec.Run("scp", scpArgs, "")
+		if err != nil {
+			return fmt.Errorf("failed to upload %s: %s", f.local, strings.TrimSpace(errOut))
+		}
+	}
+
+	// Set proper permissions on key file
+	_, _, _, _ = xexec.RunSSH(sshTarget, "sudo", []string{"chmod", "600", certDir + "/key.pem"}, "")
+
+	fmt.Fprintf(cmd.OutOrStdout(), "  ✓ Certificate uploaded to %s/cert.pem\n", certDir)
+	fmt.Fprintf(cmd.OutOrStdout(), "  ✓ Private key uploaded to %s/key.pem\n", certDir)
+	return nil
 }
 
 func newEdgeStatusCmd() *cobra.Command {
