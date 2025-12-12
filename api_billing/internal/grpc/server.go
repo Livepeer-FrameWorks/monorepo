@@ -81,6 +81,61 @@ func scanBillingFeatures(data []byte) *pb.BillingFeatures {
 	}
 }
 
+// marshalCustomPricing converts CustomPricing proto to JSONB bytes
+func marshalCustomPricing(cp *pb.CustomPricing) ([]byte, error) {
+	if cp == nil {
+		return []byte("{}"), nil
+	}
+	raw := struct {
+		BasePrice    float64 `json:"base_price"`
+		DiscountRate float64 `json:"discount_rate"`
+	}{
+		BasePrice:    cp.BasePrice,
+		DiscountRate: cp.DiscountRate,
+	}
+	return json.Marshal(raw)
+}
+
+// marshalBillingFeatures converts BillingFeatures proto to JSONB bytes
+func marshalBillingFeatures(bf *pb.BillingFeatures) ([]byte, error) {
+	if bf == nil {
+		return []byte("{}"), nil
+	}
+	raw := struct {
+		Recording      bool   `json:"recording"`
+		Analytics      bool   `json:"analytics"`
+		CustomBranding bool   `json:"custom_branding"`
+		APIAccess      bool   `json:"api_access"`
+		SupportLevel   string `json:"support_level"`
+		SLA            bool   `json:"sla"`
+	}{
+		Recording:      bf.Recording,
+		Analytics:      bf.Analytics,
+		CustomBranding: bf.CustomBranding,
+		APIAccess:      bf.ApiAccess,
+		SupportLevel:   bf.SupportLevel,
+		SLA:            bf.Sla,
+	}
+	return json.Marshal(raw)
+}
+
+// marshalAllocationDetails converts AllocationDetails proto to JSONB bytes
+func marshalAllocationDetails(ad *pb.AllocationDetails) ([]byte, error) {
+	if ad == nil {
+		return []byte("{}"), nil
+	}
+	raw := struct {
+		Limit     *float64 `json:"limit,omitempty"`
+		UnitPrice float64  `json:"unit_price,omitempty"`
+		Unit      string   `json:"unit,omitempty"`
+	}{
+		Limit:     ad.Limit,
+		UnitPrice: ad.UnitPrice,
+		Unit:      ad.Unit,
+	}
+	return json.Marshal(raw)
+}
+
 // scanOverageRates scans a JSONB column into OverageRates proto
 func scanOverageRates(data []byte) *pb.OverageRates {
 	if data == nil || len(data) == 0 {
@@ -660,11 +715,58 @@ func (s *PurserServer) CreateSubscription(ctx context.Context, req *pb.CreateSub
 	return sub, nil
 }
 
+// validateCustomPricing validates custom pricing fields
+func validateCustomPricing(cp *pb.CustomPricing) error {
+	if cp == nil {
+		return nil
+	}
+	if cp.BasePrice < 0 {
+		return fmt.Errorf("base_price cannot be negative")
+	}
+	if cp.DiscountRate < 0 || cp.DiscountRate > 1 {
+		return fmt.Errorf("discount_rate must be between 0 and 1")
+	}
+	if cp.OverageRates != nil {
+		if err := validateAllocationDetails(cp.OverageRates.Bandwidth); err != nil {
+			return fmt.Errorf("overage_rates.bandwidth: %w", err)
+		}
+		if err := validateAllocationDetails(cp.OverageRates.Storage); err != nil {
+			return fmt.Errorf("overage_rates.storage: %w", err)
+		}
+		if err := validateAllocationDetails(cp.OverageRates.Compute); err != nil {
+			return fmt.Errorf("overage_rates.compute: %w", err)
+		}
+	}
+	return nil
+}
+
+// validateAllocationDetails validates allocation detail fields
+func validateAllocationDetails(ad *pb.AllocationDetails) error {
+	if ad == nil {
+		return nil
+	}
+	if ad.Limit != nil && *ad.Limit < 0 {
+		return fmt.Errorf("limit cannot be negative")
+	}
+	if ad.UnitPrice < 0 {
+		return fmt.Errorf("unit_price cannot be negative")
+	}
+	return nil
+}
+
 // UpdateSubscription updates an existing subscription
 func (s *PurserServer) UpdateSubscription(ctx context.Context, req *pb.UpdateSubscriptionRequest) (*pb.TenantSubscription, error) {
 	tenantID := req.GetTenantId()
 	if tenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	}
+
+	// Validate custom fields before saving
+	if err := validateCustomPricing(req.CustomPricing); err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid custom_pricing: %v", err)
+	}
+	if err := validateAllocationDetails(req.CustomAllocations); err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid custom_allocations: %v", err)
 	}
 
 	// Build dynamic update
@@ -690,6 +792,35 @@ func (s *PurserServer) UpdateSubscription(ctx context.Context, req *pb.UpdateSub
 	if req.Status != nil {
 		updates = append(updates, fmt.Sprintf("status = $%d", argIdx))
 		args = append(args, *req.Status)
+		argIdx++
+	}
+
+	// Handle custom billing fields (JSONB)
+	if req.CustomPricing != nil {
+		pricingJSON, err := marshalCustomPricing(req.CustomPricing)
+		if err != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "invalid custom_pricing: %v", err)
+		}
+		updates = append(updates, fmt.Sprintf("custom_pricing = $%d", argIdx))
+		args = append(args, pricingJSON)
+		argIdx++
+	}
+	if req.CustomFeatures != nil {
+		featuresJSON, err := marshalBillingFeatures(req.CustomFeatures)
+		if err != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "invalid custom_features: %v", err)
+		}
+		updates = append(updates, fmt.Sprintf("custom_features = $%d", argIdx))
+		args = append(args, featuresJSON)
+		argIdx++
+	}
+	if req.CustomAllocations != nil {
+		allocJSON, err := marshalAllocationDetails(req.CustomAllocations)
+		if err != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "invalid custom_allocations: %v", err)
+		}
+		updates = append(updates, fmt.Sprintf("custom_allocations = $%d", argIdx))
+		args = append(args, allocJSON)
 		argIdx++
 	}
 

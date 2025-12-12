@@ -45,6 +45,9 @@ models:
   ConnectionEvent:
     model:
       - frameworks/pkg/proto.ConnectionEvent
+    fields:
+      connectionAddr:
+        resolver: true  # Redact client IP for privacy
   StreamHealthMetric:
     model:
       - frameworks/pkg/proto.StreamHealthMetric
@@ -66,6 +69,9 @@ models:
   ViewerGeographic:
     model:
       - frameworks/pkg/proto.ConnectionEvent
+    fields:
+      connectionAddr:
+        resolver: true  # Redact client IP for privacy
   StreamEvent:
     model:
       - frameworks/pkg/proto.StreamEvent
@@ -104,6 +110,9 @@ models:
   ViewerMetrics:
     model:
       - frameworks/pkg/proto.ClientLifecycleUpdate
+    fields:
+      host:
+        resolver: true  # Redact client IP for privacy
   SystemHealthEvent:
     model:
       - frameworks/pkg/proto.NodeLifecycleUpdate

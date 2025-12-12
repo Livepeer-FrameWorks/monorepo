@@ -330,3 +330,109 @@ func (r *Resolver) DoCreatePayment(ctx context.Context, input model.CreatePaymen
 
 	return resp, nil
 }
+
+// DoUpdateSubscriptionCustomTerms updates custom billing terms for a tenant subscription
+func (r *Resolver) DoUpdateSubscriptionCustomTerms(ctx context.Context, tenantID string, input model.UpdateSubscriptionCustomTermsInput) (*pb.TenantSubscription, error) {
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Demo mode: returning synthetic subscription update")
+		return demo.GenerateBillingStatus().Subscription, nil
+	}
+
+	r.Logger.WithField("tenant_id", tenantID).Info("Updating subscription custom terms")
+
+	// Build the update request
+	req := &pb.UpdateSubscriptionRequest{
+		TenantId: tenantID,
+	}
+
+	// Convert custom pricing input to proto
+	if input.CustomPricing != nil {
+		pricing := &pb.CustomPricing{}
+		if input.CustomPricing.BasePrice != nil {
+			pricing.BasePrice = *input.CustomPricing.BasePrice
+		}
+		if input.CustomPricing.DiscountRate != nil {
+			pricing.DiscountRate = *input.CustomPricing.DiscountRate
+		}
+		if input.CustomPricing.OverageRates != nil {
+			pricing.OverageRates = convertOverageRatesInput(input.CustomPricing.OverageRates)
+		}
+		req.CustomPricing = pricing
+	}
+
+	// Convert custom features input to proto
+	if input.CustomFeatures != nil {
+		features := &pb.BillingFeatures{}
+		if input.CustomFeatures.Recording != nil {
+			features.Recording = *input.CustomFeatures.Recording
+		}
+		if input.CustomFeatures.Analytics != nil {
+			features.Analytics = *input.CustomFeatures.Analytics
+		}
+		if input.CustomFeatures.CustomBranding != nil {
+			features.CustomBranding = *input.CustomFeatures.CustomBranding
+		}
+		if input.CustomFeatures.APIAccess != nil {
+			features.ApiAccess = *input.CustomFeatures.APIAccess
+		}
+		if input.CustomFeatures.SupportLevel != nil {
+			features.SupportLevel = *input.CustomFeatures.SupportLevel
+		}
+		if input.CustomFeatures.SLA != nil {
+			features.Sla = *input.CustomFeatures.SLA
+		}
+		req.CustomFeatures = features
+	}
+
+	// Convert custom allocations input to proto
+	if input.CustomAllocations != nil {
+		req.CustomAllocations = convertAllocationDetailsInput(input.CustomAllocations)
+	}
+
+	// Call Purser to update the subscription
+	subscription, err := r.Clients.Purser.UpdateSubscription(ctx, req)
+	if err != nil {
+		r.Logger.WithError(err).
+			WithField("tenant_id", tenantID).
+			Error("Failed to update subscription custom terms")
+		return nil, fmt.Errorf("failed to update subscription: %w", err)
+	}
+
+	return subscription, nil
+}
+
+// Helper to convert AllocationDetailsInput to proto
+func convertAllocationDetailsInput(input *model.AllocationDetailsInput) *pb.AllocationDetails {
+	if input == nil {
+		return nil
+	}
+	ad := &pb.AllocationDetails{}
+	if input.Limit != nil {
+		ad.Limit = input.Limit
+	}
+	if input.UnitPrice != nil {
+		ad.UnitPrice = *input.UnitPrice
+	}
+	if input.Unit != nil {
+		ad.Unit = *input.Unit
+	}
+	return ad
+}
+
+// Helper to convert OverageRatesInput to proto
+func convertOverageRatesInput(input *model.OverageRatesInput) *pb.OverageRates {
+	if input == nil {
+		return nil
+	}
+	rates := &pb.OverageRates{}
+	if input.Bandwidth != nil {
+		rates.Bandwidth = convertAllocationDetailsInput(input.Bandwidth)
+	}
+	if input.Storage != nil {
+		rates.Storage = convertAllocationDetailsInput(input.Storage)
+	}
+	if input.Compute != nil {
+		rates.Compute = convertAllocationDetailsInput(input.Compute)
+	}
+	return rates
+}

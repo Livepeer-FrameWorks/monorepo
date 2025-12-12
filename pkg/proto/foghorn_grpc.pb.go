@@ -289,6 +289,7 @@ var ClipControlService_ServiceDesc = grpc.ServiceDesc{
 const (
 	DVRControlService_StartDVR_FullMethodName          = "/foghorn.DVRControlService/StartDVR"
 	DVRControlService_StopDVR_FullMethodName           = "/foghorn.DVRControlService/StopDVR"
+	DVRControlService_DeleteDVR_FullMethodName         = "/foghorn.DVRControlService/DeleteDVR"
 	DVRControlService_GetDVRStatus_FullMethodName      = "/foghorn.DVRControlService/GetDVRStatus"
 	DVRControlService_ListDVRRecordings_FullMethodName = "/foghorn.DVRControlService/ListDVRRecordings"
 )
@@ -303,6 +304,8 @@ type DVRControlServiceClient interface {
 	StartDVR(ctx context.Context, in *StartDVRRequest, opts ...grpc.CallOption) (*StartDVRResponse, error)
 	// StopDVR stops an active DVR recording
 	StopDVR(ctx context.Context, in *StopDVRRequest, opts ...grpc.CallOption) (*StopDVRResponse, error)
+	// DeleteDVR deletes a DVR recording and its files
+	DeleteDVR(ctx context.Context, in *DeleteDVRRequest, opts ...grpc.CallOption) (*DeleteDVRResponse, error)
 	// GetDVRStatus returns status of a DVR recording
 	GetDVRStatus(ctx context.Context, in *GetDVRStatusRequest, opts ...grpc.CallOption) (*DVRInfo, error)
 	// ListDVRRecordings lists all DVR recordings for a tenant
@@ -331,6 +334,16 @@ func (c *dVRControlServiceClient) StopDVR(ctx context.Context, in *StopDVRReques
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(StopDVRResponse)
 	err := c.cc.Invoke(ctx, DVRControlService_StopDVR_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *dVRControlServiceClient) DeleteDVR(ctx context.Context, in *DeleteDVRRequest, opts ...grpc.CallOption) (*DeleteDVRResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeleteDVRResponse)
+	err := c.cc.Invoke(ctx, DVRControlService_DeleteDVR_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -367,6 +380,8 @@ type DVRControlServiceServer interface {
 	StartDVR(context.Context, *StartDVRRequest) (*StartDVRResponse, error)
 	// StopDVR stops an active DVR recording
 	StopDVR(context.Context, *StopDVRRequest) (*StopDVRResponse, error)
+	// DeleteDVR deletes a DVR recording and its files
+	DeleteDVR(context.Context, *DeleteDVRRequest) (*DeleteDVRResponse, error)
 	// GetDVRStatus returns status of a DVR recording
 	GetDVRStatus(context.Context, *GetDVRStatusRequest) (*DVRInfo, error)
 	// ListDVRRecordings lists all DVR recordings for a tenant
@@ -386,6 +401,9 @@ func (UnimplementedDVRControlServiceServer) StartDVR(context.Context, *StartDVRR
 }
 func (UnimplementedDVRControlServiceServer) StopDVR(context.Context, *StopDVRRequest) (*StopDVRResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method StopDVR not implemented")
+}
+func (UnimplementedDVRControlServiceServer) DeleteDVR(context.Context, *DeleteDVRRequest) (*DeleteDVRResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeleteDVR not implemented")
 }
 func (UnimplementedDVRControlServiceServer) GetDVRStatus(context.Context, *GetDVRStatusRequest) (*DVRInfo, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetDVRStatus not implemented")
@@ -450,6 +468,24 @@ func _DVRControlService_StopDVR_Handler(srv interface{}, ctx context.Context, de
 	return interceptor(ctx, in, info, handler)
 }
 
+func _DVRControlService_DeleteDVR_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteDVRRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DVRControlServiceServer).DeleteDVR(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DVRControlService_DeleteDVR_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DVRControlServiceServer).DeleteDVR(ctx, req.(*DeleteDVRRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _DVRControlService_GetDVRStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetDVRStatusRequest)
 	if err := dec(in); err != nil {
@@ -500,6 +536,10 @@ var DVRControlService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "StopDVR",
 			Handler:    _DVRControlService_StopDVR_Handler,
+		},
+		{
+			MethodName: "DeleteDVR",
+			Handler:    _DVRControlService_DeleteDVR_Handler,
 		},
 		{
 			MethodName: "GetDVRStatus",

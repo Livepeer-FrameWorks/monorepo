@@ -1,6 +1,12 @@
 # Foghorn (Load Balancer)
 
-Go implementation of MistServer's load balancer, replacing the original C++ MistUtilLoad binary.
+Go implementation of MistServer's load balancer, replacing the original C++ MistUtilLoad binary. **No external load balancer required**—Foghorn handles all media routing.
+
+## Why Foghorn?
+
+- **No cloud dependency**: Replace AWS ALB, Cloudflare LB, or any external load balancer with Foghorn
+- **Self-hosted routing**: Run your own regional orchestration without vendor lock-in
+- **Tenant-aware**: Routes traffic with full tenant context for multi-tenant deployments
 
 ## Architecture Role
 

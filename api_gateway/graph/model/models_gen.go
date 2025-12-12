@@ -39,6 +39,10 @@ type DeleteClipResult interface {
 	IsDeleteClipResult()
 }
 
+type DeleteDVRResult interface {
+	IsDeleteDVRResult()
+}
+
 type DeleteStreamKeyResult interface {
 	IsDeleteStreamKeyResult()
 }
@@ -75,6 +79,12 @@ type UpdateStreamResult interface {
 
 type UpdateTenantResult interface {
 	IsUpdateTenantResult()
+}
+
+type AllocationDetailsInput struct {
+	Limit     *float64 `json:"limit,omitempty"`
+	UnitPrice *float64 `json:"unitPrice,omitempty"`
+	Unit      *string  `json:"unit,omitempty"`
 }
 
 type ArtifactStateEdge struct {
@@ -115,6 +125,8 @@ func (AuthError) IsStartDVRResult() {}
 
 func (AuthError) IsStopDVRResult() {}
 
+func (AuthError) IsDeleteDVRResult() {}
+
 func (AuthError) IsCreatePaymentResult() {}
 
 func (AuthError) IsUpdateTenantResult() {}
@@ -132,6 +144,15 @@ type AvailableCluster struct {
 	ClusterName string   `json:"clusterName"`
 	Tiers       []string `json:"tiers"`
 	AutoEnroll  bool     `json:"autoEnroll"`
+}
+
+type BillingFeaturesInput struct {
+	Recording      *bool   `json:"recording,omitempty"`
+	Analytics      *bool   `json:"analytics,omitempty"`
+	CustomBranding *bool   `json:"customBranding,omitempty"`
+	APIAccess      *bool   `json:"apiAccess,omitempty"`
+	SupportLevel   *string `json:"supportLevel,omitempty"`
+	SLA            *bool   `json:"sla,omitempty"`
 }
 
 type ClientMetrics5mConnection struct {
@@ -252,6 +273,12 @@ type CreateStreamKeyInput struct {
 	Name string `json:"name"`
 }
 
+type CustomPricingInput struct {
+	BasePrice    *float64           `json:"basePrice,omitempty"`
+	DiscountRate *float64           `json:"discountRate,omitempty"`
+	OverageRates *OverageRatesInput `json:"overageRates,omitempty"`
+}
+
 type DVRRecordingEdge struct {
 	Cursor string         `json:"cursor"`
 	Node   *proto.DVRInfo `json:"node"`
@@ -275,6 +302,8 @@ func (DeleteSuccess) IsDeleteClipResult() {}
 func (DeleteSuccess) IsDeleteStreamKeyResult() {}
 
 func (DeleteSuccess) IsStopDVRResult() {}
+
+func (DeleteSuccess) IsDeleteDVRResult() {}
 
 func (DeleteSuccess) IsRevokeDeveloperTokenResult() {}
 
@@ -372,9 +401,17 @@ func (NotFoundError) IsStartDVRResult() {}
 
 func (NotFoundError) IsStopDVRResult() {}
 
+func (NotFoundError) IsDeleteDVRResult() {}
+
 func (NotFoundError) IsRevokeDeveloperTokenResult() {}
 
 func (NotFoundError) IsRevokeBootstrapTokenResult() {}
+
+type OverageRatesInput struct {
+	Bandwidth *AllocationDetailsInput `json:"bandwidth,omitempty"`
+	Storage   *AllocationDetailsInput `json:"storage,omitempty"`
+	Compute   *AllocationDetailsInput `json:"compute,omitempty"`
+}
 
 type PageInfo struct {
 	StartCursor     *string `json:"startCursor,omitempty"`
@@ -415,25 +452,13 @@ func (this RateLimitError) GetCode() *string   { return this.Code }
 func (RateLimitError) IsCreateDeveloperTokenResult() {}
 
 type RebufferingEvent struct {
-	Timestamp            time.Time   `json:"timestamp"`
-	Stream               string      `json:"stream"`
-	NodeID               string      `json:"nodeId"`
-	BufferState          BufferState `json:"bufferState"`
-	PreviousState        BufferState `json:"previousState"`
-	RebufferStart        bool        `json:"rebufferStart"`
-	RebufferEnd          bool        `json:"rebufferEnd"`
-	PacketLossPercentage *float64    `json:"packetLossPercentage,omitempty"`
-}
-
-type RecordingEdge struct {
-	Cursor string           `json:"cursor"`
-	Node   *proto.Recording `json:"node"`
-}
-
-type RecordingsConnection struct {
-	Edges      []*RecordingEdge `json:"edges"`
-	PageInfo   *PageInfo        `json:"pageInfo"`
-	TotalCount int              `json:"totalCount"`
+	Timestamp     time.Time   `json:"timestamp"`
+	Stream        string      `json:"stream"`
+	NodeID        string      `json:"nodeId"`
+	BufferState   BufferState `json:"bufferState"`
+	PreviousState BufferState `json:"previousState"`
+	RebufferStart bool        `json:"rebufferStart"`
+	RebufferEnd   bool        `json:"rebufferEnd"`
 }
 
 type RoutingEventEdge struct {
@@ -562,6 +587,12 @@ type UpdateStreamInput struct {
 	Name        *string `json:"name,omitempty"`
 	Description *string `json:"description,omitempty"`
 	Record      *bool   `json:"record,omitempty"`
+}
+
+type UpdateSubscriptionCustomTermsInput struct {
+	CustomPricing     *CustomPricingInput     `json:"customPricing,omitempty"`
+	CustomFeatures    *BillingFeaturesInput   `json:"customFeatures,omitempty"`
+	CustomAllocations *AllocationDetailsInput `json:"customAllocations,omitempty"`
 }
 
 type UpdateTenantInput struct {

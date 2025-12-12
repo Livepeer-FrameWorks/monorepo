@@ -1,6 +1,12 @@
 # The Bridge (API Gateway)
 
-The Bridge is the GraphQL API Gateway that provides a unified interface for all client applications. It aggregates data from multiple microservices into a single, strongly-typed GraphQL API.
+The Bridge is the GraphQL API Gateway that provides a unified interface for all client applications. It aggregates data from multiple microservices into a single, strongly-typed GraphQL API—**same API whether self-hosted or cloud-managed**.
+
+## Why Bridge?
+
+- **Consistent API**: Identical GraphQL schema for self-hosted, hybrid, and managed deployments
+- **Tenant isolation**: JWT-based multi-tenancy ensures strict data boundaries
+- **No vendor lock-in**: Switch deployment models without changing client code
 
 ## What it does
 - GraphQL API endpoint for web app, mobile, and developer APIs

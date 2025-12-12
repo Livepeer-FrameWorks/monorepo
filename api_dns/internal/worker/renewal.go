@@ -65,17 +65,28 @@ func (w *RenewalWorker) renewCertificates(ctx context.Context) {
 	w.logger.WithField("count", len(certs)).Info("Found certificates expiring soon")
 
 	for _, cert := range certs {
+		// Extract tenant context from the certificate
+		tenantID := ""
+		if cert.TenantID.Valid {
+			tenantID = cert.TenantID.String
+		}
+
 		log := w.logger.WithField("domain", cert.Domain)
+		if tenantID != "" {
+			log = log.WithField("tenant_id", tenantID)
+		}
 		log.Info("Renewing certificate")
 
 		// Use contact email for ACME registration
+		// For tenant-specific certificates, we could look up tenant contact email from Quartermaster
+		// For now, use the platform default
 		email := os.Getenv("BRAND_CONTACT_EMAIL")
 		if email == "" {
 			email = "info@frameworks.network"
 		}
 
-		// Attempt renewal (IssueCertificate handles cache checking and ACME logic)
-		_, _, err := w.certManager.IssueCertificate(ctx, cert.Domain, email)
+		// Attempt renewal with tenant context
+		_, _, _, err := w.certManager.IssueCertificate(ctx, tenantID, cert.Domain, email)
 		if err != nil {
 			log.WithError(err).Error("Failed to renew certificate")
 			continue

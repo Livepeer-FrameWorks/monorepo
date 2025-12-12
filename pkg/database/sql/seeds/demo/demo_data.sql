@@ -227,3 +227,100 @@ VALUES
 ON CONFLICT (tenant_id, cluster_id, usage_type, period_start, period_end) DO UPDATE SET
     usage_value = EXCLUDED.usage_value,
     usage_details = EXCLUDED.usage_details;
+
+-- ============================================================================
+-- FOGHORN: Demo Clips
+-- ============================================================================
+-- Demo clip tied to demo stream - should match physical file in infrastructure/demo-recordings
+
+INSERT INTO foghorn.clips (
+    id, tenant_id, stream_id, user_id, clip_hash,
+    stream_name, title, description,
+    start_time, duration, clip_mode, requested_params,
+    node_id, storage_path, size_bytes, status,
+    created_at, updated_at
+) VALUES (
+    'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
+    '00000000-0000-0000-0000-000000000001',  -- Demo Tenant
+    '00000000-0000-0000-0000-000000000002',  -- Demo Stream
+    '550e8400-e29b-41d4-a716-446655440000',  -- Demo User
+    'a1b2c3d4e5f6789012345678901234ab',      -- 32-char hex (must match filename)
+    'demo_live_stream_001',
+    'Demo Highlight Clip',
+    'A 10-second demo clip showcasing platform capabilities',
+    1702382400000,  -- Dec 12, 2023 12:00:00 UTC (ms)
+    10000,          -- 10 seconds (matches actual file)
+    'absolute',
+    '{"start_unix": 1702382400, "duration_sec": 10}',
+    'edge-node-1',
+    '/var/lib/mistserver/recordings/clips/demo_live_stream_001/a1b2c3d4e5f6789012345678901234ab.mp4',
+    251904,         -- Actual file size: ~246KB
+    'ready',
+    NOW() - INTERVAL '2 hours',
+    NOW() - INTERVAL '2 hours'
+) ON CONFLICT (clip_hash) DO UPDATE SET
+    status = 'ready',
+    updated_at = NOW();
+
+-- ============================================================================
+-- FOGHORN: Demo DVR Recordings
+-- ============================================================================
+-- Demo DVR request - should match HLS manifest in infrastructure/demo-recordings
+
+INSERT INTO foghorn.dvr_requests (
+    id, request_hash, tenant_id, stream_id, internal_name,
+    storage_node_id, storage_node_url,
+    status, started_at, ended_at, duration_seconds, size_bytes, manifest_path,
+    created_at, updated_at
+) VALUES (
+    'b1cdef12-3456-789a-bcde-f0123456789a',
+    'fedcba98765432109876543210fedcba',      -- 32-char hex (must match filename)
+    '00000000-0000-0000-0000-000000000001',  -- Demo Tenant
+    '00000000-0000-0000-0000-000000000002',  -- Demo Stream
+    'demo_live_stream_001',
+    'storage-demo-01',                        -- Demo storage node ID
+    'http://edge-node-1:4242',
+    'completed',
+    NOW() - INTERVAL '4 hours',
+    NOW() - INTERVAL '4 hours' + INTERVAL '18 seconds',  -- 18 seconds of HLS content
+    18,             -- 18 seconds (matches actual HLS duration)
+    513176,         -- Actual total size: ~501KB (2 segments + manifest)
+    '/var/lib/mistserver/recordings/dvr/demo_live_stream_001/fedcba98765432109876543210fedcba.m3u8',
+    NOW() - INTERVAL '4 hours',
+    NOW() - INTERVAL '4 hours'
+) ON CONFLICT (request_hash) DO UPDATE SET
+    status = 'completed',
+    updated_at = NOW();
+
+-- ============================================================================
+-- FOGHORN: Artifact Registry
+-- ============================================================================
+-- Register both demo artifacts so Helmsman/Foghorn can resolve them for VOD playback
+
+INSERT INTO foghorn.artifact_registry (
+    id, node_id, clip_hash, stream_name, file_path, size_bytes, created_at, last_seen_at
+) VALUES
+-- Demo clip artifact
+(
+    'c2def123-4567-89ab-cdef-012345678901',
+    'edge-node-1',
+    'a1b2c3d4e5f6789012345678901234ab',
+    'demo_live_stream_001',
+    '/var/lib/mistserver/recordings/clips/demo_live_stream_001/a1b2c3d4e5f6789012345678901234ab.mp4',
+    251904,
+    NOW() - INTERVAL '2 hours',
+    NOW()
+),
+-- Demo DVR artifact (HLS manifest)
+(
+    'd3ef1234-5678-9abc-def0-123456789012',
+    'edge-node-1',
+    'fedcba98765432109876543210fedcba',
+    'demo_live_stream_001',
+    '/var/lib/mistserver/recordings/dvr/demo_live_stream_001/fedcba98765432109876543210fedcba.m3u8',
+    513176,
+    NOW() - INTERVAL '4 hours',
+    NOW()
+)
+ON CONFLICT (node_id, clip_hash) DO UPDATE SET
+    last_seen_at = NOW();

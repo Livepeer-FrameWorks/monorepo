@@ -19,8 +19,14 @@
     qualityTier?: string | null;
     bitrate?: number | null;
     fps?: number | null;
-    packetLossPercentage?: number | null;
     issuesDescription?: string | null;
+  }
+
+  interface StreamAnalytics {
+    packetsSent?: number | null;
+    packetsLost?: number | null;
+    packetsRetrans?: number | null;
+    packetLossRate?: number | null;
   }
 
   interface Props {
@@ -28,11 +34,12 @@
     streamName: string;
     isLive: boolean;
     health: StreamHealth | null;
+    analytics?: StreamAnalytics | null;
     collapsed?: boolean;
     onToggle?: () => void;
   }
 
-  let { streamId, streamName, isLive, health, collapsed = false, onToggle }: Props = $props();
+  let { streamId, streamName, isLive, health, analytics = null, collapsed = false, onToggle }: Props = $props();
 
   // Derive global health state
   let globalHealth = $derived.by((): HealthState => {
@@ -41,12 +48,10 @@
 
     // Check for critical issues
     if (health.bufferState === "DRY") return "UNHEALTHY";
-    if ((health.packetLossPercentage ?? 0) > 0.05) return "UNHEALTHY";
     if ((health.bufferHealth ?? 1) < 0.3) return "UNHEALTHY";
 
     // Check for warnings
     if (health.bufferState === "EMPTY") return "HEALTHY"; // EMPTY is normal
-    if ((health.packetLossPercentage ?? 0) > 0.02) return "HEALTHY"; // Minor loss is ok
 
     return "HEALTHY";
   });
@@ -75,14 +80,15 @@
       label: health.qualityTier ?? "N/A",
     });
 
-    // Delivery check (based on packet loss)
-    const lossPercent = (health.packetLossPercentage ?? 0) * 100;
-    const deliveryStatus = lossPercent > 5 ? "error" : lossPercent > 2 ? "warning" : "ok";
-    checks.push({
-      name: "Delivery",
-      status: deliveryStatus,
-      label: lossPercent > 0 ? `${lossPercent.toFixed(1)}% loss` : "OK",
-    });
+    // Packet loss check (from stream analytics)
+    if (analytics?.packetLossRate !== undefined && analytics.packetLossRate !== null) {
+      const lossRate = analytics.packetLossRate;
+      checks.push({
+        name: "Packet Loss",
+        status: lossRate > 0.05 ? "error" : lossRate > 0.01 ? "warning" : "ok",
+        label: `${(lossRate * 100).toFixed(2)}%`,
+      });
+    }
 
     return checks;
   });

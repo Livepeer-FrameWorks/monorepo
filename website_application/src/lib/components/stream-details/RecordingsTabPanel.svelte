@@ -1,13 +1,44 @@
 <script lang="ts">
+  import { goto } from "$app/navigation";
   import { getIconComponent } from "$lib/iconUtils";
   import { formatDate, formatDuration } from "$lib/utils/stream-helpers";
   import { Button } from "$lib/components/ui/button";
+  import { getContentDeliveryUrls } from "$lib/config";
+  import PlaybackProtocols from "$lib/components/PlaybackProtocols.svelte";
 
-  let { recordings, onEnableRecording, onCopyLink, resolveUrl } = $props();
+  interface Recording {
+    dvrHash: string;
+    internalName?: string | null;
+    manifestPath?: string | null;
+    status?: string | null;
+    createdAt?: string | null;
+    durationSeconds?: number | null;
+  }
 
-  const CopyIcon = getIconComponent("Copy");
+  interface Props {
+    recordings: Recording[];
+    onEnableRecording?: () => void;
+    onCopyLink?: (url: string) => void;
+  }
+
+  let { recordings, onEnableRecording, onCopyLink }: Props = $props();
+
+  let expandedRecording = $state<string | null>(null);
+
+  // Get delivery URLs for a recording using dvrHash
+  function getRecordingUrls(dvrHash: string | undefined | null) {
+    if (!dvrHash) return null;
+    return getContentDeliveryUrls(dvrHash, "dvr");
+  }
+
+  function playRecording(dvrHash: string) {
+    goto(`/view?type=dvr&id=${dvrHash}`);
+  }
+
   const DownloadIcon = getIconComponent("Download");
   const PlayIcon = getIconComponent("Play");
+  const ChevronDownIcon = getIconComponent("ChevronDown");
+  const ChevronUpIcon = getIconComponent("ChevronUp");
 </script>
 
 <div class="slab border-t border-[hsl(var(--tn-fg-gutter)/0.3)]">
@@ -36,81 +67,80 @@
     </div>
   {:else}
     <div class="slab-body--flush">
-      {#each recordings as recording (recording.id ?? recording.asset?.id ?? recording.playbackId)}
-        <div class="p-6 border-b border-[hsl(var(--tn-fg-gutter)/0.3)] last:border-0">
-          <div
-            class="flex flex-col md:flex-row md:items-center md:justify-between gap-4"
-          >
-            <div class="space-y-2">
-              <div class="flex items-center space-x-2">
-                <h5 class="text-lg font-semibold text-foreground">
-                  {recording.asset?.name || "Recording"}
-                </h5>
-                <span
-                  class="text-xs bg-info/20 text-info px-2 py-1 rounded-full font-medium"
-                >
-                  {recording.status || "Ready"}
-                </span>
+      {#each recordings as recording (recording.dvrHash)}
+        {@const urls = getRecordingUrls(recording.dvrHash)}
+        {@const isExpanded = expandedRecording === recording.dvrHash}
+        <div class="border-b border-[hsl(var(--tn-fg-gutter)/0.3)] last:border-0">
+          <!-- Recording header -->
+          <div class="p-4">
+            <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+              <div class="space-y-1">
+                <div class="flex items-center space-x-2">
+                  <h5 class="text-base font-semibold text-foreground truncate max-w-md" title={recording.dvrHash}>
+                    {recording.internalName || recording.dvrHash}
+                  </h5>
+                  <span
+                    class="text-xs bg-info/20 text-info px-2 py-1 rounded-full font-medium"
+                  >
+                    {recording.status || "Ready"}
+                  </span>
+                </div>
+                <p class="text-xs text-muted-foreground">
+                  Created: {recording.createdAt ? formatDate(recording.createdAt) : "N/A"} • Duration: {formatDuration((recording.durationSeconds || 0) * 1000)}
+                </p>
               </div>
-              <p class="text-sm text-muted-foreground">
-                Created: {formatDate(recording.createdAt)}
-              </p>
-              <p class="text-sm text-muted-foreground">
-                Duration: {formatDuration(recording.asset?.duration || 0)}
-              </p>
-              <div class="flex items-center space-x-2">
-                <code
-                  class="px-3 py-1 bg-muted/20 text-xs font-mono text-foreground overflow-auto"
-                >
-                  {recording.asset?.downloadUrl || "No download available yet"}
-                </code>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onclick={() =>
-                    onCopyLink(
-                      recording.asset?.playbackId ||
-                        recording.asset?.downloadUrl,
-                    )}
-                  disabled={!recording.asset?.playbackId &&
-                    !recording.asset?.downloadUrl}
-                  class="gap-2 border border-border/30"
-                >
-                  <CopyIcon class="w-4 h-4" />
-                  Copy Link
-                </Button>
-              </div>
-            </div>
 
-            <div class="flex items-center space-x-2">
-              {#if recording.asset?.downloadUrl}
+              <div class="flex items-center space-x-2">
+                {#if urls?.primary.hls}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onclick={() => playRecording(recording.dvrHash)}
+                    class="gap-2 border border-border/30"
+                  >
+                    <PlayIcon class="w-4 h-4" />
+                    Play
+                  </Button>
+                  <Button
+                    href={urls.primary.mp4}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    variant="ghost"
+                    size="sm"
+                    class="gap-2 border border-border/30"
+                  >
+                    <DownloadIcon class="w-4 h-4" />
+                    Download
+                  </Button>
+                {/if}
                 <Button
-                  href={recording.asset.downloadUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
                   variant="ghost"
                   size="sm"
-                  class="gap-2 border border-border/30"
+                  onclick={() => expandedRecording = isExpanded ? null : recording.dvrHash}
+                  class="border border-border/30"
+                  title={isExpanded ? "Collapse protocols" : "Show all protocols"}
                 >
-                  <DownloadIcon class="w-4 h-4" />
-                  Download
+                  {#if isExpanded}
+                    <ChevronUpIcon class="w-4 h-4" />
+                  {:else}
+                    <ChevronDownIcon class="w-4 h-4" />
+                  {/if}
                 </Button>
-              {/if}
-              {#if recording.asset?.playbackId}
-                <Button
-                  href={resolveUrl(
-                    `/view?type=recording&id=${recording.asset.playbackId}`,
-                  )}
-                  variant="ghost"
-                  size="sm"
-                  class="gap-2 border border-border/30"
-                >
-                  <PlayIcon class="w-4 h-4" />
-                  Watch
-                </Button>
-              {/if}
+              </div>
             </div>
           </div>
+
+          <!-- Expanded protocol URLs -->
+          {#if isExpanded}
+            <div class="px-4 pb-4 border-t border-[hsl(var(--tn-fg-gutter)/0.2)] bg-muted/5">
+              <PlaybackProtocols
+                contentId={recording.dvrHash}
+                contentType="dvr"
+                showPrimary={true}
+                showAdditional={true}
+              />
+            </div>
+          {/if}
         </div>
       {/each}
     </div>

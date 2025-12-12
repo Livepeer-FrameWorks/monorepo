@@ -6,7 +6,7 @@ WORKDIR /workspace
 
 RUN apk add --no-cache git ca-certificates
 
-COPY pkg/ pkg/
+COPY pkg/go.mod pkg/go.sum pkg/
 COPY api_forms/go.mod api_forms/go.sum api_forms/
 
 WORKDIR /workspace/api_forms
@@ -14,6 +14,9 @@ WORKDIR /workspace/api_forms
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     go mod download
+
+WORKDIR /workspace
+COPY pkg/ pkg/
 
 WORKDIR /workspace
 COPY api_forms/ api_forms/

@@ -1495,7 +1495,15 @@ func toInt64(v interface{}) (int64, bool) {
 
 // resolveLiveViewerEndpoint uses load balancer to find optimal edge nodes with fallbacks
 func resolveLiveViewerEndpoint(req *pb.ViewerEndpointRequest, lat, lon float64) (*pb.ViewerEndpointResponse, error) {
-	// Resolve view key to internal name for load balancing
+	// Delegate to consolidated control package function
+	deps := &control.PlaybackDependencies{
+		DB:     db,
+		LB:     lb,
+		GeoLat: lat,
+		GeoLon: lon,
+	}
+
+	// Resolve view key to internal name
 	viewKey := req.ContentId
 	ctx := context.Background()
 	target, err := control.ResolveStream(ctx, viewKey)
@@ -1505,294 +1513,62 @@ func resolveLiveViewerEndpoint(req *pb.ViewerEndpointRequest, lat, lon float64) 
 	if target.InternalName == "" {
 		return nil, fmt.Errorf("stream not found")
 	}
-	internalName := target.InternalName // e.g., "live+actual-internal-name"
 
-	// Use load balancer with internal name to find nodes that have the stream
-	lbctx := context.WithValue(ctx, "cap", "edge")
-	// Viewer endpoint resolution -> isSourceSelection=false (allow replicated nodes)
-	nodes, err := lb.GetTopNodesWithScores(lbctx, internalName, lat, lon, make(map[string]int), "", 5, false)
+	response, err := control.ResolveLivePlayback(ctx, deps, viewKey, target.InternalName)
 	if err != nil {
-		return nil, fmt.Errorf("no suitable edge nodes available: %v", err)
+		return nil, err
 	}
 
-	var (
-		endpoints      []*pb.ViewerEndpoint
-		primaryNodeLat float64
-		primaryNodeLon float64
-	)
-
-	for _, node := range nodes {
-		// Get outputs from control package
-		nodeOutputs, exists := control.GetNodeOutputs(node.NodeID)
-		if !exists || nodeOutputs.Outputs == nil {
-			continue
-		}
-
-		// Build URLs with view key (MistServer resolves via PLAY_REWRITE trigger)
-		var protocol, nodeURL string
-		if webrtcURL, ok := nodeOutputs.Outputs["WebRTC"].(string); ok {
-			protocol = "webrtc"
-			nodeURL = strings.Replace(webrtcURL, "$", viewKey, -1)
-			nodeURL = strings.Replace(nodeURL, "HOST", strings.TrimPrefix(nodeOutputs.BaseURL, "https://"), -1)
-		} else if hlsURL, ok := nodeOutputs.Outputs["HLS"].(string); ok {
-			protocol = "hls"
-			nodeURL = strings.Replace(hlsURL, "$", viewKey, -1)
-			nodeURL = strings.Trim(nodeURL, "[\"")
-		}
-
-		if nodeURL == "" {
-			continue
-		}
-
-		// Calculate actual geo distance
-		geoDistance := 0.0
-		if lat != 0 && lon != 0 && node.GeoLatitude != 0 && node.GeoLongitude != 0 {
-			const toRad = math.Pi / 180.0
-			lat1 := lat * toRad
-			lon1 := lon * toRad
-			lat2 := node.GeoLatitude * toRad
-			lon2 := node.GeoLongitude * toRad
-			val := math.Sin(lat1)*math.Sin(lat2) + math.Cos(lat1)*math.Cos(lat2)*math.Cos(lon1-lon2)
-			if val > 1 {
-				val = 1
-			}
-			if val < -1 {
-				val = -1
-			}
-			angle := math.Acos(val)
-			geoDistance = 6371.0 * angle
-		}
-
-		endpoint := &pb.ViewerEndpoint{
-			NodeId:      node.NodeID,
-			BaseUrl:     nodeOutputs.BaseURL,
-			Protocol:    protocol,
-			Url:         nodeURL,
-			GeoDistance: geoDistance,
-			LoadScore:   float64(node.Score),
-			Outputs:     buildOutputsMap(nodeOutputs.BaseURL, nodeOutputs.Outputs, viewKey, true),
-		}
-		endpoints = append(endpoints, endpoint)
-
-		// Keep geo for primary (first) node
-		if len(endpoints) == 1 {
-			primaryNodeLat = node.GeoLatitude
-			primaryNodeLon = node.GeoLongitude
-		}
+	// Emit routing event for analytics
+	if response.Primary != nil {
+		emitViewerRoutingEvent(req, response.Primary, lat, lon, 0, 0, target.InternalName)
 	}
 
-	if len(endpoints) == 0 {
-		return nil, fmt.Errorf("no nodes with suitable outputs available")
-	}
-
-	emitViewerRoutingEvent(req, endpoints[0], lat, lon, primaryNodeLat, primaryNodeLon, target.InternalName)
-
-	return &pb.ViewerEndpointResponse{
-		Primary:   endpoints[0],
-		Fallbacks: endpoints[1:],
-		Metadata:  buildLivePlaybackMetadata(req, endpoints),
-	}, nil
+	return response, nil
 }
 
 // resolveDVRViewerEndpoint queries database for DVR storage node
 func resolveDVRViewerEndpoint(req *pb.ViewerEndpointRequest) (*pb.ViewerEndpointResponse, error) {
-	var (
-		tenantID      string
-		internalName  string
-		nodeID        string
-		status        string
-		duration      sql.NullInt64
-		recordingSize sql.NullInt64
-		manifestPath  sql.NullString
-		createdAt     sql.NullTime
-	)
+	// Delegate to consolidated control package function
+	deps := &control.PlaybackDependencies{
+		DB: db,
+		LB: lb,
+	}
 
-	err := db.QueryRow(`
-		SELECT tenant_id, internal_name, storage_node_id, status, duration_seconds, size_bytes, manifest_path, created_at
-		FROM foghorn.dvr_requests
-		WHERE request_hash = $1 AND status = 'completed'
-	`, req.ContentId).Scan(&tenantID, &internalName, &nodeID, &status, &duration, &recordingSize, &manifestPath, &createdAt)
-
+	ctx := context.Background()
+	response, err := control.ResolveDVRPlayback(ctx, deps, req.ContentId)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("DVR recording not found")
-		}
-		return nil, fmt.Errorf("failed to query DVR: %v", err)
+		return nil, err
 	}
 
-	nodeOutputs, exists := control.GetNodeOutputs(nodeID)
-
-	if !exists || nodeOutputs.Outputs == nil {
-		return nil, fmt.Errorf("storage node outputs not available")
+	// Emit routing event for analytics
+	if response.Primary != nil && response.Metadata != nil {
+		emitViewerRoutingEvent(req, response.Primary, 0, 0, 0, 0, response.Metadata.GetClipSource())
 	}
 
-	// Use DVR hash directly in URLs (MistServer resolves via PLAY_REWRITE trigger)
-	dvrHash := req.ContentId
-	var protocol, nodeURL string
-
-	if httpURL, ok := nodeOutputs.Outputs["HTTP"].(string); ok {
-		protocol = "http"
-		nodeURL = strings.Replace(httpURL, "$", dvrHash, -1)
-		nodeURL = strings.Trim(nodeURL, "[\"")
-	} else if hlsURL, ok := nodeOutputs.Outputs["HLS"].(string); ok {
-		protocol = "hls"
-		nodeURL = strings.Replace(hlsURL, "$", dvrHash, -1)
-		nodeURL = strings.Trim(nodeURL, "[\"")
-	}
-
-	if nodeURL == "" {
-		return nil, fmt.Errorf("no suitable outputs for DVR playback")
-	}
-
-	endpoint := &pb.ViewerEndpoint{
-		NodeId:   nodeID,
-		BaseUrl:  nodeOutputs.BaseURL,
-		Protocol: protocol,
-		Url:      nodeURL,
-		Outputs:  buildOutputsMap(nodeOutputs.BaseURL, nodeOutputs.Outputs, dvrHash, false),
-	}
-
-	// Emit routing event for DVR playback (storage node choice)
-	emitViewerRoutingEvent(req, endpoint, 0, 0, 0, 0, internalName)
-
-	meta := &pb.PlaybackMetadata{
-		Status:        status,
-		IsLive:        false,
-		TenantId:      tenantID,
-		ContentId:     req.ContentId,
-		ContentType:   req.ContentType,
-		DvrStatus:     status,
-		ProtocolHints: protocolHintsFromEndpoints([]*pb.ViewerEndpoint{endpoint}),
-	}
-
-	if duration.Valid {
-		d := int32(duration.Int64)
-		meta.DurationSeconds = &d
-	}
-	if recordingSize.Valid {
-		meta.RecordingSizeBytes = &recordingSize.Int64
-	}
-	if manifestPath.Valid {
-		meta.DvrSourceUri = manifestPath.String
-	}
-	if createdAt.Valid {
-		meta.CreatedAt = timestamppb.New(createdAt.Time)
-	}
-	if internalName != "" {
-		meta.ClipSource = &internalName
-	}
-
-	return &pb.ViewerEndpointResponse{
-		Primary:  endpoint,
-		Metadata: meta,
-	}, nil
+	return response, nil
 }
 
 // resolveClipViewerEndpoint queries database for clip storage node
 func resolveClipViewerEndpoint(req *pb.ViewerEndpointRequest) (*pb.ViewerEndpointResponse, error) {
-	var (
-		tenantID     string
-		nodeID       string
-		status       string
-		sourceStream string
-		title        sql.NullString
-		duration     sql.NullInt64
-		fileSize     sql.NullInt64
-		createdAt    sql.NullTime
-		baseURL      sql.NullString
-		storagePath  sql.NullString
-	)
+	// Delegate to consolidated control package function
+	deps := &control.PlaybackDependencies{
+		DB: db,
+		LB: lb,
+	}
 
-	err := db.QueryRow(`
-		SELECT tenant_id, node_id, status, stream_name, title, duration, size_bytes, created_at, base_url, storage_path
-		FROM foghorn.clips
-		WHERE clip_hash = $1 AND status = 'ready'
-	`, req.ContentId).Scan(&tenantID, &nodeID, &status, &sourceStream, &title, &duration, &fileSize, &createdAt, &baseURL, &storagePath)
-
+	ctx := context.Background()
+	response, err := control.ResolveClipPlayback(ctx, deps, req.ContentId)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("clip not found")
-		}
-		return nil, fmt.Errorf("failed to query clip: %v", err)
+		return nil, err
 	}
 
-	nodeOutputs, exists := control.GetNodeOutputs(nodeID)
-
-	if !exists || nodeOutputs.Outputs == nil {
-		return nil, fmt.Errorf("storage node outputs not available")
+	// Emit routing event for analytics
+	if response.Primary != nil && response.Metadata != nil {
+		emitViewerRoutingEvent(req, response.Primary, 0, 0, 0, 0, response.Metadata.GetClipSource())
 	}
 
-	// Use clip hash directly in URLs (MistServer resolves via PLAY_REWRITE trigger)
-	clipHash := req.ContentId
-	var protocol, nodeURL string
-
-	if httpURL, ok := nodeOutputs.Outputs["HTTP"].(string); ok {
-		protocol = "http"
-		nodeURL = strings.Replace(httpURL, "$", clipHash, -1)
-		nodeURL = strings.Trim(nodeURL, "[\"")
-	} else if hlsURL, ok := nodeOutputs.Outputs["HLS"].(string); ok {
-		protocol = "hls"
-		nodeURL = strings.Replace(hlsURL, "$", clipHash, -1)
-		nodeURL = strings.Trim(nodeURL, "[\"")
-	}
-
-	if nodeURL == "" {
-		return nil, fmt.Errorf("no suitable outputs for clip playback")
-	}
-
-	endpoint := &pb.ViewerEndpoint{
-		NodeId:   nodeID,
-		BaseUrl:  nodeOutputs.BaseURL,
-		Protocol: protocol,
-		Url:      nodeURL,
-		Outputs:  buildOutputsMap(nodeOutputs.BaseURL, nodeOutputs.Outputs, clipHash, false),
-	}
-
-	// Emit routing event for clip playback (storage node choice)
-	emitViewerRoutingEvent(req, endpoint, 0, 0, 0, 0, sourceStream)
-
-	meta := &pb.PlaybackMetadata{
-		Status:        status,
-		IsLive:        false,
-		TenantId:      tenantID,
-		ContentId:     req.ContentId,
-		ContentType:   req.ContentType,
-		ProtocolHints: protocolHintsFromEndpoints([]*pb.ViewerEndpoint{endpoint}),
-	}
-	if sourceStream != "" {
-		meta.ClipSource = &sourceStream
-	}
-	if title.Valid {
-		meta.Title = &title.String
-	}
-	if duration.Valid {
-		totalMs := duration.Int64
-		secs := int32(totalMs / 1000)
-		if totalMs%1000 != 0 {
-			secs++
-		}
-		if secs < 0 {
-			secs = 0
-		}
-		meta.DurationSeconds = &secs
-	}
-	if fileSize.Valid {
-		meta.RecordingSizeBytes = &fileSize.Int64
-	}
-	if createdAt.Valid {
-		meta.CreatedAt = timestamppb.New(createdAt.Time)
-	}
-	if baseURL.Valid && storagePath.Valid {
-		combined := strings.TrimRight(baseURL.String, "/") + "/" + strings.TrimLeft(storagePath.String, "/")
-		meta.DvrSourceUri = combined
-	} else if storagePath.Valid {
-		meta.DvrSourceUri = storagePath.String
-	}
-
-	return &pb.ViewerEndpointResponse{
-		Primary:  endpoint,
-		Metadata: meta,
-	}, nil
+	return response, nil
 }
 
 // HandleGenericViewerPlayback handles /play/* and /resolve/* endpoints for generic players
@@ -1800,6 +1576,7 @@ func resolveClipViewerEndpoint(req *pb.ViewerEndpointRequest) (*pb.ViewerEndpoin
 //   - /play/:viewkey or /resolve/:viewkey -> Returns full JSON with all protocols
 //   - /play/:viewkey/:protocol or /play/:viewkey.:protocol -> 307 redirect to edge node
 //   - Auto-detects protocol from extension (.m3u8 -> HLS, .webrtc -> WebRTC, etc.)
+//   - Supports view keys (live), clip hashes, and DVR hashes via unified resolution
 func HandleGenericViewerPlayback(c *gin.Context) {
 	// Extract the full path after /play or /resolve
 	fullPath := c.Param("path")
@@ -1865,36 +1642,28 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 		return
 	}
 
-	// Resolve view key to internal name using Commodore
-	if commodoreClient == nil {
-		logger.Error("Commodore client not initialized")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Service configuration error"})
-		return
-	}
-
+	// UNIFIED RESOLUTION: Use control.ResolveContent to determine content type
+	// This handles: view keys (live), clip hashes, and DVR hashes
 	ctx := context.Background()
-	resolveResp, err := commodoreClient.ResolvePlaybackID(ctx, viewKey)
+	resolution, err := control.ResolveContent(ctx, viewKey)
 	if err != nil {
-		logger.WithError(err).WithField("view_key", viewKey).Warn("Failed to resolve view key")
+		logger.WithError(err).WithField("view_key", viewKey).Warn("Failed to resolve content")
 		c.JSON(http.StatusNotFound, gin.H{"error": "Invalid or expired view key"})
 		return
 	}
 
-	if resolveResp.InternalName == "" {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Stream not found"})
-		return
+	contentType := resolution.ContentType
+	contentID := resolution.ContentId
+	if contentID == "" {
+		contentID = viewKey // Fallback to original input
 	}
 
-	// Determine content type (default to live for now, can be enhanced)
-	contentType := "live"
-	contentID := resolveResp.InternalName
-
-	// Check if it's a clip (UUID format) or DVR hash
-	if len(contentID) == 36 && strings.Count(contentID, "-") == 4 {
-		// Could be a clip UUID, try to determine type
-		// For now, assume live streams use internal_name format
-		contentType = "live"
-	}
+	logger.WithFields(logging.Fields{
+		"view_key":     viewKey,
+		"content_type": contentType,
+		"content_id":   contentID,
+		"fixed_node":   resolution.FixedNode,
+	}).Debug("Resolved content via unified resolution")
 
 	// Normalize protocol
 	protocol = normalizeProtocol(protocol)
@@ -2015,16 +1784,54 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 func normalizeProtocol(proto string) string {
 	proto = strings.ToLower(proto)
 	switch proto {
+	// Adaptive streaming
 	case "m3u8", "hls":
 		return "hls"
 	case "mpd", "dash":
 		return "dash"
+	case "cmaf", "llhls", "ll-hls":
+		return "cmaf"
+	// Low latency
 	case "webrtc", "whep":
 		return "webrtc"
 	case "srt":
 		return "srt"
+	// Legacy streaming
 	case "rtmp":
 		return "rtmp"
+	case "rtsp":
+		return "rtsp"
+	// Container formats
+	case "mp4", "progressive":
+		return "mp4"
+	case "webm":
+		return "webm"
+	case "mkv", "matroska":
+		return "mkv"
+	case "ts", "mpegts", "mpeg-ts":
+		return "ts"
+	case "flv", "flash":
+		return "flv"
+	case "aac", "audio":
+		return "aac"
+	// Microsoft/Adobe
+	case "smooth", "smoothstreaming", "hss":
+		return "smoothstreaming"
+	case "hds", "f4m", "dynamic":
+		// MistServer uses /dynamic/ path for HDS
+		return "hds"
+	// Other
+	case "sdp":
+		return "sdp"
+	case "h264", "rawh264", "raw":
+		return "h264"
+	case "dtsc", "mist":
+		return "dtsc"
+	case "wsmp4":
+		return "wsmp4"
+	case "wswebrtc":
+		return "wswebrtc"
+	// Wildcards
 	case "any", "all", "":
 		return "any"
 	default:
@@ -2045,12 +1852,20 @@ func findProtocolURL(outputs map[string]*pb.OutputEndpoint, protocol string) str
 		}
 	}
 
-	// Try fuzzy matching
+	// Try fuzzy matching for protocols that MistServer may report with different names
 	switch protocol {
 	case "hls":
 		for outputName, output := range outputs {
 			outputLower := strings.ToLower(outputName)
 			if strings.Contains(outputLower, "hls") {
+				return output.Url
+			}
+		}
+	case "hlscmaf", "cmaf":
+		// CMAF output serves LL-HLS, DASH, and Smooth Streaming based on manifest path
+		for outputName, output := range outputs {
+			outputLower := strings.ToLower(outputName)
+			if strings.Contains(outputLower, "cmaf") || strings.Contains(outputLower, "ll-hls") || strings.Contains(outputLower, "llhls") || strings.Contains(outputLower, "low latency") {
 				return output.Url
 			}
 		}
@@ -2072,6 +1887,118 @@ func findProtocolURL(outputs map[string]*pb.OutputEndpoint, protocol string) str
 		for outputName, output := range outputs {
 			outputLower := strings.ToLower(outputName)
 			if strings.Contains(outputLower, "html") || strings.Contains(outputLower, "embed") {
+				return output.Url
+			}
+		}
+	case "ts", "mpegts", "mpeg-ts":
+		for outputName, output := range outputs {
+			outputLower := strings.ToLower(outputName)
+			if strings.Contains(outputLower, "ts") || strings.Contains(outputLower, "mpeg") {
+				return output.Url
+			}
+		}
+	case "mp4":
+		for outputName, output := range outputs {
+			outputLower := strings.ToLower(outputName)
+			if strings.Contains(outputLower, "mp4") || strings.Contains(outputLower, "progressive") {
+				return output.Url
+			}
+		}
+	case "webm":
+		for outputName, output := range outputs {
+			outputLower := strings.ToLower(outputName)
+			if strings.Contains(outputLower, "webm") {
+				return output.Url
+			}
+		}
+	case "mkv", "matroska":
+		for outputName, output := range outputs {
+			outputLower := strings.ToLower(outputName)
+			if strings.Contains(outputLower, "mkv") || strings.Contains(outputLower, "matroska") {
+				return output.Url
+			}
+		}
+	case "flv", "flash":
+		for outputName, output := range outputs {
+			outputLower := strings.ToLower(outputName)
+			if strings.Contains(outputLower, "flv") || strings.Contains(outputLower, "flash") {
+				return output.Url
+			}
+		}
+	case "aac":
+		for outputName, output := range outputs {
+			outputLower := strings.ToLower(outputName)
+			if strings.Contains(outputLower, "aac") {
+				return output.Url
+			}
+		}
+	case "rtsp":
+		for outputName, output := range outputs {
+			outputLower := strings.ToLower(outputName)
+			if strings.Contains(outputLower, "rtsp") {
+				return output.Url
+			}
+		}
+	case "rtmp":
+		for outputName, output := range outputs {
+			outputLower := strings.ToLower(outputName)
+			if strings.Contains(outputLower, "rtmp") {
+				return output.Url
+			}
+		}
+	case "srt":
+		for outputName, output := range outputs {
+			outputLower := strings.ToLower(outputName)
+			if strings.Contains(outputLower, "srt") {
+				return output.Url
+			}
+		}
+	case "smoothstreaming", "smooth", "hss":
+		for outputName, output := range outputs {
+			outputLower := strings.ToLower(outputName)
+			if strings.Contains(outputLower, "smooth") || strings.Contains(outputLower, "hss") {
+				return output.Url
+			}
+		}
+	case "hds":
+		for outputName, output := range outputs {
+			outputLower := strings.ToLower(outputName)
+			if strings.Contains(outputLower, "hds") || strings.Contains(outputLower, "adobe") {
+				return output.Url
+			}
+		}
+	case "sdp":
+		for outputName, output := range outputs {
+			outputLower := strings.ToLower(outputName)
+			if strings.Contains(outputLower, "sdp") {
+				return output.Url
+			}
+		}
+	case "h264", "raw", "rawh264":
+		for outputName, output := range outputs {
+			outputLower := strings.ToLower(outputName)
+			if strings.Contains(outputLower, "h264") || strings.Contains(outputLower, "raw") {
+				return output.Url
+			}
+		}
+	case "dtsc":
+		for outputName, output := range outputs {
+			outputLower := strings.ToLower(outputName)
+			if strings.Contains(outputLower, "dtsc") || strings.Contains(outputLower, "mist") {
+				return output.Url
+			}
+		}
+	case "wsmp4":
+		for outputName, output := range outputs {
+			outputLower := strings.ToLower(outputName)
+			if (strings.Contains(outputLower, "ws") || strings.Contains(outputLower, "websocket")) && strings.Contains(outputLower, "mp4") {
+				return output.Url
+			}
+		}
+	case "wswebrtc":
+		for outputName, output := range outputs {
+			outputLower := strings.ToLower(outputName)
+			if (strings.Contains(outputLower, "ws") || strings.Contains(outputLower, "websocket")) && strings.Contains(outputLower, "webrtc") {
 				return output.Url
 			}
 		}

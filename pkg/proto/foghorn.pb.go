@@ -32,10 +32,11 @@ const file_foghorn_proto_rawDesc = "" +
 	"\aGetClip\x12\x16.shared.GetClipRequest\x1a\x10.shared.ClipInfo\x12B\n" +
 	"\vGetClipURLs\x12\x1a.shared.GetClipURLsRequest\x1a\x17.shared.ClipViewingURLs\x12C\n" +
 	"\n" +
-	"DeleteClip\x12\x19.shared.DeleteClipRequest\x1a\x1a.shared.DeleteClipResponse2\xa6\x02\n" +
+	"DeleteClip\x12\x19.shared.DeleteClipRequest\x1a\x1a.shared.DeleteClipResponse2\xe8\x02\n" +
 	"\x11DVRControlService\x12=\n" +
 	"\bStartDVR\x12\x17.shared.StartDVRRequest\x1a\x18.shared.StartDVRResponse\x12:\n" +
-	"\aStopDVR\x12\x16.shared.StopDVRRequest\x1a\x17.shared.StopDVRResponse\x12<\n" +
+	"\aStopDVR\x12\x16.shared.StopDVRRequest\x1a\x17.shared.StopDVRResponse\x12@\n" +
+	"\tDeleteDVR\x12\x18.shared.DeleteDVRRequest\x1a\x19.shared.DeleteDVRResponse\x12<\n" +
 	"\fGetDVRStatus\x12\x1b.shared.GetDVRStatusRequest\x1a\x0f.shared.DVRInfo\x12X\n" +
 	"\x11ListDVRRecordings\x12 .shared.ListDVRRecordingsRequest\x1a!.shared.ListDVRRecordingsResponse2\xb6\x01\n" +
 	"\x14ViewerControlService\x12V\n" +
@@ -50,21 +51,23 @@ var file_foghorn_proto_goTypes = []any{
 	(*DeleteClipRequest)(nil),         // 4: shared.DeleteClipRequest
 	(*StartDVRRequest)(nil),           // 5: shared.StartDVRRequest
 	(*StopDVRRequest)(nil),            // 6: shared.StopDVRRequest
-	(*GetDVRStatusRequest)(nil),       // 7: shared.GetDVRStatusRequest
-	(*ListDVRRecordingsRequest)(nil),  // 8: shared.ListDVRRecordingsRequest
-	(*ViewerEndpointRequest)(nil),     // 9: shared.ViewerEndpointRequest
-	(*StreamMetaRequest)(nil),         // 10: shared.StreamMetaRequest
-	(*CreateClipResponse)(nil),        // 11: shared.CreateClipResponse
-	(*GetClipsResponse)(nil),          // 12: shared.GetClipsResponse
-	(*ClipInfo)(nil),                  // 13: shared.ClipInfo
-	(*ClipViewingURLs)(nil),           // 14: shared.ClipViewingURLs
-	(*DeleteClipResponse)(nil),        // 15: shared.DeleteClipResponse
-	(*StartDVRResponse)(nil),          // 16: shared.StartDVRResponse
-	(*StopDVRResponse)(nil),           // 17: shared.StopDVRResponse
-	(*DVRInfo)(nil),                   // 18: shared.DVRInfo
-	(*ListDVRRecordingsResponse)(nil), // 19: shared.ListDVRRecordingsResponse
-	(*ViewerEndpointResponse)(nil),    // 20: shared.ViewerEndpointResponse
-	(*StreamMetaResponse)(nil),        // 21: shared.StreamMetaResponse
+	(*DeleteDVRRequest)(nil),          // 7: shared.DeleteDVRRequest
+	(*GetDVRStatusRequest)(nil),       // 8: shared.GetDVRStatusRequest
+	(*ListDVRRecordingsRequest)(nil),  // 9: shared.ListDVRRecordingsRequest
+	(*ViewerEndpointRequest)(nil),     // 10: shared.ViewerEndpointRequest
+	(*StreamMetaRequest)(nil),         // 11: shared.StreamMetaRequest
+	(*CreateClipResponse)(nil),        // 12: shared.CreateClipResponse
+	(*GetClipsResponse)(nil),          // 13: shared.GetClipsResponse
+	(*ClipInfo)(nil),                  // 14: shared.ClipInfo
+	(*ClipViewingURLs)(nil),           // 15: shared.ClipViewingURLs
+	(*DeleteClipResponse)(nil),        // 16: shared.DeleteClipResponse
+	(*StartDVRResponse)(nil),          // 17: shared.StartDVRResponse
+	(*StopDVRResponse)(nil),           // 18: shared.StopDVRResponse
+	(*DeleteDVRResponse)(nil),         // 19: shared.DeleteDVRResponse
+	(*DVRInfo)(nil),                   // 20: shared.DVRInfo
+	(*ListDVRRecordingsResponse)(nil), // 21: shared.ListDVRRecordingsResponse
+	(*ViewerEndpointResponse)(nil),    // 22: shared.ViewerEndpointResponse
+	(*StreamMetaResponse)(nil),        // 23: shared.StreamMetaResponse
 }
 var file_foghorn_proto_depIdxs = []int32{
 	0,  // 0: foghorn.ClipControlService.CreateClip:input_type -> shared.CreateClipRequest
@@ -74,23 +77,25 @@ var file_foghorn_proto_depIdxs = []int32{
 	4,  // 4: foghorn.ClipControlService.DeleteClip:input_type -> shared.DeleteClipRequest
 	5,  // 5: foghorn.DVRControlService.StartDVR:input_type -> shared.StartDVRRequest
 	6,  // 6: foghorn.DVRControlService.StopDVR:input_type -> shared.StopDVRRequest
-	7,  // 7: foghorn.DVRControlService.GetDVRStatus:input_type -> shared.GetDVRStatusRequest
-	8,  // 8: foghorn.DVRControlService.ListDVRRecordings:input_type -> shared.ListDVRRecordingsRequest
-	9,  // 9: foghorn.ViewerControlService.ResolveViewerEndpoint:input_type -> shared.ViewerEndpointRequest
-	10, // 10: foghorn.ViewerControlService.GetStreamMeta:input_type -> shared.StreamMetaRequest
-	11, // 11: foghorn.ClipControlService.CreateClip:output_type -> shared.CreateClipResponse
-	12, // 12: foghorn.ClipControlService.GetClips:output_type -> shared.GetClipsResponse
-	13, // 13: foghorn.ClipControlService.GetClip:output_type -> shared.ClipInfo
-	14, // 14: foghorn.ClipControlService.GetClipURLs:output_type -> shared.ClipViewingURLs
-	15, // 15: foghorn.ClipControlService.DeleteClip:output_type -> shared.DeleteClipResponse
-	16, // 16: foghorn.DVRControlService.StartDVR:output_type -> shared.StartDVRResponse
-	17, // 17: foghorn.DVRControlService.StopDVR:output_type -> shared.StopDVRResponse
-	18, // 18: foghorn.DVRControlService.GetDVRStatus:output_type -> shared.DVRInfo
-	19, // 19: foghorn.DVRControlService.ListDVRRecordings:output_type -> shared.ListDVRRecordingsResponse
-	20, // 20: foghorn.ViewerControlService.ResolveViewerEndpoint:output_type -> shared.ViewerEndpointResponse
-	21, // 21: foghorn.ViewerControlService.GetStreamMeta:output_type -> shared.StreamMetaResponse
-	11, // [11:22] is the sub-list for method output_type
-	0,  // [0:11] is the sub-list for method input_type
+	7,  // 7: foghorn.DVRControlService.DeleteDVR:input_type -> shared.DeleteDVRRequest
+	8,  // 8: foghorn.DVRControlService.GetDVRStatus:input_type -> shared.GetDVRStatusRequest
+	9,  // 9: foghorn.DVRControlService.ListDVRRecordings:input_type -> shared.ListDVRRecordingsRequest
+	10, // 10: foghorn.ViewerControlService.ResolveViewerEndpoint:input_type -> shared.ViewerEndpointRequest
+	11, // 11: foghorn.ViewerControlService.GetStreamMeta:input_type -> shared.StreamMetaRequest
+	12, // 12: foghorn.ClipControlService.CreateClip:output_type -> shared.CreateClipResponse
+	13, // 13: foghorn.ClipControlService.GetClips:output_type -> shared.GetClipsResponse
+	14, // 14: foghorn.ClipControlService.GetClip:output_type -> shared.ClipInfo
+	15, // 15: foghorn.ClipControlService.GetClipURLs:output_type -> shared.ClipViewingURLs
+	16, // 16: foghorn.ClipControlService.DeleteClip:output_type -> shared.DeleteClipResponse
+	17, // 17: foghorn.DVRControlService.StartDVR:output_type -> shared.StartDVRResponse
+	18, // 18: foghorn.DVRControlService.StopDVR:output_type -> shared.StopDVRResponse
+	19, // 19: foghorn.DVRControlService.DeleteDVR:output_type -> shared.DeleteDVRResponse
+	20, // 20: foghorn.DVRControlService.GetDVRStatus:output_type -> shared.DVRInfo
+	21, // 21: foghorn.DVRControlService.ListDVRRecordings:output_type -> shared.ListDVRRecordingsResponse
+	22, // 22: foghorn.ViewerControlService.ResolveViewerEndpoint:output_type -> shared.ViewerEndpointResponse
+	23, // 23: foghorn.ViewerControlService.GetStreamMeta:output_type -> shared.StreamMetaResponse
+	12, // [12:24] is the sub-list for method output_type
+	0,  // [0:12] is the sub-list for method input_type
 	0,  // [0:0] is the sub-list for extension type_name
 	0,  // [0:0] is the sub-list for extension extendee
 	0,  // [0:0] is the sub-list for field type_name

@@ -16,7 +16,6 @@ subscription ViewerMetricsStream($stream: String!) {
     packetsLost
     packetsRetransmitted
     timestamp
-    clientIp
     clientCountry
     clientCity
     clientLatitude

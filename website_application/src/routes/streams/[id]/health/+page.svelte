@@ -10,6 +10,8 @@
     GetTrackListEventsStore,
     GetRebufferingEventsStore,
     TrackListUpdatesStore,
+    GetClientMetrics5mStore,
+    GetStreamAnalyticsStore,
   } from "$houdini";
   import type { TrackListUpdates$result } from "$houdini";
   import { toast } from "$lib/stores/toast.js";
@@ -28,12 +30,15 @@
   const trackListEventsStore = new GetTrackListEventsStore();
   const rebufferingEventsStore = new GetRebufferingEventsStore();
   const trackListSub = new TrackListUpdatesStore();
+  const clientMetricsStore = new GetClientMetrics5mStore();
+  const analyticsStore = new GetStreamAnalyticsStore();
 
   // Types from Houdini
   type StreamType = NonNullable<NonNullable<typeof $streamStore.data>["stream"]>;
   type HealthMetricType = NonNullable<NonNullable<typeof $currentHealthStore.data>["currentStreamHealth"]>;
   type TrackListEventType = NonNullable<NonNullable<NonNullable<typeof $trackListEventsStore.data>["trackListEventsConnection"]>["edges"]>[0]["node"];
   type RebufferingEventType = NonNullable<NonNullable<NonNullable<typeof $rebufferingEventsStore.data>["rebufferingEvents"]>[0]>;
+  type ClientMetric5mType = NonNullable<NonNullable<NonNullable<typeof $clientMetricsStore.data>["clientMetrics5mConnection"]>["edges"]>[0]["node"];
 
   // page is a store; derive the current param value so it updates on navigation
   let streamId = $derived(page?.params?.id as string ?? "");
@@ -41,6 +46,7 @@
   // Derived state from Houdini stores
   let stream = $derived($streamStore.data?.stream ?? null);
   let currentHealth = $derived($currentHealthStore.data?.currentStreamHealth ?? null);
+  let streamAnalytics = $derived($analyticsStore.data?.streamAnalytics ?? null);
   let healthMetrics = $derived(
     $healthMetricsStore.data?.streamHealthMetricsConnection?.edges
       ?.map(e => e?.node)
@@ -54,6 +60,69 @@
       .filter(val => val !== null && val !== undefined)
       .map(val => (val as number) * 100)
   );
+
+  // Client metrics (viewer/connection quality)
+  let clientMetrics = $derived(
+    $clientMetricsStore.data?.clientMetrics5mConnection?.edges
+      ?.map(e => e?.node)
+      .filter((n): n is ClientMetric5mType => n !== null && n !== undefined) ?? []
+  );
+
+  // Computed client quality stats
+  let clientQualityStats = $derived(() => {
+    if (clientMetrics.length === 0) return null;
+
+    const validPacketLoss = clientMetrics.filter(m => m.packetLossRate !== null && m.packetLossRate !== undefined);
+    const validQuality = clientMetrics.filter(m => m.avgConnectionQuality !== null && m.avgConnectionQuality !== undefined);
+    const validSessions = clientMetrics.filter(m => m.activeSessions !== null && m.activeSessions !== undefined);
+
+    return {
+      avgPacketLoss: validPacketLoss.length > 0
+        ? validPacketLoss.reduce((sum, m) => sum + (m.packetLossRate ?? 0), 0) / validPacketLoss.length
+        : null,
+      peakPacketLoss: validPacketLoss.length > 0
+        ? Math.max(...validPacketLoss.map(m => m.packetLossRate ?? 0))
+        : null,
+      avgConnectionQuality: validQuality.length > 0
+        ? validQuality.reduce((sum, m) => sum + (m.avgConnectionQuality ?? 0), 0) / validQuality.length
+        : null,
+      totalSessions: validSessions.length > 0
+        ? validSessions.reduce((sum, m) => sum + (m.activeSessions ?? 0), 0)
+        : 0,
+      currentSessions: validSessions.length > 0 ? (validSessions[0]?.activeSessions ?? 0) : 0,
+    };
+  });
+
+  // Per-node breakdown from client metrics
+  let nodeBreakdown = $derived(() => {
+    const nodeMap = new Map<string, { sessions: number; packetLoss: number[]; quality: number[] }>();
+
+    for (const metric of clientMetrics) {
+      const nodeId = metric.nodeId ?? 'unknown';
+      if (!nodeMap.has(nodeId)) {
+        nodeMap.set(nodeId, { sessions: 0, packetLoss: [], quality: [] });
+      }
+      const node = nodeMap.get(nodeId)!;
+      node.sessions += metric.activeSessions ?? 0;
+      if (metric.packetLossRate !== null && metric.packetLossRate !== undefined) {
+        node.packetLoss.push(metric.packetLossRate);
+      }
+      if (metric.avgConnectionQuality !== null && metric.avgConnectionQuality !== undefined) {
+        node.quality.push(metric.avgConnectionQuality);
+      }
+    }
+
+    return Array.from(nodeMap.entries()).map(([nodeId, data]) => ({
+      nodeId,
+      totalSessions: data.sessions,
+      avgPacketLoss: data.packetLoss.length > 0
+        ? data.packetLoss.reduce((a, b) => a + b, 0) / data.packetLoss.length
+        : null,
+      avgQuality: data.quality.length > 0
+        ? data.quality.reduce((a, b) => a + b, 0) / data.quality.length
+        : null,
+    }));
+  });
 
   let trackListEvents = $state<TrackListEventType[]>([]);
   let rebufferingEvents = $derived($rebufferingEventsStore.data?.rebufferingEvents ?? []);
@@ -167,12 +236,6 @@
     }
   }
 
-  function getPacketLossColor(loss: number | null | undefined): string {
-    if (loss == null) return "text-muted-foreground";
-    if (loss > 0.05) return "text-destructive";
-    if (loss > 0.02) return "text-warning";
-    return "text-success";
-  }
 
   async function loadStreamData() {
     if (!streamId) return;
@@ -209,6 +272,12 @@
           variables: { stream: streamIdParam, first: 100, timeRange: getTimeRange(), noCache: true },
         }),
         rebufferingEventsStore.fetch({ variables: { stream: streamIdParam, timeRange: getTimeRange() } }),
+        clientMetricsStore.fetch({
+          variables: { stream: streamIdParam, first: 288, timeRange: getTimeRange() }, // 288 = 24h at 5min intervals
+        }),
+        analyticsStore.fetch({
+          variables: { stream: streamIdParam, timeRange: getTimeRange() },
+        }),
       ]);
     } catch (err: any) {
       // Ignore AbortErrors which happen on navigation/cancellation
@@ -393,12 +462,6 @@
                     {currentHealth.bitrate ? `${(currentHealth.bitrate / 1000000).toFixed(2)} Mbps` : 'N/A'}
                   </span>
                 </div>
-                <div class="flex justify-between border-b border-border/30 pb-2">
-                  <span class="text-muted-foreground">Packet Loss</span>
-                  <span class="font-mono {(currentHealth.packetLossPercentage ?? 0) > 0.02 ? 'text-destructive' : 'text-success'}">
-                    {currentHealth.packetLossPercentage ? `${(currentHealth.packetLossPercentage * 100).toFixed(2)}%` : 'N/A'}
-                  </span>
-                </div>
                 <div class="flex justify-between">
                   <span class="text-muted-foreground">Buffer Health</span>
                   <span class="font-mono {(currentHealth.bufferHealth ?? 0) < 0.5 ? 'text-warning' : 'text-success'}">
@@ -416,22 +479,22 @@
         </div>
 
         <!-- Encoding Details -->
-        {#if currentHealth.profile || currentHealth.gopSize || currentHealth.codec || currentHealth.fps}
+        {#if currentHealth.qualityTier || currentHealth.gopSize || currentHealth.codec || currentHealth.fps}
           <div class="slab border-t-0">
             <div class="slab-header">
               <h3>Encoding Details</h3>
             </div>
             <GridSeam cols={4} stack="2x2" surface="panel" flush={true}>
+              {#if currentHealth.qualityTier}
+                <div class="p-4">
+                  <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Quality</p>
+                  <p class="font-mono text-lg text-info">{currentHealth.qualityTier}</p>
+                </div>
+              {/if}
               {#if currentHealth.codec}
                 <div class="p-4">
                   <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Codec</p>
                   <p class="font-mono text-lg text-accent-purple">{currentHealth.codec}</p>
-                </div>
-              {/if}
-              {#if currentHealth.profile}
-                <div class="p-4">
-                  <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Profile</p>
-                  <p class="font-mono text-lg text-info">{currentHealth.profile}</p>
                 </div>
               {/if}
               {#if currentHealth.gopSize}
@@ -463,37 +526,31 @@
         {/if}
 
         <!-- Buffer Details -->
-        {#if currentHealth.bufferSize || currentHealth.bufferUsed}
+        {#if currentHealth.bufferSize || currentHealth.bufferHealth}
           <div class="slab border-t-0">
             <div class="slab-header">
               <h3>Buffer Details</h3>
             </div>
-            <GridSeam cols={3} stack="2x2" surface="panel" flush={true}>
+            <GridSeam cols={2} stack="2x2" surface="panel" flush={true}>
               {#if currentHealth.bufferSize}
                 <div class="p-4">
-                  <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Buffer Size</p>
-                  <p class="font-mono text-lg text-primary">{(currentHealth.bufferSize / 1024).toFixed(1)} KB</p>
+                  <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Buffer Duration</p>
+                  <p class="font-mono text-lg text-primary">{(currentHealth.bufferSize / 1000).toFixed(1)}s</p>
                 </div>
               {/if}
-              {#if currentHealth.bufferUsed}
+              {#if currentHealth.bufferHealth != null}
+                {@const healthPercent = currentHealth.bufferHealth * 100}
                 <div class="p-4">
-                  <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Buffer Used</p>
-                  <p class="font-mono text-lg text-warning">{(currentHealth.bufferUsed / 1024).toFixed(1)} KB</p>
-                </div>
-              {/if}
-              {#if currentHealth.bufferSize && currentHealth.bufferUsed}
-                {@const bufferPercentage = (currentHealth.bufferUsed / currentHealth.bufferSize) * 100}
-                <div class="p-4">
-                  <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Utilization</p>
+                  <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Buffer Health</p>
                   <div class="flex items-center gap-2">
                     <div class="flex-1 bg-muted h-2">
                       <div
-                        class="h-2 {bufferPercentage > 90 ? 'bg-destructive' : bufferPercentage > 70 ? 'bg-warning' : 'bg-success'}"
-                        style="width: {Math.min(bufferPercentage, 100)}%"
+                        class="h-2 {healthPercent < 30 ? 'bg-destructive' : healthPercent < 60 ? 'bg-warning' : 'bg-success'}"
+                        style="width: {Math.min(healthPercent, 100)}%"
                       ></div>
                     </div>
-                    <span class="font-mono text-sm {bufferPercentage > 90 ? 'text-destructive' : bufferPercentage > 70 ? 'text-warning' : 'text-success'}">
-                      {bufferPercentage.toFixed(0)}%
+                    <span class="font-mono text-sm {healthPercent < 30 ? 'text-destructive' : healthPercent < 60 ? 'text-warning' : 'text-success'}">
+                      {healthPercent.toFixed(0)}%
                     </span>
                   </div>
                 </div>
@@ -538,6 +595,139 @@
         {/if}
       {/if}
 
+      <!-- Ingest Network Stats (from live_streams) -->
+      {#if streamAnalytics && (streamAnalytics.packetsSent || streamAnalytics.packetsLost)}
+        <div class="slab">
+          <div class="slab-header">
+            <h2>Ingest Network Stats</h2>
+            <span class="text-xs text-muted-foreground font-normal normal-case ml-2">
+              Stream-level packet statistics
+            </span>
+          </div>
+          <GridSeam cols={4} stack="2x2" surface="panel" flush={true}>
+            <div class="p-4">
+              <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Packets Sent</p>
+              <p class="font-mono text-lg text-info">
+                {streamAnalytics.packetsSent?.toLocaleString() ?? 'N/A'}
+              </p>
+            </div>
+            <div class="p-4">
+              <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Packets Lost</p>
+              <p class="font-mono text-lg {(streamAnalytics.packetsLost ?? 0) > 0 ? 'text-warning' : 'text-success'}">
+                {streamAnalytics.packetsLost?.toLocaleString() ?? '0'}
+              </p>
+            </div>
+            <div class="p-4">
+              <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Packets Retransmitted</p>
+              <p class="font-mono text-lg text-muted-foreground">
+                {streamAnalytics.packetsRetrans?.toLocaleString() ?? '0'}
+              </p>
+            </div>
+            <div class="p-4">
+              <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Packet Loss Rate</p>
+              <p class="font-mono text-lg {(streamAnalytics.packetLossRate ?? 0) > 0.01 ? 'text-warning' : 'text-success'}">
+                {streamAnalytics.packetLossRate !== null && streamAnalytics.packetLossRate !== undefined
+                  ? `${(streamAnalytics.packetLossRate * 100).toFixed(3)}%`
+                  : 'N/A'}
+              </p>
+            </div>
+          </GridSeam>
+        </div>
+      {/if}
+
+      <!-- Client Quality Section -->
+      {#if clientMetrics.length > 0}
+        {@const stats = clientQualityStats()}
+        {@const nodes = nodeBreakdown()}
+        <div class="slab">
+          <div class="slab-header">
+            <h2>Client Quality</h2>
+            <span class="text-xs text-muted-foreground font-normal normal-case ml-2">
+              Viewer connection metrics (5-min aggregates)
+            </span>
+          </div>
+
+          <!-- Stats Grid -->
+          <GridSeam cols={4} stack="2x2" surface="panel" flush={true}>
+            <div class="p-4">
+              <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Avg Packet Loss</p>
+              <p class="font-mono text-lg {(stats?.avgPacketLoss ?? 0) > 0.01 ? 'text-warning' : 'text-success'}">
+                {stats?.avgPacketLoss != null ? `${(stats.avgPacketLoss * 100).toFixed(3)}%` : 'N/A'}
+              </p>
+            </div>
+            <div class="p-4">
+              <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Peak Packet Loss</p>
+              <p class="font-mono text-lg {(stats?.peakPacketLoss ?? 0) > 0.05 ? 'text-destructive' : (stats?.peakPacketLoss ?? 0) > 0.01 ? 'text-warning' : 'text-success'}">
+                {stats?.peakPacketLoss != null ? `${(stats.peakPacketLoss * 100).toFixed(3)}%` : 'N/A'}
+              </p>
+            </div>
+            <div class="p-4">
+              <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Avg Connection Quality</p>
+              <p class="font-mono text-lg {(stats?.avgConnectionQuality ?? 1) < 0.95 ? 'text-warning' : 'text-success'}">
+                {stats?.avgConnectionQuality != null ? `${(stats.avgConnectionQuality * 100).toFixed(1)}%` : 'N/A'}
+              </p>
+            </div>
+            <div class="p-4">
+              <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Current Sessions</p>
+              <p class="font-mono text-lg text-info">{stats?.currentSessions ?? 0}</p>
+            </div>
+          </GridSeam>
+
+          <!-- Packet Loss Trend Chart -->
+          {#if clientMetrics.length > 1}
+            <div class="slab-body--padded border-t border-border/30">
+              <h4 class="text-sm font-medium text-muted-foreground mb-3">Packet Loss Over Time</h4>
+              <HealthTrendChart
+                data={clientMetrics.map(m => ({
+                  timestamp: m.timestamp,
+                  bufferHealth: m.avgConnectionQuality,
+                  bitrate: m.packetLossRate !== null ? m.packetLossRate * 100000000 : null,
+                }))}
+                height={200}
+                showBufferHealth={true}
+                showBitrate={true}
+              />
+              <p class="text-xs text-muted-foreground mt-2">
+                Blue: Connection Quality (%) • Orange: Packet Loss (scaled)
+              </p>
+            </div>
+          {/if}
+
+          <!-- Per-Node Breakdown -->
+          {#if nodes.length > 0}
+            <div class="border-t border-border/30">
+              <div class="p-3 bg-muted/20">
+                <h4 class="text-sm font-medium text-muted-foreground">Per-Node Breakdown</h4>
+              </div>
+              <div class="divide-y divide-border/30">
+                {#each nodes as node (node.nodeId)}
+                  <div class="p-3 flex items-center justify-between">
+                    <div>
+                      <p class="font-mono text-sm text-foreground">{node.nodeId}</p>
+                      <p class="text-xs text-muted-foreground">{node.totalSessions} total sessions</p>
+                    </div>
+                    <div class="flex gap-4 text-right">
+                      <div>
+                        <p class="text-xs text-muted-foreground">Packet Loss</p>
+                        <p class="font-mono text-sm {(node.avgPacketLoss ?? 0) > 0.01 ? 'text-warning' : 'text-success'}">
+                          {node.avgPacketLoss !== null ? `${(node.avgPacketLoss * 100).toFixed(3)}%` : 'N/A'}
+                        </p>
+                      </div>
+                      <div>
+                        <p class="text-xs text-muted-foreground">Quality</p>
+                        <p class="font-mono text-sm {(node.avgQuality ?? 1) < 0.95 ? 'text-warning' : 'text-success'}">
+                          {node.avgQuality !== null ? `${(node.avgQuality * 100).toFixed(1)}%` : 'N/A'}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                {/each}
+              </div>
+            </div>
+          {/if}
+        </div>
+      {/if}
+
       <!-- Two-column grid: Health Metrics + Track List -->
       <div class="dashboard-grid">
         <!-- Recent Health Metrics -->
@@ -560,17 +750,11 @@
                       {metric.bufferState || 'Unknown'}
                     </span>
                   </div>
-                  <div class="grid grid-cols-3 gap-2 text-sm">
+                  <div class="grid grid-cols-2 gap-2 text-sm">
                     <div>
                       <span class="text-muted-foreground text-xs">Bitrate</span>
                       <p class="font-mono text-info">
                         {metric.bitrate ? `${(metric.bitrate / 1000000).toFixed(2)} Mbps` : 'N/A'}
-                      </p>
-                    </div>
-                    <div>
-                      <span class="text-muted-foreground text-xs">Loss</span>
-                      <p class="font-mono {getPacketLossColor(metric.packetLossPercentage)}">
-                        {metric.packetLossPercentage ? `${(metric.packetLossPercentage * 100).toFixed(2)}%` : 'N/A'}
                       </p>
                     </div>
                     <div>
@@ -740,17 +924,9 @@
                   </div>
                   <span class="text-xs text-muted-foreground">{formatTimestamp(event.timestamp)}</span>
                 </div>
-                <div class="mt-2 grid grid-cols-2 gap-4 text-sm">
-                  <div>
-                    <span class="text-muted-foreground text-xs">Buffer State</span>
-                    <p class={getBufferStateColor(event.bufferState)}>{event.bufferState}</p>
-                  </div>
-                  <div>
-                    <span class="text-muted-foreground text-xs">Packet Loss</span>
-                    <p class={(event.packetLossPercentage || 0) > 0.02 ? 'text-destructive' : 'text-success'}>
-                      {event.packetLossPercentage ? `${(event.packetLossPercentage * 100).toFixed(2)}%` : 'N/A'}
-                    </p>
-                  </div>
+                <div class="mt-2 text-sm">
+                  <span class="text-muted-foreground text-xs">Buffer State</span>
+                  <p class={getBufferStateColor(event.bufferState)}>{event.bufferState}</p>
                 </div>
               </div>
             {/each}
@@ -788,12 +964,10 @@
             <HealthTrendChart
               data={healthMetrics.map(m => ({
                 timestamp: m.timestamp,
-                packetLossPercentage: m.packetLossPercentage,
                 bufferHealth: m.bufferHealth,
                 bitrate: m.bitrate,
               }))}
               height={350}
-              showPacketLoss={true}
               showBufferHealth={true}
               showBitrate={true}
             />

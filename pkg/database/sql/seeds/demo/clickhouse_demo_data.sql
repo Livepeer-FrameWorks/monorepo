@@ -44,8 +44,8 @@ INSERT INTO periscope.live_streams (
 -- =================================================================================================
 INSERT INTO periscope.stream_health_metrics (
     timestamp, tenant_id, internal_name, node_id,
-    bitrate, fps, width, height, codec, profile,
-    buffer_health, buffer_state, packets_sent, packets_lost, packets_retransmitted,
+    bitrate, fps, width, height, codec,
+    buffer_health, buffer_state,
     has_issues, issues_description, audio_codec, audio_bitrate
 )
 SELECT
@@ -62,16 +62,10 @@ SELECT
     1920 as width,
     1080 as height,
     'H264' as codec,
-    'High' as profile,
 
     -- Buffer health (0-1)
     toFloat32(0.8 + 0.2 * abs(sin(number/200))) as buffer_health,
     multiIf(0.8 + 0.2 * abs(sin(number/200)) < 0.1, 'DRY', 0.8 + 0.2 * abs(sin(number/200)) < 0.5, 'RECOVER', 'FULL') as buffer_state,
-
-    -- Packets
-    toUInt64(2000 + (number % 50)) as packets_sent,
-    toUInt64(if(rand()%100 > 95, rand()%20, 0)) as packets_lost,
-    toUInt64(if(rand()%100 > 90, rand()%50, 0)) as packets_retransmitted,
 
     toUInt8(if(rand()%100 > 95 AND rand()%20 > 10, 1, 0)) as has_issues,
     if(rand()%100 > 95 AND rand()%20 > 10, 'High Packet Loss', NULL) as issues_description,
@@ -505,6 +499,187 @@ INSERT INTO periscope.clip_events (
     '/dvr/demo_live_stream_001/',
     NULL,
     450000000
+);
+
+-- =================================================================================================
+-- 8b. Demo Clip/DVR Events (Matching PostgreSQL Foghorn Seeds)
+-- These match the physical files in infrastructure/demo-recordings
+-- =================================================================================================
+
+-- Demo Clip: Requested (matches foghorn.clips a1b2c3d4e5f6789012345678901234ab)
+INSERT INTO periscope.clip_events (
+    timestamp, tenant_id, internal_name, request_id,
+    stage, content_type, start_unix, stop_unix,
+    ingest_node_id, percent, message, file_path, s3_url, size_bytes
+) VALUES (
+    now() - INTERVAL 2 HOUR - INTERVAL 5 MINUTE,
+    '00000000-0000-0000-0000-000000000001',
+    'demo_live_stream_001',
+    'a1b2c3d4e5f6789012345678901234ab',
+    'requested',
+    'clip',
+    1702382400,  -- Dec 12, 2023 12:00:00 UTC
+    1702382410,  -- Dec 12, 2023 12:00:10 UTC (10 seconds)
+    'edge-node-1',
+    0,
+    'Clip creation requested',
+    NULL,
+    NULL,
+    NULL
+);
+
+-- Demo Clip: Processing
+INSERT INTO periscope.clip_events (
+    timestamp, tenant_id, internal_name, request_id,
+    stage, content_type, start_unix, stop_unix,
+    ingest_node_id, percent, message, file_path, s3_url, size_bytes
+) VALUES (
+    now() - INTERVAL 2 HOUR - INTERVAL 3 MINUTE,
+    '00000000-0000-0000-0000-000000000001',
+    'demo_live_stream_001',
+    'a1b2c3d4e5f6789012345678901234ab',
+    'processing',
+    'clip',
+    1702382400,
+    1702382410,
+    'edge-node-1',
+    50,
+    'Transcoding video...',
+    NULL,
+    NULL,
+    NULL
+);
+
+-- Demo Clip: Completed
+INSERT INTO periscope.clip_events (
+    timestamp, tenant_id, internal_name, request_id,
+    stage, content_type, start_unix, stop_unix,
+    ingest_node_id, percent, message, file_path, s3_url, size_bytes
+) VALUES (
+    now() - INTERVAL 2 HOUR,
+    '00000000-0000-0000-0000-000000000001',
+    'demo_live_stream_001',
+    'a1b2c3d4e5f6789012345678901234ab',
+    'completed',
+    'clip',
+    1702382400,
+    1702382410,
+    'edge-node-1',
+    100,
+    'Clip creation completed',
+    '/var/lib/mistserver/recordings/clips/demo_live_stream_001/a1b2c3d4e5f6789012345678901234ab.mp4',
+    NULL,
+    251904
+);
+
+-- Demo DVR: Requested (matches foghorn.dvr_requests fedcba98765432109876543210fedcba)
+INSERT INTO periscope.clip_events (
+    timestamp, tenant_id, internal_name, request_id,
+    stage, content_type, start_unix, stop_unix,
+    ingest_node_id, percent, message, file_path, s3_url, size_bytes
+) VALUES (
+    now() - INTERVAL 4 HOUR,
+    '00000000-0000-0000-0000-000000000001',
+    'demo_live_stream_001',
+    'fedcba98765432109876543210fedcba',
+    'requested',
+    'dvr',
+    NULL,
+    NULL,
+    'edge-node-1',
+    0,
+    'DVR recording requested',
+    NULL,
+    NULL,
+    NULL
+);
+
+-- Demo DVR: Completed
+INSERT INTO periscope.clip_events (
+    timestamp, tenant_id, internal_name, request_id,
+    stage, content_type, start_unix, stop_unix,
+    ingest_node_id, percent, message, file_path, s3_url, size_bytes
+) VALUES (
+    now() - INTERVAL 4 HOUR + INTERVAL 18 SECOND,
+    '00000000-0000-0000-0000-000000000001',
+    'demo_live_stream_001',
+    'fedcba98765432109876543210fedcba',
+    'completed',
+    'dvr',
+    NULL,
+    NULL,
+    'edge-node-1',
+    100,
+    'DVR recording completed',
+    '/var/lib/mistserver/recordings/dvr/demo_live_stream_001/fedcba98765432109876543210fedcba.m3u8',
+    NULL,
+    513176
+);
+
+-- =================================================================================================
+-- 8c. Live Artifacts (Current state for demo clip and DVR)
+-- =================================================================================================
+
+-- Demo Clip artifact state
+INSERT INTO periscope.live_artifacts (
+    tenant_id, request_id, internal_name,
+    content_type, stage, progress_percent, error_message,
+    requested_at, started_at, completed_at,
+    clip_start_unix, clip_stop_unix,
+    segment_count, manifest_path,
+    file_path, s3_url, size_bytes,
+    processing_node_id, updated_at
+) VALUES (
+    '00000000-0000-0000-0000-000000000001',
+    'a1b2c3d4e5f6789012345678901234ab',
+    'demo_live_stream_001',
+    'clip',
+    'completed',
+    100,
+    NULL,
+    now() - INTERVAL 2 HOUR - INTERVAL 5 MINUTE,
+    now() - INTERVAL 2 HOUR - INTERVAL 4 MINUTE,
+    now() - INTERVAL 2 HOUR,
+    1702382400,
+    1702382410,
+    NULL,
+    NULL,
+    '/var/lib/mistserver/recordings/clips/demo_live_stream_001/a1b2c3d4e5f6789012345678901234ab.mp4',
+    NULL,
+    251904,
+    'edge-node-1',
+    now() - INTERVAL 2 HOUR
+);
+
+-- Demo DVR artifact state
+INSERT INTO periscope.live_artifacts (
+    tenant_id, request_id, internal_name,
+    content_type, stage, progress_percent, error_message,
+    requested_at, started_at, completed_at,
+    clip_start_unix, clip_stop_unix,
+    segment_count, manifest_path,
+    file_path, s3_url, size_bytes,
+    processing_node_id, updated_at
+) VALUES (
+    '00000000-0000-0000-0000-000000000001',
+    'fedcba98765432109876543210fedcba',
+    'demo_live_stream_001',
+    'dvr',
+    'completed',
+    100,
+    NULL,
+    now() - INTERVAL 4 HOUR,
+    now() - INTERVAL 4 HOUR,
+    now() - INTERVAL 4 HOUR + INTERVAL 18 SECOND,
+    NULL,
+    NULL,
+    2,  -- 2 HLS segments
+    '/var/lib/mistserver/recordings/dvr/demo_live_stream_001/fedcba98765432109876543210fedcba.m3u8',
+    '/var/lib/mistserver/recordings/dvr/demo_live_stream_001/fedcba98765432109876543210fedcba.m3u8',
+    NULL,
+    513176,
+    'edge-node-1',
+    now() - INTERVAL 4 HOUR + INTERVAL 18 SECOND
 );
 
 -- =================================================================================================

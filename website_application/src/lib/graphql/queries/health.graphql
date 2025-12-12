@@ -27,16 +27,11 @@ query GetStreamHealthMetrics(
         width
         height
         codec
-        profile
         qualityTier
         gopSize
-        packetsSent
-        packetsLost
-        packetLossPercentage
         bufferState
         bufferHealth
         bufferSize
-        bufferUsed
         audioChannels
         audioSampleRate
         audioCodec
@@ -63,16 +58,11 @@ query GetCurrentStreamHealth($stream: String!) {
     width
     height
     codec
-    profile
     qualityTier
     gopSize
-    packetsSent
-    packetsLost
-    packetLossPercentage
     bufferState
     bufferHealth
     bufferSize
-    bufferUsed
     audioChannels
     audioSampleRate
     audioCodec
@@ -137,6 +127,5 @@ query GetRebufferingEvents($stream: String!, $timeRange: TimeRangeInput) {
     previousState
     rebufferStart
     rebufferEnd
-    packetLossPercentage
   }
 }

@@ -1,6 +1,12 @@
 # Signalman (Realtime WebSocket Hub)
 
-Consumes analytics events from Kafka and broadcasts them to WebSocket channels for dashboards and realtime UIs.
+Consumes analytics events from Kafka and broadcasts them to WebSocket channels for dashboards and realtime UIs. **Strict tenant isolation**—events never leak across tenant boundaries.
+
+## Why Signalman?
+
+- **Tenant-isolated broadcasts**: Each tenant's WebSocket connections only receive their own events
+- **Self-hosted ready**: Run your own Kafka + Signalman for on-premise real-time dashboards
+- **No external dependencies**: Pure Go, no cloud services required
 
 ## Run (dev)
 - Start the full stack from repo root: `docker-compose up -d`

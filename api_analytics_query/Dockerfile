@@ -13,13 +13,16 @@ WORKDIR /src/frameworks/api_analytics_query
 # Copy go.mod and go.sum first
 COPY api_analytics_query/go.mod api_analytics_query/go.sum ./
 
-# Copy shared pkg module (maintain relative path for replace directive)
-COPY pkg/ ../pkg/
+# Copy shared pkg module go.mod and go.sum (maintain relative path for replace directive)
+COPY pkg/go.mod pkg/go.sum ../pkg/
 
 # Download dependencies
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     go mod download
+
+# Copy full shared pkg module source
+COPY pkg/ ../pkg/
 
 # Copy service source code
 COPY api_analytics_query/ ./

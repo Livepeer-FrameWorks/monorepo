@@ -32,6 +32,8 @@ service DVRControlService {
   rpc StartDVR(shared.StartDVRRequest) returns (shared.StartDVRResponse);
   // StopDVR stops an active DVR recording
   rpc StopDVR(shared.StopDVRRequest) returns (shared.StopDVRResponse);
+  // DeleteDVR deletes a DVR recording and its files
+  rpc DeleteDVR(shared.DeleteDVRRequest) returns (shared.DeleteDVRResponse);
   // GetDVRStatus returns status of a DVR recording
   rpc GetDVRStatus(shared.GetDVRStatusRequest) returns (shared.DVRInfo);
   // ListDVRRecordings lists all DVR recordings for a tenant

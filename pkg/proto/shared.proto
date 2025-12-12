@@ -149,6 +149,18 @@ message StopDVRResponse {
   string message = 2;
 }
 
+// DeleteDVRRequest - request to delete a DVR recording
+message DeleteDVRRequest {
+  string dvr_hash = 1;
+  string tenant_id = 2;  // Required for tenant isolation
+}
+
+// DeleteDVRResponse - response from DVR deletion
+message DeleteDVRResponse {
+  bool success = 1;
+  string message = 2;
+}
+
 // GetDVRStatusRequest - request to get DVR status
 message GetDVRStatusRequest {
   string dvr_hash = 1;

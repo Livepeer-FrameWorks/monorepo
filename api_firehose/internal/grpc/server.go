@@ -96,7 +96,7 @@ func isValidUUID(s string) bool {
 }
 
 func generateEventID() string {
-	return fmt.Sprintf("%d.%06d", time.Now().Unix(), time.Now().Nanosecond()/1000)
+	return uuid.New().String()
 }
 
 // unwrapMistTrigger picks the inner payload and canonical (current-compatible) event type.

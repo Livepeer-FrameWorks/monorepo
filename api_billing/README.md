@@ -1,6 +1,12 @@
 # Purser (Billing)
 
-Billing and subscriptions. Orchestrates usage → invoice drafts → payments. Keeps logic small; payments go through providers.
+Billing and subscriptions. Orchestrates usage → invoice drafts → payments. Works with self-hosted, hybrid, and fully managed deployments.
+
+## Deployment Flexibility
+
+- **Self-hosted**: Track usage locally, disable payment integrations if running internal infrastructure
+- **Hybrid**: Bill for FrameWorks-hosted resources while self-hosting edge nodes
+- **Fully managed**: Full Stripe/Mollie integration for SaaS billing
 
 ## What it does
 - Accepts usage summaries from Periscope‑Query

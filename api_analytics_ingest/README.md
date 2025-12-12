@@ -1,6 +1,12 @@
 # Periscope‑Ingest (Analytics Write Path)
 
-Consumes analytics events from Kafka and writes time‑series data exclusively to ClickHouse.
+Consumes analytics events from Kafka and writes time‑series data exclusively to ClickHouse. **Self-hostable with on-premise ClickHouse**—your analytics data stays on your infrastructure.
+
+## Why Periscope-Ingest?
+
+- **Data sovereignty**: Run ClickHouse on your own servers for complete analytics data ownership
+- **Tenant isolation**: All events carry `tenant_id` headers—strict per-tenant partitioning
+- **No cloud dependencies**: Kafka + ClickHouse can run entirely on-premise
 
 ## Responsibilities
 - Consume `analytics_events` topic with tenant headers

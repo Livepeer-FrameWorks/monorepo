@@ -51,8 +51,6 @@ type Query {
 
   # Stream Management
   streamKeys(streamId: ID!): [StreamKey!]
-  recordings(streamId: ID): [Recording!]
-  recordingsConnection(streamId: ID, first: Int = 50, after: String, last: Int, before: String): RecordingsConnection!
   clips(streamId: ID): [Clip!]
   clipsConnection(streamId: ID, first: Int = 50, after: String, last: Int, before: String): ClipsConnection!
   clip(id: ID!): Clip
@@ -119,9 +117,11 @@ type Mutation {
   # DVR operations (via Commodore)
   startDVR(internalName: String!, streamId: ID): StartDVRResult!
   stopDVR(dvrHash: ID!): StopDVRResult!
+  deleteDVR(dvrHash: ID!): DeleteDVRResult!
 
   # Billing operations (via Purser)
   createPayment(input: CreatePaymentInput!): CreatePaymentResult!
+  updateSubscriptionCustomTerms(tenantId: ID!, input: UpdateSubscriptionCustomTermsInput!): TenantSubscription
 
   # Infrastructure operations (via Quartermaster)
   updateTenant(input: UpdateTenantInput!): UpdateTenantResult!
@@ -192,6 +192,7 @@ union DeleteStreamKeyResult = DeleteSuccess | NotFoundError | AuthError
 
 union StartDVRResult = DVRRequest | ValidationError | NotFoundError | AuthError
 union StopDVRResult = DeleteSuccess | NotFoundError | AuthError
+union DeleteDVRResult = DeleteSuccess | NotFoundError | AuthError
 
 union CreatePaymentResult = Payment | ValidationError | AuthError
 union UpdateTenantResult = Tenant | ValidationError | AuthError
@@ -377,6 +378,42 @@ input CreatePaymentInput {
   returnUrl: String
 }
 
+# Input for updating custom subscription terms (admin/provider only)
+input UpdateSubscriptionCustomTermsInput {
+  customPricing: CustomPricingInput
+  customFeatures: BillingFeaturesInput
+  customAllocations: AllocationDetailsInput
+}
+
+input CustomPricingInput {
+  basePrice: Float
+  discountRate: Float
+  overageRates: OverageRatesInput
+}
+
+input OverageRatesInput {
+  bandwidth: AllocationDetailsInput
+  storage: AllocationDetailsInput
+  compute: AllocationDetailsInput
+}
+
+input AllocationDetailsInput {
+  limit: Float                # nil = unlimited
+  unitPrice: Float
+  unit: String
+}
+
+input BillingFeaturesInput {
+  recording: Boolean
+  analytics: Boolean
+  customBranding: Boolean
+  apiAccess: Boolean
+  supportLevel: String
+  sla: Boolean
+}
+
+# UpdateSubscriptionResult - returns subscription on success, errors through standard GraphQL error handling
+
 input UpdateTenantInput {
   name: String
   settings: JSON
@@ -493,7 +530,7 @@ type ViewerMetrics {
   internalName: String!
   action: String!              # "connect" or "disconnect"
   protocol: String!
-  host: String!
+  host: String                 # Client IP - redacted for privacy (returns null)
   sessionId: String
   connectionTime: Float        # seconds connected
   position: Float              # playback position
@@ -506,7 +543,7 @@ type ViewerMetrics {
   packetsRetransmitted: Int
   timestamp: Int!
   # GeoIP enriched fields (added by Foghorn)
-  clientIp: String
+  # clientIp removed - was never populated (IP in 'host', redacted for privacy)
   clientCountry: String
   clientCity: String
   clientLatitude: Float
@@ -594,9 +631,6 @@ type Stream {
   # === EDGES ===
   # Operational metrics (from Periscope Data Plane) - lazy loaded
   metrics: StreamMetrics
-
-  # Config edges
-  recordings: [Recording!]
 
   # Analytics edges (Data Plane)
   eventsConnection(timeRange: TimeRangeInput, first: Int = 100, after: String): StreamEventsConnection
@@ -934,18 +968,6 @@ type StreamsConnection {
   totalCount: Int!
 }
 
-# Recordings Connection (for paginated recordings list)
-type RecordingEdge {
-  cursor: String!
-  node: Recording!
-}
-
-type RecordingsConnection {
-  edges: [RecordingEdge!]!
-  pageInfo: PageInfo!
-  totalCount: Int!
-}
-
 # Clips Connection (for paginated clips list)
 type ClipEdge {
   cursor: String!
@@ -1088,9 +1110,38 @@ type LineItem {
   total: Money!
 }
 
+# Custom pricing override for enterprise tenants
+type CustomPricing {
+  basePrice: Float                # Custom base price (overrides tier)
+  discountRate: Float             # Discount rate (0-1)
+  overageRates: OverageRates      # Custom overage rates
+}
+
+# Tenant subscription with custom terms
+type TenantSubscription {
+  id: ID!
+  tenantId: ID!
+  tierId: String!
+  status: String!
+  billingEmail: String!
+  startedAt: Time!
+  trialEndsAt: Time
+  nextBillingDate: Time
+  cancelledAt: Time
+  # Custom enterprise terms
+  customPricing: CustomPricing
+  customFeatures: BillingFeatures
+  customAllocations: AllocationDetails
+  # Payment
+  paymentMethod: String
+  createdAt: Time!
+  updatedAt: Time!
+}
+
 # Bound to proto.BillingStatusResponse
 type BillingStatus {
   currentTier: BillingTier
+  subscription: TenantSubscription  # Full subscription details with custom terms
   billingStatus: String!
   nextBillingDate: Time
   trialEndsAt: Time               # Trial end date (from TenantSubscription.trial_ends_at)
@@ -1315,6 +1366,7 @@ enum BufferState {
 
 
 # Stream health metrics from detailed monitoring
+# Note: For packet stats, see client_metrics or live_streams tables
 type StreamHealthMetric {
   timestamp: Time!
   stream: String!
@@ -1330,22 +1382,15 @@ type StreamHealthMetric {
   width: Int
   height: Int
   codec: String
-  profile: String               # Encoding profile (from Periscope proto)
-  qualityTier: String
+  qualityTier: String           # Rich quality string e.g. "1080p60 H264 @ 6Mbps"
 
-  # Encoding parameters (from Periscope proto)
-  gopSize: Int                  # Group of Pictures size
-
-  # Network performance
-  packetsSent: Int
-  packetsLost: Int
-  packetLossPercentage: Float
+  # Encoding parameters
+  gopSize: Int                  # Group of Pictures size (frames between keyframes)
 
   # Buffer state
   bufferState: BufferState!
-  bufferHealth: Float
-  bufferSize: Int               # Total buffer size
-  bufferUsed: Int               # Current buffer usage
+  bufferHealth: Float           # Ratio of buffer_size / max_keepaway (0.0-1.0)
+  bufferSize: Int               # Buffer duration in milliseconds
 
   # Audio metrics
   audioChannels: Int
@@ -1368,9 +1413,6 @@ type RebufferingEvent {
   previousState: BufferState!
   rebufferStart: Boolean!
   rebufferEnd: Boolean!
-
-  # Performance at rebuffer time
-  packetLossPercentage: Float
 }
 
 # ============================================================================
@@ -1516,7 +1558,7 @@ type ConnectionEvent {
   timestamp: Time!
   internalName: String!
   sessionId: String!
-  connectionAddr: String!
+  connectionAddr: String       # Client IP - redacted for privacy (returns null)
   connector: String!
   nodeId: String!
   countryCode: String
@@ -1726,27 +1768,6 @@ type StreamKey {
   isActive: Boolean!
   lastUsedAt: Time
   createdAt: Time!
-}
-
-# Recording management
-type Recording {
-  id: ID!
-  streamId: ID!
-  
-  # Recording metadata
-  title: String
-  duration: Int
-  fileSizeBytes: Int
-  playbackId: String
-  thumbnailUrl: String
-  startTime: Time
-  endTime: Time
-  
-  # Processing status
-  status: String!
-  
-  createdAt: Time!
-  updatedAt: Time!
 }
 
 # ============================================================================

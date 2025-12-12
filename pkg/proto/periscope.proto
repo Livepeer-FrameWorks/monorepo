@@ -207,7 +207,7 @@ message StreamHealthMetric {
   optional double frame_jitter_ms = 23;
   optional double keyframe_stability_ms = 24;
   optional string issues_description = 25;
-  bool has_issues = 26;
+  optional bool has_issues = 26;
   optional double packet_loss_percentage = 27;
   optional string quality_tier = 28;
   string buffer_state = 29;
@@ -218,6 +218,7 @@ message StreamHealthMetric {
   optional string primary_audio_codec = 32;
   optional int32 primary_audio_bitrate = 33;
   string track_metadata = 34;  // json:"track_metadata" - Raw JSON of track metadata
+  optional int32 track_count = 35;
 }
 
 message GetStreamHealthMetricsRequest {

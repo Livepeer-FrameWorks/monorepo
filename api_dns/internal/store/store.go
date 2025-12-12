@@ -11,6 +11,7 @@ var ErrNotFound = errors.New("record not found")
 
 type Certificate struct {
 	ID        string
+	TenantID  sql.NullString // NULL for platform certificates, set for tenant custom domains
 	Domain    string
 	CertPEM   string
 	KeyPEM    string
@@ -20,6 +21,8 @@ type Certificate struct {
 }
 
 type ACMEAccount struct {
+	ID            string
+	TenantID      sql.NullString // NULL for platform accounts, set for tenant-specific accounts
 	Email         string
 	Registration  string // JSON blob
 	PrivateKeyPEM string
@@ -34,16 +37,31 @@ func NewStore(db *sql.DB) *Store {
 	return &Store{db: db}
 }
 
-// GetCertificate retrieves a valid certificate for a domain
-func (s *Store) GetCertificate(ctx context.Context, domain string) (*Certificate, error) {
-	query := `
-		SELECT id, domain, cert_pem, key_pem, expires_at, created_at, updated_at
-		FROM navigator.certificates
-		WHERE domain = $1
-	`
+// GetCertificate retrieves a valid certificate for a domain within a tenant context.
+// If tenantID is empty, retrieves platform-wide certificate (tenant_id IS NULL).
+func (s *Store) GetCertificate(ctx context.Context, tenantID, domain string) (*Certificate, error) {
+	var query string
+	var args []interface{}
+
+	if tenantID == "" {
+		query = `
+			SELECT id, tenant_id, domain, cert_pem, key_pem, expires_at, created_at, updated_at
+			FROM navigator.certificates
+			WHERE tenant_id IS NULL AND domain = $1
+		`
+		args = []interface{}{domain}
+	} else {
+		query = `
+			SELECT id, tenant_id, domain, cert_pem, key_pem, expires_at, created_at, updated_at
+			FROM navigator.certificates
+			WHERE tenant_id = $1 AND domain = $2
+		`
+		args = []interface{}{tenantID, domain}
+	}
+
 	var cert Certificate
-	err := s.db.QueryRowContext(ctx, query, domain).Scan(
-		&cert.ID, &cert.Domain, &cert.CertPEM, &cert.KeyPEM,
+	err := s.db.QueryRowContext(ctx, query, args...).Scan(
+		&cert.ID, &cert.TenantID, &cert.Domain, &cert.CertPEM, &cert.KeyPEM,
 		&cert.ExpiresAt, &cert.CreatedAt, &cert.UpdatedAt,
 	)
 	if err == sql.ErrNoRows {
@@ -55,33 +73,49 @@ func (s *Store) GetCertificate(ctx context.Context, domain string) (*Certificate
 	return &cert, nil
 }
 
-// SaveCertificate saves or updates a certificate
-func (s *Store) SaveCertificate(ctx context.Context, cert *Certificate) error {
+// SaveCertificate saves or updates a certificate for a tenant.
+// If tenantID is empty, saves as a platform-wide certificate.
+func (s *Store) SaveCertificate(ctx context.Context, tenantID string, cert *Certificate) error {
 	query := `
-		INSERT INTO navigator.certificates (domain, cert_pem, key_pem, expires_at, updated_at)
-		VALUES ($1, $2, $3, $4, NOW())
-		ON CONFLICT (domain) DO UPDATE SET
+		INSERT INTO navigator.certificates (tenant_id, domain, cert_pem, key_pem, expires_at, updated_at)
+		VALUES (NULLIF($1, '')::uuid, $2, $3, $4, $5, NOW())
+		ON CONFLICT (tenant_id, domain) DO UPDATE SET
 			cert_pem = EXCLUDED.cert_pem,
 			key_pem = EXCLUDED.key_pem,
 			expires_at = EXCLUDED.expires_at,
 			updated_at = NOW()
-		RETURNING id, created_at
+		RETURNING id, tenant_id, created_at
 	`
 	return s.db.QueryRowContext(ctx, query,
-		cert.Domain, cert.CertPEM, cert.KeyPEM, cert.ExpiresAt,
-	).Scan(&cert.ID, &cert.CreatedAt)
+		tenantID, cert.Domain, cert.CertPEM, cert.KeyPEM, cert.ExpiresAt,
+	).Scan(&cert.ID, &cert.TenantID, &cert.CreatedAt)
 }
 
-// GetACMEAccount retrieves an ACME account by email
-func (s *Store) GetACMEAccount(ctx context.Context, email string) (*ACMEAccount, error) {
-	query := `
-		SELECT email, registration_json, private_key_pem, created_at
-		FROM navigator.acme_accounts
-		WHERE email = $1
-	`
+// GetACMEAccount retrieves an ACME account by email within a tenant context.
+// If tenantID is empty, retrieves platform-wide account.
+func (s *Store) GetACMEAccount(ctx context.Context, tenantID, email string) (*ACMEAccount, error) {
+	var query string
+	var args []interface{}
+
+	if tenantID == "" {
+		query = `
+			SELECT id, tenant_id, email, registration_json, private_key_pem, created_at
+			FROM navigator.acme_accounts
+			WHERE tenant_id IS NULL AND email = $1
+		`
+		args = []interface{}{email}
+	} else {
+		query = `
+			SELECT id, tenant_id, email, registration_json, private_key_pem, created_at
+			FROM navigator.acme_accounts
+			WHERE tenant_id = $1 AND email = $2
+		`
+		args = []interface{}{tenantID, email}
+	}
+
 	var acc ACMEAccount
-	err := s.db.QueryRowContext(ctx, query, email).Scan(
-		&acc.Email, &acc.Registration, &acc.PrivateKeyPEM, &acc.CreatedAt,
+	err := s.db.QueryRowContext(ctx, query, args...).Scan(
+		&acc.ID, &acc.TenantID, &acc.Email, &acc.Registration, &acc.PrivateKeyPEM, &acc.CreatedAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, ErrNotFound
@@ -92,28 +126,31 @@ func (s *Store) GetACMEAccount(ctx context.Context, email string) (*ACMEAccount,
 	return &acc, nil
 }
 
-// SaveACMEAccount saves a new ACME account
-func (s *Store) SaveACMEAccount(ctx context.Context, acc *ACMEAccount) error {
+// SaveACMEAccount saves a new ACME account for a tenant.
+// If tenantID is empty, saves as a platform-wide account.
+func (s *Store) SaveACMEAccount(ctx context.Context, tenantID string, acc *ACMEAccount) error {
 	query := `
-		INSERT INTO navigator.acme_accounts (email, registration_json, private_key_pem)
-		VALUES ($1, $2, $3)
-		ON CONFLICT (email) DO UPDATE SET
+		INSERT INTO navigator.acme_accounts (tenant_id, email, registration_json, private_key_pem)
+		VALUES (NULLIF($1, '')::uuid, $2, $3, $4)
+		ON CONFLICT (tenant_id, email) DO UPDATE SET
 			registration_json = EXCLUDED.registration_json,
 			private_key_pem = EXCLUDED.private_key_pem
-		RETURNING created_at
+		RETURNING id, tenant_id, created_at
 	`
 	return s.db.QueryRowContext(ctx, query,
-		acc.Email, acc.Registration, acc.PrivateKeyPEM,
-	).Scan(&acc.CreatedAt)
+		tenantID, acc.Email, acc.Registration, acc.PrivateKeyPEM,
+	).Scan(&acc.ID, &acc.TenantID, &acc.CreatedAt)
 }
 
-// ListExpiringCertificates finds certs expiring within the given duration
+// ListExpiringCertificates finds certs expiring within the given duration.
+// Returns all certificates (platform-wide and tenant-specific) that are expiring.
 func (s *Store) ListExpiringCertificates(ctx context.Context, threshold time.Duration) ([]Certificate, error) {
 	expiryLimit := time.Now().Add(threshold)
 	query := `
-		SELECT id, domain, cert_pem, key_pem, expires_at, created_at, updated_at
+		SELECT id, tenant_id, domain, cert_pem, key_pem, expires_at, created_at, updated_at
 		FROM navigator.certificates
 		WHERE expires_at < $1
+		ORDER BY expires_at ASC
 	`
 	rows, err := s.db.QueryContext(ctx, query, expiryLimit)
 	if err != nil {
@@ -124,7 +161,46 @@ func (s *Store) ListExpiringCertificates(ctx context.Context, threshold time.Dur
 	var certs []Certificate
 	for rows.Next() {
 		var c Certificate
-		if err := rows.Scan(&c.ID, &c.Domain, &c.CertPEM, &c.KeyPEM, &c.ExpiresAt, &c.CreatedAt, &c.UpdatedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.TenantID, &c.Domain, &c.CertPEM, &c.KeyPEM, &c.ExpiresAt, &c.CreatedAt, &c.UpdatedAt); err != nil {
+			return nil, err
+		}
+		certs = append(certs, c)
+	}
+	return certs, nil
+}
+
+// ListCertificatesForTenant returns all certificates belonging to a specific tenant.
+func (s *Store) ListCertificatesForTenant(ctx context.Context, tenantID string) ([]Certificate, error) {
+	var query string
+	var args []interface{}
+
+	if tenantID == "" {
+		query = `
+			SELECT id, tenant_id, domain, cert_pem, key_pem, expires_at, created_at, updated_at
+			FROM navigator.certificates
+			WHERE tenant_id IS NULL
+			ORDER BY domain
+		`
+	} else {
+		query = `
+			SELECT id, tenant_id, domain, cert_pem, key_pem, expires_at, created_at, updated_at
+			FROM navigator.certificates
+			WHERE tenant_id = $1
+			ORDER BY domain
+		`
+		args = []interface{}{tenantID}
+	}
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var certs []Certificate
+	for rows.Next() {
+		var c Certificate
+		if err := rows.Scan(&c.ID, &c.TenantID, &c.Domain, &c.CertPEM, &c.KeyPEM, &c.ExpiresAt, &c.CreatedAt, &c.UpdatedAt); err != nil {
 			return nil, err
 		}
 		certs = append(certs, c)

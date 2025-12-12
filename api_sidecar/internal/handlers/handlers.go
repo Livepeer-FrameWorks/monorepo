@@ -44,11 +44,11 @@ func Init(log logging.Logger, m *HandlerMetrics, nodeID string) {
 
 	// Perform initial artifact scan
 	if storagePath := os.Getenv("HELMSMAN_STORAGE_LOCAL_PATH"); storagePath != "" {
-		count, total := scanLocalArtifacts(storagePath)
+		totalBytes, artifactCount := scanLocalArtifacts(storagePath)
 		logger.WithFields(logging.Fields{
 			"storage_path": storagePath,
-			"artifacts":    count,
-			"bytes":        total,
+			"artifacts":    artifactCount,
+			"bytes":        totalBytes,
 		}).Info("Initial artifact scan completed")
 	}
 
@@ -783,18 +783,27 @@ func HandleRecordingEnd(c *gin.Context) {
 
 // enrichStreamBufferTrigger computes Helmsman-specific metrics from parsed tracks
 func enrichStreamBufferTrigger(trigger *pb.StreamBufferTrigger) {
-	if trigger == nil || trigger.Tracks == nil {
+	if trigger == nil {
 		return
 	}
 
 	tracks := trigger.Tracks
-	trackCount := int32(len(tracks))
-	trigger.TrackCount = &trackCount
+	if tracks != nil {
+		trackCount := int32(len(tracks))
+		trigger.TrackCount = &trackCount
+	}
 
-	// Detect issues from raw track signals (no derived health score)
+	// Start with MistServer's native issues (primary source of truth)
+	// e.g., "HLSnoaudio!", "VeryLowBuffer", etc.
 	hasIssues := false
 	var issuesDesc []string
 
+	if mistIssues := trigger.GetMistIssues(); mistIssues != "" {
+		hasIssues = true
+		issuesDesc = append(issuesDesc, mistIssues)
+	}
+
+	// Optionally append Helmsman's derived analysis (supplementary diagnostics)
 	for _, track := range tracks {
 		// Check for high jitter (>100ms is concerning)
 		if track.Jitter != nil && *track.Jitter > 100 {
@@ -816,9 +825,11 @@ func enrichStreamBufferTrigger(trigger *pb.StreamBufferTrigger) {
 	}
 
 	// Determine quality tier from tracks
-	qualityTier := determineQualityTier(tracks)
-	if qualityTier != "" {
-		trigger.QualityTier = &qualityTier
+	if tracks != nil {
+		qualityTier := determineQualityTier(tracks)
+		if qualityTier != "" {
+			trigger.QualityTier = &qualityTier
+		}
 	}
 }
 

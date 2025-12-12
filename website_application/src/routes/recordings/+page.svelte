@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
-  import { resolve } from "$app/paths";
+  import { goto } from "$app/navigation";
   import {
     GetDVRRequestsStore,
     GetStreamsStore,
@@ -32,6 +32,8 @@
   import { GridSeam } from "$lib/components/layout";
   import DashboardMetricCard from "$lib/components/shared/DashboardMetricCard.svelte";
   import { getIconComponent } from "$lib/iconUtils";
+  import { getContentDeliveryUrls } from "$lib/config";
+  import PlaybackProtocols from "$lib/components/PlaybackProtocols.svelte";
 
   // Houdini stores
   const dvrRequestsStore = new GetDVRRequestsStore();
@@ -197,34 +199,17 @@
   function getStatusColor(status: string | null | undefined): string {
     switch (status?.toLowerCase()) {
       case "completed":
-        return "text-success";
+        return "text-success bg-success/10 border-success/20";
       case "recording":
-        return "text-warning";
+        return "text-warning bg-warning/10 border-warning/20";
       case "processing":
-        return "text-primary";
+        return "text-primary bg-primary/10 border-primary/20";
       case "failed":
-        return "text-destructive";
+        return "text-destructive bg-destructive/10 border-destructive/20";
       case "paused":
-        return "text-muted-foreground";
+        return "text-muted-foreground bg-muted border-border";
       default:
-        return "text-muted-foreground";
-    }
-  }
-
-  function getStatusIcon(status: string | null | undefined): string {
-    switch (status?.toLowerCase()) {
-      case "completed":
-        return "✓";
-      case "recording":
-        return "●";
-      case "processing":
-        return "⟳";
-      case "failed":
-        return "✗";
-      case "paused":
-        return "⏸";
-      default:
-        return "?";
+        return "text-muted-foreground bg-muted border-border";
     }
   }
 
@@ -266,12 +251,23 @@
 
   // Icons
   const FilmIcon = getIconComponent("Film");
-  const ScissorsIcon = getIconComponent("Scissors");
   const CheckCircleIcon = getIconComponent("CheckCircle");
   const CircleDotIcon = getIconComponent("CircleDot");
   const XCircleIcon = getIconComponent("XCircle");
   const SearchIcon = getIconComponent("Search");
   const FilterIcon = getIconComponent("Filter");
+  const DownloadIcon = getIconComponent("Download");
+  const PlayIcon = getIconComponent("Play");
+  const Share2Icon = getIconComponent("Share2");
+  const Trash2Icon = getIconComponent("Trash2");
+  const ChevronUpIcon = getIconComponent("ChevronUp");
+
+  // Expanded row tracking
+  let expandedRecording = $state<string | null>(null);
+
+  function playRecording(dvrHash: string) {
+    goto(`/view?type=dvr&id=${dvrHash}`);
+  }
 </script>
 
 <svelte:head>
@@ -465,126 +461,165 @@
                   <TableHeader>
                     <TableRow>
                       <TableHead
-                        class="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider"
+                        class="px-4 py-2 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider w-[140px]"
+                      >
+                        Actions
+                      </TableHead>
+                      <TableHead
+                        class="px-4 py-2 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider"
                       >
                         Recording
                       </TableHead>
                       <TableHead
-                        class="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider"
+                        class="px-4 py-2 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider"
                       >
                         Stream
                       </TableHead>
                       <TableHead
-                        class="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider"
+                        class="px-4 py-2 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider"
                       >
                         Status
                       </TableHead>
                       <TableHead
-                        class="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider"
+                        class="px-4 py-2 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider"
                       >
                         Duration
                       </TableHead>
                       <TableHead
-                        class="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider"
+                        class="px-4 py-2 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider"
                       >
                         Size
                       </TableHead>
                       <TableHead
-                        class="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider"
+                        class="px-4 py-2 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider"
                       >
                         Created
-                      </TableHead>
-                      <TableHead
-                        class="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider"
-                      >
-                        Actions
                       </TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody class="divide-y divide-border">
                     {#each paginatedRecordings as recording (recording.dvrHash)}
                       <TableRow
-                        class="hover:bg-muted/50 transition-colors"
+                        class="hover:bg-muted/50 transition-colors cursor-pointer group"
+                        onclick={() => recording.status === "completed" && playRecording(recording.dvrHash)}
                       >
-                        <TableCell class="px-6 py-4">
+                        <!-- Actions Column (Left, Horizontal) -->
+                        <TableCell
+                          class="px-4 py-2 align-middle"
+                          onclick={(e) => e.stopPropagation()}
+                        >
+                          <div class="flex items-center gap-1">
+                            {#if recording.status === "completed" && recording.dvrHash}
+                              {@const urls = getContentDeliveryUrls(recording.dvrHash, "dvr")}
+                              
+                              <Button
+                                href={urls.primary.mp4}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                variant="ghost"
+                                size="sm"
+                                class="h-7 w-7 p-0 text-muted-foreground hover:text-primary"
+                                title="Download MP4"
+                              >
+                                <DownloadIcon class="w-3.5 h-3.5" />
+                              </Button>
+
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                class="h-7 w-7 p-0 text-muted-foreground hover:text-foreground"
+                                title={expandedRecording === recording.dvrHash ? "Hide Share Info" : "Share Recording"}
+                                onclick={() => expandedRecording = expandedRecording === recording.dvrHash ? null : recording.dvrHash}
+                              >
+                                {#if expandedRecording === recording.dvrHash}
+                                  <ChevronUpIcon class="w-3.5 h-3.5" />
+                                {:else}
+                                  <Share2Icon class="w-3.5 h-3.5" />
+                                {/if}
+                              </Button>
+
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                class="h-7 w-7 p-0 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity focus:opacity-100"
+                                title="Delete Recording (Not implemented)"
+                                disabled
+                              >
+                                <Trash2Icon class="w-3.5 h-3.5" />
+                              </Button>
+                            {:else if recording.status === "recording"}
+                              <span class="text-[10px] text-warning animate-pulse px-2">Recording...</span>
+                            {:else}
+                              <span class="text-[10px] text-muted-foreground px-2">-</span>
+                            {/if}
+                          </div>
+                        </TableCell>
+
+                        <TableCell class="px-4 py-2">
                           <div class="flex flex-col">
                             <div
-                              class="text-sm font-medium text-foreground truncate max-w-xs"
+                              class="text-sm font-medium text-foreground truncate max-w-xs group-hover:text-primary transition-colors"
                               title={recording.manifestPath}
                             >
                               {recording.manifestPath || recording.dvrHash}
                             </div>
-                            <div class="text-xs text-muted-foreground font-mono">
-                              {recording.dvrHash}
+                            <div class="text-[10px] text-muted-foreground font-mono">
+                              {recording.dvrHash.slice(0, 8)}...
                             </div>
                           </div>
                         </TableCell>
-                        <TableCell class="px-6 py-4">
+
+                        <TableCell class="px-4 py-2">
                           <div class="flex flex-col">
                             <div class="text-sm text-foreground">
                               {recording.internalName || "Unknown"}
                             </div>
-                            <div class="text-xs text-muted-foreground">
+                            <div class="text-[10px] text-muted-foreground">
                               {recording.storageNodeId || "N/A"}
                             </div>
                           </div>
                         </TableCell>
-                        <TableCell class="px-6 py-4">
+
+                        <TableCell class="px-4 py-2">
                           <span
-                            class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-muted {getStatusColor(
-                              recording.status,
-                            )}"
+                            class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border {getStatusColor(recording.status)}"
                           >
-                            <span class="mr-1">{getStatusIcon(recording.status)}</span
-                            >
                             {recording.status || "Unknown"}
                           </span>
                         </TableCell>
-                        <TableCell class="px-6 py-4 text-sm text-foreground">
+
+                        <TableCell class="px-4 py-2 text-sm text-foreground">
                           {recording.durationSeconds
                             ? formatDuration(recording.durationSeconds * 1000)
                             : "N/A"}
                         </TableCell>
-                        <TableCell class="px-6 py-4 text-sm text-foreground">
+                        <TableCell class="px-4 py-2 text-sm text-foreground">
                           {recording.sizeBytes
                             ? formatBytes(recording.sizeBytes)
                             : "N/A"}
                         </TableCell>
-                        <TableCell class="px-6 py-4 text-sm text-foreground">
+                        <TableCell class="px-4 py-2 text-sm text-foreground">
                           {recording.createdAt
                             ? formatDate(recording.createdAt)
                             : "N/A"}
                         </TableCell>
-                        <TableCell class="px-6 py-4">
-                          <div class="flex space-x-2">
-                            {#if recording.status === "completed" && recording.manifestPath}
-                              {@const manifestUrl = recording.manifestPath}
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                class="h-8 px-2 text-info hover:text-primary"
-                                title="View recording manifest"
-                                onclick={() => {
-                                  if (typeof window !== "undefined" && manifestUrl) {
-                                    window.open(
-                                      manifestUrl,
-                                      "_blank",
-                                      "noreferrer",
-                                    );
-                                  }
-                                }}
-                              >
-                                View
-                              </Button>
-                            {/if}
-                            {#if recording.status === "recording"}
-                              <span class="h-8 px-2 flex items-center text-xs text-warning">
-                                Recording...
-                              </span>
-                            {/if}
-                          </div>
-                        </TableCell>
                       </TableRow>
+
+                      <!-- Expanded protocols row -->
+                      {#if expandedRecording === recording.dvrHash && recording.status === "completed"}
+                        <TableRow class="bg-muted/5 border-t-0">
+                          <TableCell colspan={7} class="px-4 py-4 cursor-default">
+                             <div class="pl-4 border-l-2 border-primary/20" onclick={(e) => e.stopPropagation()}>
+                              <PlaybackProtocols
+                                contentId={recording.dvrHash}
+                                contentType="dvr"
+                                showPrimary={true}
+                                showAdditional={true}
+                              />
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      {/if}
                     {/each}
                   </TableBody>
                 </Table>
@@ -686,12 +721,6 @@
                 </div>
               {/if}
             {/if}
-          </div>
-          <div class="slab-actions">
-            <Button href={resolve("/clips")} variant="ghost" class="gap-2">
-              <ScissorsIcon class="w-4 h-4" />
-              View Clips
-            </Button>
           </div>
         </div>
       </div>

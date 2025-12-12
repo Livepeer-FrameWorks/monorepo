@@ -1883,9 +1883,15 @@ func convertStreamAPIToMistTrigger(nodeID, streamName, internalName string, stre
 		}
 	}
 
-	// Detect issues from raw signals (no derived health score)
+	// Start with MistServer's native issues (primary source of truth)
+	// e.g., "HLSnoaudio!", "VeryLowBuffer", etc.
 	hasIssues := false
 	var issuesDesc []string
+
+	if mistIssues, ok := healthData["issues"].(string); ok && mistIssues != "" {
+		hasIssues = true
+		issuesDesc = append(issuesDesc, mistIssues)
+	}
 
 	// Calculate packet loss if available
 	var packetLossRatio float64
@@ -1895,7 +1901,7 @@ func convertStreamAPIToMistTrigger(nodeID, streamName, internalName string, stre
 		}
 	}
 
-	// Check for high packet loss
+	// Append Helmsman's derived analysis (supplementary diagnostics)
 	if packetLossRatio > 0.05 {
 		hasIssues = true
 		issuesDesc = append(issuesDesc, fmt.Sprintf("High packet loss: %.2f%%", packetLossRatio*100))
@@ -1936,6 +1942,16 @@ func convertStreamAPIToMistTrigger(nodeID, streamName, internalName string, stre
 	}
 	if primaryBitrate > 0 {
 		streamLifecycleUpdate.PrimaryBitrate = &primaryBitrate
+	}
+
+	// Extract packet statistics from health data (per-stream totals from MistServer)
+	if healthPacketsSent, ok := healthData["packets_sent"].(float64); ok && healthPacketsSent > 0 {
+		ps := uint64(healthPacketsSent)
+		streamLifecycleUpdate.PacketsSent = &ps
+	}
+	if healthPacketsLost, ok := healthData["packets_lost"].(float64); ok {
+		pl := uint64(healthPacketsLost)
+		streamLifecycleUpdate.PacketsLost = &pl
 	}
 
 	return &pb.MistTrigger{

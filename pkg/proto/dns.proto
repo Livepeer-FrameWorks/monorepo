@@ -10,12 +10,15 @@ service NavigatorService {
   rpc SyncDNS(SyncDNSRequest) returns (SyncDNSResponse);
   // IssueCertificate requests Navigator to issue or renew a certificate for a domain.
   rpc IssueCertificate(IssueCertificateRequest) returns (IssueCertificateResponse);
+  // GetCertificate retrieves an existing certificate for a domain.
+  rpc GetCertificate(GetCertificateRequest) returns (GetCertificateResponse);
 }
 
 // SyncDNSRequest is sent by Quartermaster to trigger DNS synchronization.
 message SyncDNSRequest {
-  string service_type = 1; // e.g., "edge", "gateway", "app"
-  string root_domain = 2;  // e.g., "frameworks.network"
+  optional string tenant_id = 1; // Optional: tenant context for tenant-specific DNS records
+  string service_type = 2;       // e.g., "edge", "gateway", "app"
+  string root_domain = 3;        // e.g., "frameworks.network"
 }
 
 // SyncDNSResponse is returned by Navigator after attempting DNS synchronization.
@@ -27,15 +30,36 @@ message SyncDNSResponse {
 
 // IssueCertificateRequest is sent to request a certificate.
 message IssueCertificateRequest {
-  string domain = 1; // The domain to issue the certificate for, e.g., "api.example.com" or "*.example.com"
-  string email = 2;  // Email for ACME registration
+  optional string tenant_id = 1; // Optional: tenant context for tenant custom domains (NULL for platform certs)
+  string domain = 2;             // The domain to issue the certificate for, e.g., "api.example.com" or "*.example.com"
+  string email = 3;              // Email for ACME registration
 }
 
 // IssueCertificateResponse is returned after attempting certificate issuance.
 message IssueCertificateResponse {
   bool success = 1;
-  string message = 2; // Details of the operation
-  string cert_pem = 3; // The issued certificate in PEM format
-  string key_pem = 4;  // The private key in PEM format
-  string error = 5;    // Error message if issuance failed
+  string message = 2;            // Details of the operation
+  optional string tenant_id = 3; // Echo back tenant context
+  string domain = 4;             // The domain the certificate was issued for
+  string cert_pem = 5;           // The issued certificate in PEM format
+  string key_pem = 6;            // The private key in PEM format
+  int64 expires_at = 7;          // Certificate expiration timestamp (Unix)
+  string error = 8;              // Error message if issuance failed
+}
+
+// GetCertificateRequest retrieves an existing certificate.
+message GetCertificateRequest {
+  optional string tenant_id = 1; // Optional: tenant context for filtering
+  string domain = 2;             // The domain to retrieve the certificate for
+}
+
+// GetCertificateResponse returns the certificate if found.
+message GetCertificateResponse {
+  bool found = 1;
+  optional string tenant_id = 2; // Tenant that owns the certificate (if any)
+  string domain = 3;             // The domain
+  string cert_pem = 4;           // The certificate in PEM format
+  string key_pem = 5;            // The private key in PEM format
+  int64 expires_at = 6;          // Certificate expiration timestamp (Unix)
+  string error = 7;              // Error message if retrieval failed
 }

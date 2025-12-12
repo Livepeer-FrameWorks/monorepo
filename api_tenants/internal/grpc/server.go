@@ -261,6 +261,57 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *pb.Get
 		resp.PeriscopeUrl = &periscopeURL.String
 	}
 
+	// Check tenant-specific resource limits from tenant_cluster_access
+	var tenantResourceLimits []byte
+	err = s.db.QueryRowContext(ctx, `
+		SELECT resource_limits
+		FROM quartermaster.tenant_cluster_access
+		WHERE tenant_id = $1 AND cluster_id = $2 AND is_active = TRUE
+	`, tenantID, primaryClusterID).Scan(&tenantResourceLimits)
+
+	if err == nil && len(tenantResourceLimits) > 0 {
+		var limits map[string]interface{}
+		if json.Unmarshal(tenantResourceLimits, &limits) == nil {
+			// Check max_streams tenant limit
+			if maxStreams, ok := limits["max_streams"].(float64); ok && maxStreams > 0 {
+				// Count tenant's current streams on this cluster
+				var currentTenantStreams int
+				s.db.QueryRowContext(ctx, `
+					SELECT COUNT(*) FROM quartermaster.service_instances
+					WHERE cluster_id = $1
+					  AND service_id = 'stream'
+					  AND status = 'running'
+					  AND node_id IN (
+					    SELECT node_id FROM quartermaster.infrastructure_nodes WHERE cluster_id = $1
+					  )
+				`, primaryClusterID).Scan(&currentTenantStreams)
+
+				// Note: This is a simplified check. In production, you'd want to track
+				// streams per tenant, not total streams on cluster.
+				// For now, we'll just log a warning if limits are configured.
+				if currentTenantStreams >= int(maxStreams) {
+					s.logger.WithFields(logging.Fields{
+						"tenant_id":        tenantID,
+						"cluster_id":       primaryClusterID,
+						"max_streams":      maxStreams,
+						"current_streams":  currentTenantStreams,
+					}).Warn("Tenant approaching stream limit")
+				}
+			}
+
+			// Check max_bandwidth_mbps tenant limit
+			if maxBandwidth, ok := limits["max_bandwidth_mbps"].(float64); ok && maxBandwidth > 0 && estimatedMbps > 0 {
+				// If tenant has bandwidth limit and would exceed it, warn
+				// Full enforcement would require tracking per-tenant bandwidth usage
+				s.logger.WithFields(logging.Fields{
+					"tenant_id":         tenantID,
+					"max_bandwidth":     maxBandwidth,
+					"estimated_mbps":    estimatedMbps,
+				}).Debug("Tenant has bandwidth limit configured")
+			}
+		}
+	}
+
 	return &resp, nil
 }
 
@@ -1334,16 +1385,39 @@ func (s *QuartermasterServer) CreateCluster(ctx context.Context, req *pb.CreateC
 		return nil, status.Error(codes.InvalidArgument, "cluster_id required")
 	}
 
+	// Determine deployment model (default to 'managed')
+	deploymentModel := req.GetDeploymentModel()
+	if deploymentModel == "" {
+		deploymentModel = "managed"
+	}
+
+	// Validate owner_tenant_id if provided
+	ownerTenantID := ""
+	if req.OwnerTenantId != nil && *req.OwnerTenantId != "" {
+		var exists bool
+		err := s.db.QueryRowContext(ctx,
+			"SELECT EXISTS(SELECT 1 FROM quartermaster.tenants WHERE id = $1)",
+			*req.OwnerTenantId).Scan(&exists)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to validate owner_tenant_id: %v", err)
+		}
+		if !exists {
+			return nil, status.Error(codes.InvalidArgument, "owner_tenant_id does not exist")
+		}
+		ownerTenantID = *req.OwnerTenantId
+	}
+
 	id := uuid.New().String()
 	now := time.Now()
 
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO quartermaster.infrastructure_clusters (id, cluster_id, cluster_name, cluster_type, deployment_model,
-		                                                   base_url, database_url, periscope_url, kafka_brokers,
+		                                                   owner_tenant_id, base_url, database_url, periscope_url, kafka_brokers,
 		                                                   max_concurrent_streams, max_concurrent_viewers, max_bandwidth_mbps,
 		                                                   health_status, is_active, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, 'managed', $5, $6, $7, $8, $9, $10, $11, 'healthy', true, $12, $12)
-	`, id, clusterID, req.GetClusterName(), req.GetClusterType(), req.GetBaseUrl(),
+		VALUES ($1, $2, $3, $4, $5, NULLIF($6, '')::uuid, $7, $8, $9, $10, $11, $12, $13, 'healthy', true, $14, $14)
+	`, id, clusterID, req.GetClusterName(), req.GetClusterType(), deploymentModel,
+		ownerTenantID, req.GetBaseUrl(),
 		req.DatabaseUrl, req.PeriscopeUrl, pq.Array(req.GetKafkaBrokers()),
 		req.GetMaxConcurrentStreams(), req.GetMaxConcurrentViewers(), req.GetMaxBandwidthMbps(), now)
 
@@ -1398,6 +1472,30 @@ func (s *QuartermasterServer) UpdateCluster(ctx context.Context, req *pb.UpdateC
 	if req.CurrentViewerCount != nil {
 		updates = append(updates, fmt.Sprintf("current_viewer_count = $%d", argIdx))
 		args = append(args, *req.CurrentViewerCount)
+		argIdx++
+	}
+	// Handle owner_tenant_id (empty string clears ownership)
+	if req.OwnerTenantId != nil {
+		if *req.OwnerTenantId != "" {
+			// Validate the tenant exists
+			var exists bool
+			err := s.db.QueryRowContext(ctx,
+				"SELECT EXISTS(SELECT 1 FROM quartermaster.tenants WHERE id = $1)",
+				*req.OwnerTenantId).Scan(&exists)
+			if err != nil {
+				return nil, status.Errorf(codes.Internal, "failed to validate owner_tenant_id: %v", err)
+			}
+			if !exists {
+				return nil, status.Error(codes.InvalidArgument, "owner_tenant_id does not exist")
+			}
+		}
+		updates = append(updates, fmt.Sprintf("owner_tenant_id = NULLIF($%d, '')::uuid", argIdx))
+		args = append(args, *req.OwnerTenantId)
+		argIdx++
+	}
+	if req.DeploymentModel != nil {
+		updates = append(updates, fmt.Sprintf("deployment_model = $%d", argIdx))
+		args = append(args, *req.DeploymentModel)
 		argIdx++
 	}
 

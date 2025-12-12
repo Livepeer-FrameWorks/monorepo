@@ -212,9 +212,9 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 	var uniqueUsers int
 	err = bs.clickhouse.QueryRowContext(ctx, `
 		SELECT COALESCE(uniq(session_id), 0) as unique_users
-		FROM connection_events 
-		WHERE tenant_id = $1 
-		AND timestamp BETWEEN $2 AND $3
+		FROM connection_events
+		WHERE tenant_id = ?
+		AND timestamp BETWEEN ? AND ?
 	`, tenantID, firstOfMonth, endTime).Scan(&uniqueUsers)
 	if err != nil && err != database.ErrNoRows {
 		bs.logger.WithError(err).Warn("Failed to query unique users (MTD) from ClickHouse, defaulting to 0")
@@ -226,8 +226,8 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 	err = bs.clickhouse.QueryRowContext(ctx, `
 		SELECT COALESCE(avg(total_bytes) / (1024*1024*1024), 0) as avg_storage_gb
 		FROM storage_snapshots
-		WHERE tenant_id = $1
-		AND timestamp BETWEEN $2 AND $3
+		WHERE tenant_id = ?
+		AND timestamp BETWEEN ? AND ?
 	`, tenantID, startTime, endTime).Scan(&avgStorageGB)
 	if err != nil && err != database.ErrNoRows {
 		bs.logger.WithError(err).Debug("Failed to query storage snapshots, defaulting to 0")
@@ -238,12 +238,12 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 	var clipStorageAddedGB float64
 	var clipsAdded int
 	err = bs.clickhouse.QueryRowContext(ctx, `
-		SELECT 
+		SELECT
 			COALESCE(sumIf(size_bytes, stage = 'done') / (1024*1024*1024), 0) as clip_storage_added_gb,
 			COALESCE(countIf(stage = 'done'), 0) as clips_added
-		FROM clip_events 
-		WHERE tenant_id = $1 
-		AND timestamp BETWEEN $2 AND $3
+		FROM clip_events
+		WHERE tenant_id = ?
+		AND timestamp BETWEEN ? AND ?
 	`, tenantID, startTime, endTime).Scan(&clipStorageAddedGB, &clipsAdded)
 	if err != nil && err != database.ErrNoRows {
 		bs.logger.WithError(err).Debug("Failed to query clip events for storage additions, defaulting to 0")
@@ -260,10 +260,10 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 	var recordingGB float64
 	err = bs.clickhouse.QueryRowContext(ctx, `
 		SELECT COALESCE(sum(file_size) / (1024*1024*1024), 0) as recording_gb
-		FROM stream_events 
-		WHERE tenant_id = $1 
-    AND event_type = 'recording-complete'
-		AND timestamp BETWEEN $2 AND $3
+		FROM stream_events
+		WHERE tenant_id = ?
+		AND event_type = 'recording-complete'
+		AND timestamp BETWEEN ? AND ?
 	`, tenantID, startTime, endTime).Scan(&recordingGB)
 	if err != nil && err != database.ErrNoRows {
 		bs.logger.WithError(err).Debug("Failed to query recording data from ClickHouse, defaulting to 0")

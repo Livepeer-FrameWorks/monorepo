@@ -55,6 +55,21 @@
   const MicIcon = $derived(getIconComponent("Mic"));
   const ActivityIcon = $derived(getIconComponent("Activity"));
   const TrendingUpIcon = $derived(getIconComponent("TrendingUp"));
+  const NetworkIcon = $derived(getIconComponent("Wifi"));
+
+  // Format large numbers with commas
+  function formatNumber(n: number | null | undefined): string {
+    if (n === null || n === undefined) return "0";
+    return n.toLocaleString();
+  }
+
+  // Packet loss status color
+  function getPacketLossColor(rate: number | null | undefined): string {
+    if (rate === null || rate === undefined) return "text-muted-foreground";
+    if (rate > 0.05) return "text-error";
+    if (rate > 0.01) return "text-warning";
+    return "text-success";
+  }
 </script>
 
 <div class="dashboard-grid border-t border-[hsl(var(--tn-fg-gutter)/0.3)]">
@@ -244,6 +259,42 @@
       {/if}
     </div>
   </div>
+
+  <!-- Network Stats (from stream analytics) -->
+  {#if analytics && (analytics.packetsSent || analytics.packetsLost || analytics.packetLossRate !== undefined)}
+    <div class="slab col-span-full">
+      <div class="slab-header flex items-center gap-2">
+        <NetworkIcon class="w-5 h-5 text-info" />
+        <h3 class="font-semibold text-xs uppercase tracking-wide text-muted-foreground">Network Stats</h3>
+      </div>
+      <div class="slab-body--padded">
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div>
+            <span class="text-sm text-muted-foreground">Packets Sent</span>
+            <p class="font-mono text-lg text-foreground">{formatNumber(analytics.packetsSent)}</p>
+          </div>
+          <div>
+            <span class="text-sm text-muted-foreground">Packets Lost</span>
+            <p class="font-mono text-lg {analytics.packetsLost > 0 ? 'text-warning' : 'text-foreground'}">
+              {formatNumber(analytics.packetsLost)}
+            </p>
+          </div>
+          <div>
+            <span class="text-sm text-muted-foreground">Retransmitted</span>
+            <p class="font-mono text-lg text-foreground">{formatNumber(analytics.packetsRetrans)}</p>
+          </div>
+          <div>
+            <span class="text-sm text-muted-foreground">Packet Loss Rate</span>
+            <p class="font-mono text-lg {getPacketLossColor(analytics.packetLossRate)}">
+              {analytics.packetLossRate !== null && analytics.packetLossRate !== undefined
+                ? `${(analytics.packetLossRate * 100).toFixed(3)}%`
+                : "N/A"}
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  {/if}
 
   <!-- Viewer Trend Chart -->
   <div class="slab col-span-full">

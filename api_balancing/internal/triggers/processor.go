@@ -30,6 +30,12 @@ type streamContext struct {
 	UserID   string
 }
 
+// DVRStarter handles DVR recording orchestration.
+// Implemented by FoghornGRPCServer to allow direct internal DVR start without Commodore hop.
+type DVRStarter interface {
+	StartDVR(ctx context.Context, req *pb.StartDVRRequest) (*pb.StartDVRResponse, error)
+}
+
 // Processor implements the MistTriggerProcessor interface for handling MistServer triggers
 type Processor struct {
 	logger          logging.Logger
@@ -38,6 +44,7 @@ type Processor struct {
 	loadBalancer    *balancer.LoadBalancer
 	geoipClient     *geoip.Reader
 	geoipCache      *cache.Cache
+	dvrService      DVRStarter // Internal DVR orchestration (FoghornGRPCServer)
 	nodeID          string
 	region          string
 	streamCache     map[string]streamContext // Cache stream context (tenant + user)
@@ -67,6 +74,11 @@ func NewProcessor(logger logging.Logger, commodoreClient *commodore.GRPCClient, 
 // SetGeoIPCache configures a cache for GeoIP lookups
 func (p *Processor) SetGeoIPCache(c *cache.Cache) {
 	p.geoipCache = c
+}
+
+// SetDVRService configures the DVR orchestration service for auto-start recordings
+func (p *Processor) SetDVRService(svc DVRStarter) {
+	p.dvrService = svc
 }
 
 // ProcessTypedTrigger processes a typed protobuf MistTrigger directly
@@ -223,12 +235,20 @@ func (p *Processor) handlePushRewrite(trigger *pb.MistTrigger) (string, bool, er
 	if streamValidation.IsRecordingEnabled {
 		p.logger.WithFields(logging.Fields{
 			"internal_name": streamValidation.InternalName,
-		}).Info("DVR recording enabled for stream, requesting DVR start")
+		}).Info("DVR recording enabled for stream, starting DVR")
 
-		// Start DVR recording
+		// Start DVR recording via Foghorn's internal orchestration.
+		// NOTE: We call Foghorn directly rather than proxying through Commodore.
+		// Stream validation already happened (ValidateStreamKey), and Foghorn owns DVR state.
+		// Future: If billing/quota checks are needed, add a pre-flight hook to Commodore/Purser here.
 		go func() {
+			if p.dvrService == nil {
+				p.logger.WithField("internal_name", streamValidation.InternalName).
+					Error("DVR service not configured, cannot start recording")
+				return
+			}
 			userID := streamValidation.UserId
-			dvrResponse, err := p.commodoreClient.StartDVR(context.Background(), &pb.StartDVRRequest{
+			dvrResponse, err := p.dvrService.StartDVR(context.Background(), &pb.StartDVRRequest{
 				TenantId:     streamValidation.TenantId,
 				InternalName: streamValidation.InternalName,
 				UserId:       &userID,
@@ -245,7 +265,7 @@ func (p *Processor) handlePushRewrite(trigger *pb.MistTrigger) (string, bool, er
 					"tenant_id":     streamValidation.TenantId,
 					"dvr_hash":      dvrResponse.GetDvrHash(),
 					"status":        dvrResponse.GetStatus(),
-				}).Info("Successfully started DVR recording")
+				}).Info("DVR recording started")
 			}
 		}()
 	}
@@ -460,8 +480,8 @@ func (p *Processor) handleUserNew(trigger *pb.MistTrigger) (string, bool, error)
 			}).Debug("Enriched USER_NEW with connection geo data (bucketized)")
 		}
 	}
-	// Redact client IP in payload (kept in Mist log only)
-	userNew.ClientIp = nil
+	// Note: Client IP redaction now happens at API layer (GraphQL resolvers, Signalman)
+	// Raw IP in 'host' field is preserved for ClickHouse storage and future analysis
 
 	// Send enriched trigger to Decklog
 	if err := p.decklogClient.SendTrigger(trigger); err != nil {
@@ -772,7 +792,18 @@ func (p *Processor) handleStreamLifecycleUpdate(trigger *pb.MistTrigger) (string
 	internal := slu.GetInternalName()
 	nodeID := slu.GetNodeId()
 
-	// Forward the StreamLifecycleUpdate directly to Decklog
+	// Enrich tenant context before forwarding (same pattern as handleStreamEnd)
+	ctx := context.Background()
+	info := p.getStreamContext(ctx, internal)
+	if info.TenantID != "" {
+		trigger.TenantId = &info.TenantID
+		slu.TenantId = &info.TenantID
+	}
+	if info.UserID != "" {
+		trigger.UserId = &info.UserID
+	}
+
+	// Forward the enriched StreamLifecycleUpdate to Decklog
 	_ = p.decklogClient.SendTrigger(trigger)
 
 	if slu.GetStatus() == "offline" {
@@ -783,7 +814,21 @@ func (p *Processor) handleStreamLifecycleUpdate(trigger *pb.MistTrigger) (string
 
 // handleClientLifecycleUpdate forwards ClientLifecycleUpdate to Decklog
 func (p *Processor) handleClientLifecycleUpdate(trigger *pb.MistTrigger) (string, bool, error) {
-	// Forward the ClientLifecycleUpdate directly to Decklog
+	clu := trigger.GetTriggerPayload().(*pb.MistTrigger_ClientLifecycleUpdate).ClientLifecycleUpdate
+	internal := clu.GetInternalName()
+
+	// Enrich tenant context before forwarding (same pattern as handleUserNew/handleUserEnd)
+	ctx := context.Background()
+	info := p.getStreamContext(ctx, internal)
+	if info.TenantID != "" {
+		trigger.TenantId = &info.TenantID
+		clu.TenantId = &info.TenantID
+	}
+	if info.UserID != "" {
+		trigger.UserId = &info.UserID
+	}
+
+	// Forward the enriched ClientLifecycleUpdate to Decklog
 	_ = p.decklogClient.SendTrigger(trigger)
 	return "", false, nil
 }

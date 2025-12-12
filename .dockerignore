@@ -14,3 +14,15 @@ dist
 **/.env
 npm-debug.log*
 yarn-error.log*
+
+# Mac System Files
+.DS_Store
+**/.DS_Store
+
+# Go Build Artifacts
+.gocache
+**/.gocache
+coverage.out
+**/coverage.out
+test-results
+**/test-results

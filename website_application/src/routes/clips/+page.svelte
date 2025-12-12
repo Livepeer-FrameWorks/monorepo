@@ -1,6 +1,5 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
-  import { resolve, base } from "$app/paths"; // Ensure base is imported for correct path resolution
   import { goto } from "$app/navigation";
   import { auth } from "$lib/stores/auth";
   import {
@@ -12,11 +11,7 @@
   } from "$houdini";
   import type { ClipLifecycle$result } from "$houdini";
   import { toast } from "$lib/stores/toast.js";
-  import LoadingCard from "$lib/components/LoadingCard.svelte"; // Still needed for skeleton fallback? No, replacing with slab-skeletons.
-  import EmptyState from "$lib/components/EmptyState.svelte";
-  import ClipModal from "$lib/components/ClipModal.svelte";
   import { Button } from "$lib/components/ui/button";
-  import { ClipCard } from "$lib/components/cards";
   import { GridSeam } from "$lib/components/layout";
   import DashboardMetricCard from "$lib/components/shared/DashboardMetricCard.svelte";
   import {
@@ -35,7 +30,18 @@
     SelectItem,
     SelectTrigger,
   } from "$lib/components/ui/select";
+  import {
+    Table,
+    TableHeader,
+    TableHead,
+    TableRow,
+    TableBody,
+    TableCell,
+  } from "$lib/components/ui/table";
   import { getIconComponent } from "$lib/iconUtils";
+  import { getContentDeliveryUrls } from "$lib/config";
+  import { formatBytes } from "$lib/utils/formatters.js";
+  import PlaybackProtocols from "$lib/components/PlaybackProtocols.svelte";
 
   // Houdini stores
   const streamsStore = new GetStreamsStore();
@@ -92,10 +98,7 @@
   let startTime = $state(0);
   let endTime = $state(300); // 5 minutes default for Absolute mode
 
-  // Clip viewing
-  let selectedClip = $state<ClipData | null>(null);
-
-  // Active stream for clip lifecycle subscription
+  // Track active stream for clip lifecycle subscription
   let activeClipStream = $state<string | null>(null);
 
   // Track clip progress for real-time updates
@@ -105,6 +108,42 @@
   let processingClips = $derived(clips.filter(c => c.status === "Processing" || c.status === "processing").length);
   let completedClips = $derived(clips.filter(c => c.status === "Available" || c.status === "completed").length);
   let failedClips = $derived(clips.filter(c => c.status === "Failed" || c.status === "failed").length);
+
+  // Expanded row tracking
+  let expandedClip = $state<string | null>(null);
+
+  // Filter for search query
+  let searchQuery = $state("");
+  let statusFilter = $state("all");
+
+  let filteredClips = $derived.by(() => {
+    let result = clips;
+
+    // Filter by search query
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase();
+      result = result.filter(
+        (clip) =>
+          clip.title?.toLowerCase().includes(query) ||
+          clip.clipHash?.toLowerCase().includes(query) ||
+          clip.streamName?.toLowerCase().includes(query) ||
+          clip.description?.toLowerCase().includes(query),
+      );
+    }
+
+    // Filter by status
+    if (statusFilter !== "all") {
+      result = result.filter((clip) => {
+        const s = clip.status?.toLowerCase() || "";
+        if (statusFilter === "processing") return s === "processing" || s === "requested";
+        if (statusFilter === "completed") return s === "available" || s === "completed" || s === "ready";
+        if (statusFilter === "failed") return s === "failed";
+        return true;
+      });
+    }
+
+    return result;
+  });
 
   // Subscribe to auth store
   auth.subscribe((authState) => {
@@ -307,27 +346,54 @@
     endTime = 300;
   }
 
-  function formatDuration(seconds: number) {
+  function formatDurationSeconds(seconds: number) {
     const minutes = Math.floor(seconds / 60);
     const remainingSeconds = seconds % 60;
     return `${minutes}:${remainingSeconds.toString().padStart(2, "0")}`;
   }
 
-  function openClip(clip: ClipData) {
-    selectedClip = clip;
+  function formatDate(dateString: string | Date) {
+    return new Date(dateString).toLocaleDateString();
   }
 
-  function closeClip() {
-    selectedClip = null;
+  function playClip(clipHash: string) {
+    goto(`/view?type=clip&id=${clipHash}`);
+  }
+
+  function getStatusColor(status: string | null | undefined): string {
+    switch (status?.toLowerCase()) {
+      case "available":
+      case "completed":
+      case "ready":
+        return "text-success bg-success/10 border-success/20";
+      case "processing":
+      case "requested":
+        return "text-warning bg-warning/10 border-warning/20";
+      case "failed":
+        return "text-destructive bg-destructive/10 border-destructive/20";
+      default:
+        return "text-muted-foreground bg-muted border-border";
+    }
+  }
+
+  function isClipReady(status: string | null | undefined): boolean {
+    const s = status?.toLowerCase();
+    return s === "available" || s === "completed" || s === "ready";
   }
 
   // Icons
   const ScissorsIcon = getIconComponent("Scissors");
-  const FilmIcon = getIconComponent("Film");
   const CheckCircleIcon = getIconComponent("CheckCircle");
   const LoaderIcon = getIconComponent("Loader");
   const XCircleIcon = getIconComponent("XCircle");
   const PlusIcon = getIconComponent("Plus");
+  const PlayIcon = getIconComponent("Play");
+  const DownloadIcon = getIconComponent("Download");
+  const Share2Icon = getIconComponent("Share2");
+  const Trash2Icon = getIconComponent("Trash2");
+  const FilterIcon = getIconComponent("Filter");
+  const SearchIcon = getIconComponent("Search");
+  const ChevronUpIcon = getIconComponent("ChevronUp");
 </script>
 
 <svelte:head>
@@ -346,36 +412,6 @@
             Create and manage video clips from your streams
           </p>
         </div>
-      </div>
-      <div class="flex items-center gap-3">
-        {#if streamsError}
-          <Button
-            variant="destructive"
-            onclick={loadData}
-            title="Failed to load streams. Click to retry."
-          >
-            Retry Loading
-          </Button>
-        {:else if streams.length === 0}
-          <Button
-            variant="outline"
-            disabled
-            title="No streams available. Create a stream first to make clips."
-            class="cursor-not-allowed opacity-60"
-          >
-            <PlusIcon class="w-4 h-4 mr-2" />
-            Create Clip
-          </Button>
-        {:else}
-          <Button
-            variant="default"
-            class="gap-2"
-            onclick={() => (showCreateModal = true)}
-          >
-            <PlusIcon class="w-4 h-4" />
-            Create Clip
-          </Button>
-        {/if}
       </div>
     </div>
   </div>
@@ -405,7 +441,7 @@
     {:else}
       <div class="page-transition">
         <!-- Stats Bar -->
-        <GridSeam cols={4} stack="2x2" surface="panel" flush={true} class="min-h-full content-start">
+        <GridSeam cols={4} stack="2x2" surface="panel" flush={true} class="mb-0 min-h-full content-start">
           <div>
             <DashboardMetricCard
               icon={ScissorsIcon}
@@ -446,27 +482,117 @@
 
         <!-- Main Content -->
         <div class="dashboard-grid">
-          <!-- Clips Grid Slab -->
+          <!-- Filters Slab -->
           <div class="slab col-span-full">
             <div class="slab-header">
               <div class="flex items-center gap-2">
-                <ScissorsIcon class="w-4 h-4 text-accent-purple" />
-                <h3>Your Clips</h3>
+                <FilterIcon class="w-4 h-4 text-info" />
+                <h3>Filters</h3>
               </div>
             </div>
             <div class="slab-body--padded">
-              {#if clips.length === 0}
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <!-- Search -->
+                <div>
+                  <label
+                    for="search"
+                    class="block text-sm font-medium text-muted-foreground mb-2"
+                  >
+                    Search Clips
+                  </label>
+                  <div class="relative">
+                    <SearchIcon class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                    <Input
+                      id="search"
+                      type="text"
+                      bind:value={searchQuery}
+                      placeholder="Search by title, hash, or stream name..."
+                      class="w-full pl-10"
+                    />
+                  </div>
+                </div>
+
+                <!-- Status Filter -->
+                <div>
+                  <label
+                    for="status-filter"
+                    class="block text-sm font-medium text-muted-foreground mb-2"
+                  >
+                    Status
+                  </label>
+                  <Select bind:value={statusFilter} type="single">
+                    <SelectTrigger id="status-filter" class="w-full">
+                      {#if statusFilter === 'all'}All Statuses{:else if statusFilter === 'processing'}Processing{:else if statusFilter === 'completed'}Completed{:else if statusFilter === 'failed'}Failed{:else}All Statuses{/if}
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Statuses</SelectItem>
+                      <SelectItem value="processing">Processing</SelectItem>
+                      <SelectItem value="completed">Completed</SelectItem>
+                      <SelectItem value="failed">Failed</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Clips Table Slab -->
+          <div class="slab col-span-full">
+            <div class="slab-header flex justify-between items-center">
+              <div class="flex items-center gap-2">
+                <ScissorsIcon class="w-4 h-4 text-info" />
+                <h3>Your Clips</h3>
+              </div>
+              {#if streamsError}
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  class="gap-2 h-8"
+                  onclick={loadData}
+                  title="Failed to load streams. Click to retry."
+                >
+                  Retry Loading
+                </Button>
+              {:else if streams.length === 0}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  class="gap-2 h-8 cursor-not-allowed opacity-60"
+                  disabled
+                  title="No streams available. Create a stream first to make clips."
+                >
+                  <PlusIcon class="w-3.5 h-3.5" />
+                  Create Clip
+                </Button>
+              {:else}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  class="gap-2 h-8"
+                  onclick={() => (showCreateModal = true)}
+                >
+                  <PlusIcon class="w-3.5 h-3.5" />
+                  Create Clip
+                </Button>
+              {/if}
+            </div>
+            <div class="slab-body--flush">
+              {#if filteredClips.length === 0}
                 <div class="flex flex-col items-center justify-center py-16 m-4 border-2 border-dashed border-border/50 rounded-lg bg-muted/5">
                   <div class="w-16 h-16 rounded-full bg-muted/30 flex items-center justify-center mb-6">
                     <ScissorsIcon class="w-8 h-8 text-muted-foreground" />
                   </div>
-                  <h3 class="text-xl font-semibold mb-3">No clips yet</h3>
+                  <h3 class="text-xl font-semibold mb-3">No clips found</h3>
                   <p class="text-muted-foreground mb-8 max-w-sm text-lg text-center">
-                    Create your first clip from a stream to get started
+                    {#if searchQuery}
+                      Try adjusting your search query.
+                    {:else}
+                      Create your first clip from a stream to get started
+                    {/if}
                   </p>
                   {#if streams.length > 0}
-                    <Button variant="ghost" size="lg" class="h-14 px-8" onclick={() => (showCreateModal = true)}>
-                      <PlusIcon class="w-5 h-5 mr-2" />
+                    <Button variant="default" onclick={() => (showCreateModal = true)}>
+                      <PlusIcon class="w-4 h-4 mr-2" />
                       Create Your First Clip
                     </Button>
                   {:else}
@@ -476,19 +602,149 @@
                   {/if}
                 </div>
               {:else}
-                <GridSeam cols={3} stack="md" flush={true} class="min-h-full content-start">
-                  {#each clips as clip (clip.id)}
-                    <ClipCard
-                      {clip}
-                      streamName={clip.streamName}
-                      onPlay={() => openClip(clip)}
-                      class="h-auto"
-                    />
-                  {/each}
-                </GridSeam>
+                <div class="overflow-x-auto">
+                  <Table class="w-full">
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead
+                          class="px-4 py-2 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider w-[140px]"
+                        >
+                          Actions
+                        </TableHead>
+                        <TableHead class="px-4 py-2 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                          Clip
+                        </TableHead>
+                        <TableHead class="px-4 py-2 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                          Stream
+                        </TableHead>
+                        <TableHead class="px-4 py-2 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                          Status
+                        </TableHead>
+                        <TableHead class="px-4 py-2 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                          Duration
+                        </TableHead>
+                        <TableHead class="px-4 py-2 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                          Size
+                        </TableHead>
+                        <TableHead class="px-4 py-2 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                          Created
+                        </TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody class="divide-y divide-border">
+                      {#each filteredClips as clip (clip.id)}
+                        <TableRow
+                          class="hover:bg-muted/50 transition-colors cursor-pointer group"
+                          onclick={() => isClipReady(clip.status) && playClip(clip.clipHash || "")}
+                        >
+                          <!-- Actions Column (Left, Horizontal) -->
+                          <TableCell
+                            class="px-4 py-2 align-middle"
+                            onclick={(e) => e.stopPropagation()}
+                          >
+                            <div class="flex items-center gap-1">
+                              {#if isClipReady(clip.status) && clip.clipHash}
+                                {@const urls = getContentDeliveryUrls(clip.clipHash, "clip")}
+                                
+                                <Button
+                                  href={urls.primary.mp4}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  variant="ghost"
+                                  size="sm"
+                                  class="h-7 w-7 p-0 text-muted-foreground hover:text-primary"
+                                  title="Download MP4"
+                                >
+                                  <DownloadIcon class="w-3.5 h-3.5" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  class="h-7 w-7 p-0 text-muted-foreground hover:text-foreground"
+                                  title={expandedClip === clip.id ? "Hide Share Info" : "Share Clip"}
+                                  onclick={() => expandedClip = expandedClip === clip.id ? null : clip.id}
+                                >
+                                  {#if expandedClip === clip.id}
+                                    <ChevronUpIcon class="w-3.5 h-3.5" />
+                                  {:else}
+                                    <Share2Icon class="w-3.5 h-3.5" />
+                                  {/if}
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  class="h-7 w-7 p-0 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity focus:opacity-100"
+                                  title="Delete Clip (Not implemented)"
+                                  disabled
+                                >
+                                  <Trash2Icon class="w-3.5 h-3.5" />
+                                </Button>
+                              {:else if clip.status === "Processing" || clip.status === "processing"}
+                                <span class="text-[10px] text-warning animate-pulse px-2">Processing...</span>
+                              {:else}
+                                <span class="text-[10px] text-muted-foreground px-2">-</span>
+                              {/if}
+                            </div>
+                          </TableCell>
+
+                          <TableCell class="px-4 py-2">
+                            <div class="flex flex-col">
+                              <div class="text-sm font-medium text-foreground truncate max-w-xs group-hover:text-primary transition-colors" title={clip.title || clip.clipHash || ""}>
+                                {clip.title || clip.clipHash || "Untitled"}
+                              </div>
+                              {#if clip.description}
+                                <div class="text-[10px] text-muted-foreground truncate max-w-xs" title={clip.description}>
+                                  {clip.description}
+                                </div>
+                              {/if}
+                              <div class="text-[10px] text-muted-foreground font-mono">
+                                {clip.clipHash?.slice(0, 8) || "N/A"}...
+                              </div>
+                            </div>
+                          </TableCell>
+                          <TableCell class="px-4 py-2">
+                            <div class="text-sm text-foreground">
+                              {clip.streamName || "Unknown"}
+                            </div>
+                          </TableCell>
+                          <TableCell class="px-4 py-2">
+                            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border {getStatusColor(clip.status)}">
+                              {clip.status || "Unknown"}
+                            </span>
+                          </TableCell>
+                          <TableCell class="px-4 py-2 text-sm text-foreground">
+                            {clip.duration ? formatDurationSeconds(clip.duration) : "N/A"}
+                          </TableCell>
+                          <TableCell class="px-4 py-2 text-sm text-foreground">
+                            {clip.sizeBytes ? formatBytes(clip.sizeBytes) : "N/A"}
+                          </TableCell>
+                          <TableCell class="px-4 py-2 text-sm text-foreground">
+                            {clip.createdAt ? formatDate(clip.createdAt) : "N/A"}
+                          </TableCell>
+                        </TableRow>
+
+                        <!-- Expanded Share Row -->
+                        {#if expandedClip === clip.id && isClipReady(clip.status) && clip.clipHash}
+                          <TableRow class="bg-muted/5 border-t-0">
+                            <TableCell colspan={7} class="px-4 py-4 cursor-default">
+                              <div class="pl-4 border-l-2 border-primary/20" onclick={(e) => e.stopPropagation()}>
+                                <PlaybackProtocols
+                                  contentId={clip.clipHash}
+                                  contentType="clip"
+                                  showPrimary={true}
+                                  showAdditional={true}
+                                />
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        {/if}
+                      {/each}
+                    </TableBody>
+                  </Table>
+                </div>
 
                 {#if hasMoreClips}
-                  <div class="flex justify-center pt-6">
+                  <div class="flex justify-center py-4 border-t border-border/30">
                     <Button
                       variant="outline"
                       onclick={loadMoreClips}
@@ -503,12 +759,6 @@
                   </div>
                 {/if}
               {/if}
-            </div>
-            <div class="slab-actions slab-actions--row">
-              <Button href={resolve("/recordings")} variant="ghost" class="gap-2">
-                <FilmIcon class="w-4 h-4" />
-                View Recordings
-              </Button>
             </div>
           </div>
         </div>
@@ -533,10 +783,10 @@
     <form id="create-clip-form" class="slab-body--padded space-y-4" onsubmit={() => { /* preventDefault(createClip) */ createClip(); }}>
       <!-- Mode Tabs -->
       <div class="space-y-2">
-        <label class="block text-sm font-medium text-muted-foreground mb-2">
+        <span id="clipping-mode-label" class="block text-sm font-medium text-muted-foreground mb-2">
           Clipping Mode
-        </label>
-        <div class="flex border border-border rounded-md overflow-hidden">
+        </span>
+        <div role="group" aria-labelledby="clipping-mode-label" class="flex border border-border rounded-md overflow-hidden">
           <button
             type="button"
             class="flex-1 px-3 py-2 text-sm font-medium transition-colors {clipMode === 'CLIP_NOW' ? 'bg-primary text-primary-foreground' : 'bg-muted/30 text-muted-foreground hover:bg-muted/50'}"
@@ -621,10 +871,10 @@
       {#if clipMode === 'CLIP_NOW'}
         <!-- Clip Now: Duration presets -->
         <div class="space-y-2">
-          <label class="block text-sm font-medium text-muted-foreground mb-2">
+          <span id="duration-label" class="block text-sm font-medium text-muted-foreground mb-2">
             Duration
-          </label>
-          <div class="flex gap-2">
+          </span>
+          <div role="group" aria-labelledby="duration-label" class="flex gap-2">
             {#each durationPresets as preset (preset.value)}
               <button
                 type="button"
@@ -636,7 +886,7 @@
             {/each}
           </div>
           <p class="text-xs text-muted-foreground/70">
-            Captures the last {formatDuration(duration)} from the live stream
+            Captures the last {formatDurationSeconds(duration)} from the live stream
           </p>
         </div>
       {:else if clipMode === 'DURATION'}
@@ -675,7 +925,7 @@
           </div>
         </div>
         <p class="text-xs text-muted-foreground/70 bg-muted/30 p-2 rounded border border-border/50">
-          <span class="font-medium">Clip Length:</span> {formatDuration(duration)}
+          <span class="font-medium">Clip Length:</span> {formatDurationSeconds(duration)}
         </p>
       {:else}
         <!-- Absolute mode: Start and end timestamps -->
@@ -714,7 +964,7 @@
         </div>
 
         <p class="text-xs text-muted-foreground/70 bg-muted/30 p-2 rounded border border-border/50">
-          <span class="font-medium">Duration:</span> {formatDuration(Math.max(0, endTime - startTime))}
+          <span class="font-medium">Duration:</span> {formatDurationSeconds(Math.max(0, endTime - startTime))}
         </p>
       {/if}
     </form>
@@ -729,8 +979,8 @@
       >
         Cancel
       </Button>
-      <Button 
-        type="submit" 
+      <Button
+        type="submit"
         variant="ghost"
         class="rounded-none h-12 flex-1 hover:bg-muted/10 text-primary hover:text-primary/80"
         disabled={creatingClip || !selectedStreamId}
@@ -741,6 +991,3 @@
     </DialogFooter>
   </DialogContent>
 </Dialog>
-
-<!-- Clip Player Modal -->
-<ClipModal clip={selectedClip} onClose={closeClip} />

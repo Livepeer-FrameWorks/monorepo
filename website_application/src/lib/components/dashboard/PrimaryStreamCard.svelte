@@ -2,6 +2,7 @@
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
   import { getIconComponent } from "$lib/iconUtils";
+  import { resolve } from "$app/paths";
   import { StreamStatus } from "$houdini";
 
   // Define stream data interface matching Houdini types
@@ -32,11 +33,23 @@
 </script>
 
 {#if stream}
+  {@const SettingsIcon = getIconComponent("Settings")}
   <div class="space-y-4">
     <div class="flex items-center justify-between mb-3">
-      <h3 class="font-semibold text-foreground">
-        {stream.name || `Stream ${stream.id.slice(0, 8)}`}
-      </h3>
+      <div class="flex items-center gap-2">
+        <h3 class="font-semibold text-foreground">
+          {stream.name || `Stream ${stream.id.slice(0, 8)}`}
+        </h3>
+        <Button
+          href={resolve(`/streams/${stream.id}`)}
+          variant="ghost"
+          size="icon"
+          class="h-6 w-6 text-muted-foreground hover:text-foreground"
+          title="Stream Settings"
+        >
+          <SettingsIcon class="w-3.5 h-3.5" />
+        </Button>
+      </div>
       <div class="flex items-center space-x-2">
         <div
           class="w-2 h-2 rounded-full {isLive

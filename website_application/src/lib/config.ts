@@ -152,6 +152,182 @@ export function getDeliveryUrls(playbackId: string): Partial<DeliveryUrls> {
   };
 }
 
+// =============================================================================
+// UNIFIED CONTENT DELIVERY URLs (via Foghorn /play/ path)
+// Works for all content types: live (playbackId), clips (clipHash), DVR (dvrHash)
+// =============================================================================
+
+export type ContentType = "live" | "clip" | "dvr";
+
+/** Primary protocols shown by default in the UI */
+export interface PrimaryProtocolUrls {
+  /** Unified play page - returns JSON with all protocols */
+  play: string;
+  /** HLS (TS segments) - best compatibility */
+  hls: string;
+  /** HLS (CMAF) - lower latency variant */
+  hlsCmaf: string;
+  /** DASH - MPEG-DASH adaptive streaming */
+  dash: string;
+  /** WebRTC (WHEP) - ultra-low latency */
+  webrtc: string;
+  /** MP4 - progressive download */
+  mp4: string;
+  /** WebM - open format (VP8/VP9) */
+  webm: string;
+  /** SRT - low-latency contribution/delivery */
+  srt: string;
+}
+
+/** Additional protocols available via expandable UI */
+export interface AdditionalProtocolUrls {
+  /** RTSP - IP cameras, VLC, ffmpeg */
+  rtsp: string;
+  /** RTMP - legacy Flash/OBS playback */
+  rtmp: string;
+  /** MPEG-TS - transport stream, DVB compatible */
+  ts: string;
+  /** FLV - legacy Flash video */
+  flv: string;
+  /** MKV - Matroska container */
+  mkv: string;
+  /** AAC - audio-only stream */
+  aac: string;
+  /** Smooth Streaming - Microsoft format */
+  smoothStreaming: string;
+  /** HDS - Adobe HTTP Dynamic Streaming */
+  hds: string;
+  /** SDP - Session Description Protocol */
+  sdp: string;
+  /** Raw H264 elementary stream */
+  rawH264: string;
+  /** MP4 over WebSocket */
+  wsmp4: string;
+  /** WebRTC over WebSocket */
+  wsWebrtc: string;
+  /** DTSC - MistServer internal protocol */
+  dtsc: string;
+}
+
+export interface ContentDeliveryUrls {
+  primary: PrimaryProtocolUrls;
+  additional: AdditionalProtocolUrls;
+  embed: string;
+}
+
+/**
+ * Generate playback URLs for any content type using Foghorn's unified /play/ path.
+ * Works for live streams (playbackId), clips (clipHash), and DVR recordings (dvrHash).
+ *
+ * All URLs route through Foghorn which:
+ * - Resolves content type automatically
+ * - Load balances across edge nodes
+ * - Returns 307 redirects to the correct edge node
+ * - MistServer handles on-the-fly muxing for container formats
+ */
+export function getContentDeliveryUrls(
+  contentId: string,
+  contentType: ContentType
+): ContentDeliveryUrls {
+  if (!contentId) {
+    return {
+      primary: {} as PrimaryProtocolUrls,
+      additional: {} as AdditionalProtocolUrls,
+      embed: "",
+    };
+  }
+
+  const edgeBase = buildEdgeBaseUrl();
+  const proto = config.edgeUseTls ? "s" : ""; // for srt/rtsp/rtmp/dtsc secure variants
+  const wsProto = config.edgeUseTls ? "wss" : "ws";
+
+  // Primary protocols - shown by default
+  const primary: PrimaryProtocolUrls = {
+    play: `${edgeBase}/play/${contentId}`,
+    hls: `${edgeBase}/play/${contentId}/hls/index.m3u8`,
+    hlsCmaf: `${edgeBase}/play/${contentId}/cmaf/index.m3u8`,
+    dash: `${edgeBase}/play/${contentId}/cmaf/index.mpd`,
+    webrtc: `${edgeBase}/play/${contentId}/webrtc`,
+    mp4: `${edgeBase}/play/${contentId}.mp4`,
+    webm: `${edgeBase}/play/${contentId}.webm`,
+    srt: `srt${proto}://${config.edgeHostname}${config.edgePort ? `:${config.srtPort}` : ""}?streamid=${contentId}`,
+  };
+
+  // Additional protocols - shown in expandable section
+  const additional: AdditionalProtocolUrls = {
+    rtsp: `rtsp${proto}://${config.edgeHostname}${config.edgePort ? `:${config.edgePort}` : ""}/play/${contentId}`,
+    rtmp: `rtmp${proto}://${config.edgeHostname}:${config.rtmpPort}/play/${contentId}`,
+    ts: `${edgeBase}/play/${contentId}.ts`,
+    flv: `${edgeBase}/play/${contentId}.flv`,
+    mkv: `${edgeBase}/play/${contentId}.mkv`,
+    aac: `${edgeBase}/play/${contentId}.aac`,
+    smoothStreaming: `${edgeBase}/play/${contentId}/cmaf/Manifest`,
+    hds: `${edgeBase}/play/${contentId}/dynamic/manifest.f4m`,
+    sdp: `${edgeBase}/play/${contentId}.sdp`,
+    rawH264: `${edgeBase}/play/${contentId}.h264`,
+    wsmp4: `${wsProto}://${config.edgeHostname}${config.edgePort ? `:${config.edgePort}` : ""}/play/${contentId}.mp4`,
+    wsWebrtc: `${wsProto}://${config.edgeHostname}${config.edgePort ? `:${config.edgePort}` : ""}/play/webrtc/${contentId}`,
+    dtsc: `dtsc${proto}://${config.edgeHostname}${config.edgePort ? `:${config.edgePort}` : ""}/play/${contentId}`,
+  };
+
+  const embed = getEmbedCodeForContent(contentId, contentType);
+
+  return { primary, additional, embed };
+}
+
+/**
+ * Generate embed code snippet for a given content type
+ */
+function getEmbedCodeForContent(contentId: string, contentType: ContentType): string {
+  return `import { Player } from '@livepeer-frameworks/player';
+import '@livepeer-frameworks/player/player.css';
+
+<Player
+  contentType="${contentType}"
+  contentId="${contentId}"
+  options={{
+    gatewayUrl: '${rawConfig.edgeUrl}',
+    autoplay: true,
+    muted: true,
+  }}
+/>`;
+}
+
+/** Protocol metadata for UI display */
+export interface ProtocolInfo {
+  key: keyof PrimaryProtocolUrls | keyof AdditionalProtocolUrls;
+  label: string;
+  description: string;
+  category: "primary" | "additional";
+}
+
+/** Protocol information for building UI selectors */
+export const PROTOCOL_INFO: ProtocolInfo[] = [
+  // Primary protocols
+  { key: "play", label: "Play Page", description: "Universal endpoint - returns all protocols", category: "primary" },
+  { key: "hls", label: "HLS", description: "HTTP Live Streaming - best compatibility", category: "primary" },
+  { key: "hlsCmaf", label: "HLS (CMAF)", description: "Lower latency HLS variant", category: "primary" },
+  { key: "dash", label: "DASH", description: "MPEG-DASH adaptive streaming", category: "primary" },
+  { key: "webrtc", label: "WebRTC", description: "Ultra-low latency (~0.5s)", category: "primary" },
+  { key: "mp4", label: "MP4", description: "Progressive download", category: "primary" },
+  { key: "webm", label: "WebM", description: "Open format (VP8/VP9)", category: "primary" },
+  { key: "srt", label: "SRT", description: "Secure Reliable Transport", category: "primary" },
+  // Additional protocols
+  { key: "rtsp", label: "RTSP", description: "IP cameras, VLC, ffmpeg", category: "additional" },
+  { key: "rtmp", label: "RTMP", description: "Legacy Flash/OBS playback", category: "additional" },
+  { key: "ts", label: "MPEG-TS", description: "Transport stream, DVB compatible", category: "additional" },
+  { key: "flv", label: "FLV", description: "Flash Video (legacy)", category: "additional" },
+  { key: "mkv", label: "MKV", description: "Matroska container", category: "additional" },
+  { key: "aac", label: "AAC", description: "Audio-only stream", category: "additional" },
+  { key: "smoothStreaming", label: "Smooth Streaming", description: "Microsoft format", category: "additional" },
+  { key: "hds", label: "HDS", description: "Adobe HTTP Dynamic Streaming", category: "additional" },
+  { key: "sdp", label: "SDP", description: "Session Description Protocol", category: "additional" },
+  { key: "rawH264", label: "Raw H264", description: "Elementary video stream", category: "additional" },
+  { key: "wsmp4", label: "WS/MP4", description: "MP4 over WebSocket", category: "additional" },
+  { key: "wsWebrtc", label: "WS/WebRTC", description: "WebRTC over WebSocket", category: "additional" },
+  { key: "dtsc", label: "DTSC", description: "MistServer internal", category: "additional" },
+];
+
 // Convenience function to get just the RTMP server URL (without stream key)
 export function getRtmpServerUrl(): string {
   return buildRtmpUrl();

@@ -89,33 +89,36 @@ query GetStreamKeys($streamId: ID!) {
 }
 
 # Recordings management queries
-fragment RecordingInfo on Recording {
-  id
-  streamId
-  title
-  duration
-  fileSizeBytes
-  playbackId
-  thumbnailUrl
-  startTime
-  endTime
+fragment DVRRequestInfo on DVRRequest {
+  dvrHash
+  internalName
+  durationSeconds
+  sizeBytes
+  manifestPath
+  startedAt
+  endedAt
   status
   createdAt
   updatedAt
 }
 
-query GetRecordings($streamId: ID) {
-  recordings(streamId: $streamId) {
-    ...RecordingInfo
+query GetRecordings($streamId: String) {
+  dvrRecordingsConnection(internalName: $streamId) {
+    edges {
+      node {
+        ...DVRRequestInfo
+      }
+    }
+    totalCount
   }
 }
 
-query GetRecordingsConnection($streamId: ID, $first: Int = 50, $after: String) {
-  recordingsConnection(streamId: $streamId, first: $first, after: $after) {
+query GetRecordingsConnection($streamId: String, $first: Int = 50, $after: String) {
+  dvrRecordingsConnection(internalName: $streamId, first: $first, after: $after) {
     edges {
       cursor
       node {
-        ...RecordingInfo
+        ...DVRRequestInfo
       }
     }
     pageInfo {
@@ -128,8 +131,12 @@ query GetRecordingsConnection($streamId: ID, $first: Int = 50, $after: String) {
   }
 }
 
-query GetStreamRecordings($streamId: ID!) {
-  recordings(streamId: $streamId) {
-    ...RecordingInfo
+query GetStreamRecordings($streamId: String!) {
+  dvrRecordingsConnection(internalName: $streamId) {
+    edges {
+      node {
+        ...DVRRequestInfo
+      }
+    }
   }
 }

@@ -6,8 +6,6 @@
     bitrate?: number;
     fps?: number;
     qualityTier?: string;
-    frameJitterMs?: number;
-    packetLossPercentage?: number;
     audioCodec?: string;
     audioSampleRate?: number;
     audioBitrate?: number;
@@ -34,12 +32,6 @@
             : "Unknown",
           fps: metrics.fps ? `${metrics.fps.toFixed(1)} fps` : "Unknown",
           qualityTier: metrics.qualityTier || "Unknown",
-          frameJitter: typeof metrics.frameJitterMs === "number"
-            ? `${metrics.frameJitterMs.toFixed(1)}ms`
-            : "N/A",
-          packetLoss: typeof metrics.packetLossPercentage === "number"
-            ? `${metrics.packetLossPercentage.toFixed(2)}%`
-            : "N/A",
         }
       : null,
   );
@@ -73,25 +65,13 @@
         </div>
       </div>
 
-      <!-- Performance Metrics -->
+      <!-- Quality Tier -->
       <div class="space-y-2">
-        <h4 class="text-sm font-medium text-muted-foreground">Performance</h4>
+        <h4 class="text-sm font-medium text-muted-foreground">Quality</h4>
         <div class="space-y-1">
           <div class="flex justify-between">
             <span class="text-sm text-foreground">Quality Tier:</span>
             <span class="text-sm font-mono text-info">{formattedMetrics.qualityTier}</span>
-          </div>
-          <div class="flex justify-between">
-            <span class="text-sm text-foreground">Frame Jitter:</span>
-            <span class="text-sm font-mono {(metrics.frameJitterMs || 0) > 30 ? 'text-error' : 'text-success'}">
-              {formattedMetrics.frameJitter}
-            </span>
-          </div>
-          <div class="flex justify-between">
-            <span class="text-sm text-foreground">Packet Loss:</span>
-            <span class="text-sm font-mono {(metrics.packetLossPercentage || 0) > 2 ? 'text-error' : 'text-success'}">
-              {formattedMetrics.packetLoss}
-            </span>
           </div>
         </div>
       </div>

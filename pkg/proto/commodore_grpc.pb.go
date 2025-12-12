@@ -1689,6 +1689,7 @@ var ClipService_ServiceDesc = grpc.ServiceDesc{
 
 const (
 	DVRService_StopDVR_FullMethodName         = "/commodore.DVRService/StopDVR"
+	DVRService_DeleteDVR_FullMethodName       = "/commodore.DVRService/DeleteDVR"
 	DVRService_ListDVRRequests_FullMethodName = "/commodore.DVRService/ListDVRRequests"
 	DVRService_GetDVRStatus_FullMethodName    = "/commodore.DVRService/GetDVRStatus"
 )
@@ -1700,6 +1701,7 @@ type DVRServiceClient interface {
 	// StartDVR is in InternalService (called by Foghorn)
 	// These are user-facing DVR management
 	StopDVR(ctx context.Context, in *StopDVRRequest, opts ...grpc.CallOption) (*StopDVRResponse, error)
+	DeleteDVR(ctx context.Context, in *DeleteDVRRequest, opts ...grpc.CallOption) (*DeleteDVRResponse, error)
 	ListDVRRequests(ctx context.Context, in *ListDVRRecordingsRequest, opts ...grpc.CallOption) (*ListDVRRecordingsResponse, error)
 	GetDVRStatus(ctx context.Context, in *GetDVRStatusRequest, opts ...grpc.CallOption) (*DVRInfo, error)
 }
@@ -1716,6 +1718,16 @@ func (c *dVRServiceClient) StopDVR(ctx context.Context, in *StopDVRRequest, opts
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(StopDVRResponse)
 	err := c.cc.Invoke(ctx, DVRService_StopDVR_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *dVRServiceClient) DeleteDVR(ctx context.Context, in *DeleteDVRRequest, opts ...grpc.CallOption) (*DeleteDVRResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeleteDVRResponse)
+	err := c.cc.Invoke(ctx, DVRService_DeleteDVR_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1749,6 +1761,7 @@ type DVRServiceServer interface {
 	// StartDVR is in InternalService (called by Foghorn)
 	// These are user-facing DVR management
 	StopDVR(context.Context, *StopDVRRequest) (*StopDVRResponse, error)
+	DeleteDVR(context.Context, *DeleteDVRRequest) (*DeleteDVRResponse, error)
 	ListDVRRequests(context.Context, *ListDVRRecordingsRequest) (*ListDVRRecordingsResponse, error)
 	GetDVRStatus(context.Context, *GetDVRStatusRequest) (*DVRInfo, error)
 	mustEmbedUnimplementedDVRServiceServer()
@@ -1763,6 +1776,9 @@ type UnimplementedDVRServiceServer struct{}
 
 func (UnimplementedDVRServiceServer) StopDVR(context.Context, *StopDVRRequest) (*StopDVRResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method StopDVR not implemented")
+}
+func (UnimplementedDVRServiceServer) DeleteDVR(context.Context, *DeleteDVRRequest) (*DeleteDVRResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeleteDVR not implemented")
 }
 func (UnimplementedDVRServiceServer) ListDVRRequests(context.Context, *ListDVRRecordingsRequest) (*ListDVRRecordingsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListDVRRequests not implemented")
@@ -1805,6 +1821,24 @@ func _DVRService_StopDVR_Handler(srv interface{}, ctx context.Context, dec func(
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(DVRServiceServer).StopDVR(ctx, req.(*StopDVRRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DVRService_DeleteDVR_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteDVRRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DVRServiceServer).DeleteDVR(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DVRService_DeleteDVR_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DVRServiceServer).DeleteDVR(ctx, req.(*DeleteDVRRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1857,114 +1891,16 @@ var DVRService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _DVRService_StopDVR_Handler,
 		},
 		{
+			MethodName: "DeleteDVR",
+			Handler:    _DVRService_DeleteDVR_Handler,
+		},
+		{
 			MethodName: "ListDVRRequests",
 			Handler:    _DVRService_ListDVRRequests_Handler,
 		},
 		{
 			MethodName: "GetDVRStatus",
 			Handler:    _DVRService_GetDVRStatus_Handler,
-		},
-	},
-	Streams:  []grpc.StreamDesc{},
-	Metadata: "commodore.proto",
-}
-
-const (
-	RecordingService_ListRecordings_FullMethodName = "/commodore.RecordingService/ListRecordings"
-)
-
-// RecordingServiceClient is the client API for RecordingService service.
-//
-// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
-type RecordingServiceClient interface {
-	ListRecordings(ctx context.Context, in *ListRecordingsRequest, opts ...grpc.CallOption) (*ListRecordingsResponse, error)
-}
-
-type recordingServiceClient struct {
-	cc grpc.ClientConnInterface
-}
-
-func NewRecordingServiceClient(cc grpc.ClientConnInterface) RecordingServiceClient {
-	return &recordingServiceClient{cc}
-}
-
-func (c *recordingServiceClient) ListRecordings(ctx context.Context, in *ListRecordingsRequest, opts ...grpc.CallOption) (*ListRecordingsResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ListRecordingsResponse)
-	err := c.cc.Invoke(ctx, RecordingService_ListRecordings_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-// RecordingServiceServer is the server API for RecordingService service.
-// All implementations must embed UnimplementedRecordingServiceServer
-// for forward compatibility.
-type RecordingServiceServer interface {
-	ListRecordings(context.Context, *ListRecordingsRequest) (*ListRecordingsResponse, error)
-	mustEmbedUnimplementedRecordingServiceServer()
-}
-
-// UnimplementedRecordingServiceServer must be embedded to have
-// forward compatible implementations.
-//
-// NOTE: this should be embedded by value instead of pointer to avoid a nil
-// pointer dereference when methods are called.
-type UnimplementedRecordingServiceServer struct{}
-
-func (UnimplementedRecordingServiceServer) ListRecordings(context.Context, *ListRecordingsRequest) (*ListRecordingsResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method ListRecordings not implemented")
-}
-func (UnimplementedRecordingServiceServer) mustEmbedUnimplementedRecordingServiceServer() {}
-func (UnimplementedRecordingServiceServer) testEmbeddedByValue()                          {}
-
-// UnsafeRecordingServiceServer may be embedded to opt out of forward compatibility for this service.
-// Use of this interface is not recommended, as added methods to RecordingServiceServer will
-// result in compilation errors.
-type UnsafeRecordingServiceServer interface {
-	mustEmbedUnimplementedRecordingServiceServer()
-}
-
-func RegisterRecordingServiceServer(s grpc.ServiceRegistrar, srv RecordingServiceServer) {
-	// If the following call panics, it indicates UnimplementedRecordingServiceServer was
-	// embedded by pointer and is nil.  This will cause panics if an
-	// unimplemented method is ever invoked, so we test this at initialization
-	// time to prevent it from happening at runtime later due to I/O.
-	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
-		t.testEmbeddedByValue()
-	}
-	s.RegisterService(&RecordingService_ServiceDesc, srv)
-}
-
-func _RecordingService_ListRecordings_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ListRecordingsRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(RecordingServiceServer).ListRecordings(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: RecordingService_ListRecordings_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(RecordingServiceServer).ListRecordings(ctx, req.(*ListRecordingsRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-// RecordingService_ServiceDesc is the grpc.ServiceDesc for RecordingService service.
-// It's only intended for direct use with grpc.RegisterService,
-// and not to be introspected or modified (even as a copy)
-var RecordingService_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "commodore.RecordingService",
-	HandlerType: (*RecordingServiceServer)(nil),
-	Methods: []grpc.MethodDesc{
-		{
-			MethodName: "ListRecordings",
-			Handler:    _RecordingService_ListRecordings_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

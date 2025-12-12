@@ -14,15 +14,30 @@
   } from "$houdini";
   import type { StreamEvents$result } from "$houdini";
   import { toast } from "$lib/stores/toast.js";
-  import LoadingCard from "$lib/components/LoadingCard.svelte";
-  import EmptyState from "$lib/components/EmptyState.svelte";
-  import StreamCard from "$lib/components/stream-details/StreamCard.svelte";
   import CreateStreamModal from "$lib/components/stream-details/CreateStreamModal.svelte";
   import DeleteStreamModal from "$lib/components/stream-details/DeleteStreamModal.svelte";
-  import GridSeam from "$lib/components/layout/GridSeam.svelte";
+  import { GridSeam } from "$lib/components/layout";
+  import DashboardMetricCard from "$lib/components/shared/DashboardMetricCard.svelte";
+  import BufferStateIndicator from "$lib/components/health/BufferStateIndicator.svelte";
   import { getIconComponent } from "$lib/iconUtils";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
+  import {
+    Table,
+    TableHeader,
+    TableHead,
+    TableRow,
+    TableBody,
+    TableCell,
+  } from "$lib/components/ui/table";
+  import {
+    Select,
+    SelectTrigger,
+    SelectContent,
+    SelectItem,
+  } from "$lib/components/ui/select";
+  import { formatDuration } from "$lib/utils/formatters.js";
+  import PlaybackProtocols from "$lib/components/PlaybackProtocols.svelte";
 
   // Houdini stores
   const streamsConnectionStore = new GetStreamsConnectionStore();
@@ -64,6 +79,9 @@
   let showDeleteModal = $state(false);
   let streamToDelete = $state<StreamData | null>(null);
 
+  // Expanded row tracking
+  let expandedStreamId = $state<string | null>(null);
+
   // Filtered streams
   let filteredStreams = $derived.by(() => {
     let result = streams;
@@ -73,7 +91,8 @@
       const query = searchQuery.toLowerCase();
       result = result.filter(s =>
         s.name.toLowerCase().includes(query) ||
-        s.description?.toLowerCase().includes(query)
+        s.description?.toLowerCase().includes(query) ||
+        s.id.toLowerCase().includes(query)
       );
     }
 
@@ -86,6 +105,11 @@
 
     return result;
   });
+
+  // Stats
+  let liveStreamCount = $derived(streams.filter(s => s.metrics?.isLive).length);
+  let offlineStreamCount = $derived(streams.length - liveStreamCount);
+  let totalViewers = $derived(streams.reduce((acc, s) => acc + (s.metrics?.currentViewers || 0), 0));
 
   // Subscribe to auth store
   auth.subscribe((authState) => {
@@ -326,8 +350,13 @@
   }
 
   // Navigate to stream detail page
-  function navigateToStream(stream: StreamData) {
-    goto(resolve(`/streams/${stream.id}`));
+  function navigateToStream(streamId: string) {
+    goto(resolve(`/streams/${streamId}`));
+  }
+  
+  // Navigate to watch page
+  function watchStream(streamId: string) {
+    goto(resolve(`/view?type=live&id=${streamId}`));
   }
 
   // Show delete confirmation
@@ -336,187 +365,418 @@
     showDeleteModal = true;
   }
 
-  // Count live streams
-  let liveStreamCount = $derived(streams.filter(s => s.metrics?.isLive).length);
+  function getStatusColor(status: string | null | undefined): string {
+    switch (status?.toLowerCase()) {
+      case "live":
+        return "text-success bg-success/10 border-success/20";
+      case "offline":
+      case "idle":
+        return "text-muted-foreground bg-muted border-border";
+      default:
+        return "text-muted-foreground bg-muted border-border";
+    }
+  }
 
+  // Icons
   const PlusIcon = getIconComponent("Plus");
   const VideoIcon = getIconComponent("Video");
   const SearchIcon = getIconComponent("Search");
-  const RadioIcon = getIconComponent("Radio");
-  const CircleOffIcon = getIconComponent("CircleOff");
-  const LayoutGridIcon = getIconComponent("LayoutGrid");
+  const FilterIcon = getIconComponent("Filter");
+  const SignalIcon = getIconComponent("Signal");
+  const WifiOffIcon = getIconComponent("WifiOff");
+  const UsersIcon = getIconComponent("Users");
+  const Trash2Icon = getIconComponent("Trash2");
+  const PlayIcon = getIconComponent("Play");
+  const Share2Icon = getIconComponent("Share2");
+  const ChevronDownIcon = getIconComponent("ChevronDown");
+  const ChevronUpIcon = getIconComponent("ChevronUp");
 </script>
 
 <svelte:head>
   <title>Streams - FrameWorks</title>
 </svelte:head>
 
-<div class="h-full flex flex-col">
+<div class="h-full flex flex-col overflow-hidden">
   <!-- Fixed Page Header -->
   <div class="px-4 sm:px-6 lg:px-8 py-4 border-b border-[hsl(var(--tn-fg-gutter)/0.3)] shrink-0 z-10 bg-background">
     <div class="flex justify-between items-center">
       <div class="flex items-center gap-3">
         <VideoIcon class="w-5 h-5 text-primary" />
         <div>
-          <div class="flex items-center gap-3">
-            <h1 class="text-xl font-bold text-foreground">Streams</h1>
-            <span class="text-xs text-muted-foreground font-mono bg-muted px-1.5 py-0.5 rounded">
-              {totalStreamCount > 0 ? totalStreamCount : streams.length}
-            </span>
-            {#if liveStreamCount > 0}
-              <span class="text-xs text-success font-medium flex items-center gap-1.5">
-                <div class="w-1.5 h-1.5 rounded-full bg-success animate-pulse"></div>
-                {liveStreamCount} LIVE
-              </span>
-            {/if}
-          </div>
+          <h1 class="text-xl font-bold text-foreground">Streams</h1>
           <p class="text-sm text-muted-foreground">
             Manage your live streams and broadcasts
           </p>
         </div>
       </div>
-      <Button
-        variant="default"
-        class="gap-2"
-        onclick={() => (showCreateModal = true)}
-      >
-        <PlusIcon class="w-4 h-4" />
-        Create Stream
-      </Button>
-    </div>
-  </div>
-
-  <!-- Filters Toolbar -->
-  <div class="w-full border-b border-[hsl(var(--tn-fg-gutter)/0.3)] bg-muted/20 shrink-0">
-    <div class="py-3 px-6 flex gap-4 items-center">
-      <div class="relative flex-1 max-w-md">
-        <SearchIcon class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-        <Input
-          type="text"
-          placeholder="Search streams..."
-          class="pl-9 bg-background/50 border-border/50 focus:bg-background transition-colors h-9"
-          bind:value={searchQuery}
-        />
-      </div>
-      <div class="flex items-center gap-2 ml-auto">
-        <Button
-          variant="ghost"
-          size="sm"
-          class={statusFilter === 'all' ? 'text-primary bg-primary/5' : 'text-muted-foreground'}
-          onclick={() => statusFilter = 'all'}
-        >
-          <LayoutGridIcon class="w-4 h-4 mr-2" /> All
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          class={statusFilter === 'live' ? 'text-primary bg-primary/5' : 'text-muted-foreground'}
-          onclick={() => statusFilter = 'live'}
-        >
-          <RadioIcon class="w-4 h-4 mr-2" /> Live
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          class={statusFilter === 'offline' ? 'text-primary bg-primary/5' : 'text-muted-foreground'}
-          onclick={() => statusFilter = 'offline'}
-        >
-          <CircleOffIcon class="w-4 h-4 mr-2" /> Offline
-        </Button>
-      </div>
     </div>
   </div>
 
   <!-- Scrollable Content -->
-  <div class="flex-1 overflow-y-auto min-h-0 bg-background/50">
-    {#if loading}
-      <!-- Loading Skeleton -->
-      <GridSeam cols={3} stack="md" flush={true} class="min-h-full content-start">
-        {#each Array.from({ length: 6 }) as _, i (i)}
-          <div class="slab h-full !p-0">
-             <div class="slab-body--padded">
-               <div class="space-y-3 animate-pulse">
-                 <div class="h-4 bg-muted rounded w-3/4"></div>
-                 <div class="h-32 bg-muted rounded"></div>
-               </div>
-             </div>
+  <div class="flex-1 overflow-y-auto bg-background/50">
+  {#if loading}
+    <!-- Loading Skeleton -->
+    <GridSeam cols={4} stack="2x2" flush={true} class="min-h-full content-start">
+      {#each Array.from({ length: 8 }) as _, i (i)}
+        <div class="slab h-full !p-0">
+          <div class="slab-header">
+            <div class="h-4 bg-muted rounded w-3/4 animate-pulse"></div>
           </div>
-        {/each}
-      </GridSeam>
-    {:else if streams.length === 0}
-      <!-- No Streams State -->
-      <div class="h-full flex items-center justify-center p-8">
-        <div class="slab w-full max-w-lg border border-border/50 shadow-xl">
-          <div class="slab-body--padded flex flex-col items-center text-center py-12">
-            <div class="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center mb-4">
-              <VideoIcon class="w-6 h-6 text-primary" />
+          <div class="slab-body--padded">
+            <div class="space-y-3">
+              <div class="h-4 bg-muted rounded w-full animate-pulse"></div>
+              <div class="h-4 bg-muted rounded w-1/2 animate-pulse"></div>
             </div>
-            <h3 class="text-lg font-semibold mb-2">No Streams Found</h3>
-            <p class="text-muted-foreground mb-6 max-w-xs">
-              Create your first stream to get started with broadcasting to the world.
-            </p>
-            <Button variant="default" onclick={() => (showCreateModal = true)}>
-              <PlusIcon class="w-4 h-4 mr-2" />
+          </div>
+        </div>
+      {/each}
+    </GridSeam>
+  {:else}
+    <div class="page-transition">
+
+      <!-- Stats Bar -->
+      <GridSeam cols={4} stack="2x2" surface="panel" flush={true} class="mb-0 min-h-full content-start">
+        <div>
+          <DashboardMetricCard
+            icon={VideoIcon}
+            iconColor="text-primary"
+            value={totalStreamCount}
+            valueColor="text-primary"
+            label="Total Streams"
+          />
+        </div>
+        <div>
+          <DashboardMetricCard
+            icon={SignalIcon}
+            iconColor="text-success"
+            value={liveStreamCount}
+            valueColor="text-success"
+            label="Live Now"
+          />
+        </div>
+        <div>
+          <DashboardMetricCard
+            icon={WifiOffIcon}
+            iconColor="text-muted-foreground"
+            value={offlineStreamCount}
+            valueColor="text-muted-foreground"
+            label="Offline"
+          />
+        </div>
+        <div>
+          <DashboardMetricCard
+            icon={UsersIcon}
+            iconColor="text-info"
+            value={totalViewers}
+            valueColor="text-info"
+            label="Total Viewers"
+          />
+        </div>
+      </GridSeam>
+
+      <!-- Main Content -->
+      <div class="dashboard-grid">
+        <!-- Filters Slab -->
+        <div class="slab col-span-full">
+          <div class="slab-header">
+            <div class="flex items-center gap-2">
+              <FilterIcon class="w-4 h-4 text-info" />
+              <h3>Filters</h3>
+            </div>
+          </div>
+          <div class="slab-body--padded">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <!-- Search -->
+              <div>
+                <label
+                  for="search"
+                  class="block text-sm font-medium text-muted-foreground mb-2"
+                >
+                  Search Streams
+                </label>
+                <div class="relative">
+                  <SearchIcon class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                  <Input
+                    id="search"
+                    type="text"
+                    bind:value={searchQuery}
+                    placeholder="Search by name, ID, or description..."
+                    class="w-full pl-10"
+                  />
+                </div>
+              </div>
+
+              <!-- Status Filter -->
+              <div>
+                <label
+                  for="status-filter"
+                  class="block text-sm font-medium text-muted-foreground mb-2"
+                >
+                  Status
+                </label>
+                <Select bind:value={statusFilter} type="single">
+                  <SelectTrigger id="status-filter" class="w-full">
+                    {statusFilter === 'all' ? 'All Statuses' : statusFilter === 'live' ? 'Live' : 'Offline'}
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Statuses</SelectItem>
+                    <SelectItem value="live">Live</SelectItem>
+                    <SelectItem value="offline">Offline</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Streams Table Slab -->
+        <div class="slab col-span-full">
+          <div class="slab-header flex justify-between items-center">
+            <div class="flex items-center gap-2">
+              <VideoIcon class="w-4 h-4 text-info" />
+              <h3>All Streams</h3>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              class="gap-2 h-8"
+              onclick={() => (showCreateModal = true)}
+            >
+              <PlusIcon class="w-3.5 h-3.5" />
               Create Stream
             </Button>
           </div>
-        </div>
-      </div>
-    {:else if filteredStreams.length === 0}
-      <!-- No Results State -->
-      <div class="h-full flex items-center justify-center p-8">
-        <div class="slab w-full max-w-lg border border-border/50">
-          <div class="slab-body--padded flex flex-col items-center text-center py-12">
-            <div class="w-12 h-12 rounded-full bg-muted flex items-center justify-center mb-4">
-              <SearchIcon class="w-6 h-6 text-muted-foreground" />
-            </div>
-            <h3 class="text-lg font-semibold mb-2">No Matching Streams</h3>
-            <p class="text-muted-foreground mb-6 max-w-xs">
-              Try adjusting your search query or changing the status filters.
-            </p>
-            <Button 
-              variant="outline" 
-              onclick={() => {
-                searchQuery = "";
-                statusFilter = "all";
-              }}
-            >
-              Clear Filters
-            </Button>
+          <div class="slab-body--flush">
+            {#if filteredStreams.length === 0}
+              <div class="flex flex-col items-center justify-center py-16 m-4 border-2 border-dashed border-border/50 rounded-lg bg-muted/5">
+                <div class="w-16 h-16 rounded-full bg-muted/30 flex items-center justify-center mb-6">
+                  <VideoIcon class="w-8 h-8 text-muted-foreground" />
+                </div>
+                <h3 class="text-xl font-semibold mb-3">No streams found</h3>
+                <p class="text-muted-foreground mb-8 max-w-sm text-lg text-center">
+                  {#if searchQuery || statusFilter !== "all"}
+                    Try adjusting your search query or changing the status filters.
+                  {:else}
+                    Create your first stream to get started with broadcasting.
+                  {/if}
+                </p>
+                {#if searchQuery || statusFilter !== "all"}
+                  <Button
+                    variant="outline"
+                    size="lg"
+                    onclick={() => {
+                      searchQuery = "";
+                      statusFilter = "all";
+                    }}
+                  >
+                    Clear Filters
+                  </Button>
+                {:else}
+                  <Button variant="default" onclick={() => (showCreateModal = true)}>
+                    <PlusIcon class="w-4 h-4 mr-2" />
+                    Create Stream
+                  </Button>
+                {/if}
+              </div>
+            {:else}
+              <div class="overflow-x-auto">
+                <Table class="w-full">
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead
+                        class="px-4 py-2 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider w-[120px]"
+                      >
+                        Actions
+                      </TableHead>
+                      <TableHead
+                        class="px-4 py-2 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider"
+                      >
+                        Stream
+                      </TableHead>
+                      <TableHead
+                        class="px-4 py-2 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider"
+                      >
+                        Status
+                      </TableHead>
+                      <TableHead
+                        class="px-4 py-2 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider"
+                      >
+                        Health
+                      </TableHead>
+                      <TableHead
+                        class="px-4 py-2 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider"
+                      >
+                        Viewers
+                      </TableHead>
+                      <TableHead
+                        class="px-4 py-2 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider"
+                      >
+                        Duration
+                      </TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody class="divide-y divide-border">
+                    {#each filteredStreams as stream (stream.id)}
+                      <TableRow
+                        class="hover:bg-muted/50 transition-colors cursor-pointer group"
+                        onclick={() => navigateToStream(stream.id)}
+                      >
+                        <!-- Actions Column (Left, Horizontal) -->
+                        <TableCell
+                          class="px-4 py-2 align-middle"
+                          onclick={(e) => e.stopPropagation()}
+                        >
+                          <div class="flex items-center gap-1">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              class="h-7 w-7 p-0 text-muted-foreground hover:text-primary disabled:opacity-30"
+                              title="Watch Stream"
+                              disabled={!stream.metrics?.isLive}
+                              onclick={(e) => {
+                                e.stopPropagation();
+                                watchStream(stream.id);
+                              }}
+                            >
+                              <PlayIcon class="w-3.5 h-3.5" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              class="h-7 w-7 p-0 text-muted-foreground hover:text-foreground"
+                              title={expandedStreamId === stream.id ? "Hide Share Info" : "Share Stream"}
+                              onclick={(e) => {
+                                e.stopPropagation();
+                                expandedStreamId = expandedStreamId === stream.id ? null : stream.id;
+                              }}
+                            >
+                              {#if expandedStreamId === stream.id}
+                                <ChevronUpIcon class="w-3.5 h-3.5" />
+                              {:else}
+                                <Share2Icon class="w-3.5 h-3.5" />
+                              {/if}
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              class="h-7 w-7 p-0 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity focus:opacity-100"
+                              title="Delete Stream"
+                              onclick={(e) => {
+                                e.stopPropagation();
+                                confirmDeleteStream(stream);
+                              }}
+                            >
+                              <Trash2Icon class="w-3.5 h-3.5" />
+                            </Button>
+                          </div>
+                        </TableCell>
+                        
+                        <TableCell class="px-4 py-2">
+                          <div class="flex flex-col">
+                            <div
+                              class="text-sm font-medium text-foreground truncate max-w-xs group-hover:text-primary transition-colors"
+                              title={stream.name}
+                            >
+                              {stream.name}
+                            </div>
+                            <div class="text-[10px] text-muted-foreground font-mono">
+                              {stream.id.slice(0, 8)}...
+                            </div>
+                          </div>
+                        </TableCell>
+                        
+                        <TableCell class="px-4 py-2">
+                          {@const status = stream.metrics?.status || "OFFLINE"}
+                          <span
+                            class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border {getStatusColor(status)}"
+                          >
+                            {#if stream.metrics?.isLive}
+                              <span class="w-1.5 h-1.5 rounded-full bg-success animate-pulse mr-1.5"></span>
+                            {/if}
+                            {status}
+                          </span>
+                        </TableCell>
+
+                        <TableCell class="px-4 py-2">
+                           {#if stream.metrics?.isLive || streamHealthData.get(stream.id)}
+                            {@const health = streamHealthData.get(stream.id)}
+                            {@const metrics = stream.metrics}
+                            <div class="flex flex-col gap-0.5">
+                              <div class="flex items-center gap-1.5">
+                                <BufferStateIndicator
+                                  bufferState={health?.bufferState || metrics?.bufferState || undefined}
+                                  compact
+                                />
+                                <span class="text-xs font-medium capitalize text-foreground">
+                                  {(health?.bufferState || metrics?.bufferState || "unknown").toLowerCase()}
+                                </span>
+                              </div>
+                              {#if metrics?.qualityTier || health?.qualityTier}
+                                <span class="text-[10px] px-1 py-0 bg-accent/10 text-accent border border-accent/20 rounded-sm w-fit">
+                                  {metrics?.qualityTier || health?.qualityTier}
+                                </span>
+                              {/if}
+                            </div>
+                           {:else}
+                             <span class="text-xs text-muted-foreground">-</span>
+                           {/if}
+                        </TableCell>
+
+                        <TableCell class="px-4 py-2 text-sm text-foreground">
+                          {stream.metrics?.currentViewers || stream.viewers || 0}
+                        </TableCell>
+                        
+                        <TableCell class="px-4 py-2 text-sm text-foreground">
+                           {#if stream.metrics?.isLive && stream.metrics?.duration}
+                              {formatDuration(stream.metrics.duration * 1000)}
+                           {:else}
+                              <span class="text-muted-foreground">-</span>
+                           {/if}
+                        </TableCell>
+                      </TableRow>
+
+                      <!-- Expanded Share Row -->
+                      {#if expandedStreamId === stream.id}
+                        <TableRow class="bg-muted/5 hover:bg-muted/5 border-t-0">
+                          <TableCell colspan={6} class="px-4 py-4 cursor-default">
+                            <div class="pl-4 border-l-2 border-primary/20" onclick={(e) => e.stopPropagation()}>
+                              <PlaybackProtocols
+                                contentId={stream.id}
+                                contentType="live"
+                                showPrimary={true}
+                                showAdditional={true}
+                              />
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      {/if}
+                    {/each}
+                  </TableBody>
+                </Table>
+              </div>
+
+              <!-- Pagination -->
+              {#if hasMoreStreams}
+                <div class="flex justify-center py-4 border-t border-border/30">
+                  <Button
+                    variant="outline"
+                    onclick={loadMoreStreams}
+                    disabled={loadingMoreStreams}
+                  >
+                    {#if loadingMoreStreams}
+                      Loading...
+                    {:else}
+                      Load More Streams
+                    {/if}
+                  </Button>
+                </div>
+              {/if}
+            {/if}
           </div>
         </div>
       </div>
-    {:else}
-      <!-- Stream Cards Grid -->
-      <GridSeam cols={3} stack="md" flush={true} class="min-h-full content-start">
-        {#each filteredStreams as stream (stream.id)}
-          <StreamCard
-            {stream}
-            selected={false}
-            healthData={streamHealthData.get(stream.id) || null}
-            onSelect={() => navigateToStream(stream)}
-            onDelete={() => confirmDeleteStream(stream)}
-            deleting={deletingStreamId === stream.id}
-          />
-        {/each}
-      </GridSeam>
-
-      {#if hasMoreStreams}
-        <div class="flex justify-center py-8">
-          <Button
-            variant="outline"
-            onclick={loadMoreStreams}
-            disabled={loadingMoreStreams}
-          >
-            {#if loadingMoreStreams}
-              Loading...
-            {:else}
-              Load More Streams
-            {/if}
-          </Button>
-        </div>
-      {/if}
-    {/if}
+    </div>
+  {/if}
   </div>
 </div>
 

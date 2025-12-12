@@ -70,6 +70,7 @@ import {
   Search,
   Server,
   Settings,
+  Share2,
   Square,
   Shield,
   Sparkles,
@@ -164,6 +165,7 @@ const iconMap = {
   Search,
   Server,
   Settings,
+  Share2,
   Square,
   Shield,
   Sparkles,
@@ -257,6 +259,7 @@ export type IconName =
   | "Search"
   | "Server"
   | "Settings"
+  | "Share2"
   | "Square"
   | "Shield"
   | "Sparkles"

@@ -26,7 +26,8 @@ import {
   MarketingIconBadge,
   MarketingCTAButton,
   MarketingStackedSeam,
-  SectionDivider
+  SectionDivider,
+  MarketingComparisonGrid
 } from '@/components/marketing'
 
 const About = () => {
@@ -137,6 +138,28 @@ const About = () => {
     "We're building the streaming infrastructure that doesn't lock you in. Need custom features? Build them yourself or let us help. Switch providers? Your infrastructure comes with you. Cloud bills spiraling? Run it yourself with our open source stack.",
     'Built by the MistServer team and backed by Livepeer, we\'re making enterprise-grade video accessible to everyone without surrendering control to cloud vendors.',
     'Run it yourself, use our hosted services, or mix and match. Uncloud your infrastructure.',
+  ]
+
+  const competitorComparison = [
+    {
+      name: 'Mux',
+      model: 'Cloud-only SaaS',
+      description: 'Per-minute billing with zero self-hosting. Your data lives on their infrastructure, forever. Scale = pay more.',
+      verdict: 'Vendor lock-in',
+    },
+    {
+      name: 'Wowza',
+      model: 'Per-node licensing',
+      description: '$195+/month per server instance. Java monolith, manual clustering, no native multi-tenancy. Scale = buy more licenses.',
+      verdict: 'Expensive at scale',
+    },
+    {
+      name: 'FrameWorks',
+      model: 'Sovereign Video Cloud',
+      description: 'Public domain licensed. Self-host for free or fall back to our infrastructure. Native multi-tenancy. Scale however you want.',
+      verdict: 'True ownership',
+      highlight: true,
+    },
   ]
 
   const differentiators = [
@@ -357,6 +380,44 @@ const About = () => {
       </Section>
 
       <SectionDivider />
+
+      <Section className="bg-brand-surface-muted">
+        <SectionContainer>
+          <motion.div
+            initial={{ opacity: 0, y: 30 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true }}
+            transition={{ duration: 0.6 }}
+          >
+            <MarketingBand surface="panel">
+              <HeadlineStack
+                eyebrow="Comparison"
+                title="How FrameWorks compares"
+                subtitle="Most platforms force a choice between cloud lock-in or operational burden. We don't."
+                align="left"
+                underlineAlign="start"
+                actionsPlacement="inline"
+              />
+              <MarketingComparisonGrid
+                columns={3}
+                className="mt-8"
+                items={competitorComparison.map((item) => ({
+                  title: item.name,
+                  badge: item.model,
+                  description: item.description,
+                  featured: item.highlight,
+                  tone: item.highlight ? 'accent' : 'neutral',
+                  footnote: (
+                    <span className={item.highlight ? 'text-primary font-medium' : 'text-muted-foreground font-medium'}>
+                      {item.verdict}
+                    </span>
+                  ),
+                }))}
+              />
+            </MarketingBand>
+          </motion.div>
+        </SectionContainer>
+      </Section>
 
       <Section className="bg-brand-surface-muted">
         <SectionContainer>

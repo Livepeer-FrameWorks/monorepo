@@ -44,29 +44,30 @@ func (u *ACMEUser) GetEmail() string                        { return u.Email }
 func (u *ACMEUser) GetRegistration() *registration.Resource { return u.Registration }
 func (u *ACMEUser) GetPrivateKey() crypto.PrivateKey        { return u.key }
 
-// IssueCertificate requests a certificate for a domain using Cloudflare DNS-01
+// IssueCertificate requests a certificate for a domain using Cloudflare DNS-01.
 // It implements "Cache-First" logic.
-func (m *CertManager) IssueCertificate(ctx context.Context, domain, email string) (certPEM, keyPEM string, err error) {
+// tenantID is optional - empty string means platform-wide certificate.
+func (m *CertManager) IssueCertificate(ctx context.Context, tenantID, domain, email string) (certPEM, keyPEM string, expiresAt time.Time, err error) {
 	if domain == "" || email == "" {
-		return "", "", fmt.Errorf("domain and email are required")
+		return "", "", time.Time{}, fmt.Errorf("domain and email are required")
 	}
 
-	// 1. Check Cache (DB)
-	cert, err := m.store.GetCertificate(ctx, domain)
+	// 1. Check Cache (DB) - with tenant context
+	cert, err := m.store.GetCertificate(ctx, tenantID, domain)
 	if err == nil {
 		// Check expiry (renew if < 30 days remaining)
 		if time.Until(cert.ExpiresAt) > 30*24*time.Hour {
-			return cert.CertPEM, cert.KeyPEM, nil
+			return cert.CertPEM, cert.KeyPEM, cert.ExpiresAt, nil
 		}
 		// If expiring soon, proceed to renewal logic (below)
 	} else if !errors.Is(err, store.ErrNotFound) {
-		return "", "", fmt.Errorf("failed to check certificate cache: %w", err)
+		return "", "", time.Time{}, fmt.Errorf("failed to check certificate cache: %w", err)
 	}
 
-	// 2. Load or Create ACME User
-	user, err := m.getOrCreateUser(ctx, email)
+	// 2. Load or Create ACME User (with tenant context)
+	user, err := m.getOrCreateUser(ctx, tenantID, email)
 	if err != nil {
-		return "", "", fmt.Errorf("failed to load ACME user: %w", err)
+		return "", "", time.Time{}, fmt.Errorf("failed to load ACME user: %w", err)
 	}
 
 	// 3. Initialize Lego config
@@ -77,7 +78,7 @@ func (m *CertManager) IssueCertificate(ctx context.Context, domain, email string
 	// 4. Create Lego client
 	client, err := lego.NewClient(config)
 	if err != nil {
-		return "", "", fmt.Errorf("failed to create lego client: %w", err)
+		return "", "", time.Time{}, fmt.Errorf("failed to create lego client: %w", err)
 	}
 
 	// 5. Setup Cloudflare Provider
@@ -87,23 +88,23 @@ func (m *CertManager) IssueCertificate(ctx context.Context, domain, email string
 
 	provider, err := cloudflare.NewDNSProvider()
 	if err != nil {
-		return "", "", fmt.Errorf("failed to create cloudflare provider: %w", err)
+		return "", "", time.Time{}, fmt.Errorf("failed to create cloudflare provider: %w", err)
 	}
 
 	if err := client.Challenge.SetDNS01Provider(provider); err != nil {
-		return "", "", fmt.Errorf("failed to set DNS provider: %w", err)
+		return "", "", time.Time{}, fmt.Errorf("failed to set DNS provider: %w", err)
 	}
 
 	// 6. Register User (if new)
 	if user.Registration == nil {
 		reg, err := client.Registration.Register(registration.RegisterOptions{TermsOfServiceAgreed: true})
 		if err != nil {
-			return "", "", fmt.Errorf("registration failed: %w", err)
+			return "", "", time.Time{}, fmt.Errorf("registration failed: %w", err)
 		}
 		user.Registration = reg
-		// Save updated registration to DB
-		if err := m.saveUser(ctx, user); err != nil {
-			return "", "", fmt.Errorf("failed to save user registration: %w", err)
+		// Save updated registration to DB (with tenant context)
+		if err := m.saveUser(ctx, tenantID, user); err != nil {
+			return "", "", time.Time{}, fmt.Errorf("failed to save user registration: %w", err)
 		}
 	}
 
@@ -114,7 +115,7 @@ func (m *CertManager) IssueCertificate(ctx context.Context, domain, email string
 	}
 	certificates, err := client.Certificate.Obtain(request)
 	if err != nil {
-		return "", "", fmt.Errorf("failed to obtain certificate: %w", err)
+		return "", "", time.Time{}, fmt.Errorf("failed to obtain certificate: %w", err)
 	}
 
 	// 8. Parse Expiry
@@ -127,24 +128,29 @@ func (m *CertManager) IssueCertificate(ctx context.Context, domain, email string
 		}
 	}
 
-	// 9. Save to DB
+	// 9. Save to DB (with tenant context)
 	newCert := &store.Certificate{
 		Domain:    domain,
 		CertPEM:   string(certificates.Certificate),
 		KeyPEM:    string(certificates.PrivateKey),
 		ExpiresAt: expiry,
 	}
-	if err := m.store.SaveCertificate(ctx, newCert); err != nil {
-		// Log error but return cert anyway? No, better to fail or retry.
-		return "", "", fmt.Errorf("failed to save certificate: %w", err)
+	if err := m.store.SaveCertificate(ctx, tenantID, newCert); err != nil {
+		return "", "", time.Time{}, fmt.Errorf("failed to save certificate: %w", err)
 	}
 
-	return newCert.CertPEM, newCert.KeyPEM, nil
+	return newCert.CertPEM, newCert.KeyPEM, expiry, nil
 }
 
-func (m *CertManager) getOrCreateUser(ctx context.Context, email string) (*ACMEUser, error) {
-	// Try DB
-	acc, err := m.store.GetACMEAccount(ctx, email)
+// GetCertificate retrieves a certificate from the store.
+// tenantID is optional - empty string means platform-wide certificate.
+func (m *CertManager) GetCertificate(ctx context.Context, tenantID, domain string) (*store.Certificate, error) {
+	return m.store.GetCertificate(ctx, tenantID, domain)
+}
+
+func (m *CertManager) getOrCreateUser(ctx context.Context, tenantID, email string) (*ACMEUser, error) {
+	// Try DB (with tenant context)
+	acc, err := m.store.GetACMEAccount(ctx, tenantID, email)
 	if err == nil {
 		// Parse Private Key
 		block, _ := pem.Decode([]byte(acc.PrivateKeyPEM))
@@ -177,7 +183,7 @@ func (m *CertManager) getOrCreateUser(ctx context.Context, email string) (*ACMEU
 	}, nil
 }
 
-func (m *CertManager) saveUser(ctx context.Context, user *ACMEUser) error {
+func (m *CertManager) saveUser(ctx context.Context, tenantID string, user *ACMEUser) error {
 	// Serialize Key
 	keyBytes, err := x509.MarshalECPrivateKey(user.key.(*ecdsa.PrivateKey))
 	if err != nil {
@@ -196,5 +202,5 @@ func (m *CertManager) saveUser(ctx context.Context, user *ACMEUser) error {
 		Registration:  string(regJSON),
 		PrivateKeyPEM: string(keyPEM),
 	}
-	return m.store.SaveACMEAccount(ctx, acc)
+	return m.store.SaveACMEAccount(ctx, tenantID, acc)
 }

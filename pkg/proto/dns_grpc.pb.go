@@ -21,6 +21,7 @@ const _ = grpc.SupportPackageIsVersion9
 const (
 	NavigatorService_SyncDNS_FullMethodName          = "/navigator.NavigatorService/SyncDNS"
 	NavigatorService_IssueCertificate_FullMethodName = "/navigator.NavigatorService/IssueCertificate"
+	NavigatorService_GetCertificate_FullMethodName   = "/navigator.NavigatorService/GetCertificate"
 )
 
 // NavigatorServiceClient is the client API for NavigatorService service.
@@ -33,6 +34,8 @@ type NavigatorServiceClient interface {
 	SyncDNS(ctx context.Context, in *SyncDNSRequest, opts ...grpc.CallOption) (*SyncDNSResponse, error)
 	// IssueCertificate requests Navigator to issue or renew a certificate for a domain.
 	IssueCertificate(ctx context.Context, in *IssueCertificateRequest, opts ...grpc.CallOption) (*IssueCertificateResponse, error)
+	// GetCertificate retrieves an existing certificate for a domain.
+	GetCertificate(ctx context.Context, in *GetCertificateRequest, opts ...grpc.CallOption) (*GetCertificateResponse, error)
 }
 
 type navigatorServiceClient struct {
@@ -63,6 +66,16 @@ func (c *navigatorServiceClient) IssueCertificate(ctx context.Context, in *Issue
 	return out, nil
 }
 
+func (c *navigatorServiceClient) GetCertificate(ctx context.Context, in *GetCertificateRequest, opts ...grpc.CallOption) (*GetCertificateResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetCertificateResponse)
+	err := c.cc.Invoke(ctx, NavigatorService_GetCertificate_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // NavigatorServiceServer is the server API for NavigatorService service.
 // All implementations must embed UnimplementedNavigatorServiceServer
 // for forward compatibility.
@@ -73,6 +86,8 @@ type NavigatorServiceServer interface {
 	SyncDNS(context.Context, *SyncDNSRequest) (*SyncDNSResponse, error)
 	// IssueCertificate requests Navigator to issue or renew a certificate for a domain.
 	IssueCertificate(context.Context, *IssueCertificateRequest) (*IssueCertificateResponse, error)
+	// GetCertificate retrieves an existing certificate for a domain.
+	GetCertificate(context.Context, *GetCertificateRequest) (*GetCertificateResponse, error)
 	mustEmbedUnimplementedNavigatorServiceServer()
 }
 
@@ -88,6 +103,9 @@ func (UnimplementedNavigatorServiceServer) SyncDNS(context.Context, *SyncDNSRequ
 }
 func (UnimplementedNavigatorServiceServer) IssueCertificate(context.Context, *IssueCertificateRequest) (*IssueCertificateResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method IssueCertificate not implemented")
+}
+func (UnimplementedNavigatorServiceServer) GetCertificate(context.Context, *GetCertificateRequest) (*GetCertificateResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetCertificate not implemented")
 }
 func (UnimplementedNavigatorServiceServer) mustEmbedUnimplementedNavigatorServiceServer() {}
 func (UnimplementedNavigatorServiceServer) testEmbeddedByValue()                          {}
@@ -146,6 +164,24 @@ func _NavigatorService_IssueCertificate_Handler(srv interface{}, ctx context.Con
 	return interceptor(ctx, in, info, handler)
 }
 
+func _NavigatorService_GetCertificate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetCertificateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NavigatorServiceServer).GetCertificate(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NavigatorService_GetCertificate_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NavigatorServiceServer).GetCertificate(ctx, req.(*GetCertificateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // NavigatorService_ServiceDesc is the grpc.ServiceDesc for NavigatorService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -160,6 +196,10 @@ var NavigatorService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "IssueCertificate",
 			Handler:    _NavigatorService_IssueCertificate_Handler,
+		},
+		{
+			MethodName: "GetCertificate",
+			Handler:    _NavigatorService_GetCertificate_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

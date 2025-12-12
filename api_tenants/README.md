@@ -1,11 +1,21 @@
 # Quartermaster (Tenants & Clusters)
 
-Authoritative tenant and cluster registry. Other services query Quartermaster over HTTP; no one reads each other’s DBs.
+Authoritative tenant and cluster registry. Other services query Quartermaster over HTTP; no one reads each other's DBs.
+
+## Sovereign Multi-Tenancy
+
+Quartermaster enables **per-tenant deployment flexibility**:
+
+- **Shared clusters**: Multiple tenants on shared infrastructure (SaaS model)
+- **Dedicated clusters**: Per-tenant isolated infrastructure for enterprise/compliance
+- **Customer-managed**: Tenants can run their own clusters, federated with FrameWorks control plane
+
+This enables B2B deployments where enterprise customers demand dedicated infrastructure without forking the platform.
 
 ## What it does
 - Tenant directory (CRUD)
-- Cluster assignments and tiering
-- Feature flags and resource limits
+- Cluster assignments and tiering (shared → dedicated → customer-managed)
+- Feature flags and resource limits per tenant
 - Batch lookups and by‑cluster queries
 
 ## API (examples)

@@ -138,6 +138,8 @@ services:
       # Currently writable as we're actively developing/testing configs
       - ./infrastructure/mistserver.conf:/etc/mistserver.conf
       - mistserver_data:/var/lib/mistserver
+      # Demo recordings for dev environment (clips & DVR artifacts)
+      - ./infrastructure/demo-recordings:/var/lib/mistserver/recordings
     restart: unless-stopped
     command: ["MistController", "-c", "/etc/mistserver.conf"]
     networks:
@@ -545,8 +547,10 @@ services:
       GRPC_USE_TLS: ${HELMSMAN_GRPC_USE_TLS}
       GRPC_TLS_CERT_PATH: ${HELMSMAN_GRPC_TLS_CERT_PATH}
       GRPC_TLS_KEY_PATH: ${HELMSMAN_GRPC_TLS_KEY_PATH}
+      HELMSMAN_STORAGE_LOCAL_PATH: /recordings
     volumes:
       - ./infrastructure/edge/machine-id:/etc/machine-id:ro
+      - ./infrastructure/demo-recordings:/recordings
     depends_on:
       commodore:
         condition: service_started

@@ -179,9 +179,9 @@
 
   <!-- Scroll Hint Overlay -->
   {#if showScrollHint && !isFullscreen}
-    <div class="scroll-hint" onclick={() => showScrollHint = false}>
+    <button class="scroll-hint" type="button" onclick={() => showScrollHint = false}>
       <span>Hold <kbd>⌥</kbd> or <kbd>Ctrl</kbd> + scroll to zoom</span>
-    </div>
+    </button>
   {/if}
 
   <div bind:this={mapContainer} class="map-container"></div>

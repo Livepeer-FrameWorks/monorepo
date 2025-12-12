@@ -2,6 +2,8 @@
 
 > Warning: This stack is pre‑release and experimental. Do not deploy to production. Interfaces and schemas change frequently. Use for local development and evaluation only.
 
+**Sovereign SaaS for live video.** Run on your infrastructure, ours, or both—no vendor lock-in.
+
 An open streaming stack for live video: apps, real‑time APIs, and analytics. Services are narrowly scoped. Frontend uses GraphQL; service-to-service uses HTTP/gRPC APIs; analytics and realtime use Kafka events. Each service owns its data (no cross‑DB access).
 
 ## Architecture at a glance

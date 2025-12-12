@@ -30,7 +30,6 @@
 
   interface HealthDataPoint {
     timestamp: string;
-    packetLossPercentage?: number | null;
     bufferHealth?: number | null;
     bitrate?: number | null;
   }
@@ -38,7 +37,6 @@
   interface Props {
     data: HealthDataPoint[];
     height?: number;
-    showPacketLoss?: boolean;
     showBufferHealth?: boolean;
     showBitrate?: boolean;
   }
@@ -46,7 +44,6 @@
   let {
     data = [],
     height = 300,
-    showPacketLoss = true,
     showBufferHealth = true,
     showBitrate = true,
   }: Props = $props();
@@ -87,23 +84,6 @@
         pointHoverRadius: 5,
         borderWidth: 2,
         yAxisID: "y",
-      });
-    }
-
-    if (showPacketLoss) {
-      datasets.push({
-        label: "Packet Loss (%)",
-        data: sortedData.map((d) =>
-          d.packetLossPercentage != null ? d.packetLossPercentage * 100 : null
-        ),
-        borderColor: "rgb(239, 68, 68)", // red
-        backgroundColor: "transparent",
-        fill: false,
-        tension: 0.4,
-        pointRadius: 1,
-        pointHoverRadius: 4,
-        borderWidth: 1.5,
-        yAxisID: "y1",
       });
     }
 
@@ -165,8 +145,6 @@
 
                 if (label.includes("Buffer Health")) {
                   return `${label}: ${value.toFixed(0)}%`;
-                } else if (label.includes("Packet")) {
-                  return `${label}: ${value.toFixed(2)}%`;
                 } else if (label.includes("Bitrate")) {
                   return `${label}: ${value.toFixed(2)} Mbps`;
                 }
@@ -224,7 +202,7 @@
           },
           y1: {
             type: "linear",
-            display: showPacketLoss || showBitrate,
+            display: showBitrate,
             position: "right",
             min: 0,
             grid: {
@@ -238,7 +216,7 @@
             },
             title: {
               display: true,
-              text: "Packet Loss (%) / Bitrate (Mbps)",
+              text: "Bitrate (Mbps)",
               color: "rgb(148, 163, 184)",
             },
           },

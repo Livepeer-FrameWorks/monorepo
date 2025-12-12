@@ -245,6 +245,9 @@ func main() {
 	// Create Foghorn control plane gRPC server (for Commodore: clips, DVR, viewer resolution)
 	foghornServer := foghorngrpc.NewFoghornGRPCServer(db, logger, lb, geoipReader, decklogClient)
 
+	// Wire DVR service to trigger processor for auto-start recordings on stream start
+	triggerProcessor.SetDVRService(foghornServer)
+
 	// Start unified gRPC server with both Helmsman control and Foghorn control plane services
 	controlAddr := config.RequireEnv("FOGHORN_CONTROL_BIND_ADDR")
 	if _, err := control.StartGRPCServer(control.GRPCServerConfig{

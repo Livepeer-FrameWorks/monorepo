@@ -24,8 +24,9 @@ const (
 // SyncDNSRequest is sent by Quartermaster to trigger DNS synchronization.
 type SyncDNSRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	ServiceType   string                 `protobuf:"bytes,1,opt,name=service_type,json=serviceType,proto3" json:"service_type,omitempty"` // e.g., "edge", "gateway", "app"
-	RootDomain    string                 `protobuf:"bytes,2,opt,name=root_domain,json=rootDomain,proto3" json:"root_domain,omitempty"`    // e.g., "frameworks.network"
+	TenantId      *string                `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3,oneof" json:"tenant_id,omitempty"`    // Optional: tenant context for tenant-specific DNS records
+	ServiceType   string                 `protobuf:"bytes,2,opt,name=service_type,json=serviceType,proto3" json:"service_type,omitempty"` // e.g., "edge", "gateway", "app"
+	RootDomain    string                 `protobuf:"bytes,3,opt,name=root_domain,json=rootDomain,proto3" json:"root_domain,omitempty"`    // e.g., "frameworks.network"
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -58,6 +59,13 @@ func (x *SyncDNSRequest) ProtoReflect() protoreflect.Message {
 // Deprecated: Use SyncDNSRequest.ProtoReflect.Descriptor instead.
 func (*SyncDNSRequest) Descriptor() ([]byte, []int) {
 	return file_dns_proto_rawDescGZIP(), []int{0}
+}
+
+func (x *SyncDNSRequest) GetTenantId() string {
+	if x != nil && x.TenantId != nil {
+		return *x.TenantId
+	}
+	return ""
 }
 
 func (x *SyncDNSRequest) GetServiceType() string {
@@ -138,8 +146,9 @@ func (x *SyncDNSResponse) GetErrors() map[string]string {
 // IssueCertificateRequest is sent to request a certificate.
 type IssueCertificateRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Domain        string                 `protobuf:"bytes,1,opt,name=domain,proto3" json:"domain,omitempty"` // The domain to issue the certificate for, e.g., "api.example.com" or "*.example.com"
-	Email         string                 `protobuf:"bytes,2,opt,name=email,proto3" json:"email,omitempty"`   // Email for ACME registration
+	TenantId      *string                `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3,oneof" json:"tenant_id,omitempty"` // Optional: tenant context for tenant custom domains (NULL for platform certs)
+	Domain        string                 `protobuf:"bytes,2,opt,name=domain,proto3" json:"domain,omitempty"`                           // The domain to issue the certificate for, e.g., "api.example.com" or "*.example.com"
+	Email         string                 `protobuf:"bytes,3,opt,name=email,proto3" json:"email,omitempty"`                             // Email for ACME registration
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -174,6 +183,13 @@ func (*IssueCertificateRequest) Descriptor() ([]byte, []int) {
 	return file_dns_proto_rawDescGZIP(), []int{2}
 }
 
+func (x *IssueCertificateRequest) GetTenantId() string {
+	if x != nil && x.TenantId != nil {
+		return *x.TenantId
+	}
+	return ""
+}
+
 func (x *IssueCertificateRequest) GetDomain() string {
 	if x != nil {
 		return x.Domain
@@ -192,10 +208,13 @@ func (x *IssueCertificateRequest) GetEmail() string {
 type IssueCertificateResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
-	Message       string                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`                // Details of the operation
-	CertPem       string                 `protobuf:"bytes,3,opt,name=cert_pem,json=certPem,proto3" json:"cert_pem,omitempty"` // The issued certificate in PEM format
-	KeyPem        string                 `protobuf:"bytes,4,opt,name=key_pem,json=keyPem,proto3" json:"key_pem,omitempty"`    // The private key in PEM format
-	Error         string                 `protobuf:"bytes,5,opt,name=error,proto3" json:"error,omitempty"`                    // Error message if issuance failed
+	Message       string                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`                         // Details of the operation
+	TenantId      *string                `protobuf:"bytes,3,opt,name=tenant_id,json=tenantId,proto3,oneof" json:"tenant_id,omitempty"` // Echo back tenant context
+	Domain        string                 `protobuf:"bytes,4,opt,name=domain,proto3" json:"domain,omitempty"`                           // The domain the certificate was issued for
+	CertPem       string                 `protobuf:"bytes,5,opt,name=cert_pem,json=certPem,proto3" json:"cert_pem,omitempty"`          // The issued certificate in PEM format
+	KeyPem        string                 `protobuf:"bytes,6,opt,name=key_pem,json=keyPem,proto3" json:"key_pem,omitempty"`             // The private key in PEM format
+	ExpiresAt     int64                  `protobuf:"varint,7,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`   // Certificate expiration timestamp (Unix)
+	Error         string                 `protobuf:"bytes,8,opt,name=error,proto3" json:"error,omitempty"`                             // Error message if issuance failed
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -244,6 +263,20 @@ func (x *IssueCertificateResponse) GetMessage() string {
 	return ""
 }
 
+func (x *IssueCertificateResponse) GetTenantId() string {
+	if x != nil && x.TenantId != nil {
+		return *x.TenantId
+	}
+	return ""
+}
+
+func (x *IssueCertificateResponse) GetDomain() string {
+	if x != nil {
+		return x.Domain
+	}
+	return ""
+}
+
 func (x *IssueCertificateResponse) GetCertPem() string {
 	if x != nil {
 		return x.CertPem
@@ -258,7 +291,160 @@ func (x *IssueCertificateResponse) GetKeyPem() string {
 	return ""
 }
 
+func (x *IssueCertificateResponse) GetExpiresAt() int64 {
+	if x != nil {
+		return x.ExpiresAt
+	}
+	return 0
+}
+
 func (x *IssueCertificateResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+// GetCertificateRequest retrieves an existing certificate.
+type GetCertificateRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TenantId      *string                `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3,oneof" json:"tenant_id,omitempty"` // Optional: tenant context for filtering
+	Domain        string                 `protobuf:"bytes,2,opt,name=domain,proto3" json:"domain,omitempty"`                           // The domain to retrieve the certificate for
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetCertificateRequest) Reset() {
+	*x = GetCertificateRequest{}
+	mi := &file_dns_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetCertificateRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetCertificateRequest) ProtoMessage() {}
+
+func (x *GetCertificateRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_dns_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetCertificateRequest.ProtoReflect.Descriptor instead.
+func (*GetCertificateRequest) Descriptor() ([]byte, []int) {
+	return file_dns_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *GetCertificateRequest) GetTenantId() string {
+	if x != nil && x.TenantId != nil {
+		return *x.TenantId
+	}
+	return ""
+}
+
+func (x *GetCertificateRequest) GetDomain() string {
+	if x != nil {
+		return x.Domain
+	}
+	return ""
+}
+
+// GetCertificateResponse returns the certificate if found.
+type GetCertificateResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Found         bool                   `protobuf:"varint,1,opt,name=found,proto3" json:"found,omitempty"`
+	TenantId      *string                `protobuf:"bytes,2,opt,name=tenant_id,json=tenantId,proto3,oneof" json:"tenant_id,omitempty"` // Tenant that owns the certificate (if any)
+	Domain        string                 `protobuf:"bytes,3,opt,name=domain,proto3" json:"domain,omitempty"`                           // The domain
+	CertPem       string                 `protobuf:"bytes,4,opt,name=cert_pem,json=certPem,proto3" json:"cert_pem,omitempty"`          // The certificate in PEM format
+	KeyPem        string                 `protobuf:"bytes,5,opt,name=key_pem,json=keyPem,proto3" json:"key_pem,omitempty"`             // The private key in PEM format
+	ExpiresAt     int64                  `protobuf:"varint,6,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`   // Certificate expiration timestamp (Unix)
+	Error         string                 `protobuf:"bytes,7,opt,name=error,proto3" json:"error,omitempty"`                             // Error message if retrieval failed
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetCertificateResponse) Reset() {
+	*x = GetCertificateResponse{}
+	mi := &file_dns_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetCertificateResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetCertificateResponse) ProtoMessage() {}
+
+func (x *GetCertificateResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_dns_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetCertificateResponse.ProtoReflect.Descriptor instead.
+func (*GetCertificateResponse) Descriptor() ([]byte, []int) {
+	return file_dns_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *GetCertificateResponse) GetFound() bool {
+	if x != nil {
+		return x.Found
+	}
+	return false
+}
+
+func (x *GetCertificateResponse) GetTenantId() string {
+	if x != nil && x.TenantId != nil {
+		return *x.TenantId
+	}
+	return ""
+}
+
+func (x *GetCertificateResponse) GetDomain() string {
+	if x != nil {
+		return x.Domain
+	}
+	return ""
+}
+
+func (x *GetCertificateResponse) GetCertPem() string {
+	if x != nil {
+		return x.CertPem
+	}
+	return ""
+}
+
+func (x *GetCertificateResponse) GetKeyPem() string {
+	if x != nil {
+		return x.KeyPem
+	}
+	return ""
+}
+
+func (x *GetCertificateResponse) GetExpiresAt() int64 {
+	if x != nil {
+		return x.ExpiresAt
+	}
+	return 0
+}
+
+func (x *GetCertificateResponse) GetError() string {
 	if x != nil {
 		return x.Error
 	}
@@ -269,30 +455,59 @@ var File_dns_proto protoreflect.FileDescriptor
 
 const file_dns_proto_rawDesc = "" +
 	"\n" +
-	"\tdns.proto\x12\tnavigator\"T\n" +
-	"\x0eSyncDNSRequest\x12!\n" +
-	"\fservice_type\x18\x01 \x01(\tR\vserviceType\x12\x1f\n" +
-	"\vroot_domain\x18\x02 \x01(\tR\n" +
-	"rootDomain\"\xc0\x01\n" +
+	"\tdns.proto\x12\tnavigator\"\x84\x01\n" +
+	"\x0eSyncDNSRequest\x12 \n" +
+	"\ttenant_id\x18\x01 \x01(\tH\x00R\btenantId\x88\x01\x01\x12!\n" +
+	"\fservice_type\x18\x02 \x01(\tR\vserviceType\x12\x1f\n" +
+	"\vroot_domain\x18\x03 \x01(\tR\n" +
+	"rootDomainB\f\n" +
+	"\n" +
+	"_tenant_id\"\xc0\x01\n" +
 	"\x0fSyncDNSResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\x12>\n" +
 	"\x06errors\x18\x03 \x03(\v2&.navigator.SyncDNSResponse.ErrorsEntryR\x06errors\x1a9\n" +
 	"\vErrorsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"G\n" +
-	"\x17IssueCertificateRequest\x12\x16\n" +
-	"\x06domain\x18\x01 \x01(\tR\x06domain\x12\x14\n" +
-	"\x05email\x18\x02 \x01(\tR\x05email\"\x98\x01\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"w\n" +
+	"\x17IssueCertificateRequest\x12 \n" +
+	"\ttenant_id\x18\x01 \x01(\tH\x00R\btenantId\x88\x01\x01\x12\x16\n" +
+	"\x06domain\x18\x02 \x01(\tR\x06domain\x12\x14\n" +
+	"\x05email\x18\x03 \x01(\tR\x05emailB\f\n" +
+	"\n" +
+	"_tenant_id\"\xff\x01\n" +
 	"\x18IssueCertificateResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\x12\x19\n" +
-	"\bcert_pem\x18\x03 \x01(\tR\acertPem\x12\x17\n" +
-	"\akey_pem\x18\x04 \x01(\tR\x06keyPem\x12\x14\n" +
-	"\x05error\x18\x05 \x01(\tR\x05error2\xb1\x01\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\x12 \n" +
+	"\ttenant_id\x18\x03 \x01(\tH\x00R\btenantId\x88\x01\x01\x12\x16\n" +
+	"\x06domain\x18\x04 \x01(\tR\x06domain\x12\x19\n" +
+	"\bcert_pem\x18\x05 \x01(\tR\acertPem\x12\x17\n" +
+	"\akey_pem\x18\x06 \x01(\tR\x06keyPem\x12\x1d\n" +
+	"\n" +
+	"expires_at\x18\a \x01(\x03R\texpiresAt\x12\x14\n" +
+	"\x05error\x18\b \x01(\tR\x05errorB\f\n" +
+	"\n" +
+	"_tenant_id\"_\n" +
+	"\x15GetCertificateRequest\x12 \n" +
+	"\ttenant_id\x18\x01 \x01(\tH\x00R\btenantId\x88\x01\x01\x12\x16\n" +
+	"\x06domain\x18\x02 \x01(\tR\x06domainB\f\n" +
+	"\n" +
+	"_tenant_id\"\xdf\x01\n" +
+	"\x16GetCertificateResponse\x12\x14\n" +
+	"\x05found\x18\x01 \x01(\bR\x05found\x12 \n" +
+	"\ttenant_id\x18\x02 \x01(\tH\x00R\btenantId\x88\x01\x01\x12\x16\n" +
+	"\x06domain\x18\x03 \x01(\tR\x06domain\x12\x19\n" +
+	"\bcert_pem\x18\x04 \x01(\tR\acertPem\x12\x17\n" +
+	"\akey_pem\x18\x05 \x01(\tR\x06keyPem\x12\x1d\n" +
+	"\n" +
+	"expires_at\x18\x06 \x01(\x03R\texpiresAt\x12\x14\n" +
+	"\x05error\x18\a \x01(\tR\x05errorB\f\n" +
+	"\n" +
+	"_tenant_id2\x88\x02\n" +
 	"\x10NavigatorService\x12@\n" +
 	"\aSyncDNS\x12\x19.navigator.SyncDNSRequest\x1a\x1a.navigator.SyncDNSResponse\x12[\n" +
-	"\x10IssueCertificate\x12\".navigator.IssueCertificateRequest\x1a#.navigator.IssueCertificateResponseB\x16Z\x14frameworks/pkg/protob\x06proto3"
+	"\x10IssueCertificate\x12\".navigator.IssueCertificateRequest\x1a#.navigator.IssueCertificateResponse\x12U\n" +
+	"\x0eGetCertificate\x12 .navigator.GetCertificateRequest\x1a!.navigator.GetCertificateResponseB\x16Z\x14frameworks/pkg/protob\x06proto3"
 
 var (
 	file_dns_proto_rawDescOnce sync.Once
@@ -306,22 +521,26 @@ func file_dns_proto_rawDescGZIP() []byte {
 	return file_dns_proto_rawDescData
 }
 
-var file_dns_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
+var file_dns_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
 var file_dns_proto_goTypes = []any{
 	(*SyncDNSRequest)(nil),           // 0: navigator.SyncDNSRequest
 	(*SyncDNSResponse)(nil),          // 1: navigator.SyncDNSResponse
 	(*IssueCertificateRequest)(nil),  // 2: navigator.IssueCertificateRequest
 	(*IssueCertificateResponse)(nil), // 3: navigator.IssueCertificateResponse
-	nil,                              // 4: navigator.SyncDNSResponse.ErrorsEntry
+	(*GetCertificateRequest)(nil),    // 4: navigator.GetCertificateRequest
+	(*GetCertificateResponse)(nil),   // 5: navigator.GetCertificateResponse
+	nil,                              // 6: navigator.SyncDNSResponse.ErrorsEntry
 }
 var file_dns_proto_depIdxs = []int32{
-	4, // 0: navigator.SyncDNSResponse.errors:type_name -> navigator.SyncDNSResponse.ErrorsEntry
+	6, // 0: navigator.SyncDNSResponse.errors:type_name -> navigator.SyncDNSResponse.ErrorsEntry
 	0, // 1: navigator.NavigatorService.SyncDNS:input_type -> navigator.SyncDNSRequest
 	2, // 2: navigator.NavigatorService.IssueCertificate:input_type -> navigator.IssueCertificateRequest
-	1, // 3: navigator.NavigatorService.SyncDNS:output_type -> navigator.SyncDNSResponse
-	3, // 4: navigator.NavigatorService.IssueCertificate:output_type -> navigator.IssueCertificateResponse
-	3, // [3:5] is the sub-list for method output_type
-	1, // [1:3] is the sub-list for method input_type
+	4, // 3: navigator.NavigatorService.GetCertificate:input_type -> navigator.GetCertificateRequest
+	1, // 4: navigator.NavigatorService.SyncDNS:output_type -> navigator.SyncDNSResponse
+	3, // 5: navigator.NavigatorService.IssueCertificate:output_type -> navigator.IssueCertificateResponse
+	5, // 6: navigator.NavigatorService.GetCertificate:output_type -> navigator.GetCertificateResponse
+	4, // [4:7] is the sub-list for method output_type
+	1, // [1:4] is the sub-list for method input_type
 	1, // [1:1] is the sub-list for extension type_name
 	1, // [1:1] is the sub-list for extension extendee
 	0, // [0:1] is the sub-list for field type_name
@@ -332,13 +551,18 @@ func file_dns_proto_init() {
 	if File_dns_proto != nil {
 		return
 	}
+	file_dns_proto_msgTypes[0].OneofWrappers = []any{}
+	file_dns_proto_msgTypes[2].OneofWrappers = []any{}
+	file_dns_proto_msgTypes[3].OneofWrappers = []any{}
+	file_dns_proto_msgTypes[4].OneofWrappers = []any{}
+	file_dns_proto_msgTypes[5].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_dns_proto_rawDesc), len(file_dns_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   5,
+			NumMessages:   7,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

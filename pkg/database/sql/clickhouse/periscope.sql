@@ -204,18 +204,12 @@ CREATE TABLE IF NOT EXISTS stream_health_metrics (
 
     -- ===== BUFFER HEALTH =====
     buffer_size Nullable(UInt32),
-    buffer_used Nullable(UInt32),
     buffer_health Nullable(Float32),
     buffer_state LowCardinality(String),
 
-    -- ===== NETWORK PERFORMANCE =====
-    packets_sent Nullable(UInt64),
-    packets_lost Nullable(UInt64),
-    packets_retransmitted Nullable(UInt64),
-
-    -- ===== CODEC & PROFILE =====
+    -- ===== CODEC & QUALITY =====
     codec Nullable(String),
-    profile Nullable(String),
+    quality_tier Nullable(String),      -- Rich quality string e.g. "1080p60 H264 @ 6Mbps"
     track_metadata JSON,
 
     -- ===== FRAME TIMING (Nullable - raw from MistServer track keys) =====
@@ -469,7 +463,6 @@ CREATE TABLE IF NOT EXISTS stream_health_5m (
     sample_issues Nullable(String),
     avg_bitrate Float32,
     avg_fps Float32,
-    packet_loss_percentage Float32,
     buffer_dry_count UInt32,
     quality_tier LowCardinality(String)
 ) ENGINE = MergeTree()
@@ -489,7 +482,6 @@ SELECT
     any(issues_description) AS sample_issues,
     avg(bitrate) AS avg_bitrate,
     avg(fps) AS avg_fps,
-    avg(if(packets_sent > 0, (packets_lost / packets_sent) * 100, 0)) AS packet_loss_percentage,
     countIf(buffer_state = 'DRY') AS buffer_dry_count,
     argMax(
         if(height >= 1080, '1080p+', if(height >= 720, '720p', if(height >= 480, '480p', 'SD'))), timestamp
@@ -675,6 +667,10 @@ CREATE TABLE IF NOT EXISTS live_streams (
     primary_codec Nullable(String),
     primary_bitrate Nullable(UInt32),
 
+    -- ===== PACKET STATISTICS (from MistServer, per-stream totals) =====
+    packets_sent Nullable(UInt64),
+    packets_lost Nullable(UInt64),
+
     -- ===== TIMING =====
     started_at Nullable(DateTime),
     updated_at DateTime
@@ -766,35 +762,39 @@ ORDER BY (tenant_id, request_id);
 
 -- Active viewer sessions (connect without disconnect)
 -- Used to calculate current_viewers at query time
--- NOTE: ORDER BY (tenant_id, connected_at, session_id) would better match query patterns
--- like "WHERE tenant_id = ? AND connected_at >= ? ORDER BY connected_at DESC"
--- Migration requires table recreation (ALTER TABLE cannot change ORDER BY in MergeTree)
+-- Uses AggregatingMergeTree with SimpleAggregateFunction to properly merge connect/disconnect:
+-- - connected_at uses max() so real timestamp (from connect) wins over epoch (from disconnect)
+-- - disconnected_at uses max() so actual disconnect time wins over NULL (from connect)
+-- - bytes/duration use max() to get final values from disconnect event
+-- NOTE: Migration from old schema requires DROP + CREATE (schema change)
 CREATE TABLE IF NOT EXISTS viewer_sessions (
     tenant_id UUID,
-    internal_name String,
+    internal_name LowCardinality(String),
     session_id String,
 
     -- ===== SESSION STATE =====
-    connected_at DateTime,
-    disconnected_at Nullable(DateTime),      -- NULL = still connected
+    -- max() ensures: connect's real timestamp > disconnect's epoch(0)
+    connected_at SimpleAggregateFunction(max, DateTime),
+    -- max() ensures: disconnect's timestamp > connect's NULL (NULL < any value)
+    disconnected_at SimpleAggregateFunction(max, Nullable(DateTime)),
 
-    -- ===== CONNECTION DETAILS =====
-    node_id LowCardinality(String),
-    connector LowCardinality(String),        -- HLS, DASH, WebRTC
+    -- ===== CONNECTION DETAILS (use any - same for connect/disconnect) =====
+    node_id SimpleAggregateFunction(any, LowCardinality(String)),
+    connector SimpleAggregateFunction(any, LowCardinality(String)),
 
-    -- ===== GEOGRAPHIC DATA =====
-    country_code FixedString(2),
-    city LowCardinality(String),
-    latitude Float64,
-    longitude Float64,
+    -- ===== GEOGRAPHIC DATA (use any - same for connect/disconnect) =====
+    country_code SimpleAggregateFunction(any, FixedString(2)),
+    city SimpleAggregateFunction(any, LowCardinality(String)),
+    latitude SimpleAggregateFunction(any, Float64),
+    longitude SimpleAggregateFunction(any, Float64),
 
-    -- ===== METRICS =====
-    bytes_transferred UInt64,
-    session_duration UInt32,
+    -- ===== METRICS (use max - disconnect has final values) =====
+    bytes_transferred SimpleAggregateFunction(max, UInt64),
+    session_duration SimpleAggregateFunction(max, UInt32),
 
-    last_updated DateTime
-) ENGINE = ReplacingMergeTree(last_updated)
-ORDER BY (tenant_id, connected_at, session_id);
+    last_updated SimpleAggregateFunction(max, DateTime)
+) ENGINE = AggregatingMergeTree()
+ORDER BY (tenant_id, session_id);
 
 -- Materialized view to track viewer connects
 CREATE MATERIALIZED VIEW IF NOT EXISTS viewer_sessions_connect_mv TO viewer_sessions AS
@@ -817,12 +817,13 @@ FROM connection_events
 WHERE event_type = 'connect' AND session_id != '';
 
 -- Materialized view to track viewer disconnects
+-- Sets connected_at to epoch(0) which will be overridden by connect's real value via max()
 CREATE MATERIALIZED VIEW IF NOT EXISTS viewer_sessions_disconnect_mv TO viewer_sessions AS
 SELECT
     tenant_id,
     internal_name,
     session_id,
-    toDateTime(0) AS connected_at,           -- Will be replaced by connect event
+    toDateTime(0) AS connected_at,           -- max() ensures connect's real value wins
     timestamp AS disconnected_at,
     node_id,
     connector,

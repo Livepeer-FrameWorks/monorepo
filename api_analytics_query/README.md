@@ -1,6 +1,12 @@
 # Periscope‑Query (Analytics Read Path)
 
-Read‑optimized analytics API. Serves tenant‑scoped queries by reading time‑series from ClickHouse.
+Read‑optimized analytics API. Serves tenant‑scoped queries by reading time‑series from ClickHouse. **All queries are tenant-isolated**—no cross-tenant data access.
+
+## Why Periscope-Query?
+
+- **Strict tenant isolation**: Every analytics query is scoped to the authenticated tenant
+- **Self-hosted analytics**: Run on-premise with your own ClickHouse for complete data control
+- **No cloud lock-in**: Same API and performance whether self-hosted or managed
 
 ## What it does
 - gRPC endpoints for analytics slices and rollups

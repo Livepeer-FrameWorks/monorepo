@@ -204,11 +204,21 @@ func (s *NavigatorServer) SyncDNS(ctx context.Context, req *pb.SyncDNSRequest) (
 
 // IssueCertificate implements the gRPC IssueCertificate method
 func (s *NavigatorServer) IssueCertificate(ctx context.Context, req *pb.IssueCertificateRequest) (*pb.IssueCertificateResponse, error) {
-	s.Logger.WithField("domain", req.GetDomain()).Info("Received IssueCertificate request")
+	// Extract optional tenant_id from request
+	tenantID := ""
+	if req.TenantId != nil {
+		tenantID = *req.TenantId
+	}
 
-	certPEM, keyPEM, err := s.CertManager.IssueCertificate(ctx, req.GetDomain(), req.GetEmail())
+	log := s.Logger.WithField("domain", req.GetDomain())
+	if tenantID != "" {
+		log = log.WithField("tenant_id", tenantID)
+	}
+	log.Info("Received IssueCertificate request")
+
+	certPEM, keyPEM, expiresAt, err := s.CertManager.IssueCertificate(ctx, tenantID, req.GetDomain(), req.GetEmail())
 	if err != nil {
-		s.Logger.WithError(err).Error("Certificate issuance failed")
+		log.WithError(err).Error("Certificate issuance failed")
 		return &pb.IssueCertificateResponse{
 			Success: false,
 			Error:   err.Error(),
@@ -216,9 +226,51 @@ func (s *NavigatorServer) IssueCertificate(ctx context.Context, req *pb.IssueCer
 	}
 
 	return &pb.IssueCertificateResponse{
-		Success: true,
-		Message: "Certificate issued successfully",
-		CertPem: certPEM,
-		KeyPem:  keyPEM,
+		Success:   true,
+		Message:   "Certificate issued successfully",
+		TenantId:  req.TenantId,
+		Domain:    req.GetDomain(),
+		CertPem:   certPEM,
+		KeyPem:    keyPEM,
+		ExpiresAt: expiresAt.Unix(),
+	}, nil
+}
+
+// GetCertificate implements the gRPC GetCertificate method
+func (s *NavigatorServer) GetCertificate(ctx context.Context, req *pb.GetCertificateRequest) (*pb.GetCertificateResponse, error) {
+	// Extract optional tenant_id from request
+	tenantID := ""
+	if req.TenantId != nil {
+		tenantID = *req.TenantId
+	}
+
+	log := s.Logger.WithField("domain", req.GetDomain())
+	if tenantID != "" {
+		log = log.WithField("tenant_id", tenantID)
+	}
+	log.Debug("Received GetCertificate request")
+
+	cert, err := s.CertManager.GetCertificate(ctx, tenantID, req.GetDomain())
+	if err != nil {
+		log.WithError(err).Debug("Certificate not found")
+		return &pb.GetCertificateResponse{
+			Found: false,
+			Error: err.Error(),
+		}, nil
+	}
+
+	// Return tenant_id if set
+	var respTenantID *string
+	if cert.TenantID.Valid {
+		respTenantID = &cert.TenantID.String
+	}
+
+	return &pb.GetCertificateResponse{
+		Found:     true,
+		TenantId:  respTenantID,
+		Domain:    cert.Domain,
+		CertPem:   cert.CertPEM,
+		KeyPem:    cert.KeyPEM,
+		ExpiresAt: cert.ExpiresAt.Unix(),
 	}, nil
 }

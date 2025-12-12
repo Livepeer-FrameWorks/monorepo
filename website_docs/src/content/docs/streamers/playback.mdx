@@ -5,36 +5,54 @@ sidebar:
   order: 3
 ---
 
+import { Aside } from '@astrojs/starlight/components';
+
 Now that you're broadcasting, let's get your stream to your audience. FrameWorks provides versatile playback options, from a drop-in React component to raw protocol support for HLS, DASH, and WebRTC.
+
+<Aside type="note" title="Self-hosted delivery">
+Self-hosted operators serve streams from their own edge nodes. The same protocols and player work—just point to your Foghorn load balancer instead.
+</Aside>
 
 ## Where to Find Your Playback URLs
 
 You can find your **Playback ID** in the FrameWorks dashboard under the **Playback Info** card of your stream. This ID is public-safe and used to construct all viewer URLs.
 
-**Supported Protocols:**
+**Primary Protocols:**
 - **HLS (HTTP Live Streaming):** The industry standard for broad compatibility (browsers, mobile apps, smart TVs).
-- **DASH (Dynamic Adaptive Streaming over HTTP):** An alternative adaptive bitrate protocol often used on Android and specific set-top boxes.
-- **WebRTC (WHEP):** Ultra-low latency streaming for real-time interactivity.
-- **Direct Formats:** Raw streams like WebM, MKV, MP4, FLV, and TS for specialized use cases.
+- **HLS (CMAF):** Lower latency HLS variant using Common Media Application Format.
+- **DASH (MPEG-DASH):** Adaptive bitrate protocol often used on Android and set-top boxes.
+- **WebRTC (WHEP):** Ultra-low latency streaming (~0.5s) for real-time interactivity.
+- **SRT:** Secure Reliable Transport for low-latency contribution and delivery.
+- **MP4/WebM:** Progressive download formats for wide compatibility.
 
-:::note[Need another protocol?]
-FrameWorks is powered by MistServer, which supports nearly every video codec and container format. If you need a protocol that isn't exposed in the dashboard, [open an issue on GitHub](https://github.com/livepeer-frameworks/monorepo/issues) and we can add it.
-:::
+**Additional Protocols:** RTSP, RTMP, MPEG-TS, FLV, MKV, AAC (audio-only), Smooth Streaming, HDS, and more. See [Supported Protocols](#supported-protocols) for the full list.
 
-The URLs follow this pattern:
+<Aside type="note" title="Powered by MistServer">
+FrameWorks uses MistServer for transcoding and delivery, which supports nearly every video codec and container format with on-the-fly muxing. For detailed protocol documentation, see [docs.mistserver.org](https://docs.mistserver.org/).
+</Aside>
+
+The URLs follow a unified pattern through Foghorn's `/play/` path:
 ```
-HLS:    %EDGE_URL%%HLS_PATH%/{playback-id}/index.m3u8
-WebRTC: %EDGE_URL%%WEBRTC_PATH%/{playback-id}
+HLS:    %EDGE_URL%/play/{content-id}/hls/index.m3u8
+DASH:   %EDGE_URL%/play/{content-id}/cmaf/index.mpd
+WebRTC: %EDGE_URL%/play/{content-id}/webrtc
+MP4:    %EDGE_URL%/play/{content-id}.mp4
 ```
 
 **Common URL paths:**
 | Protocol | Path |
 |----------|------|
-| HLS | `/hls/{playback-id}/index.m3u8` |
-| LL-HLS/CMAF | `/cmaf/{playback-id}/index.m3u8` |
-| DASH | `/cmaf/{playback-id}/index.mpd` |
-| WebRTC (WHEP) | `/webrtc/{playback-id}` |
-| MKV | `/mkv/{playback-id}` |
+| HLS (TS) | `/play/{id}/hls/index.m3u8` |
+| HLS (CMAF) | `/play/{id}/cmaf/index.m3u8` |
+| DASH | `/play/{id}/cmaf/index.mpd` |
+| WebRTC (WHEP) | `/play/{id}/webrtc` |
+| MP4 | `/play/{id}.mp4` |
+| WebM | `/play/{id}.webm` |
+
+Where `{id}` is:
+- **Live streams:** Your `playbackId` (view key)
+- **Clips:** The `clipHash` (32-character identifier)
+- **DVR recordings:** The `dvrHash` (32-character identifier)
 
 Your playback ID is different from your stream key (which is secret and used for ingest only).
 
@@ -88,15 +106,29 @@ The player queries the Gateway to resolve the best edge node for your viewer's l
 
 ### For DVR and Clips
 
-Same component, different content type:
+Same component, different content type. The player automatically resolves the correct edge node for playback:
 
 ```tsx
-// DVR recording
-<Player contentType="dvr" contentId="recording-hash" />
+// DVR recording - use the dvrHash from the recording
+<Player contentType="dvr" contentId="a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6" />
 
-// Clip
-<Player contentType="clip" contentId="clip-hash" />
+// Clip - use the clipHash from the clip
+<Player contentType="clip" contentId="f8a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6" />
 ```
+
+You can also access DVR recordings and clips directly via URL:
+
+```bash
+# DVR recording
+https://play.example.com/play/{dvrHash}/hls/index.m3u8
+https://play.example.com/play/{dvrHash}.mp4
+
+# Clip
+https://play.example.com/play/{clipHash}/hls/index.m3u8
+https://play.example.com/play/{clipHash}.mp4
+```
+
+Find these identifiers in the FrameWorks dashboard under **Recordings** and **Clips**. Each recording and clip shows its hash and provides copy buttons for all protocol URLs.
 
 ### With Thumbnail/Poster
 
@@ -233,21 +265,55 @@ Returns:
 
 ### Supported Protocols
 
-| URL Suffix | Protocol |
-|------------|----------|
-| `/hls` or `.m3u8` | HLS |
-| `/dash` or `.mpd` | DASH |
-| `/webrtc` or `.webrtc` | WebRTC/WHEP |
-| `/srt` | SRT |
-| `/rtmp` | RTMP |
-| `/mp4` | Progressive MP4 |
-| `/mkv` | Matroska |
-| `/ts` | MPEG-TS |
-| `/flv` | Flash Video |
-| `/webm` | WebM |
-| (none) | Full JSON |
+#### Primary Protocols
 
-Common protocols (HLS, DASH, WebRTC) are explicitly normalized. Other formats like MP4, MKV, TS, FLV, and WebM are passed through to MistServer - they work if your stream is configured to expose those outputs.
+These protocols are shown by default in the dashboard and cover most use cases:
+
+| URL Pattern | Protocol | Description |
+|-------------|----------|-------------|
+| `/play/{id}/hls/index.m3u8` | HLS (TS) | Best compatibility - browsers, mobile, smart TVs |
+| `/play/{id}/cmaf/index.m3u8` | HLS (CMAF) | Lower latency HLS variant |
+| `/play/{id}/cmaf/index.mpd` | DASH | MPEG-DASH adaptive streaming |
+| `/play/{id}/webrtc` | WebRTC (WHEP) | Ultra-low latency (~0.5s) |
+| `/play/{id}.mp4` | MP4 | Progressive download, wide support |
+| `/play/{id}.webm` | WebM | Open format (VP8/VP9) |
+| `srt://host/?streamid={id}` | SRT | Secure Reliable Transport |
+
+#### Additional Protocols
+
+These protocols are available for specialized use cases:
+
+| URL Pattern | Protocol | Description |
+|-------------|----------|-------------|
+| `rtsp://host/play/{id}` | RTSP | IP cameras, VLC, ffmpeg |
+| `rtmp://host/play/{id}` | RTMP | Legacy Flash players, OBS playback |
+| `/play/{id}.ts` | MPEG-TS | Transport stream, DVB compatible |
+| `/play/{id}.flv` | FLV | Legacy Flash Video |
+| `/play/{id}.mkv` | MKV | Matroska container |
+| `/play/{id}.aac` | AAC | Audio-only stream |
+| `/play/{id}/cmaf/Manifest` | Smooth Streaming | Microsoft format |
+| `/play/{id}/dynamic/manifest.f4m` | HDS | Adobe HTTP Dynamic Streaming |
+| `/play/{id}.sdp` | SDP | Session Description Protocol |
+| `/play/{id}.h264` | Raw H264 | Elementary video stream |
+| `wss://host/play/{id}.mp4` | WebSocket MP4 | MP4 over WebSocket |
+| `wss://host/play/webrtc/{id}` | WebSocket WebRTC | WebRTC over WebSocket |
+| `dtsc://host/play/{id}` | DTSC | MistServer internal protocol |
+
+<Aside type="tip" title="Protocol Compatibility">
+MistServer handles on-the-fly muxing between container formats. Container support depends on source codecs. For detailed codec/container compatibility, see the [MistServer Protocol Documentation](https://docs.mistserver.org/).
+</Aside>
+
+### Content Identifiers
+
+The `{id}` in URL patterns refers to different identifiers depending on content type:
+
+| Content Type | Identifier | Example |
+|--------------|------------|---------|
+| Live Stream | `playbackId` (view key) | `abc123def456` |
+| Clip | `clipHash` (32-char hash) | `f8a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6` |
+| DVR Recording | `dvrHash` (32-char hash) | `a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6` |
+
+All three content types use the same unified `/play/{id}` path through Foghorn.
 
 :::tip[When to use universal URLs vs. direct URLs]
 - **Universal URLs** (`play.example.com/play/...`) - Best for sharing with viewers. Handles geo-routing automatically.

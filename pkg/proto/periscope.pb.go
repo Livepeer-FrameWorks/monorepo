@@ -1345,7 +1345,7 @@ type StreamHealthMetric struct {
 	FrameJitterMs        *float64 `protobuf:"fixed64,23,opt,name=frame_jitter_ms,json=frameJitterMs,proto3,oneof" json:"frame_jitter_ms,omitempty"`
 	KeyframeStabilityMs  *float64 `protobuf:"fixed64,24,opt,name=keyframe_stability_ms,json=keyframeStabilityMs,proto3,oneof" json:"keyframe_stability_ms,omitempty"`
 	IssuesDescription    *string  `protobuf:"bytes,25,opt,name=issues_description,json=issuesDescription,proto3,oneof" json:"issues_description,omitempty"`
-	HasIssues            bool     `protobuf:"varint,26,opt,name=has_issues,json=hasIssues,proto3" json:"has_issues,omitempty"`
+	HasIssues            *bool    `protobuf:"varint,26,opt,name=has_issues,json=hasIssues,proto3,oneof" json:"has_issues,omitempty"`
 	PacketLossPercentage *float64 `protobuf:"fixed64,27,opt,name=packet_loss_percentage,json=packetLossPercentage,proto3,oneof" json:"packet_loss_percentage,omitempty"`
 	QualityTier          *string  `protobuf:"bytes,28,opt,name=quality_tier,json=qualityTier,proto3,oneof" json:"quality_tier,omitempty"`
 	BufferState          string   `protobuf:"bytes,29,opt,name=buffer_state,json=bufferState,proto3" json:"buffer_state,omitempty"`
@@ -1355,6 +1355,7 @@ type StreamHealthMetric struct {
 	PrimaryAudioCodec      *string `protobuf:"bytes,32,opt,name=primary_audio_codec,json=primaryAudioCodec,proto3,oneof" json:"primary_audio_codec,omitempty"`
 	PrimaryAudioBitrate    *int32  `protobuf:"varint,33,opt,name=primary_audio_bitrate,json=primaryAudioBitrate,proto3,oneof" json:"primary_audio_bitrate,omitempty"`
 	TrackMetadata          string  `protobuf:"bytes,34,opt,name=track_metadata,json=trackMetadata,proto3" json:"track_metadata,omitempty"` // json:"track_metadata" - Raw JSON of track metadata
+	TrackCount             *int32  `protobuf:"varint,35,opt,name=track_count,json=trackCount,proto3,oneof" json:"track_count,omitempty"`
 	unknownFields          protoimpl.UnknownFields
 	sizeCache              protoimpl.SizeCache
 }
@@ -1558,8 +1559,8 @@ func (x *StreamHealthMetric) GetIssuesDescription() string {
 }
 
 func (x *StreamHealthMetric) GetHasIssues() bool {
-	if x != nil {
-		return x.HasIssues
+	if x != nil && x.HasIssues != nil {
+		return *x.HasIssues
 	}
 	return false
 }
@@ -1618,6 +1619,13 @@ func (x *StreamHealthMetric) GetTrackMetadata() string {
 		return x.TrackMetadata
 	}
 	return ""
+}
+
+func (x *StreamHealthMetric) GetTrackCount() int32 {
+	if x != nil && x.TrackCount != nil {
+		return *x.TrackCount
+	}
+	return 0
 }
 
 type GetStreamHealthMetricsRequest struct {
@@ -7215,7 +7223,7 @@ const file_periscope_proto_rawDesc = "" +
 	"\n" +
 	"pagination\x18\x01 \x01(\v2 .common.CursorPaginationResponseR\n" +
 	"pagination\x12+\n" +
-	"\x06events\x18\x02 \x03(\v2\x13.periscope.EndEventR\x06events\"\xe9\v\n" +
+	"\x06events\x18\x02 \x03(\v2\x13.periscope.EndEventR\x06events\"\xb3\f\n" +
 	"\x12StreamHealthMetric\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x128\n" +
 	"\ttimestamp\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\x12\x1b\n" +
@@ -7243,26 +7251,31 @@ const file_periscope_proto_rawDesc = "" +
 	"\x06tracks\x18\x15 \x03(\v2\x1c.helmsmancontrol.StreamTrackR\x06tracks\x12+\n" +
 	"\x0fframe_jitter_ms\x18\x17 \x01(\x01H\x00R\rframeJitterMs\x88\x01\x01\x127\n" +
 	"\x15keyframe_stability_ms\x18\x18 \x01(\x01H\x01R\x13keyframeStabilityMs\x88\x01\x01\x122\n" +
-	"\x12issues_description\x18\x19 \x01(\tH\x02R\x11issuesDescription\x88\x01\x01\x12\x1d\n" +
+	"\x12issues_description\x18\x19 \x01(\tH\x02R\x11issuesDescription\x88\x01\x01\x12\"\n" +
 	"\n" +
-	"has_issues\x18\x1a \x01(\bR\thasIssues\x129\n" +
-	"\x16packet_loss_percentage\x18\x1b \x01(\x01H\x03R\x14packetLossPercentage\x88\x01\x01\x12&\n" +
-	"\fquality_tier\x18\x1c \x01(\tH\x04R\vqualityTier\x88\x01\x01\x12!\n" +
+	"has_issues\x18\x1a \x01(\bH\x03R\thasIssues\x88\x01\x01\x129\n" +
+	"\x16packet_loss_percentage\x18\x1b \x01(\x01H\x04R\x14packetLossPercentage\x88\x01\x01\x12&\n" +
+	"\fquality_tier\x18\x1c \x01(\tH\x05R\vqualityTier\x88\x01\x01\x12!\n" +
 	"\fbuffer_state\x18\x1d \x01(\tR\vbufferState\x129\n" +
-	"\x16primary_audio_channels\x18\x1e \x01(\x05H\x05R\x14primaryAudioChannels\x88\x01\x01\x12>\n" +
-	"\x19primary_audio_sample_rate\x18\x1f \x01(\x05H\x06R\x16primaryAudioSampleRate\x88\x01\x01\x123\n" +
-	"\x13primary_audio_codec\x18  \x01(\tH\aR\x11primaryAudioCodec\x88\x01\x01\x127\n" +
-	"\x15primary_audio_bitrate\x18! \x01(\x05H\bR\x13primaryAudioBitrate\x88\x01\x01\x12%\n" +
-	"\x0etrack_metadata\x18\" \x01(\tR\rtrackMetadataB\x12\n" +
+	"\x16primary_audio_channels\x18\x1e \x01(\x05H\x06R\x14primaryAudioChannels\x88\x01\x01\x12>\n" +
+	"\x19primary_audio_sample_rate\x18\x1f \x01(\x05H\aR\x16primaryAudioSampleRate\x88\x01\x01\x123\n" +
+	"\x13primary_audio_codec\x18  \x01(\tH\bR\x11primaryAudioCodec\x88\x01\x01\x127\n" +
+	"\x15primary_audio_bitrate\x18! \x01(\x05H\tR\x13primaryAudioBitrate\x88\x01\x01\x12%\n" +
+	"\x0etrack_metadata\x18\" \x01(\tR\rtrackMetadata\x12$\n" +
+	"\vtrack_count\x18# \x01(\x05H\n" +
+	"R\n" +
+	"trackCount\x88\x01\x01B\x12\n" +
 	"\x10_frame_jitter_msB\x18\n" +
 	"\x16_keyframe_stability_msB\x15\n" +
-	"\x13_issues_descriptionB\x19\n" +
+	"\x13_issues_descriptionB\r\n" +
+	"\v_has_issuesB\x19\n" +
 	"\x17_packet_loss_percentageB\x0f\n" +
 	"\r_quality_tierB\x19\n" +
 	"\x17_primary_audio_channelsB\x1c\n" +
 	"\x1a_primary_audio_sample_rateB\x16\n" +
 	"\x14_primary_audio_codecB\x18\n" +
-	"\x16_primary_audio_bitrate\"\xeb\x01\n" +
+	"\x16_primary_audio_bitrateB\x0e\n" +
+	"\f_track_count\"\xeb\x01\n" +
 	"\x1dGetStreamHealthMetricsRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12(\n" +
 	"\rinternal_name\x18\x02 \x01(\tH\x00R\finternalName\x88\x01\x01\x120\n" +

@@ -70,7 +70,6 @@ type ResolverRoot interface {
 	PlaybackMetadata() PlaybackMetadataResolver
 	QualityTierDaily() QualityTierDailyResolver
 	Query() QueryResolver
-	Recording() RecordingResolver
 	RoutingEvent() RoutingEventResolver
 	ServiceInstance() ServiceInstanceResolver
 	ServiceInstanceHealth() ServiceInstanceHealthResolver
@@ -86,6 +85,7 @@ type ResolverRoot interface {
 	Subscription() SubscriptionResolver
 	SystemHealthEvent() SystemHealthEventResolver
 	Tenant() TenantResolver
+	TenantSubscription() TenantSubscriptionResolver
 	TimeRange() TimeRangeResolver
 	TrackListEvent() TrackListEventResolver
 	UsageRecord() UsageRecordResolver
@@ -165,6 +165,7 @@ type ComplexityRoot struct {
 		CurrentTier       func(childComplexity int) int
 		NextBillingDate   func(childComplexity int) int
 		OutstandingAmount func(childComplexity int) int
+		Subscription      func(childComplexity int) int
 		TrialEndsAt       func(childComplexity int) int
 		UsageSummary      func(childComplexity int) int
 	}
@@ -415,6 +416,12 @@ type ComplexityRoot struct {
 		ViewerCount func(childComplexity int) int
 	}
 
+	CustomPricing struct {
+		BasePrice    func(childComplexity int) int
+		DiscountRate func(childComplexity int) int
+		OverageRates func(childComplexity int) int
+	}
+
 	DVREvent struct {
 		DvrHash      func(childComplexity int) int
 		EndedAt      func(childComplexity int) int
@@ -553,24 +560,26 @@ type ComplexityRoot struct {
 	}
 
 	Mutation struct {
-		CreateBootstrapToken   func(childComplexity int, input model.CreateBootstrapTokenInput) int
-		CreateClip             func(childComplexity int, input model.CreateClipInput) int
-		CreateDeveloperToken   func(childComplexity int, input model.CreateDeveloperTokenInput) int
-		CreatePayment          func(childComplexity int, input model.CreatePaymentInput) int
-		CreateStream           func(childComplexity int, input model.CreateStreamInput) int
-		CreateStreamKey        func(childComplexity int, streamID string, input model.CreateStreamKeyInput) int
-		DeleteClip             func(childComplexity int, id string) int
-		DeleteStream           func(childComplexity int, id string) int
-		DeleteStreamKey        func(childComplexity int, streamID string, keyID string) int
-		RefreshStreamKey       func(childComplexity int, id string) int
-		RevokeBootstrapToken   func(childComplexity int, id string) int
-		RevokeDeveloperToken   func(childComplexity int, id string) int
-		StartDvr               func(childComplexity int, internalName string, streamID *string) int
-		StopDvr                func(childComplexity int, dvrHash string) int
-		SubscribeToCluster     func(childComplexity int, clusterID string) int
-		UnsubscribeFromCluster func(childComplexity int, clusterID string) int
-		UpdateStream           func(childComplexity int, id string, input model.UpdateStreamInput) int
-		UpdateTenant           func(childComplexity int, input model.UpdateTenantInput) int
+		CreateBootstrapToken          func(childComplexity int, input model.CreateBootstrapTokenInput) int
+		CreateClip                    func(childComplexity int, input model.CreateClipInput) int
+		CreateDeveloperToken          func(childComplexity int, input model.CreateDeveloperTokenInput) int
+		CreatePayment                 func(childComplexity int, input model.CreatePaymentInput) int
+		CreateStream                  func(childComplexity int, input model.CreateStreamInput) int
+		CreateStreamKey               func(childComplexity int, streamID string, input model.CreateStreamKeyInput) int
+		DeleteClip                    func(childComplexity int, id string) int
+		DeleteDvr                     func(childComplexity int, dvrHash string) int
+		DeleteStream                  func(childComplexity int, id string) int
+		DeleteStreamKey               func(childComplexity int, streamID string, keyID string) int
+		RefreshStreamKey              func(childComplexity int, id string) int
+		RevokeBootstrapToken          func(childComplexity int, id string) int
+		RevokeDeveloperToken          func(childComplexity int, id string) int
+		StartDvr                      func(childComplexity int, internalName string, streamID *string) int
+		StopDvr                       func(childComplexity int, dvrHash string) int
+		SubscribeToCluster            func(childComplexity int, clusterID string) int
+		UnsubscribeFromCluster        func(childComplexity int, clusterID string) int
+		UpdateStream                  func(childComplexity int, id string, input model.UpdateStreamInput) int
+		UpdateSubscriptionCustomTerms func(childComplexity int, tenantID string, input model.UpdateSubscriptionCustomTermsInput) int
+		UpdateTenant                  func(childComplexity int, input model.UpdateTenantInput) int
 	}
 
 	Node struct {
@@ -821,8 +830,6 @@ type ComplexityRoot struct {
 		PlatformOverview                 func(childComplexity int, timeRange *model.TimeRangeInput) int
 		QualityTierDailyConnection       func(childComplexity int, stream *string, timeRange *model.TimeRangeInput, first *int, after *string, last *int, before *string, noCache *bool) int
 		RebufferingEvents                func(childComplexity int, stream string, timeRange *model.TimeRangeInput) int
-		Recordings                       func(childComplexity int, streamID *string) int
-		RecordingsConnection             func(childComplexity int, streamID *string, first *int, after *string, last *int, before *string) int
 		ResolveViewerEndpoint            func(childComplexity int, contentType string, contentID string) int
 		RoutingEventsConnection          func(childComplexity int, stream *string, timeRange *model.TimeRangeInput, first *int, after *string, last *int, before *string, noCache *bool) int
 		ServiceInstances                 func(childComplexity int, clusterID *string, nodeID *string, status *model.InstanceStatus, pagination *model.PaginationInput) int
@@ -853,40 +860,13 @@ type ComplexityRoot struct {
 	}
 
 	RebufferingEvent struct {
-		BufferState          func(childComplexity int) int
-		NodeID               func(childComplexity int) int
-		PacketLossPercentage func(childComplexity int) int
-		PreviousState        func(childComplexity int) int
-		RebufferEnd          func(childComplexity int) int
-		RebufferStart        func(childComplexity int) int
-		Stream               func(childComplexity int) int
-		Timestamp            func(childComplexity int) int
-	}
-
-	Recording struct {
-		CreatedAt     func(childComplexity int) int
-		Duration      func(childComplexity int) int
-		EndTime       func(childComplexity int) int
-		FileSizeBytes func(childComplexity int) int
-		Id            func(childComplexity int) int
-		PlaybackId    func(childComplexity int) int
-		StartTime     func(childComplexity int) int
-		Status        func(childComplexity int) int
-		StreamId      func(childComplexity int) int
-		ThumbnailURL  func(childComplexity int) int
-		Title         func(childComplexity int) int
-		UpdatedAt     func(childComplexity int) int
-	}
-
-	RecordingEdge struct {
-		Cursor func(childComplexity int) int
-		Node   func(childComplexity int) int
-	}
-
-	RecordingsConnection struct {
-		Edges      func(childComplexity int) int
-		PageInfo   func(childComplexity int) int
-		TotalCount func(childComplexity int) int
+		BufferState   func(childComplexity int) int
+		NodeID        func(childComplexity int) int
+		PreviousState func(childComplexity int) int
+		RebufferEnd   func(childComplexity int) int
+		RebufferStart func(childComplexity int) int
+		Stream        func(childComplexity int) int
+		Timestamp     func(childComplexity int) int
 	}
 
 	RoutingEvent struct {
@@ -994,7 +974,6 @@ type ComplexityRoot struct {
 		Name             func(childComplexity int) int
 		PlaybackId       func(childComplexity int) int
 		Record           func(childComplexity int) int
-		Recordings       func(childComplexity int) int
 		StreamKey        func(childComplexity int) int
 		UpdatedAt        func(childComplexity int) int
 	}
@@ -1095,31 +1074,26 @@ type ComplexityRoot struct {
 	}
 
 	StreamHealthMetric struct {
-		AudioBitrate         func(childComplexity int) int
-		AudioChannels        func(childComplexity int) int
-		AudioCodec           func(childComplexity int) int
-		AudioSampleRate      func(childComplexity int) int
-		Bitrate              func(childComplexity int) int
-		BufferHealth         func(childComplexity int) int
-		BufferSize           func(childComplexity int) int
-		BufferState          func(childComplexity int) int
-		BufferUsed           func(childComplexity int) int
-		Codec                func(childComplexity int) int
-		Fps                  func(childComplexity int) int
-		GopSize              func(childComplexity int) int
-		HasIssues            func(childComplexity int) int
-		Height               func(childComplexity int) int
-		IssuesDescription    func(childComplexity int) int
-		NodeId               func(childComplexity int) int
-		PacketLossPercentage func(childComplexity int) int
-		PacketsLost          func(childComplexity int) int
-		PacketsSent          func(childComplexity int) int
-		Profile              func(childComplexity int) int
-		QualityTier          func(childComplexity int) int
-		Stream               func(childComplexity int) int
-		Timestamp            func(childComplexity int) int
-		TrackMetadata        func(childComplexity int) int
-		Width                func(childComplexity int) int
+		AudioBitrate      func(childComplexity int) int
+		AudioChannels     func(childComplexity int) int
+		AudioCodec        func(childComplexity int) int
+		AudioSampleRate   func(childComplexity int) int
+		Bitrate           func(childComplexity int) int
+		BufferHealth      func(childComplexity int) int
+		BufferSize        func(childComplexity int) int
+		BufferState       func(childComplexity int) int
+		Codec             func(childComplexity int) int
+		Fps               func(childComplexity int) int
+		GopSize           func(childComplexity int) int
+		HasIssues         func(childComplexity int) int
+		Height            func(childComplexity int) int
+		IssuesDescription func(childComplexity int) int
+		NodeId            func(childComplexity int) int
+		QualityTier       func(childComplexity int) int
+		Stream            func(childComplexity int) int
+		Timestamp         func(childComplexity int) int
+		TrackMetadata     func(childComplexity int) int
+		Width             func(childComplexity int) int
 	}
 
 	StreamHealthMetricEdge struct {
@@ -1241,6 +1215,24 @@ type ComplexityRoot struct {
 		TrackListUpdate   func(childComplexity int) int
 		Type              func(childComplexity int) int
 		ViewerMetrics     func(childComplexity int) int
+	}
+
+	TenantSubscription struct {
+		BillingEmail      func(childComplexity int) int
+		CancelledAt       func(childComplexity int) int
+		CreatedAt         func(childComplexity int) int
+		CustomAllocations func(childComplexity int) int
+		CustomFeatures    func(childComplexity int) int
+		CustomPricing     func(childComplexity int) int
+		Id                func(childComplexity int) int
+		NextBillingDate   func(childComplexity int) int
+		PaymentMethod     func(childComplexity int) int
+		StartedAt         func(childComplexity int) int
+		Status            func(childComplexity int) int
+		TenantId          func(childComplexity int) int
+		TierId            func(childComplexity int) int
+		TrialEndsAt       func(childComplexity int) int
+		UpdatedAt         func(childComplexity int) int
 	}
 
 	TenantUsage struct {
@@ -1416,7 +1408,6 @@ type ComplexityRoot struct {
 		BytesUploaded        func(childComplexity int) int
 		ClientCity           func(childComplexity int) int
 		ClientCountry        func(childComplexity int) int
-		ClientIp             func(childComplexity int) int
 		ClientLatitude       func(childComplexity int) int
 		ClientLongitude      func(childComplexity int) int
 		ConnectionTime       func(childComplexity int) int
@@ -1504,6 +1495,8 @@ type ClusterResolver interface {
 type ConnectionEventResolver interface {
 	Timestamp(ctx context.Context, obj *proto.ConnectionEvent) (*time.Time, error)
 
+	ConnectionAddr(ctx context.Context, obj *proto.ConnectionEvent) (*string, error)
+
 	SessionDurationSeconds(ctx context.Context, obj *proto.ConnectionEvent) (*int, error)
 	BytesTransferred(ctx context.Context, obj *proto.ConnectionEvent) (*int, error)
 }
@@ -1553,7 +1546,9 @@ type MutationResolver interface {
 	DeleteClip(ctx context.Context, id string) (model.DeleteClipResult, error)
 	StartDvr(ctx context.Context, internalName string, streamID *string) (model.StartDVRResult, error)
 	StopDvr(ctx context.Context, dvrHash string) (model.StopDVRResult, error)
+	DeleteDvr(ctx context.Context, dvrHash string) (model.DeleteDVRResult, error)
 	CreatePayment(ctx context.Context, input model.CreatePaymentInput) (model.CreatePaymentResult, error)
+	UpdateSubscriptionCustomTerms(ctx context.Context, tenantID string, input model.UpdateSubscriptionCustomTermsInput) (*proto.TenantSubscription, error)
 	UpdateTenant(ctx context.Context, input model.UpdateTenantInput) (model.UpdateTenantResult, error)
 	SubscribeToCluster(ctx context.Context, clusterID string) (bool, error)
 	UnsubscribeFromCluster(ctx context.Context, clusterID string) (bool, error)
@@ -1660,8 +1655,6 @@ type QueryResolver interface {
 	ServiceInstances(ctx context.Context, clusterID *string, nodeID *string, status *model.InstanceStatus, pagination *model.PaginationInput) ([]*proto.ServiceInstance, error)
 	ServiceInstancesConnection(ctx context.Context, clusterID *string, nodeID *string, status *model.InstanceStatus, first *int, after *string, last *int, before *string) (*model.ServiceInstancesConnection, error)
 	StreamKeys(ctx context.Context, streamID string) ([]*proto.StreamKey, error)
-	Recordings(ctx context.Context, streamID *string) ([]*proto.Recording, error)
-	RecordingsConnection(ctx context.Context, streamID *string, first *int, after *string, last *int, before *string) (*model.RecordingsConnection, error)
 	Clips(ctx context.Context, streamID *string) ([]*proto.ClipInfo, error)
 	ClipsConnection(ctx context.Context, streamID *string, first *int, after *string, last *int, before *string) (*model.ClipsConnection, error)
 	Clip(ctx context.Context, id string) (*proto.ClipInfo, error)
@@ -1694,18 +1687,6 @@ type QueryResolver interface {
 	DvrRecordingsConnection(ctx context.Context, internalName *string, first *int, after *string, last *int, before *string) (*model.DVRRecordingsConnection, error)
 	ResolveViewerEndpoint(ctx context.Context, contentType string, contentID string) (*proto.ViewerEndpointResponse, error)
 	StreamMeta(ctx context.Context, streamKey string, targetBaseURL *string, targetNodeID *string, includeRaw *bool) (*proto.StreamMetaResponse, error)
-}
-type RecordingResolver interface {
-	Title(ctx context.Context, obj *proto.Recording) (*string, error)
-
-	FileSizeBytes(ctx context.Context, obj *proto.Recording) (*int, error)
-
-	ThumbnailURL(ctx context.Context, obj *proto.Recording) (*string, error)
-	StartTime(ctx context.Context, obj *proto.Recording) (*time.Time, error)
-	EndTime(ctx context.Context, obj *proto.Recording) (*time.Time, error)
-
-	CreatedAt(ctx context.Context, obj *proto.Recording) (*time.Time, error)
-	UpdatedAt(ctx context.Context, obj *proto.Recording) (*time.Time, error)
 }
 type RoutingEventResolver interface {
 	Timestamp(ctx context.Context, obj *proto.RoutingEvent) (*time.Time, error)
@@ -1741,7 +1722,6 @@ type StreamResolver interface {
 	CreatedAt(ctx context.Context, obj *proto.Stream) (*time.Time, error)
 	UpdatedAt(ctx context.Context, obj *proto.Stream) (*time.Time, error)
 	Metrics(ctx context.Context, obj *proto.Stream) (*proto.StreamStatusResponse, error)
-	Recordings(ctx context.Context, obj *proto.Stream) ([]*proto.Recording, error)
 	EventsConnection(ctx context.Context, obj *proto.Stream, timeRange *model.TimeRangeInput, first *int, after *string) (*model.StreamEventsConnection, error)
 	HealthConnection(ctx context.Context, obj *proto.Stream, timeRange *model.TimeRangeInput, first *int, after *string) (*model.StreamHealthMetricsConnection, error)
 }
@@ -1842,6 +1822,15 @@ type TenantResolver interface {
 	Cluster(ctx context.Context, obj *proto.Tenant) (*string, error)
 	CreatedAt(ctx context.Context, obj *proto.Tenant) (*time.Time, error)
 }
+type TenantSubscriptionResolver interface {
+	StartedAt(ctx context.Context, obj *proto.TenantSubscription) (*time.Time, error)
+	TrialEndsAt(ctx context.Context, obj *proto.TenantSubscription) (*time.Time, error)
+	NextBillingDate(ctx context.Context, obj *proto.TenantSubscription) (*time.Time, error)
+	CancelledAt(ctx context.Context, obj *proto.TenantSubscription) (*time.Time, error)
+
+	CreatedAt(ctx context.Context, obj *proto.TenantSubscription) (*time.Time, error)
+	UpdatedAt(ctx context.Context, obj *proto.TenantSubscription) (*time.Time, error)
+}
 type TimeRangeResolver interface {
 	Start(ctx context.Context, obj *proto.TimeRange) (*time.Time, error)
 	End(ctx context.Context, obj *proto.TimeRange) (*time.Time, error)
@@ -1877,12 +1866,15 @@ type ViewerGeographicResolver interface {
 	Stream(ctx context.Context, obj *proto.ConnectionEvent) (*string, error)
 
 	ViewerCount(ctx context.Context, obj *proto.ConnectionEvent) (*int, error)
+	ConnectionAddr(ctx context.Context, obj *proto.ConnectionEvent) (*string, error)
 
 	Source(ctx context.Context, obj *proto.ConnectionEvent) (*string, error)
 	SessionDurationSeconds(ctx context.Context, obj *proto.ConnectionEvent) (*int, error)
 	BytesTransferred(ctx context.Context, obj *proto.ConnectionEvent) (*int, error)
 }
 type ViewerMetricsResolver interface {
+	Host(ctx context.Context, obj *proto.ClientLifecycleUpdate) (*string, error)
+
 	ConnectionTime(ctx context.Context, obj *proto.ClientLifecycleUpdate) (*float64, error)
 	Position(ctx context.Context, obj *proto.ClientLifecycleUpdate) (*float64, error)
 	BandwidthInBps(ctx context.Context, obj *proto.ClientLifecycleUpdate) (*int, error)
@@ -2206,6 +2198,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.complexity.BillingStatus.OutstandingAmount(childComplexity), true
+
+	case "BillingStatus.subscription":
+		if e.complexity.BillingStatus.Subscription == nil {
+			break
+		}
+
+		return e.complexity.BillingStatus.Subscription(childComplexity), true
 
 	case "BillingStatus.trialEndsAt":
 		if e.complexity.BillingStatus.TrialEndsAt == nil {
@@ -3418,6 +3417,27 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.CountryTimeSeries.ViewerCount(childComplexity), true
 
+	case "CustomPricing.basePrice":
+		if e.complexity.CustomPricing.BasePrice == nil {
+			break
+		}
+
+		return e.complexity.CustomPricing.BasePrice(childComplexity), true
+
+	case "CustomPricing.discountRate":
+		if e.complexity.CustomPricing.DiscountRate == nil {
+			break
+		}
+
+		return e.complexity.CustomPricing.DiscountRate(childComplexity), true
+
+	case "CustomPricing.overageRates":
+		if e.complexity.CustomPricing.OverageRates == nil {
+			break
+		}
+
+		return e.complexity.CustomPricing.OverageRates(childComplexity), true
+
 	case "DVREvent.dvrHash":
 		if e.complexity.DVREvent.DvrHash == nil {
 			break
@@ -4167,6 +4187,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.Mutation.DeleteClip(childComplexity, args["id"].(string)), true
 
+	case "Mutation.deleteDVR":
+		if e.complexity.Mutation.DeleteDvr == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_deleteDVR_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.complexity.Mutation.DeleteDvr(childComplexity, args["dvrHash"].(string)), true
+
 	case "Mutation.deleteStream":
 		if e.complexity.Mutation.DeleteStream == nil {
 			break
@@ -4286,6 +4318,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.complexity.Mutation.UpdateStream(childComplexity, args["id"].(string), args["input"].(model.UpdateStreamInput)), true
+
+	case "Mutation.updateSubscriptionCustomTerms":
+		if e.complexity.Mutation.UpdateSubscriptionCustomTerms == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_updateSubscriptionCustomTerms_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.complexity.Mutation.UpdateSubscriptionCustomTerms(childComplexity, args["tenantId"].(string), args["input"].(model.UpdateSubscriptionCustomTermsInput)), true
 
 	case "Mutation.updateTenant":
 		if e.complexity.Mutation.UpdateTenant == nil {
@@ -5768,30 +5812,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.Query.RebufferingEvents(childComplexity, args["stream"].(string), args["timeRange"].(*model.TimeRangeInput)), true
 
-	case "Query.recordings":
-		if e.complexity.Query.Recordings == nil {
-			break
-		}
-
-		args, err := ec.field_Query_recordings_args(ctx, rawArgs)
-		if err != nil {
-			return 0, false
-		}
-
-		return e.complexity.Query.Recordings(childComplexity, args["streamId"].(*string)), true
-
-	case "Query.recordingsConnection":
-		if e.complexity.Query.RecordingsConnection == nil {
-			break
-		}
-
-		args, err := ec.field_Query_recordingsConnection_args(ctx, rawArgs)
-		if err != nil {
-			return 0, false
-		}
-
-		return e.complexity.Query.RecordingsConnection(childComplexity, args["streamId"].(*string), args["first"].(*int), args["after"].(*string), args["last"].(*int), args["before"].(*string)), true
-
 	case "Query.resolveViewerEndpoint":
 		if e.complexity.Query.ResolveViewerEndpoint == nil {
 			break
@@ -6069,13 +6089,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.RebufferingEvent.NodeID(childComplexity), true
 
-	case "RebufferingEvent.packetLossPercentage":
-		if e.complexity.RebufferingEvent.PacketLossPercentage == nil {
-			break
-		}
-
-		return e.complexity.RebufferingEvent.PacketLossPercentage(childComplexity), true
-
 	case "RebufferingEvent.previousState":
 		if e.complexity.RebufferingEvent.PreviousState == nil {
 			break
@@ -6110,125 +6123,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.complexity.RebufferingEvent.Timestamp(childComplexity), true
-
-	case "Recording.createdAt":
-		if e.complexity.Recording.CreatedAt == nil {
-			break
-		}
-
-		return e.complexity.Recording.CreatedAt(childComplexity), true
-
-	case "Recording.duration":
-		if e.complexity.Recording.Duration == nil {
-			break
-		}
-
-		return e.complexity.Recording.Duration(childComplexity), true
-
-	case "Recording.endTime":
-		if e.complexity.Recording.EndTime == nil {
-			break
-		}
-
-		return e.complexity.Recording.EndTime(childComplexity), true
-
-	case "Recording.fileSizeBytes":
-		if e.complexity.Recording.FileSizeBytes == nil {
-			break
-		}
-
-		return e.complexity.Recording.FileSizeBytes(childComplexity), true
-
-	case "Recording.id":
-		if e.complexity.Recording.Id == nil {
-			break
-		}
-
-		return e.complexity.Recording.Id(childComplexity), true
-
-	case "Recording.playbackId":
-		if e.complexity.Recording.PlaybackId == nil {
-			break
-		}
-
-		return e.complexity.Recording.PlaybackId(childComplexity), true
-
-	case "Recording.startTime":
-		if e.complexity.Recording.StartTime == nil {
-			break
-		}
-
-		return e.complexity.Recording.StartTime(childComplexity), true
-
-	case "Recording.status":
-		if e.complexity.Recording.Status == nil {
-			break
-		}
-
-		return e.complexity.Recording.Status(childComplexity), true
-
-	case "Recording.streamId":
-		if e.complexity.Recording.StreamId == nil {
-			break
-		}
-
-		return e.complexity.Recording.StreamId(childComplexity), true
-
-	case "Recording.thumbnailUrl":
-		if e.complexity.Recording.ThumbnailURL == nil {
-			break
-		}
-
-		return e.complexity.Recording.ThumbnailURL(childComplexity), true
-
-	case "Recording.title":
-		if e.complexity.Recording.Title == nil {
-			break
-		}
-
-		return e.complexity.Recording.Title(childComplexity), true
-
-	case "Recording.updatedAt":
-		if e.complexity.Recording.UpdatedAt == nil {
-			break
-		}
-
-		return e.complexity.Recording.UpdatedAt(childComplexity), true
-
-	case "RecordingEdge.cursor":
-		if e.complexity.RecordingEdge.Cursor == nil {
-			break
-		}
-
-		return e.complexity.RecordingEdge.Cursor(childComplexity), true
-
-	case "RecordingEdge.node":
-		if e.complexity.RecordingEdge.Node == nil {
-			break
-		}
-
-		return e.complexity.RecordingEdge.Node(childComplexity), true
-
-	case "RecordingsConnection.edges":
-		if e.complexity.RecordingsConnection.Edges == nil {
-			break
-		}
-
-		return e.complexity.RecordingsConnection.Edges(childComplexity), true
-
-	case "RecordingsConnection.pageInfo":
-		if e.complexity.RecordingsConnection.PageInfo == nil {
-			break
-		}
-
-		return e.complexity.RecordingsConnection.PageInfo(childComplexity), true
-
-	case "RecordingsConnection.totalCount":
-		if e.complexity.RecordingsConnection.TotalCount == nil {
-			break
-		}
-
-		return e.complexity.RecordingsConnection.TotalCount(childComplexity), true
 
 	case "RoutingEvent.clientBucket":
 		if e.complexity.RoutingEvent.ClientBucket == nil {
@@ -6757,13 +6651,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.complexity.Stream.Record(childComplexity), true
-
-	case "Stream.recordings":
-		if e.complexity.Stream.Recordings == nil {
-			break
-		}
-
-		return e.complexity.Stream.Recordings(childComplexity), true
 
 	case "Stream.streamKey":
 		if e.complexity.Stream.StreamKey == nil {
@@ -7332,13 +7219,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.StreamHealthMetric.BufferState(childComplexity), true
 
-	case "StreamHealthMetric.bufferUsed":
-		if e.complexity.StreamHealthMetric.BufferUsed == nil {
-			break
-		}
-
-		return e.complexity.StreamHealthMetric.BufferUsed(childComplexity), true
-
 	case "StreamHealthMetric.codec":
 		if e.complexity.StreamHealthMetric.Codec == nil {
 			break
@@ -7387,34 +7267,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.complexity.StreamHealthMetric.NodeId(childComplexity), true
-
-	case "StreamHealthMetric.packetLossPercentage":
-		if e.complexity.StreamHealthMetric.PacketLossPercentage == nil {
-			break
-		}
-
-		return e.complexity.StreamHealthMetric.PacketLossPercentage(childComplexity), true
-
-	case "StreamHealthMetric.packetsLost":
-		if e.complexity.StreamHealthMetric.PacketsLost == nil {
-			break
-		}
-
-		return e.complexity.StreamHealthMetric.PacketsLost(childComplexity), true
-
-	case "StreamHealthMetric.packetsSent":
-		if e.complexity.StreamHealthMetric.PacketsSent == nil {
-			break
-		}
-
-		return e.complexity.StreamHealthMetric.PacketsSent(childComplexity), true
-
-	case "StreamHealthMetric.profile":
-		if e.complexity.StreamHealthMetric.Profile == nil {
-			break
-		}
-
-		return e.complexity.StreamHealthMetric.Profile(childComplexity), true
 
 	case "StreamHealthMetric.qualityTier":
 		if e.complexity.StreamHealthMetric.QualityTier == nil {
@@ -8070,6 +7922,111 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.complexity.TenantEvent.ViewerMetrics(childComplexity), true
+
+	case "TenantSubscription.billingEmail":
+		if e.complexity.TenantSubscription.BillingEmail == nil {
+			break
+		}
+
+		return e.complexity.TenantSubscription.BillingEmail(childComplexity), true
+
+	case "TenantSubscription.cancelledAt":
+		if e.complexity.TenantSubscription.CancelledAt == nil {
+			break
+		}
+
+		return e.complexity.TenantSubscription.CancelledAt(childComplexity), true
+
+	case "TenantSubscription.createdAt":
+		if e.complexity.TenantSubscription.CreatedAt == nil {
+			break
+		}
+
+		return e.complexity.TenantSubscription.CreatedAt(childComplexity), true
+
+	case "TenantSubscription.customAllocations":
+		if e.complexity.TenantSubscription.CustomAllocations == nil {
+			break
+		}
+
+		return e.complexity.TenantSubscription.CustomAllocations(childComplexity), true
+
+	case "TenantSubscription.customFeatures":
+		if e.complexity.TenantSubscription.CustomFeatures == nil {
+			break
+		}
+
+		return e.complexity.TenantSubscription.CustomFeatures(childComplexity), true
+
+	case "TenantSubscription.customPricing":
+		if e.complexity.TenantSubscription.CustomPricing == nil {
+			break
+		}
+
+		return e.complexity.TenantSubscription.CustomPricing(childComplexity), true
+
+	case "TenantSubscription.id":
+		if e.complexity.TenantSubscription.Id == nil {
+			break
+		}
+
+		return e.complexity.TenantSubscription.Id(childComplexity), true
+
+	case "TenantSubscription.nextBillingDate":
+		if e.complexity.TenantSubscription.NextBillingDate == nil {
+			break
+		}
+
+		return e.complexity.TenantSubscription.NextBillingDate(childComplexity), true
+
+	case "TenantSubscription.paymentMethod":
+		if e.complexity.TenantSubscription.PaymentMethod == nil {
+			break
+		}
+
+		return e.complexity.TenantSubscription.PaymentMethod(childComplexity), true
+
+	case "TenantSubscription.startedAt":
+		if e.complexity.TenantSubscription.StartedAt == nil {
+			break
+		}
+
+		return e.complexity.TenantSubscription.StartedAt(childComplexity), true
+
+	case "TenantSubscription.status":
+		if e.complexity.TenantSubscription.Status == nil {
+			break
+		}
+
+		return e.complexity.TenantSubscription.Status(childComplexity), true
+
+	case "TenantSubscription.tenantId":
+		if e.complexity.TenantSubscription.TenantId == nil {
+			break
+		}
+
+		return e.complexity.TenantSubscription.TenantId(childComplexity), true
+
+	case "TenantSubscription.tierId":
+		if e.complexity.TenantSubscription.TierId == nil {
+			break
+		}
+
+		return e.complexity.TenantSubscription.TierId(childComplexity), true
+
+	case "TenantSubscription.trialEndsAt":
+		if e.complexity.TenantSubscription.TrialEndsAt == nil {
+			break
+		}
+
+		return e.complexity.TenantSubscription.TrialEndsAt(childComplexity), true
+
+	case "TenantSubscription.updatedAt":
+		if e.complexity.TenantSubscription.UpdatedAt == nil {
+			break
+		}
+
+		return e.complexity.TenantSubscription.UpdatedAt(childComplexity), true
 
 	case "TenantUsage.billingPeriod":
 		if e.complexity.TenantUsage.BillingPeriod == nil {
@@ -8939,13 +8896,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.ViewerMetrics.ClientCountry(childComplexity), true
 
-	case "ViewerMetrics.clientIp":
-		if e.complexity.ViewerMetrics.ClientIp == nil {
-			break
-		}
-
-		return e.complexity.ViewerMetrics.ClientIp(childComplexity), true
-
 	case "ViewerMetrics.clientLatitude":
 		if e.complexity.ViewerMetrics.ClientLatitude == nil {
 			break
@@ -9045,15 +8995,20 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 	opCtx := graphql.GetOperationContext(ctx)
 	ec := executionContext{opCtx, e, 0, 0, make(chan graphql.DeferredResult)}
 	inputUnmarshalMap := graphql.BuildUnmarshalerMap(
+		ec.unmarshalInputAllocationDetailsInput,
+		ec.unmarshalInputBillingFeaturesInput,
 		ec.unmarshalInputCreateBootstrapTokenInput,
 		ec.unmarshalInputCreateClipInput,
 		ec.unmarshalInputCreateDeveloperTokenInput,
 		ec.unmarshalInputCreatePaymentInput,
 		ec.unmarshalInputCreateStreamInput,
 		ec.unmarshalInputCreateStreamKeyInput,
+		ec.unmarshalInputCustomPricingInput,
+		ec.unmarshalInputOverageRatesInput,
 		ec.unmarshalInputPaginationInput,
 		ec.unmarshalInputTimeRangeInput,
 		ec.unmarshalInputUpdateStreamInput,
+		ec.unmarshalInputUpdateSubscriptionCustomTermsInput,
 		ec.unmarshalInputUpdateTenantInput,
 	)
 	first := true
@@ -9222,8 +9177,6 @@ type Query {
 
   # Stream Management
   streamKeys(streamId: ID!): [StreamKey!]
-  recordings(streamId: ID): [Recording!]
-  recordingsConnection(streamId: ID, first: Int = 50, after: String, last: Int, before: String): RecordingsConnection!
   clips(streamId: ID): [Clip!]
   clipsConnection(streamId: ID, first: Int = 50, after: String, last: Int, before: String): ClipsConnection!
   clip(id: ID!): Clip
@@ -9290,9 +9243,11 @@ type Mutation {
   # DVR operations (via Commodore)
   startDVR(internalName: String!, streamId: ID): StartDVRResult!
   stopDVR(dvrHash: ID!): StopDVRResult!
+  deleteDVR(dvrHash: ID!): DeleteDVRResult!
 
   # Billing operations (via Purser)
   createPayment(input: CreatePaymentInput!): CreatePaymentResult!
+  updateSubscriptionCustomTerms(tenantId: ID!, input: UpdateSubscriptionCustomTermsInput!): TenantSubscription
 
   # Infrastructure operations (via Quartermaster)
   updateTenant(input: UpdateTenantInput!): UpdateTenantResult!
@@ -9363,6 +9318,7 @@ union DeleteStreamKeyResult = DeleteSuccess | NotFoundError | AuthError
 
 union StartDVRResult = DVRRequest | ValidationError | NotFoundError | AuthError
 union StopDVRResult = DeleteSuccess | NotFoundError | AuthError
+union DeleteDVRResult = DeleteSuccess | NotFoundError | AuthError
 
 union CreatePaymentResult = Payment | ValidationError | AuthError
 union UpdateTenantResult = Tenant | ValidationError | AuthError
@@ -9548,6 +9504,42 @@ input CreatePaymentInput {
   returnUrl: String
 }
 
+# Input for updating custom subscription terms (admin/provider only)
+input UpdateSubscriptionCustomTermsInput {
+  customPricing: CustomPricingInput
+  customFeatures: BillingFeaturesInput
+  customAllocations: AllocationDetailsInput
+}
+
+input CustomPricingInput {
+  basePrice: Float
+  discountRate: Float
+  overageRates: OverageRatesInput
+}
+
+input OverageRatesInput {
+  bandwidth: AllocationDetailsInput
+  storage: AllocationDetailsInput
+  compute: AllocationDetailsInput
+}
+
+input AllocationDetailsInput {
+  limit: Float                # nil = unlimited
+  unitPrice: Float
+  unit: String
+}
+
+input BillingFeaturesInput {
+  recording: Boolean
+  analytics: Boolean
+  customBranding: Boolean
+  apiAccess: Boolean
+  supportLevel: String
+  sla: Boolean
+}
+
+# UpdateSubscriptionResult - returns subscription on success, errors through standard GraphQL error handling
+
 input UpdateTenantInput {
   name: String
   settings: JSON
@@ -9664,7 +9656,7 @@ type ViewerMetrics {
   internalName: String!
   action: String!              # "connect" or "disconnect"
   protocol: String!
-  host: String!
+  host: String                 # Client IP - redacted for privacy (returns null)
   sessionId: String
   connectionTime: Float        # seconds connected
   position: Float              # playback position
@@ -9677,7 +9669,7 @@ type ViewerMetrics {
   packetsRetransmitted: Int
   timestamp: Int!
   # GeoIP enriched fields (added by Foghorn)
-  clientIp: String
+  # clientIp removed - was never populated (IP in 'host', redacted for privacy)
   clientCountry: String
   clientCity: String
   clientLatitude: Float
@@ -9765,9 +9757,6 @@ type Stream {
   # === EDGES ===
   # Operational metrics (from Periscope Data Plane) - lazy loaded
   metrics: StreamMetrics
-
-  # Config edges
-  recordings: [Recording!]
 
   # Analytics edges (Data Plane)
   eventsConnection(timeRange: TimeRangeInput, first: Int = 100, after: String): StreamEventsConnection
@@ -10105,18 +10094,6 @@ type StreamsConnection {
   totalCount: Int!
 }
 
-# Recordings Connection (for paginated recordings list)
-type RecordingEdge {
-  cursor: String!
-  node: Recording!
-}
-
-type RecordingsConnection {
-  edges: [RecordingEdge!]!
-  pageInfo: PageInfo!
-  totalCount: Int!
-}
-
 # Clips Connection (for paginated clips list)
 type ClipEdge {
   cursor: String!
@@ -10259,9 +10236,38 @@ type LineItem {
   total: Money!
 }
 
+# Custom pricing override for enterprise tenants
+type CustomPricing {
+  basePrice: Float                # Custom base price (overrides tier)
+  discountRate: Float             # Discount rate (0-1)
+  overageRates: OverageRates      # Custom overage rates
+}
+
+# Tenant subscription with custom terms
+type TenantSubscription {
+  id: ID!
+  tenantId: ID!
+  tierId: String!
+  status: String!
+  billingEmail: String!
+  startedAt: Time!
+  trialEndsAt: Time
+  nextBillingDate: Time
+  cancelledAt: Time
+  # Custom enterprise terms
+  customPricing: CustomPricing
+  customFeatures: BillingFeatures
+  customAllocations: AllocationDetails
+  # Payment
+  paymentMethod: String
+  createdAt: Time!
+  updatedAt: Time!
+}
+
 # Bound to proto.BillingStatusResponse
 type BillingStatus {
   currentTier: BillingTier
+  subscription: TenantSubscription  # Full subscription details with custom terms
   billingStatus: String!
   nextBillingDate: Time
   trialEndsAt: Time               # Trial end date (from TenantSubscription.trial_ends_at)
@@ -10486,6 +10492,7 @@ enum BufferState {
 
 
 # Stream health metrics from detailed monitoring
+# Note: For packet stats, see client_metrics or live_streams tables
 type StreamHealthMetric {
   timestamp: Time!
   stream: String!
@@ -10501,22 +10508,15 @@ type StreamHealthMetric {
   width: Int
   height: Int
   codec: String
-  profile: String               # Encoding profile (from Periscope proto)
-  qualityTier: String
+  qualityTier: String           # Rich quality string e.g. "1080p60 H264 @ 6Mbps"
 
-  # Encoding parameters (from Periscope proto)
-  gopSize: Int                  # Group of Pictures size
-
-  # Network performance
-  packetsSent: Int
-  packetsLost: Int
-  packetLossPercentage: Float
+  # Encoding parameters
+  gopSize: Int                  # Group of Pictures size (frames between keyframes)
 
   # Buffer state
   bufferState: BufferState!
-  bufferHealth: Float
-  bufferSize: Int               # Total buffer size
-  bufferUsed: Int               # Current buffer usage
+  bufferHealth: Float           # Ratio of buffer_size / max_keepaway (0.0-1.0)
+  bufferSize: Int               # Buffer duration in milliseconds
 
   # Audio metrics
   audioChannels: Int
@@ -10539,9 +10539,6 @@ type RebufferingEvent {
   previousState: BufferState!
   rebufferStart: Boolean!
   rebufferEnd: Boolean!
-
-  # Performance at rebuffer time
-  packetLossPercentage: Float
 }
 
 # ============================================================================
@@ -10687,7 +10684,7 @@ type ConnectionEvent {
   timestamp: Time!
   internalName: String!
   sessionId: String!
-  connectionAddr: String!
+  connectionAddr: String       # Client IP - redacted for privacy (returns null)
   connector: String!
   nodeId: String!
   countryCode: String
@@ -10899,27 +10896,6 @@ type StreamKey {
   createdAt: Time!
 }
 
-# Recording management
-type Recording {
-  id: ID!
-  streamId: ID!
-  
-  # Recording metadata
-  title: String
-  duration: Int
-  fileSizeBytes: Int
-  playbackId: String
-  thumbnailUrl: String
-  startTime: Time
-  endTime: Time
-  
-  # Processing status
-  status: String!
-  
-  createdAt: Time!
-  updatedAt: Time!
-}
-
 # ============================================================================
 # VIEWER ENDPOINT RESOLUTION TYPES
 # ============================================================================
@@ -11116,6 +11092,17 @@ func (ec *executionContext) field_Mutation_deleteClip_args(ctx context.Context, 
 	return args, nil
 }
 
+func (ec *executionContext) field_Mutation_deleteDVR_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "dvrHash", ec.unmarshalNID2string)
+	if err != nil {
+		return nil, err
+	}
+	args["dvrHash"] = arg0
+	return args, nil
+}
+
 func (ec *executionContext) field_Mutation_deleteStreamKey_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
@@ -11234,6 +11221,22 @@ func (ec *executionContext) field_Mutation_updateStream_args(ctx context.Context
 	}
 	args["id"] = arg0
 	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "input", ec.unmarshalNUpdateStreamInput2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐUpdateStreamInput)
+	if err != nil {
+		return nil, err
+	}
+	args["input"] = arg1
+	return args, nil
+}
+
+func (ec *executionContext) field_Mutation_updateSubscriptionCustomTerms_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "tenantId", ec.unmarshalNID2string)
+	if err != nil {
+		return nil, err
+	}
+	args["tenantId"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "input", ec.unmarshalNUpdateSubscriptionCustomTermsInput2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐUpdateSubscriptionCustomTermsInput)
 	if err != nil {
 		return nil, err
 	}
@@ -12007,48 +12010,6 @@ func (ec *executionContext) field_Query_rebufferingEvents_args(ctx context.Conte
 		return nil, err
 	}
 	args["timeRange"] = arg1
-	return args, nil
-}
-
-func (ec *executionContext) field_Query_recordingsConnection_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
-	var err error
-	args := map[string]any{}
-	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "streamId", ec.unmarshalOID2ᚖstring)
-	if err != nil {
-		return nil, err
-	}
-	args["streamId"] = arg0
-	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "first", ec.unmarshalOInt2ᚖint)
-	if err != nil {
-		return nil, err
-	}
-	args["first"] = arg1
-	arg2, err := graphql.ProcessArgField(ctx, rawArgs, "after", ec.unmarshalOString2ᚖstring)
-	if err != nil {
-		return nil, err
-	}
-	args["after"] = arg2
-	arg3, err := graphql.ProcessArgField(ctx, rawArgs, "last", ec.unmarshalOInt2ᚖint)
-	if err != nil {
-		return nil, err
-	}
-	args["last"] = arg3
-	arg4, err := graphql.ProcessArgField(ctx, rawArgs, "before", ec.unmarshalOString2ᚖstring)
-	if err != nil {
-		return nil, err
-	}
-	args["before"] = arg4
-	return args, nil
-}
-
-func (ec *executionContext) field_Query_recordings_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
-	var err error
-	args := map[string]any{}
-	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "streamId", ec.unmarshalOID2ᚖstring)
-	if err != nil {
-		return nil, err
-	}
-	args["streamId"] = arg0
 	return args, nil
 }
 
@@ -14363,6 +14324,79 @@ func (ec *executionContext) fieldContext_BillingStatus_currentTier(_ context.Con
 				return ec.fieldContext_BillingTier_isEnterprise(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type BillingTier", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _BillingStatus_subscription(ctx context.Context, field graphql.CollectedField, obj *proto.BillingStatusResponse) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_BillingStatus_subscription(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Subscription, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*proto.TenantSubscription)
+	fc.Result = res
+	return ec.marshalOTenantSubscription2ᚖframeworksᚋpkgᚋprotoᚐTenantSubscription(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_BillingStatus_subscription(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "BillingStatus",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "id":
+				return ec.fieldContext_TenantSubscription_id(ctx, field)
+			case "tenantId":
+				return ec.fieldContext_TenantSubscription_tenantId(ctx, field)
+			case "tierId":
+				return ec.fieldContext_TenantSubscription_tierId(ctx, field)
+			case "status":
+				return ec.fieldContext_TenantSubscription_status(ctx, field)
+			case "billingEmail":
+				return ec.fieldContext_TenantSubscription_billingEmail(ctx, field)
+			case "startedAt":
+				return ec.fieldContext_TenantSubscription_startedAt(ctx, field)
+			case "trialEndsAt":
+				return ec.fieldContext_TenantSubscription_trialEndsAt(ctx, field)
+			case "nextBillingDate":
+				return ec.fieldContext_TenantSubscription_nextBillingDate(ctx, field)
+			case "cancelledAt":
+				return ec.fieldContext_TenantSubscription_cancelledAt(ctx, field)
+			case "customPricing":
+				return ec.fieldContext_TenantSubscription_customPricing(ctx, field)
+			case "customFeatures":
+				return ec.fieldContext_TenantSubscription_customFeatures(ctx, field)
+			case "customAllocations":
+				return ec.fieldContext_TenantSubscription_customAllocations(ctx, field)
+			case "paymentMethod":
+				return ec.fieldContext_TenantSubscription_paymentMethod(ctx, field)
+			case "createdAt":
+				return ec.fieldContext_TenantSubscription_createdAt(ctx, field)
+			case "updatedAt":
+				return ec.fieldContext_TenantSubscription_updatedAt(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type TenantSubscription", field.Name)
 		},
 	}
 	return fc, nil
@@ -21006,29 +21040,26 @@ func (ec *executionContext) _ConnectionEvent_connectionAddr(ctx context.Context,
 	}()
 	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
 		ctx = rctx // use context from middleware stack in children
-		return obj.ConnectionAddr, nil
+		return ec.resolvers.ConnectionEvent().ConnectionAddr(rctx, obj)
 	})
 	if err != nil {
 		ec.Error(ctx, err)
 		return graphql.Null
 	}
 	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
 		return graphql.Null
 	}
-	res := resTmp.(string)
+	res := resTmp.(*string)
 	fc.Result = res
-	return ec.marshalNString2string(ctx, field.Selections, res)
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_ConnectionEvent_connectionAddr(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "ConnectionEvent",
 		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
+		IsMethod:   true,
+		IsResolver: true,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type String does not have child fields")
 		},
@@ -22345,6 +22376,137 @@ func (ec *executionContext) fieldContext_CountryTimeSeries_viewerCount(_ context
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _CustomPricing_basePrice(ctx context.Context, field graphql.CollectedField, obj *proto.CustomPricing) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_CustomPricing_basePrice(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.BasePrice, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(float64)
+	fc.Result = res
+	return ec.marshalOFloat2float64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_CustomPricing_basePrice(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "CustomPricing",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _CustomPricing_discountRate(ctx context.Context, field graphql.CollectedField, obj *proto.CustomPricing) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_CustomPricing_discountRate(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.DiscountRate, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(float64)
+	fc.Result = res
+	return ec.marshalOFloat2float64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_CustomPricing_discountRate(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "CustomPricing",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _CustomPricing_overageRates(ctx context.Context, field graphql.CollectedField, obj *proto.CustomPricing) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_CustomPricing_overageRates(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.OverageRates, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*proto.OverageRates)
+	fc.Result = res
+	return ec.marshalOOverageRates2ᚖframeworksᚋpkgᚋprotoᚐOverageRates(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_CustomPricing_overageRates(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "CustomPricing",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "bandwidth":
+				return ec.fieldContext_OverageRates_bandwidth(ctx, field)
+			case "storage":
+				return ec.fieldContext_OverageRates_storage(ctx, field)
+			case "compute":
+				return ec.fieldContext_OverageRates_compute(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type OverageRates", field.Name)
 		},
 	}
 	return fc, nil
@@ -26999,6 +27161,61 @@ func (ec *executionContext) fieldContext_Mutation_stopDVR(ctx context.Context, f
 	return fc, nil
 }
 
+func (ec *executionContext) _Mutation_deleteDVR(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Mutation_deleteDVR(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.Mutation().DeleteDvr(rctx, fc.Args["dvrHash"].(string))
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(model.DeleteDVRResult)
+	fc.Result = res
+	return ec.marshalNDeleteDVRResult2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐDeleteDVRResult(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Mutation_deleteDVR(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type DeleteDVRResult does not have child fields")
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_deleteDVR_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Mutation_createPayment(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_Mutation_createPayment(ctx, field)
 	if err != nil {
@@ -27048,6 +27265,90 @@ func (ec *executionContext) fieldContext_Mutation_createPayment(ctx context.Cont
 	}()
 	ctx = graphql.WithFieldContext(ctx, fc)
 	if fc.Args, err = ec.field_Mutation_createPayment_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_updateSubscriptionCustomTerms(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Mutation_updateSubscriptionCustomTerms(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.Mutation().UpdateSubscriptionCustomTerms(rctx, fc.Args["tenantId"].(string), fc.Args["input"].(model.UpdateSubscriptionCustomTermsInput))
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*proto.TenantSubscription)
+	fc.Result = res
+	return ec.marshalOTenantSubscription2ᚖframeworksᚋpkgᚋprotoᚐTenantSubscription(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Mutation_updateSubscriptionCustomTerms(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "id":
+				return ec.fieldContext_TenantSubscription_id(ctx, field)
+			case "tenantId":
+				return ec.fieldContext_TenantSubscription_tenantId(ctx, field)
+			case "tierId":
+				return ec.fieldContext_TenantSubscription_tierId(ctx, field)
+			case "status":
+				return ec.fieldContext_TenantSubscription_status(ctx, field)
+			case "billingEmail":
+				return ec.fieldContext_TenantSubscription_billingEmail(ctx, field)
+			case "startedAt":
+				return ec.fieldContext_TenantSubscription_startedAt(ctx, field)
+			case "trialEndsAt":
+				return ec.fieldContext_TenantSubscription_trialEndsAt(ctx, field)
+			case "nextBillingDate":
+				return ec.fieldContext_TenantSubscription_nextBillingDate(ctx, field)
+			case "cancelledAt":
+				return ec.fieldContext_TenantSubscription_cancelledAt(ctx, field)
+			case "customPricing":
+				return ec.fieldContext_TenantSubscription_customPricing(ctx, field)
+			case "customFeatures":
+				return ec.fieldContext_TenantSubscription_customFeatures(ctx, field)
+			case "customAllocations":
+				return ec.fieldContext_TenantSubscription_customAllocations(ctx, field)
+			case "paymentMethod":
+				return ec.fieldContext_TenantSubscription_paymentMethod(ctx, field)
+			case "createdAt":
+				return ec.fieldContext_TenantSubscription_createdAt(ctx, field)
+			case "updatedAt":
+				return ec.fieldContext_TenantSubscription_updatedAt(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type TenantSubscription", field.Name)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_updateSubscriptionCustomTerms_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
 		ec.Error(ctx, err)
 		return fc, err
 	}
@@ -34443,8 +34744,6 @@ func (ec *executionContext) fieldContext_Query_streams(_ context.Context, field 
 				return ec.fieldContext_Stream_updatedAt(ctx, field)
 			case "metrics":
 				return ec.fieldContext_Stream_metrics(ctx, field)
-			case "recordings":
-				return ec.fieldContext_Stream_recordings(ctx, field)
 			case "eventsConnection":
 				return ec.fieldContext_Stream_eventsConnection(ctx, field)
 			case "healthConnection":
@@ -34573,8 +34872,6 @@ func (ec *executionContext) fieldContext_Query_stream(ctx context.Context, field
 				return ec.fieldContext_Stream_updatedAt(ctx, field)
 			case "metrics":
 				return ec.fieldContext_Stream_metrics(ctx, field)
-			case "recordings":
-				return ec.fieldContext_Stream_recordings(ctx, field)
 			case "eventsConnection":
 				return ec.fieldContext_Stream_eventsConnection(ctx, field)
 			case "healthConnection":
@@ -36141,147 +36438,6 @@ func (ec *executionContext) fieldContext_Query_streamKeys(ctx context.Context, f
 	return fc, nil
 }
 
-func (ec *executionContext) _Query_recordings(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_Query_recordings(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return ec.resolvers.Query().Recordings(rctx, fc.Args["streamId"].(*string))
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		return graphql.Null
-	}
-	res := resTmp.([]*proto.Recording)
-	fc.Result = res
-	return ec.marshalORecording2ᚕᚖframeworksᚋpkgᚋprotoᚐRecordingᚄ(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_Query_recordings(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "Query",
-		Field:      field,
-		IsMethod:   true,
-		IsResolver: true,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			switch field.Name {
-			case "id":
-				return ec.fieldContext_Recording_id(ctx, field)
-			case "streamId":
-				return ec.fieldContext_Recording_streamId(ctx, field)
-			case "title":
-				return ec.fieldContext_Recording_title(ctx, field)
-			case "duration":
-				return ec.fieldContext_Recording_duration(ctx, field)
-			case "fileSizeBytes":
-				return ec.fieldContext_Recording_fileSizeBytes(ctx, field)
-			case "playbackId":
-				return ec.fieldContext_Recording_playbackId(ctx, field)
-			case "thumbnailUrl":
-				return ec.fieldContext_Recording_thumbnailUrl(ctx, field)
-			case "startTime":
-				return ec.fieldContext_Recording_startTime(ctx, field)
-			case "endTime":
-				return ec.fieldContext_Recording_endTime(ctx, field)
-			case "status":
-				return ec.fieldContext_Recording_status(ctx, field)
-			case "createdAt":
-				return ec.fieldContext_Recording_createdAt(ctx, field)
-			case "updatedAt":
-				return ec.fieldContext_Recording_updatedAt(ctx, field)
-			}
-			return nil, fmt.Errorf("no field named %q was found under type Recording", field.Name)
-		},
-	}
-	defer func() {
-		if r := recover(); r != nil {
-			err = ec.Recover(ctx, r)
-			ec.Error(ctx, err)
-		}
-	}()
-	ctx = graphql.WithFieldContext(ctx, fc)
-	if fc.Args, err = ec.field_Query_recordings_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
-		ec.Error(ctx, err)
-		return fc, err
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _Query_recordingsConnection(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_Query_recordingsConnection(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return ec.resolvers.Query().RecordingsConnection(rctx, fc.Args["streamId"].(*string), fc.Args["first"].(*int), fc.Args["after"].(*string), fc.Args["last"].(*int), fc.Args["before"].(*string))
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.(*model.RecordingsConnection)
-	fc.Result = res
-	return ec.marshalNRecordingsConnection2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐRecordingsConnection(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_Query_recordingsConnection(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "Query",
-		Field:      field,
-		IsMethod:   true,
-		IsResolver: true,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			switch field.Name {
-			case "edges":
-				return ec.fieldContext_RecordingsConnection_edges(ctx, field)
-			case "pageInfo":
-				return ec.fieldContext_RecordingsConnection_pageInfo(ctx, field)
-			case "totalCount":
-				return ec.fieldContext_RecordingsConnection_totalCount(ctx, field)
-			}
-			return nil, fmt.Errorf("no field named %q was found under type RecordingsConnection", field.Name)
-		},
-	}
-	defer func() {
-		if r := recover(); r != nil {
-			err = ec.Recover(ctx, r)
-			ec.Error(ctx, err)
-		}
-	}()
-	ctx = graphql.WithFieldContext(ctx, fc)
-	if fc.Args, err = ec.field_Query_recordingsConnection_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
-		ec.Error(ctx, err)
-		return fc, err
-	}
-	return fc, nil
-}
-
 func (ec *executionContext) _Query_clips(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_Query_clips(ctx, field)
 	if err != nil {
@@ -36757,26 +36913,16 @@ func (ec *executionContext) fieldContext_Query_currentStreamHealth(ctx context.C
 				return ec.fieldContext_StreamHealthMetric_height(ctx, field)
 			case "codec":
 				return ec.fieldContext_StreamHealthMetric_codec(ctx, field)
-			case "profile":
-				return ec.fieldContext_StreamHealthMetric_profile(ctx, field)
 			case "qualityTier":
 				return ec.fieldContext_StreamHealthMetric_qualityTier(ctx, field)
 			case "gopSize":
 				return ec.fieldContext_StreamHealthMetric_gopSize(ctx, field)
-			case "packetsSent":
-				return ec.fieldContext_StreamHealthMetric_packetsSent(ctx, field)
-			case "packetsLost":
-				return ec.fieldContext_StreamHealthMetric_packetsLost(ctx, field)
-			case "packetLossPercentage":
-				return ec.fieldContext_StreamHealthMetric_packetLossPercentage(ctx, field)
 			case "bufferState":
 				return ec.fieldContext_StreamHealthMetric_bufferState(ctx, field)
 			case "bufferHealth":
 				return ec.fieldContext_StreamHealthMetric_bufferHealth(ctx, field)
 			case "bufferSize":
 				return ec.fieldContext_StreamHealthMetric_bufferSize(ctx, field)
-			case "bufferUsed":
-				return ec.fieldContext_StreamHealthMetric_bufferUsed(ctx, field)
 			case "audioChannels":
 				return ec.fieldContext_StreamHealthMetric_audioChannels(ctx, field)
 			case "audioSampleRate":
@@ -36855,8 +37001,6 @@ func (ec *executionContext) fieldContext_Query_rebufferingEvents(ctx context.Con
 				return ec.fieldContext_RebufferingEvent_rebufferStart(ctx, field)
 			case "rebufferEnd":
 				return ec.fieldContext_RebufferingEvent_rebufferEnd(ctx, field)
-			case "packetLossPercentage":
-				return ec.fieldContext_RebufferingEvent_packetLossPercentage(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type RebufferingEvent", field.Name)
 		},
@@ -37111,6 +37255,8 @@ func (ec *executionContext) fieldContext_Query_billingStatus(_ context.Context, 
 			switch field.Name {
 			case "currentTier":
 				return ec.fieldContext_BillingStatus_currentTier(ctx, field)
+			case "subscription":
+				return ec.fieldContext_BillingStatus_subscription(ctx, field)
 			case "billingStatus":
 				return ec.fieldContext_BillingStatus_billingStatus(ctx, field)
 			case "nextBillingDate":
@@ -39155,816 +39301,6 @@ func (ec *executionContext) fieldContext_RebufferingEvent_rebufferEnd(_ context.
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type Boolean does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _RebufferingEvent_packetLossPercentage(ctx context.Context, field graphql.CollectedField, obj *model.RebufferingEvent) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_RebufferingEvent_packetLossPercentage(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.PacketLossPercentage, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		return graphql.Null
-	}
-	res := resTmp.(*float64)
-	fc.Result = res
-	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_RebufferingEvent_packetLossPercentage(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "RebufferingEvent",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Float does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _Recording_id(ctx context.Context, field graphql.CollectedField, obj *proto.Recording) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_Recording_id(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.Id, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.(string)
-	fc.Result = res
-	return ec.marshalNID2string(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_Recording_id(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "Recording",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type ID does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _Recording_streamId(ctx context.Context, field graphql.CollectedField, obj *proto.Recording) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_Recording_streamId(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.StreamId, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.(string)
-	fc.Result = res
-	return ec.marshalNID2string(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_Recording_streamId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "Recording",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type ID does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _Recording_title(ctx context.Context, field graphql.CollectedField, obj *proto.Recording) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_Recording_title(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return ec.resolvers.Recording().Title(rctx, obj)
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		return graphql.Null
-	}
-	res := resTmp.(*string)
-	fc.Result = res
-	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_Recording_title(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "Recording",
-		Field:      field,
-		IsMethod:   true,
-		IsResolver: true,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type String does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _Recording_duration(ctx context.Context, field graphql.CollectedField, obj *proto.Recording) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_Recording_duration(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.Duration, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		return graphql.Null
-	}
-	res := resTmp.(*int32)
-	fc.Result = res
-	return ec.marshalOInt2ᚖint32(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_Recording_duration(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "Recording",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Int does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _Recording_fileSizeBytes(ctx context.Context, field graphql.CollectedField, obj *proto.Recording) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_Recording_fileSizeBytes(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return ec.resolvers.Recording().FileSizeBytes(rctx, obj)
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		return graphql.Null
-	}
-	res := resTmp.(*int)
-	fc.Result = res
-	return ec.marshalOInt2ᚖint(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_Recording_fileSizeBytes(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "Recording",
-		Field:      field,
-		IsMethod:   true,
-		IsResolver: true,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Int does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _Recording_playbackId(ctx context.Context, field graphql.CollectedField, obj *proto.Recording) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_Recording_playbackId(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.PlaybackId, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		return graphql.Null
-	}
-	res := resTmp.(*string)
-	fc.Result = res
-	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_Recording_playbackId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "Recording",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type String does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _Recording_thumbnailUrl(ctx context.Context, field graphql.CollectedField, obj *proto.Recording) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_Recording_thumbnailUrl(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return ec.resolvers.Recording().ThumbnailURL(rctx, obj)
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		return graphql.Null
-	}
-	res := resTmp.(*string)
-	fc.Result = res
-	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_Recording_thumbnailUrl(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "Recording",
-		Field:      field,
-		IsMethod:   true,
-		IsResolver: true,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type String does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _Recording_startTime(ctx context.Context, field graphql.CollectedField, obj *proto.Recording) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_Recording_startTime(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return ec.resolvers.Recording().StartTime(rctx, obj)
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		return graphql.Null
-	}
-	res := resTmp.(*time.Time)
-	fc.Result = res
-	return ec.marshalOTime2ᚖtimeᚐTime(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_Recording_startTime(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "Recording",
-		Field:      field,
-		IsMethod:   true,
-		IsResolver: true,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Time does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _Recording_endTime(ctx context.Context, field graphql.CollectedField, obj *proto.Recording) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_Recording_endTime(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return ec.resolvers.Recording().EndTime(rctx, obj)
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		return graphql.Null
-	}
-	res := resTmp.(*time.Time)
-	fc.Result = res
-	return ec.marshalOTime2ᚖtimeᚐTime(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_Recording_endTime(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "Recording",
-		Field:      field,
-		IsMethod:   true,
-		IsResolver: true,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Time does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _Recording_status(ctx context.Context, field graphql.CollectedField, obj *proto.Recording) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_Recording_status(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.Status, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.(string)
-	fc.Result = res
-	return ec.marshalNString2string(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_Recording_status(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "Recording",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type String does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _Recording_createdAt(ctx context.Context, field graphql.CollectedField, obj *proto.Recording) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_Recording_createdAt(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return ec.resolvers.Recording().CreatedAt(rctx, obj)
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.(*time.Time)
-	fc.Result = res
-	return ec.marshalNTime2ᚖtimeᚐTime(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_Recording_createdAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "Recording",
-		Field:      field,
-		IsMethod:   true,
-		IsResolver: true,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Time does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _Recording_updatedAt(ctx context.Context, field graphql.CollectedField, obj *proto.Recording) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_Recording_updatedAt(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return ec.resolvers.Recording().UpdatedAt(rctx, obj)
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.(*time.Time)
-	fc.Result = res
-	return ec.marshalNTime2ᚖtimeᚐTime(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_Recording_updatedAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "Recording",
-		Field:      field,
-		IsMethod:   true,
-		IsResolver: true,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Time does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _RecordingEdge_cursor(ctx context.Context, field graphql.CollectedField, obj *model.RecordingEdge) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_RecordingEdge_cursor(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.Cursor, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.(string)
-	fc.Result = res
-	return ec.marshalNString2string(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_RecordingEdge_cursor(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "RecordingEdge",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type String does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _RecordingEdge_node(ctx context.Context, field graphql.CollectedField, obj *model.RecordingEdge) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_RecordingEdge_node(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.Node, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.(*proto.Recording)
-	fc.Result = res
-	return ec.marshalNRecording2ᚖframeworksᚋpkgᚋprotoᚐRecording(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_RecordingEdge_node(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "RecordingEdge",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			switch field.Name {
-			case "id":
-				return ec.fieldContext_Recording_id(ctx, field)
-			case "streamId":
-				return ec.fieldContext_Recording_streamId(ctx, field)
-			case "title":
-				return ec.fieldContext_Recording_title(ctx, field)
-			case "duration":
-				return ec.fieldContext_Recording_duration(ctx, field)
-			case "fileSizeBytes":
-				return ec.fieldContext_Recording_fileSizeBytes(ctx, field)
-			case "playbackId":
-				return ec.fieldContext_Recording_playbackId(ctx, field)
-			case "thumbnailUrl":
-				return ec.fieldContext_Recording_thumbnailUrl(ctx, field)
-			case "startTime":
-				return ec.fieldContext_Recording_startTime(ctx, field)
-			case "endTime":
-				return ec.fieldContext_Recording_endTime(ctx, field)
-			case "status":
-				return ec.fieldContext_Recording_status(ctx, field)
-			case "createdAt":
-				return ec.fieldContext_Recording_createdAt(ctx, field)
-			case "updatedAt":
-				return ec.fieldContext_Recording_updatedAt(ctx, field)
-			}
-			return nil, fmt.Errorf("no field named %q was found under type Recording", field.Name)
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _RecordingsConnection_edges(ctx context.Context, field graphql.CollectedField, obj *model.RecordingsConnection) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_RecordingsConnection_edges(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.Edges, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.([]*model.RecordingEdge)
-	fc.Result = res
-	return ec.marshalNRecordingEdge2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐRecordingEdgeᚄ(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_RecordingsConnection_edges(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "RecordingsConnection",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			switch field.Name {
-			case "cursor":
-				return ec.fieldContext_RecordingEdge_cursor(ctx, field)
-			case "node":
-				return ec.fieldContext_RecordingEdge_node(ctx, field)
-			}
-			return nil, fmt.Errorf("no field named %q was found under type RecordingEdge", field.Name)
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _RecordingsConnection_pageInfo(ctx context.Context, field graphql.CollectedField, obj *model.RecordingsConnection) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_RecordingsConnection_pageInfo(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.PageInfo, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.(*model.PageInfo)
-	fc.Result = res
-	return ec.marshalNPageInfo2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐPageInfo(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_RecordingsConnection_pageInfo(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "RecordingsConnection",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			switch field.Name {
-			case "startCursor":
-				return ec.fieldContext_PageInfo_startCursor(ctx, field)
-			case "endCursor":
-				return ec.fieldContext_PageInfo_endCursor(ctx, field)
-			case "hasNextPage":
-				return ec.fieldContext_PageInfo_hasNextPage(ctx, field)
-			case "hasPreviousPage":
-				return ec.fieldContext_PageInfo_hasPreviousPage(ctx, field)
-			}
-			return nil, fmt.Errorf("no field named %q was found under type PageInfo", field.Name)
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _RecordingsConnection_totalCount(ctx context.Context, field graphql.CollectedField, obj *model.RecordingsConnection) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_RecordingsConnection_totalCount(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.TotalCount, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.(int)
-	fc.Result = res
-	return ec.marshalNInt2int(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_RecordingsConnection_totalCount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "RecordingsConnection",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Int does not have child fields")
 		},
 	}
 	return fc, nil
@@ -43426,73 +42762,6 @@ func (ec *executionContext) fieldContext_Stream_metrics(_ context.Context, field
 	return fc, nil
 }
 
-func (ec *executionContext) _Stream_recordings(ctx context.Context, field graphql.CollectedField, obj *proto.Stream) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_Stream_recordings(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return ec.resolvers.Stream().Recordings(rctx, obj)
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		return graphql.Null
-	}
-	res := resTmp.([]*proto.Recording)
-	fc.Result = res
-	return ec.marshalORecording2ᚕᚖframeworksᚋpkgᚋprotoᚐRecordingᚄ(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_Stream_recordings(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "Stream",
-		Field:      field,
-		IsMethod:   true,
-		IsResolver: true,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			switch field.Name {
-			case "id":
-				return ec.fieldContext_Recording_id(ctx, field)
-			case "streamId":
-				return ec.fieldContext_Recording_streamId(ctx, field)
-			case "title":
-				return ec.fieldContext_Recording_title(ctx, field)
-			case "duration":
-				return ec.fieldContext_Recording_duration(ctx, field)
-			case "fileSizeBytes":
-				return ec.fieldContext_Recording_fileSizeBytes(ctx, field)
-			case "playbackId":
-				return ec.fieldContext_Recording_playbackId(ctx, field)
-			case "thumbnailUrl":
-				return ec.fieldContext_Recording_thumbnailUrl(ctx, field)
-			case "startTime":
-				return ec.fieldContext_Recording_startTime(ctx, field)
-			case "endTime":
-				return ec.fieldContext_Recording_endTime(ctx, field)
-			case "status":
-				return ec.fieldContext_Recording_status(ctx, field)
-			case "createdAt":
-				return ec.fieldContext_Recording_createdAt(ctx, field)
-			case "updatedAt":
-				return ec.fieldContext_Recording_updatedAt(ctx, field)
-			}
-			return nil, fmt.Errorf("no field named %q was found under type Recording", field.Name)
-		},
-	}
-	return fc, nil
-}
-
 func (ec *executionContext) _Stream_eventsConnection(ctx context.Context, field graphql.CollectedField, obj *proto.Stream) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_Stream_eventsConnection(ctx, field)
 	if err != nil {
@@ -46259,8 +45528,6 @@ func (ec *executionContext) fieldContext_StreamEdge_node(_ context.Context, fiel
 				return ec.fieldContext_Stream_updatedAt(ctx, field)
 			case "metrics":
 				return ec.fieldContext_Stream_metrics(ctx, field)
-			case "recordings":
-				return ec.fieldContext_Stream_recordings(ctx, field)
 			case "eventsConnection":
 				return ec.fieldContext_Stream_eventsConnection(ctx, field)
 			case "healthConnection":
@@ -46936,9 +46203,9 @@ func (ec *executionContext) _StreamHealthMetric_hasIssues(ctx context.Context, f
 		}
 		return graphql.Null
 	}
-	res := resTmp.(bool)
+	res := resTmp.(*bool)
 	fc.Result = res
-	return ec.marshalNBoolean2bool(ctx, field.Selections, res)
+	return ec.marshalNBoolean2ᚖbool(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_StreamHealthMetric_hasIssues(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -47159,47 +46426,6 @@ func (ec *executionContext) fieldContext_StreamHealthMetric_codec(_ context.Cont
 	return fc, nil
 }
 
-func (ec *executionContext) _StreamHealthMetric_profile(ctx context.Context, field graphql.CollectedField, obj *proto.StreamHealthMetric) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_StreamHealthMetric_profile(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.Profile, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		return graphql.Null
-	}
-	res := resTmp.(string)
-	fc.Result = res
-	return ec.marshalOString2string(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_StreamHealthMetric_profile(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "StreamHealthMetric",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type String does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
 func (ec *executionContext) _StreamHealthMetric_qualityTier(ctx context.Context, field graphql.CollectedField, obj *proto.StreamHealthMetric) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_StreamHealthMetric_qualityTier(ctx, field)
 	if err != nil {
@@ -47277,129 +46503,6 @@ func (ec *executionContext) fieldContext_StreamHealthMetric_gopSize(_ context.Co
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type Int does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _StreamHealthMetric_packetsSent(ctx context.Context, field graphql.CollectedField, obj *proto.StreamHealthMetric) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_StreamHealthMetric_packetsSent(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.PacketsSent, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		return graphql.Null
-	}
-	res := resTmp.(int64)
-	fc.Result = res
-	return ec.marshalOInt2int64(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_StreamHealthMetric_packetsSent(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "StreamHealthMetric",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Int does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _StreamHealthMetric_packetsLost(ctx context.Context, field graphql.CollectedField, obj *proto.StreamHealthMetric) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_StreamHealthMetric_packetsLost(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.PacketsLost, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		return graphql.Null
-	}
-	res := resTmp.(int64)
-	fc.Result = res
-	return ec.marshalOInt2int64(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_StreamHealthMetric_packetsLost(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "StreamHealthMetric",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Int does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _StreamHealthMetric_packetLossPercentage(ctx context.Context, field graphql.CollectedField, obj *proto.StreamHealthMetric) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_StreamHealthMetric_packetLossPercentage(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.PacketLossPercentage, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		return graphql.Null
-	}
-	res := resTmp.(*float64)
-	fc.Result = res
-	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_StreamHealthMetric_packetLossPercentage(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "StreamHealthMetric",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Float does not have child fields")
 		},
 	}
 	return fc, nil
@@ -47519,47 +46622,6 @@ func (ec *executionContext) _StreamHealthMetric_bufferSize(ctx context.Context, 
 }
 
 func (ec *executionContext) fieldContext_StreamHealthMetric_bufferSize(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "StreamHealthMetric",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Int does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _StreamHealthMetric_bufferUsed(ctx context.Context, field graphql.CollectedField, obj *proto.StreamHealthMetric) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_StreamHealthMetric_bufferUsed(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.BufferUsed, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		return graphql.Null
-	}
-	res := resTmp.(int32)
-	fc.Result = res
-	return ec.marshalOInt2int32(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_StreamHealthMetric_bufferUsed(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "StreamHealthMetric",
 		Field:      field,
@@ -47880,26 +46942,16 @@ func (ec *executionContext) fieldContext_StreamHealthMetricEdge_node(_ context.C
 				return ec.fieldContext_StreamHealthMetric_height(ctx, field)
 			case "codec":
 				return ec.fieldContext_StreamHealthMetric_codec(ctx, field)
-			case "profile":
-				return ec.fieldContext_StreamHealthMetric_profile(ctx, field)
 			case "qualityTier":
 				return ec.fieldContext_StreamHealthMetric_qualityTier(ctx, field)
 			case "gopSize":
 				return ec.fieldContext_StreamHealthMetric_gopSize(ctx, field)
-			case "packetsSent":
-				return ec.fieldContext_StreamHealthMetric_packetsSent(ctx, field)
-			case "packetsLost":
-				return ec.fieldContext_StreamHealthMetric_packetsLost(ctx, field)
-			case "packetLossPercentage":
-				return ec.fieldContext_StreamHealthMetric_packetLossPercentage(ctx, field)
 			case "bufferState":
 				return ec.fieldContext_StreamHealthMetric_bufferState(ctx, field)
 			case "bufferHealth":
 				return ec.fieldContext_StreamHealthMetric_bufferHealth(ctx, field)
 			case "bufferSize":
 				return ec.fieldContext_StreamHealthMetric_bufferSize(ctx, field)
-			case "bufferUsed":
-				return ec.fieldContext_StreamHealthMetric_bufferUsed(ctx, field)
 			case "audioChannels":
 				return ec.fieldContext_StreamHealthMetric_audioChannels(ctx, field)
 			case "audioSampleRate":
@@ -50296,8 +49348,6 @@ func (ec *executionContext) fieldContext_Subscription_viewerMetrics(ctx context.
 				return ec.fieldContext_ViewerMetrics_packetsRetransmitted(ctx, field)
 			case "timestamp":
 				return ec.fieldContext_ViewerMetrics_timestamp(ctx, field)
-			case "clientIp":
-				return ec.fieldContext_ViewerMetrics_clientIp(ctx, field)
 			case "clientCountry":
 				return ec.fieldContext_ViewerMetrics_clientCountry(ctx, field)
 			case "clientCity":
@@ -51719,8 +50769,6 @@ func (ec *executionContext) fieldContext_TenantEvent_viewerMetrics(_ context.Con
 				return ec.fieldContext_ViewerMetrics_packetsRetransmitted(ctx, field)
 			case "timestamp":
 				return ec.fieldContext_ViewerMetrics_timestamp(ctx, field)
-			case "clientIp":
-				return ec.fieldContext_ViewerMetrics_clientIp(ctx, field)
 			case "clientCountry":
 				return ec.fieldContext_ViewerMetrics_clientCountry(ctx, field)
 			case "clientCity":
@@ -52011,6 +51059,675 @@ func (ec *executionContext) fieldContext_TenantEvent_systemHealthEvent(_ context
 				return ec.fieldContext_SystemHealthEvent_timestamp(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type SystemHealthEvent", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _TenantSubscription_id(ctx context.Context, field graphql.CollectedField, obj *proto.TenantSubscription) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_TenantSubscription_id(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Id, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNID2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_TenantSubscription_id(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TenantSubscription",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _TenantSubscription_tenantId(ctx context.Context, field graphql.CollectedField, obj *proto.TenantSubscription) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_TenantSubscription_tenantId(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.TenantId, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNID2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_TenantSubscription_tenantId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TenantSubscription",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _TenantSubscription_tierId(ctx context.Context, field graphql.CollectedField, obj *proto.TenantSubscription) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_TenantSubscription_tierId(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.TierId, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_TenantSubscription_tierId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TenantSubscription",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _TenantSubscription_status(ctx context.Context, field graphql.CollectedField, obj *proto.TenantSubscription) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_TenantSubscription_status(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Status, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_TenantSubscription_status(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TenantSubscription",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _TenantSubscription_billingEmail(ctx context.Context, field graphql.CollectedField, obj *proto.TenantSubscription) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_TenantSubscription_billingEmail(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.BillingEmail, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_TenantSubscription_billingEmail(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TenantSubscription",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _TenantSubscription_startedAt(ctx context.Context, field graphql.CollectedField, obj *proto.TenantSubscription) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_TenantSubscription_startedAt(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.TenantSubscription().StartedAt(rctx, obj)
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(*time.Time)
+	fc.Result = res
+	return ec.marshalNTime2ᚖtimeᚐTime(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_TenantSubscription_startedAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TenantSubscription",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Time does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _TenantSubscription_trialEndsAt(ctx context.Context, field graphql.CollectedField, obj *proto.TenantSubscription) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_TenantSubscription_trialEndsAt(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.TenantSubscription().TrialEndsAt(rctx, obj)
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*time.Time)
+	fc.Result = res
+	return ec.marshalOTime2ᚖtimeᚐTime(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_TenantSubscription_trialEndsAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TenantSubscription",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Time does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _TenantSubscription_nextBillingDate(ctx context.Context, field graphql.CollectedField, obj *proto.TenantSubscription) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_TenantSubscription_nextBillingDate(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.TenantSubscription().NextBillingDate(rctx, obj)
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*time.Time)
+	fc.Result = res
+	return ec.marshalOTime2ᚖtimeᚐTime(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_TenantSubscription_nextBillingDate(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TenantSubscription",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Time does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _TenantSubscription_cancelledAt(ctx context.Context, field graphql.CollectedField, obj *proto.TenantSubscription) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_TenantSubscription_cancelledAt(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.TenantSubscription().CancelledAt(rctx, obj)
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*time.Time)
+	fc.Result = res
+	return ec.marshalOTime2ᚖtimeᚐTime(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_TenantSubscription_cancelledAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TenantSubscription",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Time does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _TenantSubscription_customPricing(ctx context.Context, field graphql.CollectedField, obj *proto.TenantSubscription) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_TenantSubscription_customPricing(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.CustomPricing, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*proto.CustomPricing)
+	fc.Result = res
+	return ec.marshalOCustomPricing2ᚖframeworksᚋpkgᚋprotoᚐCustomPricing(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_TenantSubscription_customPricing(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TenantSubscription",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "basePrice":
+				return ec.fieldContext_CustomPricing_basePrice(ctx, field)
+			case "discountRate":
+				return ec.fieldContext_CustomPricing_discountRate(ctx, field)
+			case "overageRates":
+				return ec.fieldContext_CustomPricing_overageRates(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type CustomPricing", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _TenantSubscription_customFeatures(ctx context.Context, field graphql.CollectedField, obj *proto.TenantSubscription) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_TenantSubscription_customFeatures(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.CustomFeatures, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*proto.BillingFeatures)
+	fc.Result = res
+	return ec.marshalOBillingFeatures2ᚖframeworksᚋpkgᚋprotoᚐBillingFeatures(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_TenantSubscription_customFeatures(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TenantSubscription",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "recording":
+				return ec.fieldContext_BillingFeatures_recording(ctx, field)
+			case "analytics":
+				return ec.fieldContext_BillingFeatures_analytics(ctx, field)
+			case "customBranding":
+				return ec.fieldContext_BillingFeatures_customBranding(ctx, field)
+			case "apiAccess":
+				return ec.fieldContext_BillingFeatures_apiAccess(ctx, field)
+			case "supportLevel":
+				return ec.fieldContext_BillingFeatures_supportLevel(ctx, field)
+			case "sla":
+				return ec.fieldContext_BillingFeatures_sla(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type BillingFeatures", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _TenantSubscription_customAllocations(ctx context.Context, field graphql.CollectedField, obj *proto.TenantSubscription) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_TenantSubscription_customAllocations(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.CustomAllocations, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*proto.AllocationDetails)
+	fc.Result = res
+	return ec.marshalOAllocationDetails2ᚖframeworksᚋpkgᚋprotoᚐAllocationDetails(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_TenantSubscription_customAllocations(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TenantSubscription",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "limit":
+				return ec.fieldContext_AllocationDetails_limit(ctx, field)
+			case "unitPrice":
+				return ec.fieldContext_AllocationDetails_unitPrice(ctx, field)
+			case "unit":
+				return ec.fieldContext_AllocationDetails_unit(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type AllocationDetails", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _TenantSubscription_paymentMethod(ctx context.Context, field graphql.CollectedField, obj *proto.TenantSubscription) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_TenantSubscription_paymentMethod(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.PaymentMethod, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_TenantSubscription_paymentMethod(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TenantSubscription",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _TenantSubscription_createdAt(ctx context.Context, field graphql.CollectedField, obj *proto.TenantSubscription) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_TenantSubscription_createdAt(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.TenantSubscription().CreatedAt(rctx, obj)
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(*time.Time)
+	fc.Result = res
+	return ec.marshalNTime2ᚖtimeᚐTime(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_TenantSubscription_createdAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TenantSubscription",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Time does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _TenantSubscription_updatedAt(ctx context.Context, field graphql.CollectedField, obj *proto.TenantSubscription) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_TenantSubscription_updatedAt(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.TenantSubscription().UpdatedAt(rctx, obj)
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(*time.Time)
+	fc.Result = res
+	return ec.marshalNTime2ᚖtimeᚐTime(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_TenantSubscription_updatedAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TenantSubscription",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Time does not have child fields")
 		},
 	}
 	return fc, nil
@@ -56955,7 +56672,7 @@ func (ec *executionContext) _ViewerGeographic_connectionAddr(ctx context.Context
 	}()
 	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
 		ctx = rctx // use context from middleware stack in children
-		return obj.ConnectionAddr, nil
+		return ec.resolvers.ViewerGeographic().ConnectionAddr(rctx, obj)
 	})
 	if err != nil {
 		ec.Error(ctx, err)
@@ -56964,17 +56681,17 @@ func (ec *executionContext) _ViewerGeographic_connectionAddr(ctx context.Context
 	if resTmp == nil {
 		return graphql.Null
 	}
-	res := resTmp.(string)
+	res := resTmp.(*string)
 	fc.Result = res
-	return ec.marshalOString2string(ctx, field.Selections, res)
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_ViewerGeographic_connectionAddr(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "ViewerGeographic",
 		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
+		IsMethod:   true,
+		IsResolver: true,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type String does not have child fields")
 		},
@@ -57377,29 +57094,26 @@ func (ec *executionContext) _ViewerMetrics_host(ctx context.Context, field graph
 	}()
 	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
 		ctx = rctx // use context from middleware stack in children
-		return obj.Host, nil
+		return ec.resolvers.ViewerMetrics().Host(rctx, obj)
 	})
 	if err != nil {
 		ec.Error(ctx, err)
 		return graphql.Null
 	}
 	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
 		return graphql.Null
 	}
-	res := resTmp.(string)
+	res := resTmp.(*string)
 	fc.Result = res
-	return ec.marshalNString2string(ctx, field.Selections, res)
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_ViewerMetrics_host(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "ViewerMetrics",
 		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
+		IsMethod:   true,
+		IsResolver: true,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type String does not have child fields")
 		},
@@ -57856,47 +57570,6 @@ func (ec *executionContext) fieldContext_ViewerMetrics_timestamp(_ context.Conte
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type Int does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _ViewerMetrics_clientIp(ctx context.Context, field graphql.CollectedField, obj *proto.ClientLifecycleUpdate) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_ViewerMetrics_clientIp(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.ClientIp, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		return graphql.Null
-	}
-	res := resTmp.(*string)
-	fc.Result = res
-	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_ViewerMetrics_clientIp(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "ViewerMetrics",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type String does not have child fields")
 		},
 	}
 	return fc, nil
@@ -60017,6 +59690,109 @@ func (ec *executionContext) fieldContext___Type_isOneOf(_ context.Context, field
 
 // region    **************************** input.gotpl *****************************
 
+func (ec *executionContext) unmarshalInputAllocationDetailsInput(ctx context.Context, obj any) (model.AllocationDetailsInput, error) {
+	var it model.AllocationDetailsInput
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"limit", "unitPrice", "unit"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "limit":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("limit"))
+			data, err := ec.unmarshalOFloat2ᚖfloat64(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Limit = data
+		case "unitPrice":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("unitPrice"))
+			data, err := ec.unmarshalOFloat2ᚖfloat64(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.UnitPrice = data
+		case "unit":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("unit"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Unit = data
+		}
+	}
+
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputBillingFeaturesInput(ctx context.Context, obj any) (model.BillingFeaturesInput, error) {
+	var it model.BillingFeaturesInput
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"recording", "analytics", "customBranding", "apiAccess", "supportLevel", "sla"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "recording":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("recording"))
+			data, err := ec.unmarshalOBoolean2ᚖbool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Recording = data
+		case "analytics":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("analytics"))
+			data, err := ec.unmarshalOBoolean2ᚖbool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Analytics = data
+		case "customBranding":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("customBranding"))
+			data, err := ec.unmarshalOBoolean2ᚖbool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.CustomBranding = data
+		case "apiAccess":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("apiAccess"))
+			data, err := ec.unmarshalOBoolean2ᚖbool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.APIAccess = data
+		case "supportLevel":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("supportLevel"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.SupportLevel = data
+		case "sla":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("sla"))
+			data, err := ec.unmarshalOBoolean2ᚖbool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.SLA = data
+		}
+	}
+
+	return it, nil
+}
+
 func (ec *executionContext) unmarshalInputCreateBootstrapTokenInput(ctx context.Context, obj any) (model.CreateBootstrapTokenInput, error) {
 	var it model.CreateBootstrapTokenInput
 	asMap := map[string]any{}
@@ -60330,6 +60106,88 @@ func (ec *executionContext) unmarshalInputCreateStreamKeyInput(ctx context.Conte
 	return it, nil
 }
 
+func (ec *executionContext) unmarshalInputCustomPricingInput(ctx context.Context, obj any) (model.CustomPricingInput, error) {
+	var it model.CustomPricingInput
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"basePrice", "discountRate", "overageRates"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "basePrice":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("basePrice"))
+			data, err := ec.unmarshalOFloat2ᚖfloat64(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.BasePrice = data
+		case "discountRate":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("discountRate"))
+			data, err := ec.unmarshalOFloat2ᚖfloat64(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.DiscountRate = data
+		case "overageRates":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("overageRates"))
+			data, err := ec.unmarshalOOverageRatesInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐOverageRatesInput(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.OverageRates = data
+		}
+	}
+
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputOverageRatesInput(ctx context.Context, obj any) (model.OverageRatesInput, error) {
+	var it model.OverageRatesInput
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"bandwidth", "storage", "compute"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "bandwidth":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("bandwidth"))
+			data, err := ec.unmarshalOAllocationDetailsInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐAllocationDetailsInput(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Bandwidth = data
+		case "storage":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("storage"))
+			data, err := ec.unmarshalOAllocationDetailsInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐAllocationDetailsInput(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Storage = data
+		case "compute":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("compute"))
+			data, err := ec.unmarshalOAllocationDetailsInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐAllocationDetailsInput(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Compute = data
+		}
+	}
+
+	return it, nil
+}
+
 func (ec *executionContext) unmarshalInputPaginationInput(ctx context.Context, obj any) (model.PaginationInput, error) {
 	var it model.PaginationInput
 	asMap := map[string]any{}
@@ -60433,6 +60291,47 @@ func (ec *executionContext) unmarshalInputUpdateStreamInput(ctx context.Context,
 				return it, err
 			}
 			it.Record = data
+		}
+	}
+
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputUpdateSubscriptionCustomTermsInput(ctx context.Context, obj any) (model.UpdateSubscriptionCustomTermsInput, error) {
+	var it model.UpdateSubscriptionCustomTermsInput
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"customPricing", "customFeatures", "customAllocations"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "customPricing":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("customPricing"))
+			data, err := ec.unmarshalOCustomPricingInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐCustomPricingInput(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.CustomPricing = data
+		case "customFeatures":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("customFeatures"))
+			data, err := ec.unmarshalOBillingFeaturesInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐBillingFeaturesInput(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.CustomFeatures = data
+		case "customAllocations":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("customAllocations"))
+			data, err := ec.unmarshalOAllocationDetailsInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐAllocationDetailsInput(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.CustomAllocations = data
 		}
 	}
 
@@ -60667,6 +60566,36 @@ func (ec *executionContext) _CreateStreamResult(ctx context.Context, sel ast.Sel
 }
 
 func (ec *executionContext) _DeleteClipResult(ctx context.Context, sel ast.SelectionSet, obj model.DeleteClipResult) graphql.Marshaler {
+	switch obj := (obj).(type) {
+	case nil:
+		return graphql.Null
+	case model.NotFoundError:
+		return ec._NotFoundError(ctx, sel, &obj)
+	case *model.NotFoundError:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._NotFoundError(ctx, sel, obj)
+	case model.AuthError:
+		return ec._AuthError(ctx, sel, &obj)
+	case *model.AuthError:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._AuthError(ctx, sel, obj)
+	case model.DeleteSuccess:
+		return ec._DeleteSuccess(ctx, sel, &obj)
+	case *model.DeleteSuccess:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._DeleteSuccess(ctx, sel, obj)
+	default:
+		panic(fmt.Errorf("unexpected type %T", obj))
+	}
+}
+
+func (ec *executionContext) _DeleteDVRResult(ctx context.Context, sel ast.SelectionSet, obj model.DeleteDVRResult) graphql.Marshaler {
 	switch obj := (obj).(type) {
 	case nil:
 		return graphql.Null
@@ -61390,7 +61319,7 @@ func (ec *executionContext) _ArtifactStatesConnection(ctx context.Context, sel a
 	return out
 }
 
-var authErrorImplementors = []string{"AuthError", "Error", "CreateStreamResult", "UpdateStreamResult", "DeleteStreamResult", "CreateClipResult", "DeleteClipResult", "CreateStreamKeyResult", "DeleteStreamKeyResult", "StartDVRResult", "StopDVRResult", "CreatePaymentResult", "UpdateTenantResult", "CreateDeveloperTokenResult", "RevokeDeveloperTokenResult", "CreateBootstrapTokenResult", "RevokeBootstrapTokenResult"}
+var authErrorImplementors = []string{"AuthError", "Error", "CreateStreamResult", "UpdateStreamResult", "DeleteStreamResult", "CreateClipResult", "DeleteClipResult", "CreateStreamKeyResult", "DeleteStreamKeyResult", "StartDVRResult", "StopDVRResult", "DeleteDVRResult", "CreatePaymentResult", "UpdateTenantResult", "CreateDeveloperTokenResult", "RevokeDeveloperTokenResult", "CreateBootstrapTokenResult", "RevokeBootstrapTokenResult"}
 
 func (ec *executionContext) _AuthError(ctx context.Context, sel ast.SelectionSet, obj *model.AuthError) graphql.Marshaler {
 	fields := graphql.CollectFields(ec.OperationContext, sel, authErrorImplementors)
@@ -61593,6 +61522,8 @@ func (ec *executionContext) _BillingStatus(ctx context.Context, sel ast.Selectio
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "subscription":
+			out.Values[i] = ec._BillingStatus_subscription(ctx, field, obj)
 		case "billingStatus":
 			out.Values[i] = ec._BillingStatus_billingStatus(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
@@ -63651,10 +63582,38 @@ func (ec *executionContext) _ConnectionEvent(ctx context.Context, sel ast.Select
 				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "connectionAddr":
-			out.Values[i] = ec._ConnectionEvent_connectionAddr(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				atomic.AddUint32(&out.Invalids, 1)
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._ConnectionEvent_connectionAddr(ctx, field, obj)
+				return res
 			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		case "connector":
 			out.Values[i] = ec._ConnectionEvent_connector(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
@@ -64073,6 +64032,46 @@ func (ec *executionContext) _CountryTimeSeries(ctx context.Context, sel ast.Sele
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.processDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var customPricingImplementors = []string{"CustomPricing"}
+
+func (ec *executionContext) _CustomPricing(ctx context.Context, sel ast.SelectionSet, obj *proto.CustomPricing) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, customPricingImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("CustomPricing")
+		case "basePrice":
+			out.Values[i] = ec._CustomPricing_basePrice(ctx, field, obj)
+		case "discountRate":
+			out.Values[i] = ec._CustomPricing_discountRate(ctx, field, obj)
+		case "overageRates":
+			out.Values[i] = ec._CustomPricing_overageRates(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -64541,7 +64540,7 @@ func (ec *executionContext) _DVRRequest(ctx context.Context, sel ast.SelectionSe
 	return out
 }
 
-var deleteSuccessImplementors = []string{"DeleteSuccess", "DeleteStreamResult", "DeleteClipResult", "DeleteStreamKeyResult", "StopDVRResult", "RevokeDeveloperTokenResult", "RevokeBootstrapTokenResult"}
+var deleteSuccessImplementors = []string{"DeleteSuccess", "DeleteStreamResult", "DeleteClipResult", "DeleteStreamKeyResult", "StopDVRResult", "DeleteDVRResult", "RevokeDeveloperTokenResult", "RevokeBootstrapTokenResult"}
 
 func (ec *executionContext) _DeleteSuccess(ctx context.Context, sel ast.SelectionSet, obj *model.DeleteSuccess) graphql.Marshaler {
 	fields := graphql.CollectFields(ec.OperationContext, sel, deleteSuccessImplementors)
@@ -65551,6 +65550,13 @@ func (ec *executionContext) _Mutation(ctx context.Context, sel ast.SelectionSet)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "deleteDVR":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_deleteDVR(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		case "createPayment":
 			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
 				return ec._Mutation_createPayment(ctx, field)
@@ -65558,6 +65564,10 @@ func (ec *executionContext) _Mutation(ctx context.Context, sel ast.SelectionSet)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "updateSubscriptionCustomTerms":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_updateSubscriptionCustomTerms(ctx, field)
+			})
 		case "updateTenant":
 			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
 				return ec._Mutation_updateTenant(ctx, field)
@@ -67146,7 +67156,7 @@ func (ec *executionContext) _NodesConnection(ctx context.Context, sel ast.Select
 	return out
 }
 
-var notFoundErrorImplementors = []string{"NotFoundError", "Error", "UpdateStreamResult", "DeleteStreamResult", "CreateClipResult", "DeleteClipResult", "CreateStreamKeyResult", "DeleteStreamKeyResult", "StartDVRResult", "StopDVRResult", "RevokeDeveloperTokenResult", "RevokeBootstrapTokenResult"}
+var notFoundErrorImplementors = []string{"NotFoundError", "Error", "UpdateStreamResult", "DeleteStreamResult", "CreateClipResult", "DeleteClipResult", "CreateStreamKeyResult", "DeleteStreamKeyResult", "StartDVRResult", "StopDVRResult", "DeleteDVRResult", "RevokeDeveloperTokenResult", "RevokeBootstrapTokenResult"}
 
 func (ec *executionContext) _NotFoundError(ctx context.Context, sel ast.SelectionSet, obj *model.NotFoundError) graphql.Marshaler {
 	fields := graphql.CollectFields(ec.OperationContext, sel, notFoundErrorImplementors)
@@ -68930,47 +68940,6 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
-		case "recordings":
-			field := field
-
-			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
-				defer func() {
-					if r := recover(); r != nil {
-						ec.Error(ctx, ec.Recover(ctx, r))
-					}
-				}()
-				res = ec._Query_recordings(ctx, field)
-				return res
-			}
-
-			rrm := func(ctx context.Context) graphql.Marshaler {
-				return ec.OperationContext.RootResolverMiddleware(ctx,
-					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
-			}
-
-			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
-		case "recordingsConnection":
-			field := field
-
-			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
-				defer func() {
-					if r := recover(); r != nil {
-						ec.Error(ctx, ec.Recover(ctx, r))
-					}
-				}()
-				res = ec._Query_recordingsConnection(ctx, field)
-				if res == graphql.Null {
-					atomic.AddUint32(&fs.Invalids, 1)
-				}
-				return res
-			}
-
-			rrm := func(ctx context.Context) graphql.Marshaler {
-				return ec.OperationContext.RootResolverMiddleware(ctx,
-					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
-			}
-
-			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
 		case "clips":
 			field := field
 
@@ -69717,391 +69686,6 @@ func (ec *executionContext) _RebufferingEvent(ctx context.Context, sel ast.Selec
 			}
 		case "rebufferEnd":
 			out.Values[i] = ec._RebufferingEvent_rebufferEnd(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "packetLossPercentage":
-			out.Values[i] = ec._RebufferingEvent_packetLossPercentage(ctx, field, obj)
-		default:
-			panic("unknown field " + strconv.Quote(field.Name))
-		}
-	}
-	out.Dispatch(ctx)
-	if out.Invalids > 0 {
-		return graphql.Null
-	}
-
-	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
-
-	for label, dfs := range deferred {
-		ec.processDeferredGroup(graphql.DeferredGroup{
-			Label:    label,
-			Path:     graphql.GetPath(ctx),
-			FieldSet: dfs,
-			Context:  ctx,
-		})
-	}
-
-	return out
-}
-
-var recordingImplementors = []string{"Recording"}
-
-func (ec *executionContext) _Recording(ctx context.Context, sel ast.SelectionSet, obj *proto.Recording) graphql.Marshaler {
-	fields := graphql.CollectFields(ec.OperationContext, sel, recordingImplementors)
-
-	out := graphql.NewFieldSet(fields)
-	deferred := make(map[string]*graphql.FieldSet)
-	for i, field := range fields {
-		switch field.Name {
-		case "__typename":
-			out.Values[i] = graphql.MarshalString("Recording")
-		case "id":
-			out.Values[i] = ec._Recording_id(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				atomic.AddUint32(&out.Invalids, 1)
-			}
-		case "streamId":
-			out.Values[i] = ec._Recording_streamId(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				atomic.AddUint32(&out.Invalids, 1)
-			}
-		case "title":
-			field := field
-
-			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
-				defer func() {
-					if r := recover(); r != nil {
-						ec.Error(ctx, ec.Recover(ctx, r))
-					}
-				}()
-				res = ec._Recording_title(ctx, field, obj)
-				return res
-			}
-
-			if field.Deferrable != nil {
-				dfs, ok := deferred[field.Deferrable.Label]
-				di := 0
-				if ok {
-					dfs.AddField(field)
-					di = len(dfs.Values) - 1
-				} else {
-					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
-					deferred[field.Deferrable.Label] = dfs
-				}
-				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
-					return innerFunc(ctx, dfs)
-				})
-
-				// don't run the out.Concurrently() call below
-				out.Values[i] = graphql.Null
-				continue
-			}
-
-			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
-		case "duration":
-			out.Values[i] = ec._Recording_duration(ctx, field, obj)
-		case "fileSizeBytes":
-			field := field
-
-			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
-				defer func() {
-					if r := recover(); r != nil {
-						ec.Error(ctx, ec.Recover(ctx, r))
-					}
-				}()
-				res = ec._Recording_fileSizeBytes(ctx, field, obj)
-				return res
-			}
-
-			if field.Deferrable != nil {
-				dfs, ok := deferred[field.Deferrable.Label]
-				di := 0
-				if ok {
-					dfs.AddField(field)
-					di = len(dfs.Values) - 1
-				} else {
-					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
-					deferred[field.Deferrable.Label] = dfs
-				}
-				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
-					return innerFunc(ctx, dfs)
-				})
-
-				// don't run the out.Concurrently() call below
-				out.Values[i] = graphql.Null
-				continue
-			}
-
-			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
-		case "playbackId":
-			out.Values[i] = ec._Recording_playbackId(ctx, field, obj)
-		case "thumbnailUrl":
-			field := field
-
-			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
-				defer func() {
-					if r := recover(); r != nil {
-						ec.Error(ctx, ec.Recover(ctx, r))
-					}
-				}()
-				res = ec._Recording_thumbnailUrl(ctx, field, obj)
-				return res
-			}
-
-			if field.Deferrable != nil {
-				dfs, ok := deferred[field.Deferrable.Label]
-				di := 0
-				if ok {
-					dfs.AddField(field)
-					di = len(dfs.Values) - 1
-				} else {
-					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
-					deferred[field.Deferrable.Label] = dfs
-				}
-				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
-					return innerFunc(ctx, dfs)
-				})
-
-				// don't run the out.Concurrently() call below
-				out.Values[i] = graphql.Null
-				continue
-			}
-
-			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
-		case "startTime":
-			field := field
-
-			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
-				defer func() {
-					if r := recover(); r != nil {
-						ec.Error(ctx, ec.Recover(ctx, r))
-					}
-				}()
-				res = ec._Recording_startTime(ctx, field, obj)
-				return res
-			}
-
-			if field.Deferrable != nil {
-				dfs, ok := deferred[field.Deferrable.Label]
-				di := 0
-				if ok {
-					dfs.AddField(field)
-					di = len(dfs.Values) - 1
-				} else {
-					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
-					deferred[field.Deferrable.Label] = dfs
-				}
-				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
-					return innerFunc(ctx, dfs)
-				})
-
-				// don't run the out.Concurrently() call below
-				out.Values[i] = graphql.Null
-				continue
-			}
-
-			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
-		case "endTime":
-			field := field
-
-			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
-				defer func() {
-					if r := recover(); r != nil {
-						ec.Error(ctx, ec.Recover(ctx, r))
-					}
-				}()
-				res = ec._Recording_endTime(ctx, field, obj)
-				return res
-			}
-
-			if field.Deferrable != nil {
-				dfs, ok := deferred[field.Deferrable.Label]
-				di := 0
-				if ok {
-					dfs.AddField(field)
-					di = len(dfs.Values) - 1
-				} else {
-					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
-					deferred[field.Deferrable.Label] = dfs
-				}
-				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
-					return innerFunc(ctx, dfs)
-				})
-
-				// don't run the out.Concurrently() call below
-				out.Values[i] = graphql.Null
-				continue
-			}
-
-			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
-		case "status":
-			out.Values[i] = ec._Recording_status(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				atomic.AddUint32(&out.Invalids, 1)
-			}
-		case "createdAt":
-			field := field
-
-			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
-				defer func() {
-					if r := recover(); r != nil {
-						ec.Error(ctx, ec.Recover(ctx, r))
-					}
-				}()
-				res = ec._Recording_createdAt(ctx, field, obj)
-				if res == graphql.Null {
-					atomic.AddUint32(&fs.Invalids, 1)
-				}
-				return res
-			}
-
-			if field.Deferrable != nil {
-				dfs, ok := deferred[field.Deferrable.Label]
-				di := 0
-				if ok {
-					dfs.AddField(field)
-					di = len(dfs.Values) - 1
-				} else {
-					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
-					deferred[field.Deferrable.Label] = dfs
-				}
-				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
-					return innerFunc(ctx, dfs)
-				})
-
-				// don't run the out.Concurrently() call below
-				out.Values[i] = graphql.Null
-				continue
-			}
-
-			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
-		case "updatedAt":
-			field := field
-
-			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
-				defer func() {
-					if r := recover(); r != nil {
-						ec.Error(ctx, ec.Recover(ctx, r))
-					}
-				}()
-				res = ec._Recording_updatedAt(ctx, field, obj)
-				if res == graphql.Null {
-					atomic.AddUint32(&fs.Invalids, 1)
-				}
-				return res
-			}
-
-			if field.Deferrable != nil {
-				dfs, ok := deferred[field.Deferrable.Label]
-				di := 0
-				if ok {
-					dfs.AddField(field)
-					di = len(dfs.Values) - 1
-				} else {
-					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
-					deferred[field.Deferrable.Label] = dfs
-				}
-				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
-					return innerFunc(ctx, dfs)
-				})
-
-				// don't run the out.Concurrently() call below
-				out.Values[i] = graphql.Null
-				continue
-			}
-
-			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
-		default:
-			panic("unknown field " + strconv.Quote(field.Name))
-		}
-	}
-	out.Dispatch(ctx)
-	if out.Invalids > 0 {
-		return graphql.Null
-	}
-
-	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
-
-	for label, dfs := range deferred {
-		ec.processDeferredGroup(graphql.DeferredGroup{
-			Label:    label,
-			Path:     graphql.GetPath(ctx),
-			FieldSet: dfs,
-			Context:  ctx,
-		})
-	}
-
-	return out
-}
-
-var recordingEdgeImplementors = []string{"RecordingEdge"}
-
-func (ec *executionContext) _RecordingEdge(ctx context.Context, sel ast.SelectionSet, obj *model.RecordingEdge) graphql.Marshaler {
-	fields := graphql.CollectFields(ec.OperationContext, sel, recordingEdgeImplementors)
-
-	out := graphql.NewFieldSet(fields)
-	deferred := make(map[string]*graphql.FieldSet)
-	for i, field := range fields {
-		switch field.Name {
-		case "__typename":
-			out.Values[i] = graphql.MarshalString("RecordingEdge")
-		case "cursor":
-			out.Values[i] = ec._RecordingEdge_cursor(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "node":
-			out.Values[i] = ec._RecordingEdge_node(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		default:
-			panic("unknown field " + strconv.Quote(field.Name))
-		}
-	}
-	out.Dispatch(ctx)
-	if out.Invalids > 0 {
-		return graphql.Null
-	}
-
-	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
-
-	for label, dfs := range deferred {
-		ec.processDeferredGroup(graphql.DeferredGroup{
-			Label:    label,
-			Path:     graphql.GetPath(ctx),
-			FieldSet: dfs,
-			Context:  ctx,
-		})
-	}
-
-	return out
-}
-
-var recordingsConnectionImplementors = []string{"RecordingsConnection"}
-
-func (ec *executionContext) _RecordingsConnection(ctx context.Context, sel ast.SelectionSet, obj *model.RecordingsConnection) graphql.Marshaler {
-	fields := graphql.CollectFields(ec.OperationContext, sel, recordingsConnectionImplementors)
-
-	out := graphql.NewFieldSet(fields)
-	deferred := make(map[string]*graphql.FieldSet)
-	for i, field := range fields {
-		switch field.Name {
-		case "__typename":
-			out.Values[i] = graphql.MarshalString("RecordingsConnection")
-		case "edges":
-			out.Values[i] = ec._RecordingsConnection_edges(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "pageInfo":
-			out.Values[i] = ec._RecordingsConnection_pageInfo(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "totalCount":
-			out.Values[i] = ec._RecordingsConnection_totalCount(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -71424,39 +71008,6 @@ func (ec *executionContext) _Stream(ctx context.Context, sel ast.SelectionSet, o
 					}
 				}()
 				res = ec._Stream_metrics(ctx, field, obj)
-				return res
-			}
-
-			if field.Deferrable != nil {
-				dfs, ok := deferred[field.Deferrable.Label]
-				di := 0
-				if ok {
-					dfs.AddField(field)
-					di = len(dfs.Values) - 1
-				} else {
-					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
-					deferred[field.Deferrable.Label] = dfs
-				}
-				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
-					return innerFunc(ctx, dfs)
-				})
-
-				// don't run the out.Concurrently() call below
-				out.Values[i] = graphql.Null
-				continue
-			}
-
-			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
-		case "recordings":
-			field := field
-
-			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
-				defer func() {
-					if r := recover(); r != nil {
-						ec.Error(ctx, ec.Recover(ctx, r))
-					}
-				}()
-				res = ec._Stream_recordings(ctx, field, obj)
 				return res
 			}
 
@@ -72992,18 +72543,10 @@ func (ec *executionContext) _StreamHealthMetric(ctx context.Context, sel ast.Sel
 			out.Values[i] = ec._StreamHealthMetric_height(ctx, field, obj)
 		case "codec":
 			out.Values[i] = ec._StreamHealthMetric_codec(ctx, field, obj)
-		case "profile":
-			out.Values[i] = ec._StreamHealthMetric_profile(ctx, field, obj)
 		case "qualityTier":
 			out.Values[i] = ec._StreamHealthMetric_qualityTier(ctx, field, obj)
 		case "gopSize":
 			out.Values[i] = ec._StreamHealthMetric_gopSize(ctx, field, obj)
-		case "packetsSent":
-			out.Values[i] = ec._StreamHealthMetric_packetsSent(ctx, field, obj)
-		case "packetsLost":
-			out.Values[i] = ec._StreamHealthMetric_packetsLost(ctx, field, obj)
-		case "packetLossPercentage":
-			out.Values[i] = ec._StreamHealthMetric_packetLossPercentage(ctx, field, obj)
 		case "bufferState":
 			field := field
 
@@ -73075,8 +72618,6 @@ func (ec *executionContext) _StreamHealthMetric(ctx context.Context, sel ast.Sel
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		case "bufferSize":
 			out.Values[i] = ec._StreamHealthMetric_bufferSize(ctx, field, obj)
-		case "bufferUsed":
-			out.Values[i] = ec._StreamHealthMetric_bufferUsed(ctx, field, obj)
 		case "audioChannels":
 			field := field
 
@@ -74586,6 +74127,280 @@ func (ec *executionContext) _TenantEvent(ctx context.Context, sel ast.SelectionS
 	return out
 }
 
+var tenantSubscriptionImplementors = []string{"TenantSubscription"}
+
+func (ec *executionContext) _TenantSubscription(ctx context.Context, sel ast.SelectionSet, obj *proto.TenantSubscription) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, tenantSubscriptionImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("TenantSubscription")
+		case "id":
+			out.Values[i] = ec._TenantSubscription_id(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "tenantId":
+			out.Values[i] = ec._TenantSubscription_tenantId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "tierId":
+			out.Values[i] = ec._TenantSubscription_tierId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "status":
+			out.Values[i] = ec._TenantSubscription_status(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "billingEmail":
+			out.Values[i] = ec._TenantSubscription_billingEmail(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "startedAt":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._TenantSubscription_startedAt(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "trialEndsAt":
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._TenantSubscription_trialEndsAt(ctx, field, obj)
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "nextBillingDate":
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._TenantSubscription_nextBillingDate(ctx, field, obj)
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "cancelledAt":
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._TenantSubscription_cancelledAt(ctx, field, obj)
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "customPricing":
+			out.Values[i] = ec._TenantSubscription_customPricing(ctx, field, obj)
+		case "customFeatures":
+			out.Values[i] = ec._TenantSubscription_customFeatures(ctx, field, obj)
+		case "customAllocations":
+			out.Values[i] = ec._TenantSubscription_customAllocations(ctx, field, obj)
+		case "paymentMethod":
+			out.Values[i] = ec._TenantSubscription_paymentMethod(ctx, field, obj)
+		case "createdAt":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._TenantSubscription_createdAt(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "updatedAt":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._TenantSubscription_updatedAt(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.processDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
 var tenantUsageImplementors = []string{"TenantUsage"}
 
 func (ec *executionContext) _TenantUsage(ctx context.Context, sel ast.SelectionSet, obj *model.TenantUsage) graphql.Marshaler {
@@ -75987,7 +75802,38 @@ func (ec *executionContext) _ViewerGeographic(ctx context.Context, sel ast.Selec
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		case "connectionAddr":
-			out.Values[i] = ec._ViewerGeographic_connectionAddr(ctx, field, obj)
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._ViewerGeographic_connectionAddr(ctx, field, obj)
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		case "eventType":
 			out.Values[i] = ec._ViewerGeographic_eventType(ctx, field, obj)
 		case "source":
@@ -76146,10 +75992,38 @@ func (ec *executionContext) _ViewerMetrics(ctx context.Context, sel ast.Selectio
 				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "host":
-			out.Values[i] = ec._ViewerMetrics_host(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				atomic.AddUint32(&out.Invalids, 1)
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._ViewerMetrics_host(ctx, field, obj)
+				return res
 			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		case "sessionId":
 			out.Values[i] = ec._ViewerMetrics_sessionId(ctx, field, obj)
 		case "connectionTime":
@@ -76454,8 +76328,6 @@ func (ec *executionContext) _ViewerMetrics(ctx context.Context, sel ast.Selectio
 			if out.Values[i] == graphql.Null {
 				atomic.AddUint32(&out.Invalids, 1)
 			}
-		case "clientIp":
-			out.Values[i] = ec._ViewerMetrics_clientIp(ctx, field, obj)
 		case "clientCountry":
 			out.Values[i] = ec._ViewerMetrics_clientCountry(ctx, field, obj)
 		case "clientCity":
@@ -76938,6 +76810,28 @@ func (ec *executionContext) unmarshalNBoolean2bool(ctx context.Context, v any) (
 func (ec *executionContext) marshalNBoolean2bool(ctx context.Context, sel ast.SelectionSet, v bool) graphql.Marshaler {
 	_ = sel
 	res := graphql.MarshalBoolean(v)
+	if res == graphql.Null {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
+		}
+	}
+	return res
+}
+
+func (ec *executionContext) unmarshalNBoolean2ᚖbool(ctx context.Context, v any) (*bool, error) {
+	res, err := graphql.UnmarshalBoolean(v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNBoolean2ᚖbool(ctx context.Context, sel ast.SelectionSet, v *bool) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	_ = sel
+	res := graphql.MarshalBoolean(*v)
 	if res == graphql.Null {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
@@ -77898,6 +77792,16 @@ func (ec *executionContext) marshalNDeleteClipResult2frameworksᚋapi_gatewayᚋ
 	return ec._DeleteClipResult(ctx, sel, v)
 }
 
+func (ec *executionContext) marshalNDeleteDVRResult2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐDeleteDVRResult(ctx context.Context, sel ast.SelectionSet, v model.DeleteDVRResult) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._DeleteDVRResult(ctx, sel, v)
+}
+
 func (ec *executionContext) marshalNDeleteStreamKeyResult2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐDeleteStreamKeyResult(ctx context.Context, sel ast.SelectionSet, v model.DeleteStreamKeyResult) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
@@ -78576,84 +78480,6 @@ func (ec *executionContext) marshalNRebufferingEvent2ᚖframeworksᚋapi_gateway
 		return graphql.Null
 	}
 	return ec._RebufferingEvent(ctx, sel, v)
-}
-
-func (ec *executionContext) marshalNRecording2ᚖframeworksᚋpkgᚋprotoᚐRecording(ctx context.Context, sel ast.SelectionSet, v *proto.Recording) graphql.Marshaler {
-	if v == nil {
-		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
-			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
-		}
-		return graphql.Null
-	}
-	return ec._Recording(ctx, sel, v)
-}
-
-func (ec *executionContext) marshalNRecordingEdge2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐRecordingEdgeᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.RecordingEdge) graphql.Marshaler {
-	ret := make(graphql.Array, len(v))
-	var wg sync.WaitGroup
-	isLen1 := len(v) == 1
-	if !isLen1 {
-		wg.Add(len(v))
-	}
-	for i := range v {
-		i := i
-		fc := &graphql.FieldContext{
-			Index:  &i,
-			Result: &v[i],
-		}
-		ctx := graphql.WithFieldContext(ctx, fc)
-		f := func(i int) {
-			defer func() {
-				if r := recover(); r != nil {
-					ec.Error(ctx, ec.Recover(ctx, r))
-					ret = nil
-				}
-			}()
-			if !isLen1 {
-				defer wg.Done()
-			}
-			ret[i] = ec.marshalNRecordingEdge2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐRecordingEdge(ctx, sel, v[i])
-		}
-		if isLen1 {
-			f(i)
-		} else {
-			go f(i)
-		}
-
-	}
-	wg.Wait()
-
-	for _, e := range ret {
-		if e == graphql.Null {
-			return graphql.Null
-		}
-	}
-
-	return ret
-}
-
-func (ec *executionContext) marshalNRecordingEdge2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐRecordingEdge(ctx context.Context, sel ast.SelectionSet, v *model.RecordingEdge) graphql.Marshaler {
-	if v == nil {
-		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
-			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
-		}
-		return graphql.Null
-	}
-	return ec._RecordingEdge(ctx, sel, v)
-}
-
-func (ec *executionContext) marshalNRecordingsConnection2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐRecordingsConnection(ctx context.Context, sel ast.SelectionSet, v model.RecordingsConnection) graphql.Marshaler {
-	return ec._RecordingsConnection(ctx, sel, &v)
-}
-
-func (ec *executionContext) marshalNRecordingsConnection2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐRecordingsConnection(ctx context.Context, sel ast.SelectionSet, v *model.RecordingsConnection) graphql.Marshaler {
-	if v == nil {
-		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
-			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
-		}
-		return graphql.Null
-	}
-	return ec._RecordingsConnection(ctx, sel, v)
 }
 
 func (ec *executionContext) marshalNRevokeBootstrapTokenResult2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐRevokeBootstrapTokenResult(ctx context.Context, sel ast.SelectionSet, v model.RevokeBootstrapTokenResult) graphql.Marshaler {
@@ -79525,6 +79351,11 @@ func (ec *executionContext) marshalNUpdateStreamResult2frameworksᚋapi_gateway�
 	return ec._UpdateStreamResult(ctx, sel, v)
 }
 
+func (ec *executionContext) unmarshalNUpdateSubscriptionCustomTermsInput2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐUpdateSubscriptionCustomTermsInput(ctx context.Context, v any) (model.UpdateSubscriptionCustomTermsInput, error) {
+	res, err := ec.unmarshalInputUpdateSubscriptionCustomTermsInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
 func (ec *executionContext) unmarshalNUpdateTenantInput2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐUpdateTenantInput(ctx context.Context, v any) (model.UpdateTenantInput, error) {
 	res, err := ec.unmarshalInputUpdateTenantInput(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
@@ -80006,6 +79837,14 @@ func (ec *executionContext) marshalOAllocationDetails2ᚖframeworksᚋpkgᚋprot
 	return ec._AllocationDetails(ctx, sel, v)
 }
 
+func (ec *executionContext) unmarshalOAllocationDetailsInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐAllocationDetailsInput(ctx context.Context, v any) (*model.AllocationDetailsInput, error) {
+	if v == nil {
+		return nil, nil
+	}
+	res, err := ec.unmarshalInputAllocationDetailsInput(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
 func (ec *executionContext) marshalOArtifactState2ᚖframeworksᚋpkgᚋprotoᚐArtifactState(ctx context.Context, sel ast.SelectionSet, v *proto.ArtifactState) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
@@ -80058,6 +79897,21 @@ func (ec *executionContext) marshalOAvailableCluster2ᚕᚖframeworksᚋapi_gate
 	}
 
 	return ret
+}
+
+func (ec *executionContext) marshalOBillingFeatures2ᚖframeworksᚋpkgᚋprotoᚐBillingFeatures(ctx context.Context, sel ast.SelectionSet, v *proto.BillingFeatures) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._BillingFeatures(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalOBillingFeaturesInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐBillingFeaturesInput(ctx context.Context, v any) (*model.BillingFeaturesInput, error) {
+	if v == nil {
+		return nil, nil
+	}
+	res, err := ec.unmarshalInputBillingFeaturesInput(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
 }
 
 func (ec *executionContext) marshalOBillingStatus2ᚖframeworksᚋpkgᚋprotoᚐBillingStatusResponse(ctx context.Context, sel ast.SelectionSet, v *proto.BillingStatusResponse) graphql.Marshaler {
@@ -80399,6 +80253,21 @@ func (ec *executionContext) marshalOCurrency2ᚖstring(ctx context.Context, sel 
 	_ = ctx
 	res := graphql.MarshalString(*v)
 	return res
+}
+
+func (ec *executionContext) marshalOCustomPricing2ᚖframeworksᚋpkgᚋprotoᚐCustomPricing(ctx context.Context, sel ast.SelectionSet, v *proto.CustomPricing) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._CustomPricing(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalOCustomPricingInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐCustomPricingInput(ctx context.Context, v any) (*model.CustomPricingInput, error) {
+	if v == nil {
+		return nil, nil
+	}
+	res, err := ec.unmarshalInputCustomPricingInput(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
 }
 
 func (ec *executionContext) marshalODVREvent2ᚖframeworksᚋpkgᚋprotoᚐDVRLifecycleData(ctx context.Context, sel ast.SelectionSet, v *proto.DVRLifecycleData) graphql.Marshaler {
@@ -80836,6 +80705,14 @@ func (ec *executionContext) marshalOOverageRates2ᚖframeworksᚋpkgᚋprotoᚐO
 	return ec._OverageRates(ctx, sel, v)
 }
 
+func (ec *executionContext) unmarshalOOverageRatesInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐOverageRatesInput(ctx context.Context, v any) (*model.OverageRatesInput, error) {
+	if v == nil {
+		return nil, nil
+	}
+	res, err := ec.unmarshalInputOverageRatesInput(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
 func (ec *executionContext) unmarshalOPaginationInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐPaginationInput(ctx context.Context, v any) (*model.PaginationInput, error) {
 	if v == nil {
 		return nil, nil
@@ -80980,53 +80857,6 @@ func (ec *executionContext) marshalORebufferingEvent2ᚕᚖframeworksᚋapi_gate
 				defer wg.Done()
 			}
 			ret[i] = ec.marshalNRebufferingEvent2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐRebufferingEvent(ctx, sel, v[i])
-		}
-		if isLen1 {
-			f(i)
-		} else {
-			go f(i)
-		}
-
-	}
-	wg.Wait()
-
-	for _, e := range ret {
-		if e == graphql.Null {
-			return graphql.Null
-		}
-	}
-
-	return ret
-}
-
-func (ec *executionContext) marshalORecording2ᚕᚖframeworksᚋpkgᚋprotoᚐRecordingᚄ(ctx context.Context, sel ast.SelectionSet, v []*proto.Recording) graphql.Marshaler {
-	if v == nil {
-		return graphql.Null
-	}
-	ret := make(graphql.Array, len(v))
-	var wg sync.WaitGroup
-	isLen1 := len(v) == 1
-	if !isLen1 {
-		wg.Add(len(v))
-	}
-	for i := range v {
-		i := i
-		fc := &graphql.FieldContext{
-			Index:  &i,
-			Result: &v[i],
-		}
-		ctx := graphql.WithFieldContext(ctx, fc)
-		f := func(i int) {
-			defer func() {
-				if r := recover(); r != nil {
-					ec.Error(ctx, ec.Recover(ctx, r))
-					ret = nil
-				}
-			}()
-			if !isLen1 {
-				defer wg.Done()
-			}
-			ret[i] = ec.marshalNRecording2ᚖframeworksᚋpkgᚋprotoᚐRecording(ctx, sel, v[i])
 		}
 		if isLen1 {
 			f(i)
@@ -81438,6 +81268,13 @@ func (ec *executionContext) marshalOTenant2ᚖframeworksᚋpkgᚋprotoᚐTenant(
 		return graphql.Null
 	}
 	return ec._Tenant(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalOTenantSubscription2ᚖframeworksᚋpkgᚋprotoᚐTenantSubscription(ctx context.Context, sel ast.SelectionSet, v *proto.TenantSubscription) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._TenantSubscription(ctx, sel, v)
 }
 
 func (ec *executionContext) marshalOTenantUsage2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐTenantUsage(ctx context.Context, sel ast.SelectionSet, v *model.TenantUsage) graphql.Marshaler {

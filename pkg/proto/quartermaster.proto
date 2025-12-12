@@ -354,6 +354,9 @@ message CreateClusterRequest {
   int32 max_concurrent_streams = 8;     // json:"max_concurrent_streams"
   int32 max_concurrent_viewers = 9;     // json:"max_concurrent_viewers"
   int32 max_bandwidth_mbps = 10;        // json:"max_bandwidth_mbps"
+  // Cluster ownership for dedicated B2B clusters
+  optional string owner_tenant_id = 20; // json:"owner_tenant_id,omitempty" - UUID of owning tenant
+  string deployment_model = 21;         // json:"deployment_model" - 'shared' or 'managed' (default: 'managed')
 }
 
 // Matches pkg/api/quartermaster/types.go:UpdateClusterRequest (lines 378-392)
@@ -372,6 +375,9 @@ message UpdateClusterRequest {
   optional int32 current_bandwidth_mbps = 12; // json:"current_bandwidth_mbps,omitempty"
   optional string health_status = 13;   // json:"health_status,omitempty"
   optional bool is_active = 14;         // json:"is_active,omitempty"
+  // Cluster ownership for dedicated B2B clusters
+  optional string owner_tenant_id = 20; // json:"owner_tenant_id,omitempty" - Set/clear ownership (empty string clears)
+  optional string deployment_model = 21; // json:"deployment_model,omitempty" - Change isolation level
 }
 
 message ListClustersForTenantRequest {

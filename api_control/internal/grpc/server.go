@@ -88,7 +88,6 @@ type CommodoreServer struct {
 	pb.UnimplementedDeveloperServiceServer
 	pb.UnimplementedClipServiceServer
 	pb.UnimplementedDVRServiceServer
-	pb.UnimplementedRecordingServiceServer
 	pb.UnimplementedViewerServiceServer
 	db                   *sql.DB
 	logger               logging.Logger
@@ -1402,6 +1401,64 @@ func (s *CommodoreServer) UpdateStream(ctx context.Context, req *pb.UpdateStream
 		}
 	}
 
+	// Handle dynamic DVR start/stop when recording config changes while stream is live
+	if req.Record != nil && s.foghornClient != nil {
+		newRecordingEnabled := *req.Record
+		// Capture variables for goroutine
+		internalName := streamID
+		tid := tenantID
+
+		go func() {
+			// Check if stream is currently live
+			contentType := "live"
+			meta, err := s.foghornClient.GetStreamMeta(context.Background(), &pb.StreamMetaRequest{
+				InternalName: internalName,
+				ContentType:  &contentType,
+			})
+			if err != nil || meta.GetMetaSummary() == nil || !meta.GetMetaSummary().GetIsLive() {
+				// Stream not live - config will take effect on next stream start
+				return
+			}
+
+			// Stream is live - handle recording toggle
+			if newRecordingEnabled {
+				// Start DVR recording
+				_, err := s.foghornClient.StartDVR(context.Background(), &pb.StartDVRRequest{
+					TenantId:     tid,
+					InternalName: internalName,
+				})
+				if err != nil {
+					s.logger.WithError(err).WithField("internal_name", internalName).
+						Error("Failed to start DVR after config change")
+				} else {
+					s.logger.WithField("internal_name", internalName).
+						Info("Started DVR recording after config enabled while live")
+				}
+			} else {
+				// Stop DVR - find active recording first
+				recordings, err := s.foghornClient.ListDVRRecordings(context.Background(), tid, &internalName, nil)
+				if err != nil {
+					s.logger.WithError(err).Error("Failed to list DVR recordings")
+					return
+				}
+				for _, rec := range recordings.GetDvrRecordings() {
+					status := rec.GetStatus()
+					if status == "recording" || status == "requested" || status == "starting" {
+						_, err := s.foghornClient.StopDVR(context.Background(), rec.GetDvrHash(), &tid)
+						if err != nil {
+							s.logger.WithError(err).WithField("dvr_hash", rec.GetDvrHash()).
+								Error("Failed to stop DVR after config change")
+						} else {
+							s.logger.WithField("internal_name", internalName).
+								Info("Stopped DVR recording after config disabled while live")
+						}
+						break
+					}
+				}
+			}
+		}()
+	}
+
 	return s.queryStream(ctx, streamID, userID, tenantID)
 }
 
@@ -1958,159 +2015,6 @@ func (s *CommodoreServer) RevokeAPIToken(ctx context.Context, req *pb.RevokeAPIT
 }
 
 // ============================================================================
-// RECORDING SERVICE (Gateway → Commodore)
-// ============================================================================
-
-// ListRecordings lists recordings for a stream or tenant
-func (s *CommodoreServer) ListRecordings(ctx context.Context, req *pb.ListRecordingsRequest) (*pb.ListRecordingsResponse, error) {
-	userID, tenantID, err := extractUserContext(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	// Parse bidirectional pagination
-	params, err := pagination.Parse(req.GetPagination())
-	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "invalid pagination: %v", err)
-	}
-
-	builder := &pagination.KeysetBuilder{
-		TimestampColumn: "r.created_at",
-		IDColumn:        "r.id",
-	}
-
-	// Build base query with optional stream filter
-	var baseWhere string
-	var args []interface{}
-	argIdx := 1
-
-	if req.GetStreamId() != "" {
-		baseWhere = "s.internal_name = $1 AND s.user_id = $2 AND s.tenant_id = $3"
-		args = []interface{}{req.GetStreamId(), userID, tenantID}
-		argIdx = 4
-	} else {
-		baseWhere = "s.user_id = $1 AND s.tenant_id = $2"
-		args = []interface{}{userID, tenantID}
-		argIdx = 3
-	}
-
-	// Get total count
-	var total int32
-	countQuery := fmt.Sprintf(`
-		SELECT COUNT(*) FROM commodore.recordings r
-		JOIN commodore.streams s ON r.stream_id = s.internal_name
-		WHERE %s
-	`, baseWhere)
-	if err := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
-	}
-
-	// Build select query with keyset pagination
-	query := fmt.Sprintf(`
-		SELECT r.id, r.stream_id, r.filename, r.file_size, r.duration, r.status, r.playback_id, r.start_time, r.end_time, r.created_at, r.updated_at
-		FROM commodore.recordings r
-		JOIN commodore.streams s ON r.stream_id = s.internal_name
-		WHERE %s`, baseWhere)
-
-	// Add keyset condition if cursor provided
-	if condition, cursorArgs := builder.Condition(params, argIdx); condition != "" {
-		query += " AND " + condition
-		args = append(args, cursorArgs...)
-	}
-
-	// Add ORDER BY and LIMIT
-	query += " " + builder.OrderBy(params)
-	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
-
-	rows, err := s.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
-	}
-	defer rows.Close()
-
-	var recordings []*pb.Recording
-	for rows.Next() {
-		var rec pb.Recording
-		var fileSize, duration sql.NullInt64
-		var playbackID sql.NullString
-		var startTime, endTime sql.NullTime
-		var createdAt, updatedAt time.Time
-
-		err := rows.Scan(&rec.Id, &rec.StreamId, &rec.Filename, &fileSize, &duration,
-			&rec.Status, &playbackID, &startTime, &endTime, &createdAt, &updatedAt)
-		if err != nil {
-			continue
-		}
-
-		if fileSize.Valid {
-			rec.FileSize = &fileSize.Int64
-		}
-		if duration.Valid {
-			dur := int32(duration.Int64)
-			rec.Duration = &dur
-		}
-		if playbackID.Valid {
-			rec.PlaybackId = &playbackID.String
-		}
-		if startTime.Valid {
-			rec.StartTime = timestamppb.New(startTime.Time)
-		}
-		if endTime.Valid {
-			rec.EndTime = timestamppb.New(endTime.Time)
-		}
-		rec.CreatedAt = timestamppb.New(createdAt)
-		rec.UpdatedAt = timestamppb.New(updatedAt)
-
-		recordings = append(recordings, &rec)
-	}
-
-	// Detect hasMore and trim results
-	hasMore := len(recordings) > params.Limit
-	if hasMore {
-		recordings = recordings[:params.Limit]
-	}
-
-	// Reverse results if backward pagination
-	if params.Direction == pagination.Backward && len(recordings) > 0 {
-		for i, j := 0, len(recordings)-1; i < j; i, j = i+1, j-1 {
-			recordings[i], recordings[j] = recordings[j], recordings[i]
-		}
-	}
-
-	// Build cursors from results
-	var startCursor, endCursor string
-	if len(recordings) > 0 {
-		first := recordings[0]
-		last := recordings[len(recordings)-1]
-		startCursor = pagination.EncodeCursor(first.CreatedAt.AsTime(), first.Id)
-		endCursor = pagination.EncodeCursor(last.CreatedAt.AsTime(), last.Id)
-	}
-
-	// Build response with proper hasNextPage/hasPreviousPage
-	resp := &pb.ListRecordingsResponse{
-		Recordings: recordings,
-		Pagination: &pb.CursorPaginationResponse{
-			TotalCount: total,
-		},
-	}
-	if startCursor != "" {
-		resp.Pagination.StartCursor = &startCursor
-	}
-	if endCursor != "" {
-		resp.Pagination.EndCursor = &endCursor
-	}
-	if params.Direction == pagination.Forward {
-		resp.Pagination.HasNextPage = hasMore
-		resp.Pagination.HasPreviousPage = params.Cursor != nil
-	} else {
-		resp.Pagination.HasPreviousPage = hasMore
-		resp.Pagination.HasNextPage = params.Cursor != nil
-	}
-
-	return resp, nil
-}
-
-// ============================================================================
 // HELPER FUNCTIONS
 // ============================================================================
 
@@ -2472,7 +2376,6 @@ func NewGRPCServer(cfg CommodoreServerConfig) *grpc.Server {
 	pb.RegisterStreamServiceServer(server, commodoreServer)
 	pb.RegisterStreamKeyServiceServer(server, commodoreServer)
 	pb.RegisterDeveloperServiceServer(server, commodoreServer)
-	pb.RegisterRecordingServiceServer(server, commodoreServer)
 	// ClipService, DVRService, and ViewerService proxy to Foghorn via gRPC
 	pb.RegisterClipServiceServer(server, commodoreServer)
 	pb.RegisterDVRServiceServer(server, commodoreServer)

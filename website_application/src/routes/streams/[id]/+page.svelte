@@ -6,7 +6,7 @@
   import {
     GetStreamStore,
     GetStreamKeysStore,
-    GetStreamRecordingsStore,
+    GetDVRRequestsStore,
     GetStreamAnalyticsStore,
     GetCurrentStreamHealthStore,
     GetViewerCountTimeSeriesStore,
@@ -48,6 +48,7 @@
     OverviewTabPanel,
     StreamKeysTabPanel,
     RecordingsTabPanel,
+    PlaybackTabPanel,
     HealthSidebar,
     EventLog,
     StreamSetupPanel,
@@ -58,7 +59,7 @@
   // Houdini stores
   const streamStore = new GetStreamStore();
   const streamKeysStore = new GetStreamKeysStore();
-  const recordingsStore = new GetStreamRecordingsStore();
+  const dvrRequestsStore = new GetDVRRequestsStore();
   const analyticsStore = new GetStreamAnalyticsStore();
   const healthStore = new GetCurrentStreamHealthStore();
   const viewerCountStore = new GetViewerCountTimeSeriesStore();
@@ -76,7 +77,7 @@
   // Types from Houdini
   type StreamType = NonNullable<NonNullable<typeof $streamStore.data>["stream"]>;
   type StreamKeyType = NonNullable<NonNullable<typeof $streamKeysStore.data>["streamKeys"]>[0];
-  type RecordingType = NonNullable<NonNullable<typeof $recordingsStore.data>["recordings"]>[0];
+  type RecordingType = NonNullable<NonNullable<NonNullable<typeof $dvrRequestsStore.data>["dvrRecordingsConnection"]>["edges"]>[0]["node"];
   type TrackInfo = NonNullable<TrackListUpdates$result["trackListUpdates"]>;
   type HealthData = NonNullable<NonNullable<typeof $healthStore.data>["currentStreamHealth"]>;
 
@@ -86,7 +87,7 @@
   // Derived state from Houdini stores
   let stream = $derived($streamStore.data?.stream ?? null);
   let streamKeys = $derived($streamKeysStore.data?.streamKeys ?? []);
-  let recordings = $derived($recordingsStore.data?.recordings ?? []);
+  let recordings = $derived($dvrRequestsStore.data?.dvrRecordingsConnection?.edges?.map(e => e.node) ?? []);
   let analytics = $derived($analyticsStore.data?.streamAnalytics ?? null);
   let health = $derived($healthStore.data?.currentStreamHealth ?? null);
   let viewerMetrics = $derived($viewerCountStore.data?.viewerCountTimeSeries ?? []);
@@ -341,7 +342,7 @@
 
       await Promise.all([
         streamKeysStore.fetch({ variables: { streamId } }),
-        recordingsStore.fetch({ variables: { streamId } }),
+        dvrRequestsStore.fetch({ variables: { internalName: streamId } }),
         analyticsStore.fetch({ variables: { stream: streamUUID, timeRange } }).catch(() => null),
         healthStore.fetch({ variables: { stream: streamUUID } }).catch(() => null),
         viewerCountStore.fetch({ variables: { stream: streamUUID, timeRange, interval: "5m" } }).catch(() => null),
@@ -515,6 +516,7 @@
   const SettingsIcon = getIconComponent("Settings");
   const KeyIcon = getIconComponent("Key");
   const VideoIcon = getIconComponent("Video");
+  const PlayIcon = getIconComponent("Play");
 </script>
 
 <svelte:head>
@@ -668,6 +670,13 @@
                     <VideoIcon class="w-4 h-4" />
                     Recordings ({recordings.length})
                   </TabsTrigger>
+                  <TabsTrigger
+                    value="playback"
+                    class="gap-2 px-4 py-3 text-sm font-medium text-muted-foreground border-b-2 border-transparent rounded-none data-[state=active]:text-info data-[state=active]:border-info cursor-pointer hover:bg-muted/20 transition-colors"
+                  >
+                    <PlayIcon class="w-4 h-4" />
+                    Playback
+                  </TabsTrigger>
                 </TabsList>
 
               <TabsContent value="overview" class="p-0 min-h-[20rem]">
@@ -704,7 +713,12 @@
                   {recordings}
                   onEnableRecording={() => (showEditModal = true)}
                   onCopyLink={copyToClipboard}
-                  resolveUrl={resolve}
+                />
+              </TabsContent>
+
+              <TabsContent value="playback" class="p-0 min-h-[20rem]">
+                <PlaybackTabPanel
+                  playbackId={stream?.playbackId}
                 />
               </TabsContent>
             </Tabs>
@@ -727,6 +741,7 @@
           streamName={stream.name}
           {isLive}
           {health}
+          {analytics}
           collapsed={healthSidebarCollapsed}
           onToggle={toggleHealthSidebar}
         />

@@ -201,16 +201,11 @@ fragment StreamHealthFields on StreamHealthMetric {
   width
   height
   codec
-  profile
   qualityTier
   gopSize
-  packetsSent
-  packetsLost
-  packetLossPercentage
   bufferState
   bufferHealth
   bufferSize
-  bufferUsed
   audioChannels
   audioSampleRate
   audioCodec

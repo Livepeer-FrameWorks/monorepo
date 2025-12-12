@@ -258,9 +258,9 @@ const LandingPage = () => {
         className="landing-hero"
         surface="gradient"
         accents={landingHeroAccents}
-        title="Full-Stack Video Services"
+        title="Sovereign Video Infrastructure"
         description="Most streaming platforms lock you into their ecosystem. We give you the keys."
-        support="Open source stack • Permissive licenses • No cloud dependencies • Scales globally"
+        support="Self-hosted or cloud • No vendor lock-in • Public domain licensed • True ownership"
         primaryAction={{
           label: 'Start Free',
           href: config.appUrl,

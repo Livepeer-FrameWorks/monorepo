@@ -10,16 +10,11 @@ query GetCurrentStreamHealth($stream: String!) {
     width
     height
     codec
-    profile
     qualityTier
     gopSize
-    packetsSent
-    packetsLost
-    packetLossPercentage
     bufferState
     bufferHealth
     bufferSize
-    bufferUsed
     audioChannels
     audioSampleRate
     audioCodec

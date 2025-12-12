@@ -3,7 +3,7 @@
   import { Input } from "$lib/components/ui/input";
   import { Textarea } from "$lib/components/ui/textarea";
   import { getIconComponent } from "$lib/iconUtils";
-  import { getIngestUrls, getDeliveryUrls, getEmbedCode, getDocsSiteUrl } from "$lib/config";
+  import { getIngestUrls, getContentDeliveryUrls, getDocsSiteUrl, type PrimaryProtocolUrls, type AdditionalProtocolUrls } from "$lib/config";
   import { toast } from "$lib/stores/toast";
 
   interface Stream {
@@ -22,13 +22,13 @@
   let { stream, onRefreshKey, refreshingKey = false }: Props = $props();
 
   let copiedField = $state<string | null>(null);
+  let showAdditionalProtocols = $state(false);
 
-  // Derive URLs from stream data
+  // Derive URLs from stream data using unified helper
   let ingestUrls = $derived(getIngestUrls(stream.streamKey || ""));
-  let deliveryUrls = $derived(getDeliveryUrls(stream.playbackId || stream.name || ""));
-  let embedCode = $derived(getEmbedCode(stream.playbackId || stream.name || ""));
+  let contentUrls = $derived(getContentDeliveryUrls(stream.playbackId || stream.name || "", "live"));
 
-  // Protocol definitions
+  // Protocol definitions for ingest
   const ingestProtocols = [
     {
       key: "rtmp",
@@ -54,26 +54,43 @@
     },
   ];
 
-  const deliveryProtocols = [
-    {
-      key: "hls",
-      name: "HLS",
-      icon: "Play",
-      description: "HTTP Live Streaming - widest compatibility",
-      recommended: true,
-    },
-    {
-      key: "webrtc",
-      name: "WebRTC",
-      icon: "Zap",
-      description: "Ultra-low latency delivery",
-    },
-    {
-      key: "embed",
-      name: "React Player",
-      icon: "Code",
-      description: "Embed using the NPM package",
-    },
+  // Primary delivery protocols (shown by default)
+  const primaryDeliveryProtocols: Array<{
+    key: keyof PrimaryProtocolUrls;
+    name: string;
+    icon: string;
+    description: string;
+    recommended?: boolean;
+  }> = [
+    { key: "hls", name: "HLS", icon: "Play", description: "HTTP Live Streaming - best compatibility", recommended: true },
+    { key: "hlsCmaf", name: "HLS (CMAF)", icon: "Play", description: "Lower latency HLS variant" },
+    { key: "dash", name: "DASH", icon: "Film", description: "MPEG-DASH adaptive streaming" },
+    { key: "webrtc", name: "WebRTC", icon: "Zap", description: "Ultra-low latency (~0.5s)" },
+    { key: "mp4", name: "MP4", icon: "FileVideo", description: "Progressive download" },
+    { key: "webm", name: "WebM", icon: "FileVideo", description: "Open format (VP8/VP9)" },
+    { key: "srt", name: "SRT", icon: "Radio", description: "Secure Reliable Transport" },
+  ];
+
+  // Additional delivery protocols (expandable)
+  const additionalDeliveryProtocols: Array<{
+    key: keyof AdditionalProtocolUrls;
+    name: string;
+    icon: string;
+    description: string;
+  }> = [
+    { key: "rtsp", name: "RTSP", icon: "Monitor", description: "IP cameras, VLC, ffmpeg" },
+    { key: "rtmp", name: "RTMP", icon: "Radio", description: "Legacy Flash/OBS playback" },
+    { key: "ts", name: "MPEG-TS", icon: "FileVideo", description: "Transport stream, DVB compatible" },
+    { key: "mkv", name: "MKV", icon: "FileVideo", description: "Matroska container" },
+    { key: "flv", name: "FLV", icon: "FileVideo", description: "Flash Video (legacy)" },
+    { key: "aac", name: "AAC", icon: "Music", description: "Audio-only stream" },
+    { key: "smoothStreaming", name: "Smooth Streaming", icon: "Film", description: "Microsoft format" },
+    { key: "hds", name: "HDS", icon: "Film", description: "Adobe HTTP Dynamic Streaming" },
+    { key: "sdp", name: "SDP", icon: "FileText", description: "Session Description Protocol" },
+    { key: "rawH264", name: "Raw H264", icon: "FileVideo", description: "Elementary video stream" },
+    { key: "wsmp4", name: "WS/MP4", icon: "FileVideo", description: "MP4 over WebSocket" },
+    { key: "wsWebrtc", name: "WS/WebRTC", icon: "Zap", description: "WebRTC over WebSocket" },
+    { key: "dtsc", name: "DTSC", icon: "Server", description: "MistServer internal" },
   ];
 
   async function copyToClipboard(text: string, field: string) {
@@ -93,6 +110,10 @@
   const CheckCircleIcon = getIconComponent("CheckCircle");
   const CopyIcon = getIconComponent("Copy");
   const KeyIcon = getIconComponent("Key");
+  const ChevronDownIcon = getIconComponent("ChevronDown");
+  const ChevronUpIcon = getIconComponent("ChevronUp");
+  const ExternalLinkIcon = getIconComponent("ExternalLink");
+  const CodeIcon = getIconComponent("Code");
 </script>
 
 <div class="dashboard-grid border-t border-[hsl(var(--tn-fg-gutter)/0.3)]">
@@ -200,81 +221,150 @@
     <div class="slab-header">
       <h3 class="font-semibold text-xs uppercase tracking-wide text-muted-foreground">Playback URLs</h3>
       <p class="text-xs text-muted-foreground/70 mt-1">
-        Share these URLs with viewers to watch your stream
+        Share these URLs with viewers to watch your stream.
+        <a
+          href={`${getDocsSiteUrl()}/streamers/playback`}
+          target="_blank"
+          rel="noopener noreferrer"
+          class="text-info hover:underline inline-flex items-center gap-1"
+        >
+          Protocol docs <ExternalLinkIcon class="w-3 h-3" />
+        </a>
       </p>
     </div>
     <div class="slab-body--flush">
-      {#each deliveryProtocols as protocol}
+      <!-- Primary protocols -->
+      {#each primaryDeliveryProtocols as protocol}
         {@const ProtocolIcon = getIconComponent(protocol.icon)}
-        {@const url = protocol.key === "embed" ? embedCode : deliveryUrls[protocol.key as keyof typeof deliveryUrls]}
-        <div class="p-6 border-b border-[hsl(var(--tn-fg-gutter)/0.3)] last:border-0">
+        {@const url = contentUrls.primary[protocol.key]}
+        <div class="p-4 border-b border-[hsl(var(--tn-fg-gutter)/0.3)]">
           <div class="flex items-center justify-between mb-2">
             <div class="flex items-center gap-2">
               <ProtocolIcon class="w-4 h-4 text-info" />
-              <span class="font-medium text-foreground">{protocol.name}</span>
+              <span class="font-medium text-foreground text-sm">{protocol.name}</span>
               {#if protocol.recommended}
                 <span class="text-xs px-1.5 py-0.5 bg-success/20 text-success rounded-none">Recommended</span>
               {/if}
             </div>
           </div>
           <p class="text-xs text-muted-foreground mb-2">{protocol.description}</p>
-
-          {#if protocol.key === "embed"}
-            <Textarea
-              readonly
+          <div class="flex items-center gap-2">
+            <Input
+              type="text"
               value={url || "Playback ID required"}
-              class="font-mono text-xs h-32 resize-none"
+              readonly
+              class="flex-1 font-mono text-xs"
             />
-            <div class="mt-2 flex gap-2">
-              <Button
-                variant="ghost"
-                size="sm"
-                class="flex-1 border border-border/30"
-                onclick={() => copyToClipboard(url || "", "embed")}
-                disabled={!url}
-              >
-                {#if copiedField === "embed"}
-                  <CheckCircleIcon class="w-4 h-4 mr-2" />
-                  Copied!
-                {:else}
-                  <CopyIcon class="w-4 h-4 mr-2" />
-                  Copy Code
-                {/if}
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                class="border border-border/30"
-                onclick={() => window.open(`${getDocsSiteUrl()}/streamers/playback`, '_blank')}
-              >
-                View Docs
-              </Button>
-            </div>
-          {:else}
-            <div class="flex items-center gap-2">
-              <Input
-                type="text"
-                value={url || "Playback ID required"}
-                readonly
-                class="flex-1 font-mono text-xs"
-              />
-              <Button
-                variant="ghost"
-                size="sm"
-                onclick={() => copyToClipboard(url || "", `delivery-${protocol.key}`)}
-                disabled={!url}
-                class="border border-border/30"
-              >
-                {#if copiedField === `delivery-${protocol.key}`}
-                  <CheckCircleIcon class="w-4 h-4" />
-                {:else}
-                  <CopyIcon class="w-4 h-4" />
-                {/if}
-              </Button>
-            </div>
-          {/if}
+            <Button
+              variant="ghost"
+              size="sm"
+              onclick={() => copyToClipboard(url || "", `primary-${protocol.key}`)}
+              disabled={!url}
+              class="border border-border/30"
+            >
+              {#if copiedField === `primary-${protocol.key}`}
+                <CheckCircleIcon class="w-4 h-4" />
+              {:else}
+                <CopyIcon class="w-4 h-4" />
+              {/if}
+            </Button>
+          </div>
         </div>
       {/each}
+
+      <!-- Embed code -->
+      <div class="p-4 border-b border-[hsl(var(--tn-fg-gutter)/0.3)]">
+        <div class="flex items-center justify-between mb-2">
+          <div class="flex items-center gap-2">
+            <CodeIcon class="w-4 h-4 text-info" />
+            <span class="font-medium text-foreground text-sm">React Player</span>
+          </div>
+        </div>
+        <p class="text-xs text-muted-foreground mb-2">Embed using the NPM package</p>
+        <Textarea
+          readonly
+          value={contentUrls.embed || "Playback ID required"}
+          class="font-mono text-xs h-32 resize-none"
+        />
+        <div class="mt-2 flex gap-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            class="flex-1 border border-border/30"
+            onclick={() => copyToClipboard(contentUrls.embed || "", "embed")}
+            disabled={!contentUrls.embed}
+          >
+            {#if copiedField === "embed"}
+              <CheckCircleIcon class="w-4 h-4 mr-2" />
+              Copied!
+            {:else}
+              <CopyIcon class="w-4 h-4 mr-2" />
+              Copy Code
+            {/if}
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            class="border border-border/30"
+            onclick={() => window.open(`${getDocsSiteUrl()}/streamers/playback`, '_blank')}
+          >
+            View Docs
+          </Button>
+        </div>
+      </div>
+
+      <!-- Additional protocols toggle -->
+      <button
+        class="w-full p-3 flex items-center justify-between text-sm text-muted-foreground hover:bg-muted/10 transition-colors"
+        onclick={() => showAdditionalProtocols = !showAdditionalProtocols}
+      >
+        <span>{showAdditionalProtocols ? "Hide" : "Show"} additional protocols ({additionalDeliveryProtocols.length})</span>
+        {#if showAdditionalProtocols}
+          <ChevronUpIcon class="w-4 h-4" />
+        {:else}
+          <ChevronDownIcon class="w-4 h-4" />
+        {/if}
+      </button>
+
+      <!-- Additional protocols (collapsible) -->
+      {#if showAdditionalProtocols}
+        <div class="border-t border-[hsl(var(--tn-fg-gutter)/0.3)] bg-muted/5">
+          {#each additionalDeliveryProtocols as protocol}
+            {@const ProtocolIcon = getIconComponent(protocol.icon)}
+            {@const url = contentUrls.additional[protocol.key]}
+            <div class="p-4 border-b border-[hsl(var(--tn-fg-gutter)/0.2)] last:border-0">
+              <div class="flex items-center justify-between mb-1">
+                <div class="flex items-center gap-2">
+                  <ProtocolIcon class="w-3 h-3 text-muted-foreground" />
+                  <span class="font-medium text-foreground text-sm">{protocol.name}</span>
+                </div>
+              </div>
+              <p class="text-xs text-muted-foreground mb-2">{protocol.description}</p>
+              <div class="flex items-center gap-2">
+                <Input
+                  type="text"
+                  value={url || "Playback ID required"}
+                  readonly
+                  class="flex-1 font-mono text-xs"
+                />
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onclick={() => copyToClipboard(url || "", `additional-${protocol.key}`)}
+                  disabled={!url}
+                  class="border border-border/30"
+                >
+                  {#if copiedField === `additional-${protocol.key}`}
+                    <CheckCircleIcon class="w-4 h-4" />
+                  {:else}
+                    <CopyIcon class="w-4 h-4" />
+                  {/if}
+                </Button>
+              </div>
+            </div>
+          {/each}
+        </div>
+      {/if}
     </div>
   </div>
 </div>

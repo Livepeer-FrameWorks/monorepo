@@ -7,6 +7,5 @@ query GetRebufferingEvents($stream: String!, $timeRange: TimeRangeInput) {
     previousState
     rebufferStart
     rebufferEnd
-    packetLossPercentage
   }
 }

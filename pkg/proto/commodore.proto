@@ -515,43 +515,9 @@ service DVRService {
   // StartDVR is in InternalService (called by Foghorn)
   // These are user-facing DVR management
   rpc StopDVR(shared.StopDVRRequest) returns (shared.StopDVRResponse);
+  rpc DeleteDVR(shared.DeleteDVRRequest) returns (shared.DeleteDVRResponse);
   rpc ListDVRRequests(shared.ListDVRRecordingsRequest) returns (shared.ListDVRRecordingsResponse);
   rpc GetDVRStatus(shared.GetDVRStatusRequest) returns (shared.DVRInfo);
-}
-
-// ============================================================================
-// RECORDING SERVICE (Gateway → Commodore)
-// Source: pkg/api/commodore/types.go
-// ============================================================================
-
-service RecordingService {
-  rpc ListRecordings(ListRecordingsRequest) returns (ListRecordingsResponse);
-}
-
-message ListRecordingsRequest {
-  string stream_id = 1;                 // optional filter by stream
-  common.CursorPaginationRequest pagination = 2;
-}
-
-// Matches pkg/api/commodore/types.go:RecordingsResponse (lines 370-374)
-message ListRecordingsResponse {
-  repeated Recording recordings = 1;    // json:"recordings"
-  common.CursorPaginationResponse pagination = 2;
-}
-
-// Matches pkg/api/commodore/types.go:Recording (lines 355-368)
-message Recording {
-  string id = 1;                        // json:"id"
-  string stream_id = 2;                 // json:"stream_id"
-  string filename = 3;                  // json:"filename"
-  optional int64 file_size = 4;         // json:"file_size"
-  optional int32 duration = 5;          // json:"duration"
-  string status = 6;                    // json:"status"
-  optional string playback_id = 7;      // json:"playback_id"
-  optional google.protobuf.Timestamp start_time = 8;  // json:"start_time"
-  optional google.protobuf.Timestamp end_time = 9;    // json:"end_time"
-  google.protobuf.Timestamp created_at = 10; // json:"created_at"
-  google.protobuf.Timestamp updated_at = 11; // json:"updated_at"
 }
 
 // ============================================================================

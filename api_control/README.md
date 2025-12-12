@@ -1,6 +1,12 @@
 # Commodore (Control Plane)
 
-Commodore is the control API. It owns users, streams, API tokens and exposes tenant‑scoped gRPC endpoints (HTTP for health/metrics only).
+Commodore is the control API. It owns users, streams, API tokens and exposes tenant‑scoped gRPC endpoints. **Works identically in self-hosted, hybrid, and managed deployments.**
+
+## Why Commodore?
+
+- **Tenant isolation**: Every query is scoped to the authenticated tenant—no cross-tenant data access
+- **Deployment agnostic**: Same API and behavior whether running on your infrastructure or ours
+- **No external dependencies**: Pure Go + PostgreSQL, no cloud services required
 
 ## What it does
 - User authentication and authorization

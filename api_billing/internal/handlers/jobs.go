@@ -299,12 +299,31 @@ func (jm *JobManager) generateMonthlyInvoices() {
 			// viewer_hours from usage data, convert to minutes
 			viewerMinutes := usageData["viewer_hours"] * 60
 
+			// Determine effective allocations (custom overrides tier defaults)
+			effectiveBandwidthAllocation := bandwidthAllocation
+			if customAllocations.Limit != nil {
+				// Custom allocation override for bandwidth (primary billing metric)
+				effectiveBandwidthAllocation = customAllocations
+			}
+
+			// Determine effective overage rates (custom pricing overrides tier defaults)
+			effectiveOverageRates := overageRates
+			if customPricing.OverageRates.Bandwidth.UnitPrice > 0 {
+				effectiveOverageRates.Bandwidth = customPricing.OverageRates.Bandwidth
+			}
+			if customPricing.OverageRates.Storage.UnitPrice > 0 {
+				effectiveOverageRates.Storage = customPricing.OverageRates.Storage
+			}
+			if customPricing.OverageRates.Compute.UnitPrice > 0 {
+				effectiveOverageRates.Compute = customPricing.OverageRates.Compute
+			}
+
 			// 1. Bandwidth (delivered minutes)
-			if bandwidthAllocation.Limit != nil && viewerMinutes > 0 {
-				includedMinutes := *bandwidthAllocation.Limit
+			if effectiveBandwidthAllocation.Limit != nil && viewerMinutes > 0 {
+				includedMinutes := *effectiveBandwidthAllocation.Limit
 				billable := viewerMinutes - includedMinutes
-				if billable > 0 && overageRates.Bandwidth.UnitPrice > 0 {
-					meteredAmount += billable * overageRates.Bandwidth.UnitPrice
+				if billable > 0 && effectiveOverageRates.Bandwidth.UnitPrice > 0 {
+					meteredAmount += billable * effectiveOverageRates.Bandwidth.UnitPrice
 				}
 			}
 
@@ -316,17 +335,17 @@ func (jm *JobManager) generateMonthlyInvoices() {
 			if storageAllocation.Limit != nil && storageUsage > 0 {
 				includedStorage := *storageAllocation.Limit
 				billable := storageUsage - includedStorage
-				if billable > 0 && overageRates.Storage.UnitPrice > 0 {
-					meteredAmount += billable * overageRates.Storage.UnitPrice
+				if billable > 0 && effectiveOverageRates.Storage.UnitPrice > 0 {
+					meteredAmount += billable * effectiveOverageRates.Storage.UnitPrice
 				}
 			}
 
 			// 3. Compute overage (GPU hours)
 			gpuHours := usageData["gpu_hours"]
-			if gpuHours > 0 && overageRates.Compute.UnitPrice > 0 {
+			if gpuHours > 0 && effectiveOverageRates.Compute.UnitPrice > 0 {
 				// TODO: Get compute allocation limit when compute billing is implemented
 				// For now, charge all GPU hours at overage rate
-				meteredAmount += gpuHours * overageRates.Compute.UnitPrice
+				meteredAmount += gpuHours * effectiveOverageRates.Compute.UnitPrice
 			}
 		}
 

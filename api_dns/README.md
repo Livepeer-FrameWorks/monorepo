@@ -1,6 +1,12 @@
 # Navigator (DNS & Certificate Manager)
 
-Automates public DNS records and TLS certificate issuance. Currently uses Cloudflare, with plans to migrate to self-hosted anycast DNS once ASN is acquired.
+Automates public DNS records and TLS certificate issuance for tenant custom domains. Designed for full sovereignty—currently uses Cloudflare API, with architecture enabling migration to self-hosted anycast DNS.
+
+## Why Navigator?
+
+- **No vendor lock-in**: DNS provider is abstracted—swap Cloudflare for self-hosted PowerDNS without code changes
+- **Self-hosted path**: Architecture supports migration to fully owned anycast DNS infrastructure once ASN is acquired
+- **Tenant automation**: Every paying customer gets automatic subdomain + load balancer + TLS—no manual DNS work
 
 ## What it does
 - Syncs DNS records based on node inventory from Quartermaster

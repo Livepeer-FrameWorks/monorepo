@@ -242,40 +242,6 @@ CREATE INDEX IF NOT EXISTS idx_qm_cluster_services_cluster_id ON quartermaster.c
 CREATE INDEX IF NOT EXISTS idx_qm_service_instances_cluster_id ON quartermaster.service_instances(cluster_id);
 
 -- ============================================================================
--- ANSIBLE DYNAMIC INVENTORY
--- ============================================================================
-
--- Ansible group definitions with dynamic criteria for node assignment
-CREATE TABLE IF NOT EXISTS quartermaster.ansible_groups (
-    -- ===== IDENTITY =====
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    group_name VARCHAR(100) UNIQUE NOT NULL,
-    description TEXT,
-    
-    -- ===== GROUP CONFIGURATION =====
-    criteria JSONB NOT NULL DEFAULT '{}', -- Dynamic selection criteria
-    group_vars JSONB DEFAULT '{}',        -- Ansible variables for group
-    
-    -- ===== STATUS =====
-    is_active BOOLEAN DEFAULT TRUE,
-    created_at TIMESTAMP DEFAULT NOW(),
-    updated_at TIMESTAMP DEFAULT NOW()
-);
-
--- Computed mapping of nodes to Ansible groups (refreshed periodically)
-CREATE TABLE IF NOT EXISTS quartermaster.node_ansible_group_map (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    node_id VARCHAR(100) NOT NULL REFERENCES quartermaster.infrastructure_nodes(node_id),
-    group_name VARCHAR(100) NOT NULL REFERENCES quartermaster.ansible_groups(group_name),
-    computed_at TIMESTAMP DEFAULT NOW(),
-    UNIQUE(node_id, group_name)
-);
-
-CREATE INDEX IF NOT EXISTS idx_qm_ansible_groups_active ON quartermaster.ansible_groups(is_active);
-CREATE INDEX IF NOT EXISTS idx_qm_node_ansible_group_map_node ON quartermaster.node_ansible_group_map(node_id);
-CREATE INDEX IF NOT EXISTS idx_qm_node_ansible_group_map_group ON quartermaster.node_ansible_group_map(group_name);
-
--- ============================================================================
 -- TENANT-CLUSTER MAPPING & ACCESS CONTROL
 -- ============================================================================
 
@@ -297,21 +263,19 @@ CREATE TABLE IF NOT EXISTS quartermaster.tenant_cluster_assignments (
     UNIQUE(tenant_id, cluster_id)
 );
 
--- Runtime access control and quota tracking per tenant-cluster pair
+-- Runtime access control per tenant-cluster pair
 CREATE TABLE IF NOT EXISTS quartermaster.tenant_cluster_access (
     -- ===== IDENTITY =====
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL,
     cluster_id VARCHAR(100) NOT NULL,
-    
+
     -- ===== ACCESS CONTROL =====
     access_level VARCHAR(50) DEFAULT 'shared', -- shared, dedicated, priority
-    
-    -- ===== RESOURCE TRACKING =====
-    resource_limits JSONB DEFAULT '{}',  -- Current limits
-    current_usage JSONB DEFAULT '{}',    -- Real-time usage
-    quota_usage JSONB DEFAULT '{}',      -- Quota consumption
-    
+
+    -- ===== RESOURCE LIMITS (synced from Purser custom_allocations) =====
+    resource_limits JSONB DEFAULT '{}',  -- Tenant-specific limits: {max_streams, max_viewers, max_bandwidth_mbps}
+
     -- ===== STATUS =====
     is_active BOOLEAN DEFAULT true,
     granted_at TIMESTAMP DEFAULT NOW(),

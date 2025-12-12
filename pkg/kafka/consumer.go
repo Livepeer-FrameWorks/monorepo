@@ -92,20 +92,31 @@ func (c *Consumer) Start(ctx context.Context) error {
 			}
 
 			iter := fetches.RecordIter()
-			var records []*kgo.Record
+			type topicPartition struct {
+				topic     string
+				partition int32
+			}
+			blocked := make(map[topicPartition]bool)
+			lastSuccess := make(map[topicPartition]*kgo.Record)
 
 			for !iter.Done() {
 				record := iter.Next()
-				records = append(records, record)
+				tp := topicPartition{topic: record.Topic, partition: record.Partition}
+				if blocked[tp] {
+					// A prior message in this topic/partition failed. We must not
+					// process or commit later offsets, otherwise we'd skip the failed
+					// message on restart.
+					continue
+				}
 
 				c.mu.RLock()
 				handler, exists := c.handlers[record.Topic]
 				c.mu.RUnlock()
 
 				if !exists {
-					// Try to find a default/wildcard handler or just log
-					// For now, we just skip
+					// No handler registered - still commit to avoid reprocessing
 					c.logger.WithField("topic", record.Topic).Warn("No handler registered for topic")
+					lastSuccess[tp] = record
 					continue
 				}
 
@@ -129,12 +140,21 @@ func (c *Consumer) Start(ctx context.Context) error {
 						"topic":     record.Topic,
 						"partition": record.Partition,
 						"offset":    record.Offset,
-					}).Error("Failed to handle message")
-					// Continue processing other messages, don't break the loop
+					}).Error("Failed to handle message - will retry on restart")
+					// Block this partition to avoid committing offsets beyond the failed message.
+					blocked[tp] = true
+					continue
 				}
+
+				lastSuccess[tp] = record
 			}
 
-			if len(records) > 0 {
+			if len(lastSuccess) > 0 {
+				records := make([]*kgo.Record, 0, len(lastSuccess))
+				for _, r := range lastSuccess {
+					records = append(records, r)
+				}
+
 				if err := c.client.CommitRecords(ctx, records...); err != nil {
 					c.logger.WithError(err).Error("failed to commit records")
 				}

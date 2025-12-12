@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -830,7 +829,7 @@ func (s *FoghornGRPCServer) GetDVRStatus(ctx context.Context, req *pb.GetDVRStat
 	}
 
 	query := `
-		SELECT request_hash, internal_name, storage_node_id, status,
+		SELECT request_hash, internal_name, COALESCE(storage_node_id, ''), status,
 		       started_at, ended_at, duration_seconds, size_bytes, manifest_path,
 		       error_message, created_at, updated_at
 		FROM foghorn.dvr_requests
@@ -929,7 +928,7 @@ func (s *FoghornGRPCServer) ListDVRRecordings(ctx context.Context, req *pb.ListD
 
 	// Build select query with keyset pagination
 	selectQuery := fmt.Sprintf(`
-		SELECT request_hash, internal_name, storage_node_id, status,
+		SELECT request_hash, internal_name, COALESCE(storage_node_id, ''), status,
 		       started_at, ended_at, duration_seconds, size_bytes, manifest_path,
 		       error_message, created_at, updated_at
 		FROM foghorn.dvr_requests
@@ -1051,8 +1050,21 @@ func (s *FoghornGRPCServer) ListDVRRecordings(ctx context.Context, req *pb.ListD
 
 // ResolveViewerEndpoint resolves the best endpoint(s) for a viewer
 func (s *FoghornGRPCServer) ResolveViewerEndpoint(ctx context.Context, req *pb.ViewerEndpointRequest) (*pb.ViewerEndpointResponse, error) {
-	if req.ContentType == "" || req.ContentId == "" {
-		return nil, status.Error(codes.InvalidArgument, "content_type and content_id are required")
+	if req.ContentId == "" {
+		return nil, status.Error(codes.InvalidArgument, "content_id is required")
+	}
+
+	// Auto-detect content type if not specified (unified resolution)
+	if req.ContentType == "" {
+		resolution, err := control.ResolveContent(ctx, req.ContentId)
+		if err != nil {
+			return nil, status.Errorf(codes.NotFound, "failed to resolve content: %v", err)
+		}
+		req.ContentType = resolution.ContentType
+		s.logger.WithFields(logging.Fields{
+			"content_id":   req.ContentId,
+			"content_type": req.ContentType,
+		}).Debug("Auto-detected content type")
 	}
 
 	if req.ContentType != "live" && req.ContentType != "dvr" && req.ContentType != "clip" {
@@ -1105,7 +1117,15 @@ func (s *FoghornGRPCServer) ResolveViewerEndpoint(ctx context.Context, req *pb.V
 }
 
 func (s *FoghornGRPCServer) resolveLiveViewerEndpoint(ctx context.Context, req *pb.ViewerEndpointRequest, lat, lon float64) (*pb.ViewerEndpointResponse, error) {
-	// Resolve view key to internal name for load balancing
+	// Delegate to consolidated control package function
+	deps := &control.PlaybackDependencies{
+		DB:     s.db,
+		LB:     s.lb,
+		GeoLat: lat,
+		GeoLon: lon,
+	}
+
+	// Resolve view key to internal name
 	viewKey := req.ContentId
 	target, err := control.ResolveStream(ctx, viewKey)
 	if err != nil {
@@ -1114,236 +1134,55 @@ func (s *FoghornGRPCServer) resolveLiveViewerEndpoint(ctx context.Context, req *
 	if target.InternalName == "" {
 		return nil, status.Error(codes.NotFound, "stream not found")
 	}
-	internalName := target.InternalName // e.g., "live+actual-internal-name"
 
-	// Use load balancer with internal name to find nodes that have the stream
-	lbctx := context.WithValue(ctx, "cap", "edge")
-	nodes, err := s.lb.GetTopNodesWithScores(lbctx, internalName, lat, lon, make(map[string]int), "", 5, false)
+	response, err := control.ResolveLivePlayback(ctx, deps, viewKey, target.InternalName)
 	if err != nil {
-		return nil, status.Errorf(codes.Unavailable, "no suitable edge nodes available: %v", err)
+		return nil, status.Errorf(codes.Unavailable, "%v", err)
 	}
 
-	var endpoints []*pb.ViewerEndpoint
-
-	for _, node := range nodes {
-		nodeOutputs, exists := control.GetNodeOutputs(node.NodeID)
-		if !exists || nodeOutputs.Outputs == nil {
-			continue
-		}
-
-		// Build URLs with view key (MistServer resolves via PLAY_REWRITE trigger)
-		var protocol, endpointURL string
-		if webrtcURL, ok := nodeOutputs.Outputs["WebRTC"].(string); ok {
-			protocol = "webrtc"
-			endpointURL = strings.Replace(webrtcURL, "$", viewKey, -1)
-			endpointURL = strings.Replace(endpointURL, "HOST", strings.TrimPrefix(nodeOutputs.BaseURL, "https://"), -1)
-		} else if hlsURL, ok := nodeOutputs.Outputs["HLS"].(string); ok {
-			protocol = "hls"
-			endpointURL = strings.Replace(hlsURL, "$", viewKey, -1)
-			endpointURL = strings.Trim(endpointURL, "[\"")
-		}
-
-		if endpointURL == "" {
-			continue
-		}
-
-		// Calculate geo distance
-		geoDistance := 0.0
-		if lat != 0 && lon != 0 && node.GeoLatitude != 0 && node.GeoLongitude != 0 {
-			const toRad = math.Pi / 180.0
-			lat1 := lat * toRad
-			lon1 := lon * toRad
-			lat2 := node.GeoLatitude * toRad
-			lon2 := node.GeoLongitude * toRad
-			val := math.Sin(lat1)*math.Sin(lat2) + math.Cos(lat1)*math.Cos(lat2)*math.Cos(lon1-lon2)
-			if val > 1 {
-				val = 1
-			}
-			if val < -1 {
-				val = -1
-			}
-			angle := math.Acos(val)
-			geoDistance = 6371.0 * angle
-		}
-
-		endpoint := &pb.ViewerEndpoint{
-			NodeId:      node.NodeID,
-			BaseUrl:     nodeOutputs.BaseURL,
-			Protocol:    protocol,
-			Url:         endpointURL,
-			GeoDistance: geoDistance,
-			LoadScore:   float64(node.Score),
-			Outputs:     buildOutputsMapProto(nodeOutputs.BaseURL, nodeOutputs.Outputs, viewKey, true),
-		}
-		endpoints = append(endpoints, endpoint)
-	}
-
-	if len(endpoints) == 0 {
-		return nil, status.Error(codes.Unavailable, "no nodes with suitable outputs available")
-	}
-
-	return &pb.ViewerEndpointResponse{
-		Primary:   endpoints[0],
-		Fallbacks: endpoints[1:],
-		Metadata:  buildLivePlaybackMetadataProto(req, endpoints),
-	}, nil
+	return response, nil
 }
 
 func (s *FoghornGRPCServer) resolveDVRViewerEndpoint(ctx context.Context, req *pb.ViewerEndpointRequest) (*pb.ViewerEndpointResponse, error) {
-	var tenantID, internalName, nodeID, dvrStatus string
-	var duration, recordingSize sql.NullInt64
-	var manifestPath sql.NullString
-	var createdAt sql.NullTime
+	// Delegate to consolidated control package function
+	deps := &control.PlaybackDependencies{
+		DB: s.db,
+		LB: s.lb,
+	}
 
-	err := s.db.QueryRowContext(ctx, `
-		SELECT tenant_id, internal_name, storage_node_id, status, duration_seconds, size_bytes, manifest_path, created_at
-		FROM foghorn.dvr_requests
-		WHERE request_hash = $1 AND status = 'completed'
-	`, req.ContentId).Scan(&tenantID, &internalName, &nodeID, &dvrStatus, &duration, &recordingSize, &manifestPath, &createdAt)
-
+	response, err := control.ResolveDVRPlayback(ctx, deps, req.ContentId)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, status.Error(codes.NotFound, "DVR recording not found")
+		if strings.Contains(err.Error(), "not found") {
+			return nil, status.Error(codes.NotFound, err.Error())
 		}
-		return nil, status.Errorf(codes.Internal, "failed to query DVR: %v", err)
+		if strings.Contains(err.Error(), "not available") {
+			return nil, status.Error(codes.Unavailable, err.Error())
+		}
+		return nil, status.Errorf(codes.Internal, "%v", err)
 	}
 
-	nodeOutputs, exists := control.GetNodeOutputs(nodeID)
-	if !exists || nodeOutputs.Outputs == nil {
-		return nil, status.Error(codes.Unavailable, "storage node outputs not available")
-	}
-
-	// Use DVR hash directly in URLs (MistServer resolves via PLAY_REWRITE trigger)
-	dvrHash := req.ContentId
-	var protocol, endpointURL string
-
-	if hlsURL, ok := nodeOutputs.Outputs["HLS"].(string); ok {
-		protocol = "hls"
-		endpointURL = resolveTemplateURL(hlsURL, nodeOutputs.BaseURL, dvrHash)
-	} else {
-		endpointURL = ensureTrailingSlash(nodeOutputs.BaseURL) + dvrHash + ".html"
-		protocol = "html"
-	}
-
-	endpoint := &pb.ViewerEndpoint{
-		NodeId:      nodeID,
-		BaseUrl:     nodeOutputs.BaseURL,
-		Protocol:    protocol,
-		Url:         endpointURL,
-		GeoDistance: 0,
-		LoadScore:   0,
-		Outputs:     buildOutputsMapProto(nodeOutputs.BaseURL, nodeOutputs.Outputs, dvrHash, false),
-	}
-
-	metadata := &pb.PlaybackMetadata{
-		Status:      "completed",
-		IsLive:      false,
-		DvrStatus:   "completed",
-		TenantId:    tenantID,
-		ContentId:   req.ContentId,
-		ContentType: "dvr",
-	}
-
-	if duration.Valid {
-		d := int32(duration.Int64)
-		metadata.DurationSeconds = &d
-	}
-	if recordingSize.Valid {
-		metadata.RecordingSizeBytes = &recordingSize.Int64
-	}
-	if createdAt.Valid {
-		metadata.CreatedAt = timestamppb.New(createdAt.Time)
-	}
-
-	return &pb.ViewerEndpointResponse{
-		Primary:   endpoint,
-		Fallbacks: []*pb.ViewerEndpoint{},
-		Metadata:  metadata,
-	}, nil
+	return response, nil
 }
 
 func (s *FoghornGRPCServer) resolveClipViewerEndpoint(ctx context.Context, req *pb.ViewerEndpointRequest) (*pb.ViewerEndpointResponse, error) {
-	var tenantID, streamName, title, description, nodeID, clipStatus string
-	var startTime, clipDuration int64
-	var sizeBytes sql.NullInt64
-	var createdAt sql.NullTime
+	// Delegate to consolidated control package function
+	deps := &control.PlaybackDependencies{
+		DB: s.db,
+		LB: s.lb,
+	}
 
-	err := s.db.QueryRowContext(ctx, `
-		SELECT tenant_id, stream_name, COALESCE(title, ''), COALESCE(description, ''),
-		       COALESCE(node_id, ''), status, start_time, duration, size_bytes, created_at
-		FROM foghorn.clips
-		WHERE clip_hash = $1 AND status != 'deleted'
-	`, req.ContentId).Scan(&tenantID, &streamName, &title, &description, &nodeID, &clipStatus, &startTime, &clipDuration, &sizeBytes, &createdAt)
-
+	response, err := control.ResolveClipPlayback(ctx, deps, req.ContentId)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, status.Error(codes.NotFound, "clip not found")
+		if strings.Contains(err.Error(), "not found") {
+			return nil, status.Error(codes.NotFound, err.Error())
 		}
-		return nil, status.Errorf(codes.Internal, "failed to query clip: %v", err)
+		if strings.Contains(err.Error(), "not available") || strings.Contains(err.Error(), "unknown") {
+			return nil, status.Error(codes.Unavailable, err.Error())
+		}
+		return nil, status.Errorf(codes.Internal, "%v", err)
 	}
 
-	if nodeID == "" {
-		return nil, status.Error(codes.Unavailable, "clip storage node unknown")
-	}
-
-	nodeOutputs, exists := control.GetNodeOutputs(nodeID)
-	if !exists || nodeOutputs.Outputs == nil {
-		return nil, status.Error(codes.Unavailable, "storage node outputs not available")
-	}
-
-	// Use clip hash directly in URLs (MistServer resolves via PLAY_REWRITE trigger)
-	clipHash := req.ContentId
-	var protocol, endpointURL string
-
-	if hlsURL, ok := nodeOutputs.Outputs["HLS"].(string); ok {
-		protocol = "hls"
-		endpointURL = resolveTemplateURL(hlsURL, nodeOutputs.BaseURL, clipHash)
-	} else {
-		endpointURL = ensureTrailingSlash(nodeOutputs.BaseURL) + clipHash + ".html"
-		protocol = "html"
-	}
-
-	endpoint := &pb.ViewerEndpoint{
-		NodeId:      nodeID,
-		BaseUrl:     nodeOutputs.BaseURL,
-		Protocol:    protocol,
-		Url:         endpointURL,
-		GeoDistance: 0,
-		LoadScore:   0,
-		Outputs:     buildOutputsMapProto(nodeOutputs.BaseURL, nodeOutputs.Outputs, clipHash, false),
-	}
-
-	metadata := &pb.PlaybackMetadata{
-		Status:      clipStatus,
-		IsLive:      false,
-		TenantId:    tenantID,
-		ContentId:   req.ContentId,
-		ContentType: "clip",
-		ClipSource:  &streamName,
-	}
-
-	if title != "" {
-		metadata.Title = &title
-	}
-	if description != "" {
-		metadata.Description = &description
-	}
-	if clipDuration > 0 {
-		d := int32(clipDuration / 1000)
-		metadata.DurationSeconds = &d
-	}
-	if sizeBytes.Valid {
-		metadata.RecordingSizeBytes = &sizeBytes.Int64
-	}
-	if createdAt.Valid {
-		metadata.CreatedAt = timestamppb.New(createdAt.Time)
-	}
-
-	return &pb.ViewerEndpointResponse{
-		Primary:   endpoint,
-		Fallbacks: []*pb.ViewerEndpoint{},
-		Metadata:  metadata,
-	}, nil
+	return response, nil
 }
 
 // GetStreamMeta returns MistServer JSON meta for a stream

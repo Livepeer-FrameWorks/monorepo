@@ -318,6 +318,12 @@ func (r *connectionEventResolver) Timestamp(ctx context.Context, obj *proto.Conn
 	return &t, nil
 }
 
+// ConnectionAddr is the resolver for the connectionAddr field.
+func (r *connectionEventResolver) ConnectionAddr(ctx context.Context, obj *proto.ConnectionEvent) (*string, error) {
+	// Redacted for privacy - client IPs are not exposed via API
+	return nil, nil
+}
+
 // SessionDurationSeconds is the resolver for the sessionDurationSeconds field.
 func (r *connectionEventResolver) SessionDurationSeconds(ctx context.Context, obj *proto.ConnectionEvent) (*int, error) {
 	if obj.SessionDurationSeconds == 0 {
@@ -586,9 +592,19 @@ func (r *mutationResolver) StopDvr(ctx context.Context, dvrHash string) (model.S
 	return r.Resolver.DoStopDVR(ctx, dvrHash)
 }
 
+// DeleteDvr is the resolver for the deleteDVR field.
+func (r *mutationResolver) DeleteDvr(ctx context.Context, dvrHash string) (model.DeleteDVRResult, error) {
+	panic(fmt.Errorf("not implemented: DeleteDvr - deleteDVR"))
+}
+
 // CreatePayment is the resolver for the createPayment field.
 func (r *mutationResolver) CreatePayment(ctx context.Context, input model.CreatePaymentInput) (model.CreatePaymentResult, error) {
 	return r.DoCreatePayment(ctx, input)
+}
+
+// UpdateSubscriptionCustomTerms is the resolver for the updateSubscriptionCustomTerms field.
+func (r *mutationResolver) UpdateSubscriptionCustomTerms(ctx context.Context, tenantID string, input model.UpdateSubscriptionCustomTermsInput) (*proto.TenantSubscription, error) {
+	return r.Resolver.DoUpdateSubscriptionCustomTerms(ctx, tenantID, input)
 }
 
 // UpdateTenant is the resolver for the updateTenant field.
@@ -1113,16 +1129,6 @@ func (r *queryResolver) StreamKeys(ctx context.Context, streamID string) ([]*pro
 	return r.Resolver.DoGetStreamKeys(ctx, streamID)
 }
 
-// Recordings is the resolver for the recordings field.
-func (r *queryResolver) Recordings(ctx context.Context, streamID *string) ([]*proto.Recording, error) {
-	return r.DoGetRecordings(ctx, streamID)
-}
-
-// RecordingsConnection is the resolver for the recordingsConnection field.
-func (r *queryResolver) RecordingsConnection(ctx context.Context, streamID *string, first *int, after *string, last *int, before *string) (*model.RecordingsConnection, error) {
-	return r.DoGetRecordingsConnection(ctx, streamID, first, after, last, before)
-}
-
 // Clips is the resolver for the clips field.
 func (r *queryResolver) Clips(ctx context.Context, streamID *string) ([]*proto.ClipInfo, error) {
 	return r.DoGetClips(ctx, streamID)
@@ -1337,65 +1343,6 @@ func (r *queryResolver) StreamMeta(ctx context.Context, streamKey string, target
 	return r.Resolver.DoGetStreamMeta(ctx, streamKey, targetBaseURL, targetNodeID, includeRaw)
 }
 
-// Title is the resolver for the title field.
-func (r *recordingResolver) Title(ctx context.Context, obj *proto.Recording) (*string, error) {
-	if obj.Filename != "" {
-		return &obj.Filename, nil
-	}
-	return nil, nil
-}
-
-// FileSizeBytes is the resolver for the fileSizeBytes field.
-func (r *recordingResolver) FileSizeBytes(ctx context.Context, obj *proto.Recording) (*int, error) {
-	if obj.FileSize != nil {
-		v := int(*obj.FileSize)
-		return &v, nil
-	}
-	return nil, nil
-}
-
-// ThumbnailURL is the resolver for the thumbnailUrl field.
-func (r *recordingResolver) ThumbnailURL(ctx context.Context, obj *proto.Recording) (*string, error) {
-	// Not in proto - would need to be added if thumbnails are implemented
-	return nil, nil
-}
-
-// StartTime is the resolver for the startTime field.
-func (r *recordingResolver) StartTime(ctx context.Context, obj *proto.Recording) (*time.Time, error) {
-	if obj.StartTime == nil {
-		return nil, nil
-	}
-	t := obj.StartTime.AsTime()
-	return &t, nil
-}
-
-// EndTime is the resolver for the endTime field.
-func (r *recordingResolver) EndTime(ctx context.Context, obj *proto.Recording) (*time.Time, error) {
-	if obj.EndTime == nil {
-		return nil, nil
-	}
-	t := obj.EndTime.AsTime()
-	return &t, nil
-}
-
-// CreatedAt is the resolver for the createdAt field.
-func (r *recordingResolver) CreatedAt(ctx context.Context, obj *proto.Recording) (*time.Time, error) {
-	if obj.CreatedAt == nil {
-		return nil, nil
-	}
-	t := obj.CreatedAt.AsTime()
-	return &t, nil
-}
-
-// UpdatedAt is the resolver for the updatedAt field.
-func (r *recordingResolver) UpdatedAt(ctx context.Context, obj *proto.Recording) (*time.Time, error) {
-	if obj.UpdatedAt == nil {
-		return nil, nil
-	}
-	t := obj.UpdatedAt.AsTime()
-	return &t, nil
-}
-
 // Timestamp is the resolver for the timestamp field.
 func (r *routingEventResolver) Timestamp(ctx context.Context, obj *proto.RoutingEvent) (*time.Time, error) {
 	if obj.Timestamp == nil {
@@ -1602,12 +1549,6 @@ func (r *streamResolver) Metrics(ctx context.Context, obj *proto.Stream) (*proto
 	}
 
 	return loaders.StreamMetrics.Load(ctx, tenantID, obj.InternalName)
-}
-
-// Recordings is the resolver for the recordings field.
-func (r *streamResolver) Recordings(ctx context.Context, obj *proto.Stream) ([]*proto.Recording, error) {
-	streamID := obj.InternalName
-	return r.DoGetRecordings(ctx, &streamID)
 }
 
 // EventsConnection is the resolver for the eventsConnection field.
@@ -2176,6 +2117,60 @@ func (r *tenantResolver) CreatedAt(ctx context.Context, obj *proto.Tenant) (*tim
 	return &t, nil
 }
 
+// StartedAt is the resolver for the startedAt field.
+func (r *tenantSubscriptionResolver) StartedAt(ctx context.Context, obj *proto.TenantSubscription) (*time.Time, error) {
+	if obj.StartedAt == nil || !obj.StartedAt.IsValid() {
+		return nil, nil
+	}
+	t := obj.StartedAt.AsTime()
+	return &t, nil
+}
+
+// TrialEndsAt is the resolver for the trialEndsAt field.
+func (r *tenantSubscriptionResolver) TrialEndsAt(ctx context.Context, obj *proto.TenantSubscription) (*time.Time, error) {
+	if obj.TrialEndsAt == nil || !obj.TrialEndsAt.IsValid() {
+		return nil, nil
+	}
+	t := obj.TrialEndsAt.AsTime()
+	return &t, nil
+}
+
+// NextBillingDate is the resolver for the nextBillingDate field.
+func (r *tenantSubscriptionResolver) NextBillingDate(ctx context.Context, obj *proto.TenantSubscription) (*time.Time, error) {
+	if obj.NextBillingDate == nil || !obj.NextBillingDate.IsValid() {
+		return nil, nil
+	}
+	t := obj.NextBillingDate.AsTime()
+	return &t, nil
+}
+
+// CancelledAt is the resolver for the cancelledAt field.
+func (r *tenantSubscriptionResolver) CancelledAt(ctx context.Context, obj *proto.TenantSubscription) (*time.Time, error) {
+	if obj.CancelledAt == nil || !obj.CancelledAt.IsValid() {
+		return nil, nil
+	}
+	t := obj.CancelledAt.AsTime()
+	return &t, nil
+}
+
+// CreatedAt is the resolver for the createdAt field.
+func (r *tenantSubscriptionResolver) CreatedAt(ctx context.Context, obj *proto.TenantSubscription) (*time.Time, error) {
+	if obj.CreatedAt == nil || !obj.CreatedAt.IsValid() {
+		return nil, nil
+	}
+	t := obj.CreatedAt.AsTime()
+	return &t, nil
+}
+
+// UpdatedAt is the resolver for the updatedAt field.
+func (r *tenantSubscriptionResolver) UpdatedAt(ctx context.Context, obj *proto.TenantSubscription) (*time.Time, error) {
+	if obj.UpdatedAt == nil || !obj.UpdatedAt.IsValid() {
+		return nil, nil
+	}
+	t := obj.UpdatedAt.AsTime()
+	return &t, nil
+}
+
 // Start is the resolver for the start field.
 func (r *timeRangeResolver) Start(ctx context.Context, obj *proto.TimeRange) (*time.Time, error) {
 	if obj.Start == nil {
@@ -2304,6 +2299,12 @@ func (r *viewerGeographicResolver) ViewerCount(ctx context.Context, obj *proto.C
 	return &v, nil
 }
 
+// ConnectionAddr is the resolver for the connectionAddr field.
+func (r *viewerGeographicResolver) ConnectionAddr(ctx context.Context, obj *proto.ConnectionEvent) (*string, error) {
+	// Redacted for privacy - client IPs are not exposed via API
+	return nil, nil
+}
+
 // Source is the resolver for the source field.
 func (r *viewerGeographicResolver) Source(ctx context.Context, obj *proto.ConnectionEvent) (*string, error) {
 	if obj.Connector != "" {
@@ -2329,6 +2330,12 @@ func (r *viewerGeographicResolver) BytesTransferred(ctx context.Context, obj *pr
 	}
 	v := int(obj.BytesTransferred)
 	return &v, nil
+}
+
+// Host is the resolver for the host field.
+func (r *viewerMetricsResolver) Host(ctx context.Context, obj *proto.ClientLifecycleUpdate) (*string, error) {
+	// Redacted for privacy - client IPs are not exposed via API
+	return nil, nil
 }
 
 // ConnectionTime is the resolver for the connectionTime field.
@@ -2521,9 +2528,6 @@ func (r *Resolver) QualityTierDaily() generated.QualityTierDailyResolver {
 // Query returns generated.QueryResolver implementation.
 func (r *Resolver) Query() generated.QueryResolver { return &queryResolver{r} }
 
-// Recording returns generated.RecordingResolver implementation.
-func (r *Resolver) Recording() generated.RecordingResolver { return &recordingResolver{r} }
-
 // RoutingEvent returns generated.RoutingEventResolver implementation.
 func (r *Resolver) RoutingEvent() generated.RoutingEventResolver { return &routingEventResolver{r} }
 
@@ -2584,6 +2588,11 @@ func (r *Resolver) SystemHealthEvent() generated.SystemHealthEventResolver {
 
 // Tenant returns generated.TenantResolver implementation.
 func (r *Resolver) Tenant() generated.TenantResolver { return &tenantResolver{r} }
+
+// TenantSubscription returns generated.TenantSubscriptionResolver implementation.
+func (r *Resolver) TenantSubscription() generated.TenantSubscriptionResolver {
+	return &tenantSubscriptionResolver{r}
+}
 
 // TimeRange returns generated.TimeRangeResolver implementation.
 func (r *Resolver) TimeRange() generated.TimeRangeResolver { return &timeRangeResolver{r} }
@@ -2649,7 +2658,6 @@ type playbackInstanceResolver struct{ *Resolver }
 type playbackMetadataResolver struct{ *Resolver }
 type qualityTierDailyResolver struct{ *Resolver }
 type queryResolver struct{ *Resolver }
-type recordingResolver struct{ *Resolver }
 type routingEventResolver struct{ *Resolver }
 type serviceInstanceResolver struct{ *Resolver }
 type serviceInstanceHealthResolver struct{ *Resolver }
@@ -2665,6 +2673,7 @@ type streamMetricsResolver struct{ *Resolver }
 type subscriptionResolver struct{ *Resolver }
 type systemHealthEventResolver struct{ *Resolver }
 type tenantResolver struct{ *Resolver }
+type tenantSubscriptionResolver struct{ *Resolver }
 type timeRangeResolver struct{ *Resolver }
 type trackListEventResolver struct{ *Resolver }
 type usageRecordResolver struct{ *Resolver }

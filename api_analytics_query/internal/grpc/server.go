@@ -242,6 +242,8 @@ func (s *PeriscopeServer) GetStreamAnalytics(ctx context.Context, req *pb.GetStr
 			primary_fps,
 			primary_codec,
 			primary_bitrate,
+			packets_sent,
+			packets_lost,
 			started_at,
 			updated_at
 		FROM live_streams FINAL
@@ -280,6 +282,7 @@ func (s *PeriscopeServer) GetStreamAnalytics(ctx context.Context, req *pb.GetStr
 		var trackCount, primaryWidth, primaryHeight *uint16
 		var primaryCodec *string
 		var primaryBitrate *int32
+		var packetsSent, packetsLost *uint64
 		var startedAt, updatedAt *time.Time
 		var downloadedBytes, uploadedBytes, viewerSeconds uint64
 		var currentViewers uint32
@@ -291,6 +294,7 @@ func (s *PeriscopeServer) GetStreamAnalytics(ctx context.Context, req *pb.GetStr
 			&viewerSeconds, &hasIssues, &issuesDesc,
 			&trackCount, &qualityTier, &primaryWidth, &primaryHeight, &primaryFps,
 			&primaryCodec, &primaryBitrate,
+			&packetsSent, &packetsLost,
 			&startedAt, &updatedAt,
 		)
 		if err != nil {
@@ -337,6 +341,12 @@ func (s *PeriscopeServer) GetStreamAnalytics(ctx context.Context, req *pb.GetStr
 		}
 		if qualityTier != nil {
 			stream.QualityTier = qualityTier
+		}
+		if packetsSent != nil {
+			stream.PacketsSent = int64(*packetsSent)
+		}
+		if packetsLost != nil {
+			stream.PacketsLost = int64(*packetsLost)
 		}
 
 		streams = append(streams, &stream)
@@ -560,6 +570,8 @@ func (s *PeriscopeServer) GetStreamDetails(ctx context.Context, req *pb.GetStrea
 			primary_fps,
 			primary_codec,
 			primary_bitrate,
+			packets_sent,
+			packets_lost,
 			started_at,
 			updated_at
 		FROM live_streams FINAL
@@ -573,6 +585,7 @@ func (s *PeriscopeServer) GetStreamDetails(ctx context.Context, req *pb.GetStrea
 	var trackCount, primaryWidth, primaryHeight *uint16
 	var primaryCodec *string
 	var primaryBitrate *int32
+	var packetsSent, packetsLost *uint64
 	var startedAt, updatedAt *time.Time
 	var downloadedBytes, uploadedBytes, viewerSeconds uint64
 	var currentViewers uint32
@@ -584,6 +597,7 @@ func (s *PeriscopeServer) GetStreamDetails(ctx context.Context, req *pb.GetStrea
 		&viewerSeconds, &hasIssues, &issuesDesc,
 		&trackCount, &qualityTier, &primaryWidth, &primaryHeight, &primaryFps,
 		&primaryCodec, &primaryBitrate,
+		&packetsSent, &packetsLost,
 		&startedAt, &updatedAt,
 	)
 	if err != nil {
@@ -611,6 +625,12 @@ func (s *PeriscopeServer) GetStreamDetails(ctx context.Context, req *pb.GetStrea
 	}
 	if updatedAt != nil && !updatedAt.IsZero() {
 		stream.LastUpdated = timestamppb.New(*updatedAt)
+	}
+	if packetsSent != nil {
+		stream.PacketsSent = int64(*packetsSent)
+	}
+	if packetsLost != nil {
+		stream.PacketsLost = int64(*packetsLost)
 	}
 
 	// Fetch avg_connection_quality from client_metrics_5m
@@ -1004,9 +1024,8 @@ func (s *PeriscopeServer) GetStreamHealthMetrics(ctx context.Context, req *pb.Ge
 	query := `
 		SELECT timestamp, tenant_id, internal_name, node_id,
 			bitrate, fps, gop_size, width, height,
-			buffer_size, buffer_used, buffer_health,
-			packets_sent, packets_lost, packets_retransmitted,
-			codec, profile, buffer_state, track_metadata,
+			buffer_size, buffer_health, buffer_state,
+			codec, quality_tier, track_metadata,
 			has_issues, issues_description, track_count,
 			audio_channels, audio_sample_rate, audio_codec, audio_bitrate
 		FROM stream_health_metrics
@@ -1050,9 +1069,8 @@ func (s *PeriscopeServer) GetStreamHealthMetrics(ctx context.Context, req *pb.Ge
 		err := rows.Scan(
 			&ts, &tenantID, &m.InternalName, &m.NodeId,
 			&m.Bitrate, &m.Fps, &m.GopSize, &m.Width, &m.Height,
-			&m.BufferSize, &m.BufferUsed, &m.BufferHealth,
-			&m.PacketsSent, &m.PacketsLost, &m.PacketsRetransmitted,
-			&m.Codec, &m.Profile, &m.BufferState, &trackMetadata,
+			&m.BufferSize, &m.BufferHealth, &m.BufferState,
+			&m.Codec, &m.QualityTier, &trackMetadata,
 			&hasIssues, &issuesDesc, &trackCount,
 			&audioChannels, &audioSampleRate, &audioCodec, &audioBitrate,
 		)
@@ -1065,6 +1083,18 @@ func (s *PeriscopeServer) GetStreamHealthMetrics(ctx context.Context, req *pb.Ge
 		m.TenantId = tenantID
 		m.Timestamp = timestamppb.New(ts)
 		m.TrackMetadata = trackMetadata
+
+		// Assign health issue fields (previously scanned but not assigned)
+		if hasIssues != nil {
+			hi := *hasIssues != 0
+			m.HasIssues = &hi
+		}
+		m.IssuesDescription = issuesDesc
+		if trackCount != nil {
+			tc := int32(*trackCount)
+			m.TrackCount = &tc
+		}
+
 		if audioChannels != nil {
 			ch := int32(*audioChannels)
 			m.PrimaryAudioChannels = &ch
@@ -2493,7 +2523,7 @@ func (s *PeriscopeServer) GetRealtimeEvents(ctx context.Context, req *pb.GetReal
 	query := `
 		SELECT timestamp, event_type, event_id, status, node_id, internal_name
 		FROM periscope.stream_events
-		WHERE tenant_id = $1 AND timestamp >= now() - INTERVAL 5 MINUTE
+		WHERE tenant_id = ? AND timestamp >= now() - INTERVAL 5 MINUTE
 		ORDER BY timestamp DESC
 		LIMIT 100
 	`
@@ -2565,7 +2595,6 @@ func (s *PeriscopeServer) GetPlatformOverview(ctx context.Context, req *pb.GetPl
 			countIf(status = 'live') as active_streams,
 			sum(current_viewers) as total_viewers,
 			avg(current_viewers) as avg_viewers,
-			max(uploaded_bytes) as peak_bandwidth,
 			sum(uploaded_bytes) as total_upload_bytes,
 			sum(downloaded_bytes) as total_download_bytes
 		FROM live_streams FINAL
@@ -2573,11 +2602,23 @@ func (s *PeriscopeServer) GetPlatformOverview(ctx context.Context, req *pb.GetPl
 	`
 
 	err = s.clickhouse.QueryRowContext(ctx, liveQuery, tenantID).Scan(
-		&resp.TotalStreams, &resp.ActiveStreams, &resp.TotalViewers, &resp.AverageViewers, &resp.PeakBandwidth,
+		&resp.TotalStreams, &resp.ActiveStreams, &resp.TotalViewers, &resp.AverageViewers,
 		&resp.TotalUploadBytes, &resp.TotalDownloadBytes,
 	)
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to get platform overview from live_streams")
+	}
+
+	// Get peak bandwidth from client_metrics_5m (actual bandwidth rate, not cumulative bytes)
+	peakBwQuery := `
+		SELECT COALESCE(max(avg_bw_out), 0) as peak_bandwidth
+		FROM client_metrics_5m
+		WHERE tenant_id = ?
+		AND timestamp_5m BETWEEN ? AND ?
+	`
+	err = s.clickhouse.QueryRowContext(ctx, peakBwQuery, tenantID, startTime, endTime).Scan(&resp.PeakBandwidth)
+	if err != nil {
+		s.logger.WithError(err).Debug("Failed to get peak bandwidth from client_metrics_5m")
 	}
 
 	// Get historical metrics from tenant_viewer_daily (pre-aggregated from connection_events)
@@ -3170,7 +3211,14 @@ func (s *PeriscopeServer) GetClientMetrics5M(ctx context.Context, req *pb.GetCli
 		} else {
 			query += " AND (timestamp_5m, internal_name, node_id) < (?, ?, ?)"
 		}
-		args = append(args, params.Cursor.Timestamp, params.Cursor.ID, params.Cursor.ID)
+		// Cursor ID is compound: "internal_name|node_id"
+		cursorInternalName := params.Cursor.ID
+		cursorNodeID := ""
+		if parts := strings.SplitN(params.Cursor.ID, "|", 2); len(parts) == 2 {
+			cursorInternalName = parts[0]
+			cursorNodeID = parts[1]
+		}
+		args = append(args, params.Cursor.Timestamp, cursorInternalName, cursorNodeID)
 	}
 
 	if params.Direction == pagination.Backward {
@@ -3237,8 +3285,9 @@ func (s *PeriscopeServer) GetClientMetrics5M(ctx context.Context, req *pb.GetCli
 
 	var startCursor, endCursor string
 	if len(records) > 0 {
-		startCursor = pagination.EncodeCursor(records[0].Timestamp.AsTime(), records[0].InternalName)
-		endCursor = pagination.EncodeCursor(records[len(records)-1].Timestamp.AsTime(), records[len(records)-1].InternalName)
+		// Encode compound ID: "internal_name|node_id" for proper 3-tuple pagination
+		startCursor = pagination.EncodeCursor(records[0].Timestamp.AsTime(), records[0].InternalName+"|"+records[0].NodeId)
+		endCursor = pagination.EncodeCursor(records[len(records)-1].Timestamp.AsTime(), records[len(records)-1].InternalName+"|"+records[len(records)-1].NodeId)
 	}
 
 	return &pb.GetClientMetrics5MResponse{

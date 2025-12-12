@@ -24,7 +24,6 @@ type GRPCClient struct {
 	developer pb.DeveloperServiceClient
 	clip      pb.ClipServiceClient
 	dvr       pb.DVRServiceClient
-	recording pb.RecordingServiceClient
 	viewer    pb.ViewerServiceClient
 	logger    logging.Logger
 	cache     *cache.Cache
@@ -103,7 +102,6 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 		developer: pb.NewDeveloperServiceClient(conn),
 		clip:      pb.NewClipServiceClient(conn),
 		dvr:       pb.NewDVRServiceClient(conn),
-		recording: pb.NewRecordingServiceClient(conn),
 		viewer:    pb.NewViewerServiceClient(conn),
 		logger:    config.Logger,
 		cache:     config.Cache,
@@ -414,18 +412,6 @@ func (c *GRPCClient) ListDVRRequests(ctx context.Context, tenantID string, inter
 func (c *GRPCClient) GetDVRStatus(ctx context.Context, dvrHash string) (*pb.DVRInfo, error) {
 	return c.dvr.GetDVRStatus(ctx, &pb.GetDVRStatusRequest{
 		DvrHash: dvrHash,
-	})
-}
-
-// ============================================================================
-// RECORDING OPERATIONS (Gateway → Commodore)
-// ============================================================================
-
-// ListRecordings lists recordings with optional stream filter
-func (c *GRPCClient) ListRecordings(ctx context.Context, streamID string, pagination *pb.CursorPaginationRequest) (*pb.ListRecordingsResponse, error) {
-	return c.recording.ListRecordings(ctx, &pb.ListRecordingsRequest{
-		StreamId:   streamID,
-		Pagination: pagination,
 	})
 }
 

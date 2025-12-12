@@ -27,12 +27,12 @@
   }: Props = $props();
 </script>
 
-<div class="h-full p-6 text-center relative">
+<div class="h-full p-4 relative flex items-center gap-4">
   {#if statusIndicator}
-    <div class="absolute top-3 right-3">
-      <div class="flex items-center space-x-1 text-xs">
+    <div class="absolute top-2 right-2">
+      <div class="flex items-center space-x-1 text-[10px]">
         <div
-          class="w-2 h-2 rounded-full {statusIndicator.connected
+          class="w-1.5 h-1.5 rounded-full {statusIndicator.connected
             ? 'bg-success animate-pulse'
             : 'bg-destructive'}"
         ></div>
@@ -41,16 +41,17 @@
     </div>
   {/if}
 
-  <div class="text-3xl mb-2">
-    <Icon class="w-8 h-8 {iconColor} mx-auto" />
+  <div class="w-10 h-10 shrink-0 rounded-lg bg-muted/50 flex items-center justify-center">
+    <Icon class="w-5 h-5 {iconColor}" />
   </div>
 
-  <div class="text-2xl font-bold {valueColor} mb-1">
-    {value}
+  <div class="flex flex-col min-w-0">
+    <div class="text-lg font-bold {valueColor} leading-none">
+      {value}
+    </div>
+    <div class="text-xs text-muted-foreground font-medium mt-1 truncate" title={label}>{label}</div>
+    {#if subtitle}
+      <div class="text-[10px] text-muted-foreground/70 truncate">{subtitle}</div>
+    {/if}
   </div>
-
-  <div class="text-sm text-muted-foreground">{label}</div>
-  {#if subtitle}
-    <div class="text-xs text-muted-foreground/70 mt-0.5">{subtitle}</div>
-  {/if}
 </div>

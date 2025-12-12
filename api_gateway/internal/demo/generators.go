@@ -300,6 +300,9 @@ func GenerateBillingStatus() *pb.BillingStatusResponse {
 	now := time.Now()
 	nextBilling := now.Add(18 * 24 * time.Hour)
 
+	// Demo custom allocation - 100,000 viewer-minutes included
+	customLimit := float64(100000)
+
 	return &pb.BillingStatusResponse{
 		TenantId: "demo_tenant_frameworks",
 		Subscription: &pb.TenantSubscription{
@@ -310,6 +313,26 @@ func GenerateBillingStatus() *pb.BillingStatusResponse {
 			BillingEmail:    "demo@frameworks.example",
 			StartedAt:       timestamppb.New(now.Add(-30 * 24 * time.Hour)),
 			NextBillingDate: timestamppb.New(nextBilling),
+			CreatedAt:       timestamppb.New(now.Add(-30 * 24 * time.Hour)),
+			UpdatedAt:       timestamppb.Now(),
+			// Demo custom terms for enterprise-style subscription
+			CustomPricing: &pb.CustomPricing{
+				BasePrice:    79.00, // Custom negotiated base price
+				DiscountRate: 0.20,  // 20% discount
+			},
+			CustomAllocations: &pb.AllocationDetails{
+				Limit:     &customLimit, // 100k viewer-minutes included
+				UnitPrice: 0.0005,       // $0.0005 per minute overage
+				Unit:      "viewer-minutes",
+			},
+			CustomFeatures: &pb.BillingFeatures{
+				Recording:      true,
+				Analytics:      true,
+				CustomBranding: true,
+				ApiAccess:      true,
+				SupportLevel:   "priority",
+				Sla:            true,
+			},
 		},
 		Tier: &pb.BillingTier{
 			Id:          "tier_professional",
@@ -323,8 +346,8 @@ func GenerateBillingStatus() *pb.BillingStatusResponse {
 		NextBillingDate:   timestamppb.New(nextBilling),
 		OutstandingAmount: 0.00,
 		Currency:          "USD",
-		PendingInvoices:   []*pb.Invoice{},
-		RecentPayments:    []*pb.Payment{},
+		PendingInvoices:   []*pb.Invoice{}, // Empty slice
+		RecentPayments:    []*pb.Payment{},    // Empty slice
 		UsageSummary: &pb.UsageSummary{
 			BillingMonth:       now.Format("2006-01"),
 			Period:             "1d",
@@ -847,7 +870,7 @@ func GenerateViewerGeographics() []*pb.ConnectionEvent {
 			TenantId:       "demo_tenant_frameworks",
 			InternalName:   "demo_live_stream_001",
 			SessionId:      "sess_demo_2",
-			ConnectionAddr: "203.0.113.45",
+			ConnectionAddr:         "203.0.113.45",
 			Connector:      "DASH",
 			NodeId:         "node_demo_eu_west_01",
 			CountryCode:    "GB",
@@ -1004,11 +1027,11 @@ func GenerateLoadBalancingMetrics() []*pb.RoutingEvent {
 	// These are valid H3 indexes for the given lat/lng coordinates
 	sfClientBucket := &pb.GeoBucket{H3Index: 0x85283473fffffff, Resolution: 5}   // San Francisco area
 	sfNodeBucket := &pb.GeoBucket{H3Index: 0x85283477fffffff, Resolution: 5}     // Palo Alto area
-	londonClientBucket := &pb.GeoBucket{H3Index: 0x85194ad7fffffff, Resolution: 5} // London area
-	londonNodeBucket := &pb.GeoBucket{H3Index: 0x85194ad3fffffff, Resolution: 5}   // London node
-	tokyoClientBucket := &pb.GeoBucket{H3Index: 0x8529a927fffffff, Resolution: 5}  // Tokyo area
-	tokyoNodeBucket := &pb.GeoBucket{H3Index: 0x8529a923fffffff, Resolution: 5}    // Tokyo node
-	nyClientBucket := &pb.GeoBucket{H3Index: 0x85282607fffffff, Resolution: 5}     // New York area
+londonClientBucket := &pb.GeoBucket{H3Index: 0x85194ad7fffffff, Resolution: 5} // London area
+londonNodeBucket := &pb.GeoBucket{H3Index: 0x85194ad3fffffff, Resolution: 5}   // London node
+tokyoClientBucket := &pb.GeoBucket{H3Index: 0x8529a927fffffff, Resolution: 5}  // Tokyo area
+tokyoNodeBucket := &pb.GeoBucket{H3Index: 0x8529a923fffffff, Resolution: 5}    // Tokyo node
+nyClientBucket := &pb.GeoBucket{H3Index: 0x85282607fffffff, Resolution: 5}     // New York area
 
 	return []*pb.RoutingEvent{
 		// US West routing events - multiple to same node for realistic counts
@@ -1276,9 +1299,9 @@ func GenerateViewerEndpointResponse(contentType, contentID string) *pb.ViewerEnd
 	}
 }
 
-// ============================================================================
+// ============================================================================ 
 // Connection-style Demo Generators (for Relay pagination)
-// ============================================================================
+// ============================================================================ 
 
 // GenerateRoutingEventsConnection creates demo routing events with pagination
 func GenerateRoutingEventsConnection() *model.RoutingEventsConnection {
@@ -2124,6 +2147,157 @@ func GenerateClustersConnection() *model.ClustersConnection {
 		Edges:      edges,
 		PageInfo:   &model.PageInfo{HasNextPage: false, HasPreviousPage: false},
 		TotalCount: len(clusters),
+	}
+}
+
+// GenerateUsers creates demo users
+func GenerateUsers() []*pb.User {
+	now := time.Now()
+	return []*pb.User{
+		{
+			Id:          "user_demo_admin",
+			TenantId:    "demo_tenant_frameworks",
+			Email:       "admin@demo.frameworks.video",
+			FirstName:   "Admin",
+			LastName:    "User",
+			Role:        "admin",
+			Permissions: []string{"admin", "streams:write", "streams:read", "billing:read", "billing:write"},
+			IsActive:    true,
+			IsVerified:  true,
+			LastLoginAt: timestamppb.New(now.Add(-1 * time.Hour)),
+			CreatedAt:   timestamppb.New(now.Add(-90 * 24 * time.Hour)),
+			UpdatedAt:   timestamppb.New(now.Add(-5 * 24 * time.Hour)),
+		},
+		{
+			Id:          "user_demo_viewer",
+			TenantId:    "demo_tenant_frameworks",
+			Email:       "viewer@demo.frameworks.video",
+			FirstName:   "Viewer",
+			LastName:    "User",
+			Role:        "member",
+			Permissions: []string{"streams:read"},
+			IsActive:    true,
+			IsVerified:  true,
+			LastLoginAt: timestamppb.New(now.Add(-5 * time.Hour)),
+			CreatedAt:   timestamppb.New(now.Add(-30 * 24 * time.Hour)),
+			UpdatedAt:   timestamppb.New(now.Add(-30 * 24 * time.Hour)),
+		},
+	}
+}
+
+// GenerateServices creates demo services
+func GenerateServices() []*pb.Service {
+	now := time.Now()
+	return []*pb.Service{
+		{
+			Id:           "svc_def_mist",
+			ServiceId:    "service_mist",
+			Name:         "MistServer",
+			Plane:        "data",
+			Description:  stringPtr("MistServer media server instance"),
+			DefaultPort:  int32Ptr(4242),
+			HealthCheckPath: stringPtr("/health"),
+			DockerImage:  stringPtr("mistserver/mistserver:latest"),
+			Version:      stringPtr("3.3"),
+			IsActive:     true,
+			CreatedAt:    timestamppb.New(now.Add(-100 * 24 * time.Hour)),
+			Type:         "media_server",
+			Protocol:     "http",
+		},
+		{
+			Id:           "svc_def_foghorn",
+			ServiceId:    "service_foghorn",
+			Name:         "Foghorn",
+			Plane:        "control",
+			Description:  stringPtr("Load balancing and orchestration service"),
+			DefaultPort:  int32Ptr(8080),
+			HealthCheckPath: stringPtr("/healthz"),
+			DockerImage:  stringPtr("frameworks/foghorn:latest"),
+			Version:      stringPtr("1.2.0"),
+			IsActive:     true,
+			CreatedAt:    timestamppb.New(now.Add(-100 * 24 * time.Hour)),
+			Type:         "orchestrator",
+			Protocol:     "grpc",
+		},
+	}
+}
+
+// GenerateBootstrapTokens creates demo bootstrap tokens
+func GenerateBootstrapTokens() []*pb.BootstrapToken {
+	now := time.Now()
+	return []*pb.BootstrapToken{
+		{
+			Id:         "token_boot_001",
+			Name:       "Edge Node Token",
+			Token:      "boot_edge_xyz123",
+			Kind:       "edge_node",
+			TenantId:   stringPtr("demo_tenant_frameworks"),
+			UsageLimit: int32Ptr(10),
+			UsageCount: 2,
+			ExpiresAt:  timestamppb.New(now.Add(24 * time.Hour)),
+			CreatedAt:  timestamppb.New(now.Add(-1 * time.Hour)),
+		},
+	}
+}
+
+// GenerateInfrastructureNodes returns a slice of demo nodes (wrapper around connection gen)
+func GenerateInfrastructureNodes() []*pb.InfrastructureNode {
+	conn := GenerateNodesConnection()
+	result := make([]*pb.InfrastructureNode, len(conn.Edges))
+	for i, edge := range conn.Edges {
+		result[i] = edge.Node
+	}
+	return result
+}
+
+// GenerateInfrastructureClusters returns a slice of demo clusters (wrapper around connection gen)
+func GenerateInfrastructureClusters() []*pb.InfrastructureCluster {
+	conn := GenerateClustersConnection()
+	result := make([]*pb.InfrastructureCluster, len(conn.Edges))
+	for i, edge := range conn.Edges {
+		result[i] = edge.Node
+	}
+	return result
+}
+
+// GenerateClips returns a slice of demo clips matching shared.ClipInfo
+func GenerateClips() []*pb.ClipInfo {
+	now := time.Now()
+	return []*pb.ClipInfo{
+		{
+			Id:          "clip_info_demo_001",
+			ClipHash:    "hash_demo_001",
+			StreamName:  "demo_live_stream_001",
+			Title:       "Best Moments",
+			Description: "Highlights from the stream",
+			StartTime:   now.Add(-90 * time.Minute).Unix(),
+			Duration:    300,
+			NodeId:      "node_demo_us_west_01",
+			StoragePath: "/clips/demo_clip_001.mp4",
+			SizeBytes:   int64Ptr(15000000),
+			Status:      "ready",
+			AccessCount: 42,
+			CreatedAt:   timestamppb.New(now.Add(-30 * time.Minute)),
+			UpdatedAt:   timestamppb.New(now.Add(-30 * time.Minute)),
+			ClipMode:    stringPtr("absolute"),
+		},
+		{
+			Id:          "clip_info_demo_002",
+			ClipHash:    "hash_demo_002",
+			StreamName:  "demo_live_stream_001",
+			Title:       "Intro Sequence",
+			Description: "Stream introduction",
+			StartTime:   now.Add(-120 * time.Minute).Unix(),
+			Duration:    60,
+			NodeId:      "node_demo_us_west_01",
+			StoragePath: "/clips/demo_clip_002.mp4",
+			SizeBytes:   int64Ptr(5000000),
+			Status:      "ready",
+			AccessCount: 12,
+			CreatedAt:   timestamppb.New(now.Add(-45 * time.Minute)),
+			UpdatedAt:   timestamppb.New(now.Add(-45 * time.Minute)),
+			ClipMode:    stringPtr("absolute"),
+		},
 	}
 }
 

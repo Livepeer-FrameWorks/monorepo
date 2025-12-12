@@ -50,6 +50,8 @@ message ControlMessage {
     MistTriggerResponse mist_trigger_response = 25;
     ConfigSeed config_seed = 29;
     ArtifactDeleted artifact_deleted = 30;
+    ClipDeleteRequest clip_delete = 31;
+    DVRDeleteRequest dvr_delete = 32;
   }
 }
 
@@ -248,6 +250,18 @@ message DVRStopRequest {
   optional string internal_name = 3;  // Stream internal name (for stopping all DVR recordings for a stream)
 }
 
+// ClipDeleteRequest tells Helmsman to delete clip files from storage
+message ClipDeleteRequest {
+  string clip_hash = 1;          // Clip identifier to delete
+  string request_id = 2;         // Request ID for tracking
+}
+
+// DVRDeleteRequest tells Helmsman to delete DVR recording files from storage
+message DVRDeleteRequest {
+  string dvr_hash = 1;           // DVR identifier to delete
+  string request_id = 2;         // Request ID for tracking
+}
+
 message DVRReadyRequest {
   string dvr_hash = 1;           // Which DVR job we're asking about
   string node_id = 2;            // Which storage node is asking
@@ -335,15 +349,18 @@ message PushEndTrigger {
 // ViewerConnectTrigger (formerly USER_NEW) indicates a viewer connection.
 message ViewerConnectTrigger {
   string stream_name = 1;
+  // host contains the client's connection IP address from MistServer.
+  // Used for GeoIP enrichment; geographic data is preserved while
+  // raw IP is redacted downstream for privacy.
   string host = 2;
   string connection_id = 3;
   string connector = 4;
   string request_url = 5;
   string session_id = 6;
-  
-  // Enrichment fields
+
+  // Enrichment fields (populated by Foghorn)
   optional string node_id = 7;
-  optional string client_ip = 8;
+  reserved 8;  // Removed: client_ip was never populated (IP lives in 'host')
   optional string client_country = 9;
   optional string client_city = 10;
   optional double client_latitude = 11;
@@ -480,6 +497,10 @@ message StreamLifecycleUpdate {
 
   // Stream timing (populated by Foghorn from state manager)
   optional int64 started_at = 23;       // Unix timestamp when stream went live
+
+  // Packet statistics (from MistServer Prometheus metrics via poller)
+  optional uint64 packets_sent = 24;
+  optional uint64 packets_lost = 25;
 }
 
 message ClientLifecycleUpdate {
@@ -488,6 +509,8 @@ message ClientLifecycleUpdate {
   string internal_name = 3;
   string action = 4;                    // "connect", "disconnect"
   string protocol = 5;
+  // host contains the client's connection IP address.
+  // Used for GeoIP enrichment before downstream redaction.
   string host = 6;
   optional string session_id = 7;
   optional float connection_time = 8;
@@ -500,9 +523,9 @@ message ClientLifecycleUpdate {
   optional uint64 packets_lost = 15;
   optional uint64 packets_retransmitted = 16;
   int64 timestamp = 17;
-  
-  // Client identification and geo fields (client_ip from Helmsman, geo enriched by Foghorn)
-  optional string client_ip = 18;       // Client IP address
+
+  // Client geo fields (enriched by Foghorn from 'host' field)
+  reserved 18;  // Removed: client_ip was never populated (IP lives in 'host')
   optional string client_country = 19;  // GeoIP enriched country
   optional string client_city = 20;     // GeoIP enriched city  
   optional double client_latitude = 21; // GeoIP enriched latitude

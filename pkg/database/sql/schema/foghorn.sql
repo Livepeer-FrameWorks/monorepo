@@ -147,7 +147,7 @@ CREATE TABLE IF NOT EXISTS foghorn.dvr_requests (
     internal_name VARCHAR(255) NOT NULL,
     
     -- ===== STORAGE ASSIGNMENT =====
-    storage_node_id UUID,       -- Assigned storage node
+    storage_node_id VARCHAR(100),  -- Assigned storage node (matches node_id elsewhere)
     storage_node_url VARCHAR(255),
     
     -- ===== STATUS TRACKING =====

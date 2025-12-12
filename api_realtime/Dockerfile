@@ -12,14 +12,18 @@ WORKDIR /src/frameworks
 # Copy go.mod and go.sum first
 COPY api_realtime/go.mod api_realtime/go.sum api_realtime/
 
-# Copy shared pkg module (maintain relative path for replace directive)
-COPY pkg/ pkg/
+# Copy shared pkg module go.mod and go.sum (maintain relative path for replace directive)
+COPY pkg/go.mod pkg/go.sum pkg/
 
 # Download dependencies
 WORKDIR /src/frameworks/api_realtime
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     go mod download
+
+# Copy full shared pkg module source
+WORKDIR /src/frameworks
+COPY pkg/ pkg/
 
 # Copy service source code
 WORKDIR /src/frameworks

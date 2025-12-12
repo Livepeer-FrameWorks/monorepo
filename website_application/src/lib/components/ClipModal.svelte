@@ -1,8 +1,11 @@
 <script lang="ts">
   import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "$lib/components/ui/dialog";
   import { Button } from "$lib/components/ui/button";
+  import { Input } from "$lib/components/ui/input";
   import Player from "./Player.svelte";
   import { getIconComponent } from "$lib/iconUtils";
+  import { getContentDeliveryUrls, type PrimaryProtocolUrls } from "$lib/config";
+  import { toast } from "$lib/stores/toast";
 
   // Clip type matching Houdini schema
   interface ClipData {
@@ -27,7 +30,44 @@
 
   let { clip = null, onClose = () => {} }: Props = $props();
 
+  let copiedField = $state<string | null>(null);
+  let showUrls = $state(false);
+
+  // Get delivery URLs for clip using clipHash
+  let clipUrls = $derived(clip?.clipHash ? getContentDeliveryUrls(clip.clipHash, "clip") : null);
+
+  // Primary protocols to show for clips
+  const clipProtocols: Array<{
+    key: keyof PrimaryProtocolUrls;
+    name: string;
+    icon: string;
+  }> = [
+    { key: "hls", name: "HLS", icon: "Play" },
+    { key: "dash", name: "DASH", icon: "Film" },
+    { key: "mp4", name: "MP4", icon: "FileVideo" },
+    { key: "webm", name: "WebM", icon: "FileVideo" },
+  ];
+
+  async function copyToClipboard(text: string, field: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      copiedField = field;
+      toast.success("Copied to clipboard");
+      setTimeout(() => {
+        if (copiedField === field) copiedField = null;
+      }, 2000);
+    } catch {
+      toast.error("Failed to copy");
+    }
+  }
+
   const CloseIcon = getIconComponent("X");
+  const CopyIcon = getIconComponent("Copy");
+  const CheckCircleIcon = getIconComponent("CheckCircle");
+  const ChevronDownIcon = getIconComponent("ChevronDown");
+  const ChevronUpIcon = getIconComponent("ChevronUp");
+  const DownloadIcon = getIconComponent("Download");
+  const LinkIcon = getIconComponent("Link");
 
   function formatDuration(totalSeconds: number | null | undefined) {
     if (totalSeconds == null || totalSeconds < 0) return "0:00";
@@ -113,12 +153,82 @@
             </p>
           </div>
         {/if}
+
+        <!-- Playback URLs Section -->
+        {#if clipUrls && clip.clipHash}
+          <div class="border border-border">
+            <button
+              class="w-full p-3 flex items-center justify-between text-sm hover:bg-muted/10 transition-colors"
+              onclick={() => showUrls = !showUrls}
+            >
+              <div class="flex items-center gap-2">
+                <LinkIcon class="w-4 h-4 text-info" />
+                <span class="font-medium">Direct Playback URLs</span>
+              </div>
+              {#if showUrls}
+                <ChevronUpIcon class="w-4 h-4" />
+              {:else}
+                <ChevronDownIcon class="w-4 h-4" />
+              {/if}
+            </button>
+
+            {#if showUrls}
+              <div class="border-t border-border p-4 space-y-3 bg-muted/5">
+                {#each clipProtocols as protocol}
+                  {@const ProtocolIcon = getIconComponent(protocol.icon)}
+                  {@const url = clipUrls.primary[protocol.key]}
+                  <div class="flex items-center gap-2">
+                    <div class="flex items-center gap-1.5 w-16 shrink-0">
+                      <ProtocolIcon class="w-3 h-3 text-muted-foreground" />
+                      <span class="text-xs font-medium text-muted-foreground">{protocol.name}</span>
+                    </div>
+                    <Input
+                      type="text"
+                      value={url || "N/A"}
+                      readonly
+                      class="flex-1 font-mono text-xs h-8"
+                    />
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onclick={() => copyToClipboard(url || "", `clip-${protocol.key}`)}
+                      disabled={!url}
+                      class="border border-border/30 h-8 w-8 p-0"
+                    >
+                      {#if copiedField === `clip-${protocol.key}`}
+                        <CheckCircleIcon class="w-3 h-3" />
+                      {:else}
+                        <CopyIcon class="w-3 h-3" />
+                      {/if}
+                    </Button>
+                  </div>
+                {/each}
+              </div>
+            {/if}
+          </div>
+        {/if}
       </section>
 
       <DialogFooter class="border-t border-border bg-muted/10 px-6 py-4">
-        <Button variant="secondary" onclick={close}>
-          Close
-        </Button>
+        <div class="flex items-center gap-2 w-full justify-between">
+          {#if clipUrls?.primary.mp4}
+            <Button
+              href={clipUrls.primary.mp4}
+              target="_blank"
+              rel="noopener noreferrer"
+              variant="outline"
+              class="gap-2"
+            >
+              <DownloadIcon class="w-4 h-4" />
+              Download MP4
+            </Button>
+          {:else}
+            <div></div>
+          {/if}
+          <Button variant="secondary" onclick={close}>
+            Close
+          </Button>
+        </div>
       </DialogFooter>
     </DialogContent>
   </Dialog>

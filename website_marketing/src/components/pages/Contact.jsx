@@ -124,6 +124,16 @@ const Contact = () => {
 
   const faqs = [
     {
+      question: 'What is "Sovereign SaaS"?',
+      answer:
+        'Sovereign SaaS means you can run FrameWorks on your own infrastructure, our infrastructure, or both—without vendor lock-in. Unlike cloud-only platforms (Mux) or self-hosted-only products (Wowza), FrameWorks gives you deployment flexibility with native multi-tenancy.',
+    },
+    {
+      question: 'How does FrameWorks compare to Mux or Wowza?',
+      answer:
+        'Mux is cloud-only with per-minute billing—zero self-hosting. Wowza charges $195+/month per server instance with manual clustering. FrameWorks is public domain licensed: self-host for free, or use our managed infrastructure. Native multi-tenancy means you scale on your hardware, not their bills.',
+    },
+    {
       question: 'How do I get started with FrameWorks?',
       answer:
         'Deploy the full stack yourself using the Docker Compose setup, or use our hosted service and add your own edge nodes for a hybrid approach. Both paths get you streaming in minutes.',
@@ -134,9 +144,9 @@ const Contact = () => {
         'Yes. We provide enterprise support with SLAs, custom development, managed hosting, and priority GPU access. Reach out to discuss enterprise pricing and requirements.',
     },
     {
-      question: 'Where can I get help and support?',
+      question: 'Can I run FrameWorks entirely on my own infrastructure?',
       answer:
-        'Join our Discord for quick answers or use the forum for in-depth discussions. Enterprise customers can contact us directly for SLA-backed support.',
+        'Yes. Every component—control plane, analytics (ClickHouse), event streaming (Kafka), edge nodes (MistServer), and mesh networking (WireGuard)—can run on your servers. No external cloud dependencies required.',
     },
     {
       question: 'Can I contribute to FrameWorks?',

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"frameworks/pkg/database"
@@ -223,6 +224,7 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, event kaf
 			viewer_seconds, has_issues, issues_description,
 			track_count, quality_tier, primary_width, primary_height,
 			primary_fps, primary_codec, primary_bitrate,
+			packets_sent, packets_lost,
 			started_at, updated_at
 		)`)
 	if err != nil {
@@ -265,6 +267,8 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, event kaf
 		nilIfZeroFloat32(streamLifecycle.GetPrimaryFps()),
 		nilIfEmptyString(streamLifecycle.GetPrimaryCodec()),
 		nilIfZeroInt32(streamLifecycle.GetPrimaryBitrate()),
+		nilIfZeroUint64(streamLifecycle.GetPacketsSent()),
+		nilIfZeroUint64(streamLifecycle.GetPacketsLost()),
 		startedAt,
 		event.Timestamp,
 	); err != nil {
@@ -1229,6 +1233,8 @@ func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event kafka.
 		codec                            *string
 		frameMsMax, frameMsMin           *float32
 		keyframeMsMax, keyframeMsMin     *float32
+		framesMax, framesMin             *uint32
+		gopSize                          *uint16
 	)
 	if primaryVideo != nil {
 		if v := primaryVideo.GetBitrateKbps(); v > 0 {
@@ -1266,6 +1272,35 @@ func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event kafka.
 			f := float32(v)
 			keyframeMsMin = &f
 		}
+		if v := primaryVideo.GetFramesMax(); v > 0 {
+			f := uint32(v)
+			framesMax = &f
+			// Map frames_max (GOP length) to gop_size
+			gs := uint16(v)
+			gopSize = &gs
+		}
+		if v := primaryVideo.GetFramesMin(); v > 0 {
+			f := uint32(v)
+			framesMin = &f
+		}
+	}
+
+	// Extract stream-wide buffer metrics
+	var bufferSize *uint32
+	if v := streamBuffer.GetStreamBufferMs(); v > 0 {
+		bs := uint32(v)
+		bufferSize = &bs
+	}
+
+	// Calculate buffer_health as ratio of current buffer to max allowed distance from live
+	// A healthy stream has buffer_health close to 1.0 (buffer full relative to maxkeepaway)
+	var bufferHealth *float32
+	if bufferSize != nil && streamBuffer.GetMaxKeepawayMs() > 0 {
+		bh := float32(*bufferSize) / float32(streamBuffer.GetMaxKeepawayMs())
+		if bh > 1.0 {
+			bh = 1.0 // Clamp to max 1.0
+		}
+		bufferHealth = &bh
 	}
 
 	// Extract primary audio track fields
@@ -1345,8 +1380,9 @@ func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event kafka.
 		INSERT INTO stream_health_metrics (
 			timestamp, tenant_id, internal_name, node_id, buffer_state,
 			has_issues, issues_description, track_count, track_metadata,
-			bitrate, fps, width, height, codec,
+			bitrate, fps, width, height, codec, quality_tier,
 			frame_ms_max, frame_ms_min, keyframe_ms_max, keyframe_ms_min,
+			frames_max, frames_min, gop_size, buffer_size, buffer_health,
 			audio_channels, audio_sample_rate, audio_codec, audio_bitrate
 		)`)
 	if err != nil {
@@ -1369,10 +1405,16 @@ func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event kafka.
 		width,
 		height,
 		codec,
+		nilIfEmptyString(streamBuffer.GetQualityTier()),
 		frameMsMax,
 		frameMsMin,
 		keyframeMsMax,
 		keyframeMsMin,
+		framesMax,
+		framesMin,
+		gopSize,
+		bufferSize,
+		bufferHealth,
 		audioChannels,
 		audioSampleRate,
 		audioCodec,
@@ -1772,8 +1814,8 @@ func (h *AnalyticsHandler) processClipLifecycle(ctx context.Context, event kafka
 		return err
 	}
 
-	// Map stage string for consistency
-	stageStr := cl.GetStage().String()
+	// Map stage string for consistency - convert STAGE_DONE -> done, STAGE_FAILED -> failed, etc.
+	stageStr := strings.ToLower(strings.TrimPrefix(cl.GetStage().String(), "STAGE_"))
 
 	if err := stateBatch.Append(
 		tenantID,

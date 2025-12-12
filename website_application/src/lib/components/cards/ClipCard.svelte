@@ -2,6 +2,8 @@
 	import { Badge } from "$lib/components/ui/badge";
 	import { Button } from "$lib/components/ui/button";
 	import { getIconComponent } from "$lib/iconUtils";
+	import { getContentDeliveryUrls } from "$lib/config";
+	import { toast } from "$lib/stores/toast";
 
 	// Clip type matching Houdini schema
 	interface ClipData {
@@ -31,6 +33,25 @@
 		[key: string]: unknown;
 	} = $props();
 
+	// Get delivery URLs for clip using clipHash
+	let clipUrls = $derived(clip.clipHash ? getContentDeliveryUrls(clip.clipHash, "clip") : null);
+
+	let copiedField = $state<string | null>(null);
+
+	async function copyToClipboard(text: string, field: string, event: Event) {
+		event.stopPropagation();
+		try {
+			await navigator.clipboard.writeText(text);
+			copiedField = field;
+			toast.success("Copied to clipboard");
+			setTimeout(() => {
+				if (copiedField === field) copiedField = null;
+			}, 2000);
+		} catch {
+			toast.error("Failed to copy");
+		}
+	}
+
 	function formatDuration(seconds: number | null | undefined) {
 		if (seconds == null) return "0:00";
 		const minutes = Math.floor(seconds / 60);
@@ -53,6 +74,9 @@
 	);
 
 	const PlayIcon = getIconComponent("Play");
+	const CopyIcon = getIconComponent("Copy");
+	const CheckCircleIcon = getIconComponent("CheckCircle");
+	const DownloadIcon = getIconComponent("Download");
 </script>
 
 <div
@@ -92,20 +116,47 @@
 		</div>
 	</div>
 
-	{#if onPlay && (clip.status === "Available" || clip.status === "completed")}
-		<div class="slab-actions">
-			<button
-				class="flex items-center justify-center py-3 text-sm font-medium text-primary hover:bg-primary/5 transition-colors"
-				onclick={(event) => {
-					event.stopPropagation();
-					onPlay();
-				}}
-			>
-				{#if PlayIcon}
-					<PlayIcon class="size-4 mr-2" />
-				{/if}
-				<span>Play Clip</span>
-			</button>
+	{#if (clip.status === "Available" || clip.status === "completed")}
+		<div class="slab-actions flex divide-x divide-border/30">
+			{#if onPlay}
+				<button
+					class="flex-1 flex items-center justify-center py-3 text-sm font-medium text-primary hover:bg-primary/5 transition-colors"
+					onclick={(event) => {
+						event.stopPropagation();
+						onPlay();
+					}}
+				>
+					{#if PlayIcon}
+						<PlayIcon class="size-4 mr-1.5" />
+					{/if}
+					<span>Play</span>
+				</button>
+			{/if}
+			{#if clipUrls?.primary.hls}
+				<button
+					class="flex-1 flex items-center justify-center py-3 text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-muted/10 transition-colors"
+					onclick={(event) => copyToClipboard(clipUrls.primary.hls, `hls-${clip.id}`, event)}
+					title="Copy HLS URL"
+				>
+					{#if copiedField === `hls-${clip.id}`}
+						<CheckCircleIcon class="size-4 mr-1.5" />
+					{:else}
+						<CopyIcon class="size-4 mr-1.5" />
+					{/if}
+					<span>HLS</span>
+				</button>
+				<a
+					href={clipUrls.primary.mp4}
+					target="_blank"
+					rel="noopener noreferrer"
+					class="flex-1 flex items-center justify-center py-3 text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-muted/10 transition-colors"
+					onclick={(event) => event.stopPropagation()}
+					title="Download MP4"
+				>
+					<DownloadIcon class="size-4 mr-1.5" />
+					<span>MP4</span>
+				</a>
+			{/if}
 		</div>
 	{/if}
 </div>
