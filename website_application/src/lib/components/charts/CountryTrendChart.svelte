@@ -44,7 +44,7 @@
 
   let { data = [], height = 300, title = "", maxCountries = 6 }: Props = $props();
 
-  let canvas: HTMLCanvasElement | null = null;
+  let canvas = $state<HTMLCanvasElement | null>(null);
   let chart: Chart | null = null;
 
   // Color palette for countries

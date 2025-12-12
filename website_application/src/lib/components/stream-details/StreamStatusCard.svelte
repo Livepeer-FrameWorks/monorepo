@@ -9,32 +9,34 @@
   const StatusIconComponent = $derived(getIconComponent(statusIcon));
 </script>
 
-<div class="p-6">
-  <div class="flex items-center justify-between mb-4">
-    <h3 class="text-lg font-semibold gradient-text">Stream Status</h3>
-    <StatusIconComponent class="w-6 h-6 {statusColor}" />
+<div class="slab h-full shadow-none border-none">
+  <div class="slab-header flex items-center justify-between">
+    <h3 class="font-semibold text-xs uppercase tracking-wide text-muted-foreground">Stream Status</h3>
+    <div class="h-6 flex items-center">
+      <StatusIconComponent class="w-5 h-5 {statusColor}" />
+    </div>
   </div>
-  <div class="space-y-2">
+  <div class="slab-body--padded space-y-2">
     <div class="flex justify-between items-center">
-      <span class="text-muted-foreground">Status:</span>
-      <span class="font-mono {statusColor} uppercase font-medium">
+      <span class="text-sm text-muted-foreground">Status:</span>
+      <span class="font-mono {statusColor} uppercase font-medium text-sm">
         {stream?.status || "Unknown"}
       </span>
     </div>
     <div class="flex justify-between items-center">
-      <span class="text-muted-foreground">Recording:</span>
+      <span class="text-sm text-muted-foreground">Recording:</span>
       <span
         class="font-mono {stream?.record
           ? 'text-success'
-          : 'text-error'} font-medium"
+          : 'text-error'} font-medium text-sm"
       >
         {stream?.record ? "Enabled" : "Disabled"}
       </span>
     </div>
     {#if analytics?.currentViewers !== undefined}
       <div class="flex justify-between items-center">
-        <span class="text-muted-foreground">Viewers:</span>
-        <span class="font-mono text-info font-medium"
+        <span class="text-sm text-muted-foreground">Viewers:</span>
+        <span class="font-mono text-info font-medium text-sm"
           >{analytics.currentViewers}</span
         >
       </div>

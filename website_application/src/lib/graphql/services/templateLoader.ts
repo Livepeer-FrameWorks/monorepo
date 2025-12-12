@@ -9,7 +9,7 @@ import {
   formatOperationForTemplate,
   type ParsedOperation,
   type OperationType,
-} from './gqlParser';
+} from "./gqlParser";
 
 export interface Template {
   name: string;
@@ -29,9 +29,9 @@ export interface TemplateGroups {
 
 // Use Vite's import.meta.glob to load all .gql files at build time
 // The ?raw query imports the file content as a string
-const gqlModules = import.meta.glob('/src/lib/houdini/**/*.gql', {
-  query: '?raw',
-  import: 'default',
+const gqlModules = import.meta.glob("/src/lib/houdini/**/*.gql", {
+  query: "?raw",
+  import: "default",
   eager: false, // Lazy load for better initial bundle size
 });
 
@@ -65,7 +65,7 @@ export async function loadAllTemplates(): Promise<TemplateGroups> {
         console.error(`Failed to load ${path}:`, error);
         return null;
       }
-    })
+    }),
   );
 
   // Parse and categorize each file
@@ -80,16 +80,16 @@ export async function loadAllTemplates(): Promise<TemplateGroups> {
 
       // Add to appropriate group
       switch (parsed.type) {
-        case 'query':
+        case "query":
           groups.queries.push(template);
           break;
-        case 'mutation':
+        case "mutation":
           groups.mutations.push(template);
           break;
-        case 'subscription':
+        case "subscription":
           groups.subscriptions.push(template);
           break;
-        case 'fragment':
+        case "fragment":
           groups.fragments.push(template);
           break;
       }
@@ -129,7 +129,7 @@ function createTemplate(parsed: ParsedOperation, filePath: string): Template {
  * /src/lib/houdini/queries/GetStream.gql -> houdini/queries/GetStream.gql
  */
 function cleanFilePath(path: string): string {
-  return path.replace(/^\/src\/lib\//, '');
+  return path.replace(/^\/src\/lib\//, "");
 }
 
 /**
@@ -167,24 +167,26 @@ export async function searchTemplates(query: string): Promise<Template[]> {
   return allTemplates.filter(
     (t) =>
       t.name.toLowerCase().includes(lowerQuery) ||
-      t.description.toLowerCase().includes(lowerQuery)
+      t.description.toLowerCase().includes(lowerQuery),
   );
 }
 
 /**
  * Get templates by operation type
  */
-export async function getTemplatesByType(type: OperationType): Promise<Template[]> {
+export async function getTemplatesByType(
+  type: OperationType,
+): Promise<Template[]> {
   const templates = await loadAllTemplates();
 
   switch (type) {
-    case 'query':
+    case "query":
       return templates.queries;
-    case 'mutation':
+    case "mutation":
       return templates.mutations;
-    case 'subscription':
+    case "subscription":
       return templates.subscriptions;
-    case 'fragment':
+    case "fragment":
       return templates.fragments;
     default:
       return [];

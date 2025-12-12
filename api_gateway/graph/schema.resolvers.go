@@ -759,6 +759,18 @@ func (r *nodeMetricResolver) NetworkTx(ctx context.Context, obj *proto.NodeMetri
 	return int(obj.BandwidthOut), nil
 }
 
+// UpSpeed is the resolver for the upSpeed field.
+func (r *nodeMetricResolver) UpSpeed(ctx context.Context, obj *proto.NodeMetric) (*int, error) {
+	v := int(obj.UpSpeed)
+	return &v, nil
+}
+
+// DownSpeed is the resolver for the downSpeed field.
+func (r *nodeMetricResolver) DownSpeed(ctx context.Context, obj *proto.NodeMetric) (*int, error) {
+	v := int(obj.DownSpeed)
+	return &v, nil
+}
+
 // Status is the resolver for the status field.
 func (r *nodeMetricResolver) Status(ctx context.Context, obj *proto.NodeMetric) (string, error) {
 	if obj.IsHealthy {
@@ -819,6 +831,16 @@ func (r *nodeMetricHourlyResolver) AvgDisk(ctx context.Context, obj *proto.NodeM
 // PeakDisk is the resolver for the peakDisk field.
 func (r *nodeMetricHourlyResolver) PeakDisk(ctx context.Context, obj *proto.NodeMetricHourly) (float64, error) {
 	return float64(obj.GetPeakDisk()), nil
+}
+
+// AvgShm is the resolver for the avgShm field.
+func (r *nodeMetricHourlyResolver) AvgShm(ctx context.Context, obj *proto.NodeMetricHourly) (float64, error) {
+	return float64(obj.AvgShm), nil
+}
+
+// PeakShm is the resolver for the peakShm field.
+func (r *nodeMetricHourlyResolver) PeakShm(ctx context.Context, obj *proto.NodeMetricHourly) (float64, error) {
+	return float64(obj.PeakShm), nil
 }
 
 // Method is the resolver for the method field.
@@ -902,30 +924,6 @@ func (r *playbackMetadataResolver) CreatedAt(ctx context.Context, obj *proto.Pla
 	}
 	t := obj.CreatedAt.AsTime()
 	return &t, nil
-}
-
-// Hour is the resolver for the hour field.
-func (r *qualityChangesHourlyResolver) Hour(ctx context.Context, obj *proto.QualityChangesHourly) (*time.Time, error) {
-	if obj.Hour == nil {
-		return nil, nil
-	}
-	t := obj.Hour.AsTime()
-	return &t, nil
-}
-
-// TotalChanges is the resolver for the totalChanges field.
-func (r *qualityChangesHourlyResolver) TotalChanges(ctx context.Context, obj *proto.QualityChangesHourly) (int, error) {
-	return int(obj.TotalChanges), nil
-}
-
-// ResolutionChanges is the resolver for the resolutionChanges field.
-func (r *qualityChangesHourlyResolver) ResolutionChanges(ctx context.Context, obj *proto.QualityChangesHourly) (int, error) {
-	return int(obj.ResolutionChanges), nil
-}
-
-// CodecChanges is the resolver for the codecChanges field.
-func (r *qualityChangesHourlyResolver) CodecChanges(ctx context.Context, obj *proto.QualityChangesHourly) (int, error) {
-	return int(obj.CodecChanges), nil
 }
 
 // Day is the resolver for the day field.
@@ -1093,11 +1091,6 @@ func (r *queryResolver) ClientMetrics5mConnection(ctx context.Context, stream *s
 // QualityTierDailyConnection is the resolver for the qualityTierDailyConnection field.
 func (r *queryResolver) QualityTierDailyConnection(ctx context.Context, stream *string, timeRange *model.TimeRangeInput, first *int, after *string, last *int, before *string, noCache *bool) (*model.QualityTierDailyConnection, error) {
 	return r.Resolver.DoGetQualityTierDailyConnection(ctx, stream, timeRange, first, after, last, before, noCache)
-}
-
-// QualityChangesHourlyConnection is the resolver for the qualityChangesHourlyConnection field.
-func (r *queryResolver) QualityChangesHourlyConnection(ctx context.Context, stream *string, timeRange *model.TimeRangeInput, first *int, after *string, last *int, before *string, noCache *bool) (*model.QualityChangesHourlyConnection, error) {
-	return r.Resolver.DoGetQualityChangesHourlyConnection(ctx, stream, timeRange, first, after, last, before, noCache)
 }
 
 // StorageUsageConnection is the resolver for the storageUsageConnection field.
@@ -2520,11 +2513,6 @@ func (r *Resolver) PlaybackMetadata() generated.PlaybackMetadataResolver {
 	return &playbackMetadataResolver{r}
 }
 
-// QualityChangesHourly returns generated.QualityChangesHourlyResolver implementation.
-func (r *Resolver) QualityChangesHourly() generated.QualityChangesHourlyResolver {
-	return &qualityChangesHourlyResolver{r}
-}
-
 // QualityTierDaily returns generated.QualityTierDailyResolver implementation.
 func (r *Resolver) QualityTierDaily() generated.QualityTierDailyResolver {
 	return &qualityTierDailyResolver{r}
@@ -2659,7 +2647,6 @@ type paymentResolver struct{ *Resolver }
 type platformOverviewResolver struct{ *Resolver }
 type playbackInstanceResolver struct{ *Resolver }
 type playbackMetadataResolver struct{ *Resolver }
-type qualityChangesHourlyResolver struct{ *Resolver }
 type qualityTierDailyResolver struct{ *Resolver }
 type queryResolver struct{ *Resolver }
 type recordingResolver struct{ *Resolver }

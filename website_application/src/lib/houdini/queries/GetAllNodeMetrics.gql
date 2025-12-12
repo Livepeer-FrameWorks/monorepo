@@ -24,10 +24,12 @@ query GetAllNodeMetrics(
         shmUsed
         networkRx
         networkTx
+        upSpeed
+        downSpeed
+        connectionsCurrent
         status
         latitude
         longitude
-        tags
         metadata
       }
     }

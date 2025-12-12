@@ -2,9 +2,8 @@
   import { onMount } from "svelte";
   import { resolve } from "$app/paths";
   import { auth } from "$lib/stores/auth";
-  import { GetBillingStatusStore, GetBillingTiersStore, GetUsageRecordsStore, GetInvoicesStore, CreatePaymentStore } from "$houdini";
+  import { GetBillingStatusStore, GetBillingTiersStore, GetInvoicesStore, CreatePaymentStore } from "$houdini";
   import { toast } from "$lib/stores/toast.js";
-  import SkeletonLoader from "$lib/components/SkeletonLoader.svelte";
   import { Button } from "$lib/components/ui/button";
   import { GridSeam } from "$lib/components/layout";
   import DashboardMetricCard from "$lib/components/shared/DashboardMetricCard.svelte";
@@ -14,7 +13,6 @@
   // Houdini stores
   const billingStatusStore = new GetBillingStatusStore();
   const billingTiersStore = new GetBillingTiersStore();
-  const usageRecordsStore = new GetUsageRecordsStore();
   const invoicesStore = new GetInvoicesStore();
   const createPaymentMutation = new CreatePaymentStore();
 
@@ -25,12 +23,10 @@
   let loading = $derived(
     $billingStatusStore.fetching ||
     $billingTiersStore.fetching ||
-    $usageRecordsStore.fetching ||
     $invoicesStore.fetching
   );
   let billingStatus = $derived($billingStatusStore.data?.billingStatus ?? null);
   let availableTiers = $derived($billingTiersStore.data?.billingTiers ?? []);
-  let usageRecords = $derived($usageRecordsStore.data?.usageRecords ?? []);
   let invoices = $derived($invoicesStore.data?.invoices ?? []);
 
   // Subscribe to auth store
@@ -47,19 +43,10 @@
 
   async function loadBillingData() {
     try {
-      // Default time range for usage records (last 30 days)
-      const now = new Date();
-      const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-      const timeRange = {
-        start: thirtyDaysAgo.toISOString(),
-        end: now.toISOString()
-      };
-
       // Load all billing data in parallel
       await Promise.all([
         billingStatusStore.fetch().catch(() => null),
         billingTiersStore.fetch().catch(() => null),
-        usageRecordsStore.fetch({ variables: { timeRange } }).catch(() => null),
         invoicesStore.fetch().catch(() => null)
       ]);
 
@@ -150,39 +137,9 @@
   const CalendarIcon = getIconComponent('Calendar');
   const CheckCircleIcon = getIconComponent('CheckCircle');
   const ShieldIcon = getIconComponent('Shield');
-  const SettingsIcon = getIconComponent('Settings');
   const ReceiptIcon = getIconComponent('Receipt');
-  const BarChart3Icon = getIconComponent('BarChart3');
   const SparklesIcon = getIconComponent('Sparkles');
-  const GlobeIcon = getIconComponent('Globe');
-
-  // Country code to name mapping for display
-  const countryNames: Record<string, string> = {
-    US: 'United States',
-    GB: 'United Kingdom',
-    DE: 'Germany',
-    FR: 'France',
-    JP: 'Japan',
-    CA: 'Canada',
-    AU: 'Australia',
-    BR: 'Brazil',
-    IN: 'India',
-    KR: 'South Korea',
-    NL: 'Netherlands',
-    ES: 'Spain',
-    IT: 'Italy',
-    SE: 'Sweden',
-    MX: 'Mexico',
-  };
-
-  function getCountryName(code: string): string {
-    return countryNames[code] || code;
-  }
-
-  function formatViewerHours(hours: number): string {
-    if (hours >= 1000) return `${(hours / 1000).toFixed(1)}k`;
-    return hours.toFixed(1);
-  }
+  const GaugeIcon = getIconComponent('Gauge');
 </script>
 
 <svelte:head>
@@ -191,7 +148,7 @@
 
 <div class="h-full flex flex-col">
   <!-- Fixed Page Header -->
-  <div class="px-4 sm:px-6 lg:px-8 py-4 border-b border-border shrink-0">
+  <div class="px-4 sm:px-6 lg:px-8 py-4 border-b border-[hsl(var(--tn-fg-gutter)/0.3)] shrink-0">
     <div class="flex items-center gap-3">
       <CreditCardIcon class="w-5 h-5 text-primary" />
       <div>
@@ -380,6 +337,25 @@
           </div>
         {/if}
 
+        <!-- Usage Link Slab -->
+        <div class="slab">
+          <div class="slab-header">
+            <div class="flex items-center gap-2">
+              <GaugeIcon class="w-4 h-4 text-primary" />
+              <h3>Usage & Costs</h3>
+            </div>
+          </div>
+          <div class="slab-body--padded">
+            <p class="text-sm text-muted-foreground mb-4">
+              Track your streaming hours, bandwidth consumption, and see what it's costing you.
+            </p>
+            <Button href={resolve("/analytics/usage")} variant="default" class="w-full gap-2">
+              <GaugeIcon class="w-4 h-4" />
+              View Usage & Costs
+            </Button>
+          </div>
+        </div>
+
         <!-- Recent Invoices Slab -->
         {#if invoices.length > 0}
           <div class="slab col-span-full">
@@ -452,104 +428,6 @@
           </div>
         {/if}
 
-        <!-- Usage Records Slab -->
-        <div class="slab col-span-full">
-          <div class="slab-header">
-            <div class="flex items-center gap-2">
-              <BarChart3Icon class="w-4 h-4 text-primary" />
-              <h3>Current Usage</h3>
-            </div>
-          </div>
-          {#if usageRecords.length > 0}
-            <div class="slab-body--padded">
-              <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
-                {#each usageRecords.slice(0, 4) as record, index (record.id ?? `${record.usageType}-${index}`)}
-                  <div class="text-center p-4 border border-border/30">
-                    <div class="text-2xl font-bold text-primary">{record.usageValue.toLocaleString()}</div>
-                    <div class="text-sm text-muted-foreground capitalize">{record.usageType.replace(/_/g, ' ')}</div>
-                    {#if record.clusterName}
-                      <div class="text-xs text-muted-foreground mt-1">{record.clusterName}</div>
-                    {/if}
-                  </div>
-                {/each}
-              </div>
-            </div>
-          {:else}
-            <div class="slab-body--padded">
-              <p class="text-muted-foreground">No usage data available for this period.</p>
-            </div>
-          {/if}
-          <div class="slab-actions">
-            <Button href={resolve("/settings")} variant="ghost" class="gap-2">
-              <SettingsIcon class="w-4 h-4" />
-              Account Settings
-            </Button>
-          </div>
-        </div>
-
-        <!-- Geographic Distribution Slab -->
-        {#if billingStatus?.usageSummary?.geoBreakdown && billingStatus.usageSummary.geoBreakdown.length > 0}
-          <div class="slab col-span-full">
-            <div class="slab-header">
-              <div class="flex items-center gap-2">
-                <GlobeIcon class="w-4 h-4 text-tokyo-night-cyan" />
-                <h3>Top Regions</h3>
-              </div>
-              <span class="text-xs text-muted-foreground">
-                {billingStatus.usageSummary.uniqueCountries} countries, {billingStatus.usageSummary.uniqueCities} cities
-              </span>
-            </div>
-            <div class="slab-body--flush">
-              <table class="w-full text-sm">
-                <thead>
-                  <tr class="border-b border-border/50 text-muted-foreground text-xs uppercase tracking-wide">
-                    <th class="text-left py-3 px-4">Country</th>
-                    <th class="text-right py-3 px-4">Viewers</th>
-                    <th class="text-right py-3 px-4">Watch Time</th>
-                    <th class="text-right py-3 px-4">Bandwidth</th>
-                    <th class="text-right py-3 px-4">Share</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {#each billingStatus.usageSummary.geoBreakdown as country (country.countryCode)}
-                    <tr class="border-b border-border/30 hover:bg-muted/10">
-                      <td class="py-3 px-4">
-                        <span class="font-medium">{getCountryName(country.countryCode)}</span>
-                        <span class="text-muted-foreground ml-1">({country.countryCode})</span>
-                      </td>
-                      <td class="py-3 px-4 text-right font-mono">
-                        {country.viewerCount.toLocaleString()}
-                      </td>
-                      <td class="py-3 px-4 text-right font-mono">
-                        {formatViewerHours(country.viewerHours)}h
-                      </td>
-                      <td class="py-3 px-4 text-right font-mono">
-                        {country.egressGb.toFixed(1)} GB
-                      </td>
-                      <td class="py-3 px-4 text-right">
-                        <div class="flex items-center justify-end gap-2">
-                          <div class="w-16 h-1.5 bg-muted overflow-hidden">
-                            <div
-                              class="h-full bg-tokyo-night-cyan"
-                              style="width: {Math.min(country.percentage, 100)}%"
-                            ></div>
-                          </div>
-                          <span class="font-mono text-xs w-12 text-right">{country.percentage.toFixed(1)}%</span>
-                        </div>
-                      </td>
-                    </tr>
-                  {/each}
-                </tbody>
-              </table>
-            </div>
-            <div class="slab-actions">
-              <Button href={resolve("/analytics/geographic")} variant="ghost" class="gap-2">
-                <GlobeIcon class="w-4 h-4" />
-                View Full Geographic Analytics
-              </Button>
-            </div>
-          </div>
-        {/if}
       </div>
     </div>
   {/if}

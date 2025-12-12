@@ -7,10 +7,16 @@ query GetLoadBalancingMetrics($timeRange: TimeRangeInput) {
     clientCountry
     clientLatitude
     clientLongitude
-    clientBucket { h3Index resolution }
+    clientBucket {
+      h3Index
+      resolution
+    }
     nodeLatitude
     nodeLongitude
-    nodeBucket { h3Index resolution }
+    nodeBucket {
+      h3Index
+      resolution
+    }
     nodeName
     score
     status
@@ -18,5 +24,6 @@ query GetLoadBalancingMetrics($timeRange: TimeRangeInput) {
     routingDistance
     eventType
     source
+    latencyMs
   }
 }

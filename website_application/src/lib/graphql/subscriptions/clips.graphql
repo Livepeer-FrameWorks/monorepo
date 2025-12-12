@@ -15,5 +15,10 @@ subscription ClipLifecycle($stream: String!) {
     filePath
     s3Url
     sizeBytes
+    # Timing info (from Foghorn enrichment)
+    startUnix
+    stopUnix
+    durationSec
+    clipMode
   }
 }

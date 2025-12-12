@@ -282,7 +282,7 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 		)
 		SELECT
 			country_code,
-			sum(viewer_count) as viewer_count,
+			sum(viewer_count) as total_viewer_count,
 			sum(viewer_hours) as viewer_hours,
 			sum(egress_gb) as egress_gb,
 			if((SELECT total_viewers FROM totals) > 0,
@@ -293,7 +293,7 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 		AND hour BETWEEN ? AND ?
 		AND country_code != '' AND country_code != '--'
 		GROUP BY country_code
-		ORDER BY viewer_count DESC
+		ORDER BY total_viewer_count DESC
 		LIMIT 10
 	`, tenantID, startTime, endTime, tenantID, startTime, endTime)
 

@@ -107,6 +107,9 @@ fragment CoreClip on Clip {
   accessCount
   createdAt
   updatedAt
+  # Mode and request params for UI display
+  clipMode
+  requestedParams
 }
 
 fragment CoreDVRRequest on DVRRequest {

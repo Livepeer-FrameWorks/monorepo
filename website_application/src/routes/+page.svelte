@@ -10,7 +10,7 @@
   import { toast } from "$lib/stores/toast.js";
   import { getIconComponent } from "$lib/iconUtils";
   import { Button } from "$lib/components/ui/button";
-  import { GridSeam } from "$lib/components/layout";
+  import { GridSeam, SectionDivider } from "$lib/components/layout";
   import DashboardMetricCard from "$lib/components/shared/DashboardMetricCard.svelte";
   import StreamStatsGrid from "$lib/components/dashboard/StreamStatsGrid.svelte";
   import ConnectionStatusBanner from "$lib/components/dashboard/ConnectionStatusBanner.svelte";
@@ -43,10 +43,12 @@
   let user = $state<UserData | null>(null);
   let loading = $state(true);
 
-  // Stream metrics type for real-time data
+  // Stream metrics type for real-time data (matches realtime.ts StreamMetric)
   interface StreamMetrics {
-    bandwidth_in?: number;
-    bandwidth_out?: number;
+    // Bandwidth in bits per second (from ViewerMetrics subscription)
+    bandwidthInBps?: number;
+    bandwidthOutBps?: number;
+    // Legacy fields (not currently populated)
     bitrate_kbps?: number;
     video_codec?: string;
     audio_codec?: string;
@@ -216,9 +218,9 @@
     realtimeStreams: realtimeData?.length || 0,
   });
 
-  // Calculate total bandwidth from live metrics
+  // Calculate total bandwidth from live metrics (bandwidthInBps/OutBps are in bits/sec)
   let totalBandwidth = $derived(Object.values(liveMetrics).reduce((total: number, stream) => {
-    return total + (stream.bandwidth_in || 0) + (stream.bandwidth_out || 0);
+    return total + (stream.bandwidthInBps || 0) + (stream.bandwidthOutBps || 0);
   }, 0));
 
   function copyToClipboard(text: string) {
@@ -264,7 +266,7 @@
     {@const ServerIcon = getIconComponent('Server')}
     {@const LayoutDashboardIcon = getIconComponent('LayoutDashboard')}
     <!-- Fixed Page Header -->
-    <div class="px-4 sm:px-6 lg:px-8 py-4 border-b border-border shrink-0">
+    <div class="px-4 sm:px-6 lg:px-8 py-4 border-b border-[hsl(var(--tn-fg-gutter)/0.3)] shrink-0">
       <div class="flex items-center gap-3">
         <LayoutDashboardIcon class="w-5 h-5 text-primary" />
         <div>
@@ -326,6 +328,8 @@
           />
         </div>
       </GridSeam>
+
+      <SectionDivider class="my-8" />
 
       <!-- Main Content Grid (seamed layout, no outer padding) -->
       <div class="dashboard-grid">
@@ -493,17 +497,16 @@
         </div>
 
         <!-- Recent Activity Event Log -->
-        <div class="slab col-span-full">
-          <EventLog
-            events={platformEvents}
-            title="Recent Activity"
-            maxVisible={5}
-            collapsed={eventLogCollapsed}
-            onToggle={() => (eventLogCollapsed = !eventLogCollapsed)}
-            showStreamName={true}
-            emptyMessage="No recent activity. Events will appear here as streams go live and viewers connect."
-          />
-        </div>
+        <EventLog
+          class="col-span-full"
+          events={platformEvents}
+          title="Recent Activity"
+          maxVisible={5}
+          collapsed={eventLogCollapsed}
+          onToggle={() => (eventLogCollapsed = !eventLogCollapsed)}
+          showStreamName={true}
+          emptyMessage="No recent activity. Events will appear here as streams go live and viewers connect."
+        />
       </div>
     </div>
     </div>

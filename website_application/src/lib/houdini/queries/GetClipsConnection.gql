@@ -17,6 +17,8 @@ query GetClipsConnection($streamId: ID, $first: Int = 50, $after: String) {
         accessCount
         createdAt
         updatedAt
+        clipMode
+        requestedParams
       }
     }
     pageInfo {

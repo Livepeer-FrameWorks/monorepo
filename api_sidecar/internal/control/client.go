@@ -412,10 +412,12 @@ func buildClipParams(req *pb.ClipPullRequest) string {
 		parts = append(parts, "stopunix="+strconv.FormatInt(req.GetStopUnix(), 10))
 	}
 	if req.StartMs != nil {
-		parts = append(parts, "start="+strconv.FormatInt(req.GetStartMs()/1000, 10))
+		// StartMs is media time in seconds (despite the name), MistServer expects seconds
+		parts = append(parts, "start="+strconv.FormatInt(req.GetStartMs(), 10))
 	}
 	if req.StopMs != nil {
-		parts = append(parts, "stop="+strconv.FormatInt(req.GetStopMs()/1000, 10))
+		// StopMs is media time in seconds (despite the name), MistServer expects seconds
+		parts = append(parts, "stop="+strconv.FormatInt(req.GetStopMs(), 10))
 	}
 	if req.DurationSec != nil {
 		parts = append(parts, "duration="+strconv.FormatInt(req.GetDurationSec(), 10))

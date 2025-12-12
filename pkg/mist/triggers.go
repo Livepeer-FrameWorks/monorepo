@@ -168,16 +168,40 @@ func ParseTriggerToProtobuf(triggerType TriggerType, rawPayload []byte, nodeID s
 			BufferState: params[1],
 		}
 
-		// Parse JSON track details if present (params[2])
+		// Parse JSON health data if present (params[2])
+		// Mist sends: {"health": {buffer, jitter, issues, maxkeepaway, tracks[], video_..., audio_...}}
 		if len(params) > 2 && params[2] != "" {
-			var tracksData map[string]interface{}
-			if err := json.Unmarshal([]byte(params[2]), &tracksData); err != nil {
+			var healthData map[string]interface{}
+			if err := json.Unmarshal([]byte(params[2]), &healthData); err != nil {
 				logger.WithFields(logging.Fields{
 					"error": err.Error(),
 					"json":  params[2],
-				}).Warn("Failed to parse STREAM_BUFFER track JSON")
+				}).Warn("Failed to parse STREAM_BUFFER health JSON")
 			} else {
-				trigger.Tracks = parseTracksFromJSON(tracksData)
+				// Check if wrapped in "health" key (Mist sends {"health": {...}})
+				if health, ok := healthData["health"].(map[string]interface{}); ok {
+					healthData = health
+				}
+
+				// Extract top-level summary fields from health wrapper
+				if buffer, ok := healthData["buffer"].(float64); ok {
+					bufferMs := int32(buffer)
+					trigger.StreamBufferMs = &bufferMs
+				}
+				if jitter, ok := healthData["jitter"].(float64); ok {
+					jitterMs := int32(jitter)
+					trigger.StreamJitterMs = &jitterMs
+				}
+				if issues, ok := healthData["issues"].(string); ok && issues != "" {
+					trigger.MistIssues = &issues
+				}
+				if maxKeepaway, ok := healthData["maxkeepaway"].(float64); ok {
+					maxKeepawayMs := int32(maxKeepaway)
+					trigger.MaxKeepawayMs = &maxKeepawayMs
+				}
+
+				// Parse per-track data (entries with "codec" field)
+				trigger.Tracks = parseTracksFromJSON(healthData)
 			}
 		}
 

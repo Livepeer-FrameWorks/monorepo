@@ -21,7 +21,8 @@ function parseStreamingUrl(url: string): ParsedStreamingUrl {
 
 // Raw config from environment - these are base URLs that we parse to construct protocol-specific URLs
 const rawConfig = {
-  ingestUrl: import.meta.env.VITE_STREAMING_INGEST_URL || "http://localhost:8080",
+  ingestUrl:
+    import.meta.env.VITE_STREAMING_INGEST_URL || "http://localhost:8080",
   edgeUrl: import.meta.env.VITE_STREAMING_EDGE_URL || "http://localhost:8080",
   rtmpPort: import.meta.env.VITE_STREAMING_RTMP_PORT || "1935",
   srtPort: import.meta.env.VITE_STREAMING_SRT_PORT || "8889",
@@ -29,8 +30,10 @@ const rawConfig = {
   hlsPath: import.meta.env.VITE_STREAMING_HLS_PATH || "/hls",
   webrtcPath: import.meta.env.VITE_STREAMING_WEBRTC_PATH || "/webrtc",
   embedPath: import.meta.env.VITE_STREAMING_EMBED_PATH || "/",
-  marketingSiteUrl: import.meta.env.VITE_MARKETING_SITE_URL || "http://localhost:18031",
-  docsSiteUrl: import.meta.env.VITE_DOCS_SITE_URL || "http://localhost:18090/docs",
+  marketingSiteUrl:
+    import.meta.env.VITE_MARKETING_SITE_URL || "http://localhost:18031",
+  docsSiteUrl:
+    import.meta.env.VITE_DOCS_SITE_URL || "http://localhost:18090/docs",
 };
 
 // Parsed URLs for deriving hostnames and TLS mode

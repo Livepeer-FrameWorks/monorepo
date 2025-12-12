@@ -203,17 +203,93 @@
     return { routes, nodes: displayNodes, buckets: bucketPolys, bucketStats };
   });
 
+  const bucketToCentroid = (bucket?: { h3Index?: string | null } | null) => {
+    if (!bucket?.h3Index || !cellToLatLngFn) return null;
+    try {
+      const [lat, lng] = cellToLatLngFn(bucket.h3Index);
+      return [lat, lng] as [number, number];
+    } catch (e) {
+      console.warn('[bucketToCentroid] Failed for h3Index:', bucket.h3Index, e);
+      return null;
+    }
+  };
+
+  // Simple Haversine distance in km
+  function haversineDistance(lat1: number, lon1: number, lat2: number, lon2: number) {
+    const R = 6371; // Radius of the earth in km
+    const dLat = (lat2 - lat1) * (Math.PI / 180);
+    const dLon = (lon2 - lon1) * (Math.PI / 180);
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) *
+      Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+  }
+
+  function resolveBucketLocation(h3Index: string, countryMap: Record<string, string>): string {
+    const centroid = bucketToCentroid({ h3Index });
+    // First try country map fallback if we have it
+    const country = countryMap[h3Index];
+    
+    if (!centroid || !geographicDistribution?.topCities) {
+      return country ? `${country} (${h3Index.slice(0, 6)}...)` : h3Index.slice(0, 8) + '...';
+    }
+
+    const [lat, lng] = centroid;
+    let closestCity = null;
+    let minDist = Infinity;
+
+    // Find nearest city within 75km (increased from 50km)
+    for (const city of geographicDistribution.topCities) {
+      if (city.latitude && city.longitude) {
+        const dist = haversineDistance(lat, lng, city.latitude, city.longitude);
+        if (dist < minDist) {
+          minDist = dist;
+          closestCity = city;
+        }
+      }
+    }
+
+    if (closestCity && minDist < 75) {
+      return `${closestCity.city}, ${closestCity.countryCode}`;
+    }
+    
+    // Fallback to country from events
+    if (country) {
+      return `${getCountryName(country)} (${h3Index.slice(0, 4)}...)`;
+    }
+    
+    return h3Index.slice(0, 8) + '...';
+  }
+
   // Bucket hotspot list (client buckets)
   let bucketHotspots = $derived.by(() => {
+    // Build bucket->country map from events
+    const edges = $routingEventsStore.data?.routingEventsConnection?.edges ?? [];
+    const countryMap: Record<string, string> = {};
+    for (const edge of edges) {
+      const evt = edge.node;
+      if (evt.clientBucket?.h3Index && evt.clientCountry) {
+        countryMap[evt.clientBucket.h3Index] = evt.clientCountry;
+      }
+    }
+
     const stats = routingMapData.bucketStats || {};
     const arr = Object.entries(stats)
-      .map(([id, s]) => ({
-        id,
-        count: s.count,
-        successRate: s.count ? Math.round((s.success / s.count) * 100) : 0,
-        avgDistance: s.count ? s.distanceSum / s.count : 0,
-        nodeSeen: s.nodeSeen
-      }))
+      .map(([id, s]) => {
+        // Strip prefix "c-" or "n-" to get raw index
+        const rawIndex = id.includes('-') ? id.split('-')[1] : id;
+        return {
+          id,
+          rawIndex,
+          count: s.count,
+          successRate: s.count ? Math.round((s.success / s.count) * 100) : 0,
+          avgDistance: s.count ? s.distanceSum / s.count : 0,
+          nodeSeen: s.nodeSeen,
+          label: resolveBucketLocation(rawIndex, countryMap)
+        };
+      })
       .sort((a, b) => b.count - a.count);
     const maxCount = arr[0]?.count || 1;
     return arr.map((x) => ({ ...x, pct: Math.round((x.count / maxCount) * 100) }));
@@ -245,16 +321,7 @@
       .sort((a, b) => b.count - a.count);
   });
 
-  const bucketToCentroid = (bucket?: { h3Index?: string | null } | null) => {
-    if (!bucket?.h3Index || !cellToLatLngFn) return null;
-    try {
-      const [lat, lng] = cellToLatLngFn(bucket.h3Index);
-      return [lat, lng] as [number, number];
-    } catch (e) {
-      console.warn('[bucketToCentroid] Failed for h3Index:', bucket.h3Index, e);
-      return null;
-    }
-  };
+
 
   let flowSegments = $derived.by(() => {
     return bucketFlows
@@ -517,7 +584,7 @@
 
 <div class="h-full flex flex-col">
   <!-- Fixed Page Header -->
-  <div class="px-4 sm:px-6 lg:px-8 py-4 border-b border-border shrink-0">
+  <div class="px-4 sm:px-6 lg:px-8 py-4 border-b border-[hsl(var(--tn-fg-gutter)/0.3)] shrink-0">
     <div class="flex items-center gap-3">
       <Globe2Icon class="w-5 h-5 text-primary" />
       <div>
@@ -645,16 +712,7 @@
                 />
               </div>
             </div>
-            <div class="slab-actions slab-actions--row">
-              <Button href={resolve("/analytics")} variant="ghost" class="gap-2">
-                <ChartLineIcon class="w-4 h-4" />
-                Overview
-              </Button>
-              <Button href={resolve("/analytics/realtime")} variant="ghost" class="gap-2">
-                <ZapIcon class="w-4 h-4" />
-                Real-time
-              </Button>
-            </div>
+
           </div>
 
           <!-- Top Countries & Cities Slab -->
@@ -686,7 +744,7 @@
                     <div class="flex justify-between items-center p-2 rounded border border-border/30 bg-muted/20">
                       <div>
                         <span class="text-sm text-foreground">{city.city}</span>
-                        <span class="text-xs text-muted-foreground ml-1">({getCountryName(city.countryCode)})</span>
+                        <span class="text-xs text-muted-foreground ml-1">({getCountryName(city.countryCode ?? '')})</span>
                       </div>
                       <span class="font-semibold text-foreground">{city.viewerCount}</span>
                     </div>
@@ -930,7 +988,7 @@
                 {#each bucketHotspots.slice(0, 8) as b (b.id)}
                   <div class="flex items-center justify-between p-2 border border-border/30 bg-muted/10">
                     <div class="flex items-center gap-2">
-                      <span class="font-mono text-xs px-2 py-0.5 bg-primary/10 text-primary rounded">{b.id}</span>
+                      <span class="font-mono text-xs px-2 py-0.5 bg-primary/10 text-primary rounded" title={b.id}>{b.label}</span>
                       <span class="text-muted-foreground text-xs">{b.pct}%</span>
                     </div>
                     <div class="flex items-center gap-3 text-xs">
@@ -964,7 +1022,7 @@
                   .slice(0, 6) as b (b.id)}
                   <div class="flex items-center justify-between p-2 border border-border/30 bg-muted/10">
                     <div class="flex items-center gap-2">
-                      <span class="font-mono text-xs px-2 py-0.5 bg-warning/10 text-warning rounded">{b.id}</span>
+                      <span class="font-mono text-xs px-2 py-0.5 bg-warning/10 text-warning rounded" title={b.id}>{b.label}</span>
                       <span class="text-muted-foreground text-xs">{Math.round(b.avgDistance)} km avg</span>
                     </div>
                     <div class="text-xs text-muted-foreground flex items-center gap-2">
@@ -1042,7 +1100,7 @@
                 {#each bucketHotspots.filter(b => !b.nodeSeen).slice(0, 6) as b (b.id)}
                   <div class="flex items-center justify-between p-2 border border-destructive/20 bg-destructive/5">
                     <div class="flex items-center gap-2">
-                      <span class="font-mono text-xs px-2 py-0.5 bg-destructive/20 text-destructive rounded">{b.id}</span>
+                      <span class="font-mono text-xs px-2 py-0.5 bg-destructive/20 text-destructive rounded" title={b.id}>{b.label}</span>
                       <span class="text-muted-foreground text-xs">{b.count} events</span>
                     </div>
                     <Button size="sm" variant="ghost" class="text-xs" onclick={() => { selectedBucket = b.id; }}>
@@ -1226,31 +1284,7 @@
           </div>
         {/if}
 
-        <!-- Node Distribution Slab -->
-        <div class="slab col-span-full">
-          <div class="slab-header">
-            <div class="flex items-center gap-2">
-              <ServerIcon class="w-4 h-4 text-info" />
-              <h3>Node Distribution by Region</h3>
-            </div>
-          </div>
-          <div class="slab-body--padded">
-            {#if nodes.length > 0}
-              <div class="grid md:grid-cols-2 xl:grid-cols-3 gap-4">
-                {#each nodes as node (node.id ?? node.nodeName)}
-                  <NodeCard {node} />
-                {/each}
-              </div>
-            {:else}
-              <div class="text-center py-12">
-                <MonitorIcon class="w-6 h-6 text-muted-foreground mx-auto mb-4" />
-                <h3 class="text-lg font-semibold text-foreground mb-2">No Infrastructure Nodes</h3>
-                <p class="text-muted-foreground mb-4">Configure infrastructure nodes to see regional distribution</p>
-                <Button href={resolve("/infrastructure")}>Configure Infrastructure</Button>
-              </div>
-            {/if}
-          </div>
-        </div>
+
       </div>
     </div>
   {/if}

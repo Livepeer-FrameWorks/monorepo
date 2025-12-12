@@ -24,6 +24,12 @@ import (
 	pb "frameworks/pkg/proto"
 )
 
+// streamContext holds cached tenant and user information for a stream
+type streamContext struct {
+	TenantID string
+	UserID   string
+}
+
 // Processor implements the MistTriggerProcessor interface for handling MistServer triggers
 type Processor struct {
 	logger          logging.Logger
@@ -34,7 +40,7 @@ type Processor struct {
 	geoipCache      *cache.Cache
 	nodeID          string
 	region          string
-	tenantCache     map[string]string // Cache tenant resolutions
+	streamCache     map[string]streamContext // Cache stream context (tenant + user)
 }
 
 // hash generates a simple hash for string input
@@ -54,7 +60,7 @@ func NewProcessor(logger logging.Logger, commodoreClient *commodore.GRPCClient, 
 		geoipClient:     geoipClient,
 		nodeID:          os.Getenv("NODE_ID"),
 		region:          os.Getenv("REGION"),
-		tenantCache:     make(map[string]string),
+		streamCache:     make(map[string]streamContext),
 	}
 }
 
@@ -129,10 +135,16 @@ func (p *Processor) handlePushRewrite(trigger *pb.MistTrigger) (string, bool, er
 		return "", true, err
 	}
 
-	// Cache tenant resolution
-	p.tenantCache[streamValidation.InternalName] = streamValidation.TenantId
+	// Cache stream context (tenant + user)
+	p.streamCache[streamValidation.InternalName] = streamContext{
+		TenantID: streamValidation.TenantId,
+		UserID:   streamValidation.UserId,
+	}
 	if streamValidation.TenantId != "" {
 		trigger.TenantId = &streamValidation.TenantId
+	}
+	if streamValidation.UserId != "" {
+		trigger.UserId = &streamValidation.UserId
 	}
 
 	// Detect protocol from push URL
@@ -280,6 +292,13 @@ func (p *Processor) handlePlayRewrite(trigger *pb.MistTrigger) (string, bool, er
 		}
 	}
 
+	// Enrich with node location name for analytics (e.g., "us-east-1", "Frankfurt")
+	if nodeConfig := p.getNodeConfig(trigger.GetNodeId()); nodeConfig != nil {
+		if nodeConfig.Location != "" {
+			defaultStream.NodeLocation = &nodeConfig.Location
+		}
+	}
+
 	// Apply the resolved TenantID if available.
 	if target.TenantID != "" {
 		trigger.TenantId = &target.TenantID
@@ -342,9 +361,13 @@ func (p *Processor) handlePushEnd(trigger *pb.MistTrigger) (string, bool, error)
 	pushEnd := trigger.GetTriggerPayload().(*pb.MistTrigger_PushEnd).PushEnd
 	internalName := mist.ExtractInternalName(pushEnd.GetStreamName())
 
-	tenantID := p.getTenantForInternalName(internalName)
-	if tenantID != "" {
-		trigger.TenantId = &tenantID
+	ctx := context.Background()
+	info := p.getStreamContext(ctx, internalName)
+	if info.TenantID != "" {
+		trigger.TenantId = &info.TenantID
+	}
+	if info.UserID != "" {
+		trigger.UserId = &info.UserID
 	}
 
 	// Send enriched trigger to Decklog
@@ -366,9 +389,13 @@ func (p *Processor) handlePushOutStart(trigger *pb.MistTrigger) (string, bool, e
 	// nodeID is available via trigger.GetNodeId() and flows to Decklog with the full trigger
 	internalName := mist.ExtractInternalName(pushOutStart.GetStreamName())
 
-	tenantID := p.getTenantForInternalName(internalName)
-	if tenantID != "" {
-		trigger.TenantId = &tenantID
+	ctx := context.Background()
+	info := p.getStreamContext(ctx, internalName)
+	if info.TenantID != "" {
+		trigger.TenantId = &info.TenantID
+	}
+	if info.UserID != "" {
+		trigger.UserId = &info.UserID
 	}
 
 	// NOTE: push_out_start event no longer forwarded to Commodore (Control Plane separation)
@@ -396,9 +423,13 @@ func (p *Processor) handleUserNew(trigger *pb.MistTrigger) (string, bool, error)
 		"node_id":         trigger.GetNodeId(),
 	}).Debug("Processing USER_NEW trigger")
 
-	tenantID := p.getTenantForInternalName(userNew.GetStreamName())
-	if tenantID != "" {
-		trigger.TenantId = &tenantID
+	ctx := context.Background()
+	info := p.getStreamContext(ctx, userNew.GetStreamName())
+	if info.TenantID != "" {
+		trigger.TenantId = &info.TenantID
+	}
+	if info.UserID != "" {
+		trigger.UserId = &info.UserID
 	}
 
 	// Enrich ViewerConnect payload directly
@@ -442,70 +473,59 @@ func (p *Processor) handleUserNew(trigger *pb.MistTrigger) (string, bool, error)
 		}).Error("Failed to send user connection trigger to Decklog")
 	}
 
-	// Update state (viewer +1)
-	state.DefaultManager().UpdateUserConnection(userNew.GetStreamName(), trigger.GetNodeId(), p.getTenantForInternalName(userNew.GetStreamName()), 1)
+	// Update state (viewer +1) - reuse info from earlier lookup
+	state.DefaultManager().UpdateUserConnection(userNew.GetStreamName(), trigger.GetNodeId(), info.TenantID, 1)
 
 	// Allow user connection by returning "true"
 	return "true", false, nil
 }
 
 // handleStreamBuffer processes STREAM_BUFFER trigger (non-blocking)
+// Forwards the original StreamBufferTrigger to Decklog with full track data and health metrics.
 func (p *Processor) handleStreamBuffer(trigger *pb.MistTrigger) (string, bool, error) {
 	// Extract StreamBuffer payload from protobuf
 	streamBuffer := trigger.GetTriggerPayload().(*pb.MistTrigger_StreamBuffer).StreamBuffer
 
 	p.logger.WithFields(logging.Fields{
-		"internal_name": streamBuffer.GetStreamName(),
-		"buffer_state":  streamBuffer.GetBufferState(),
-		"track_count":   len(streamBuffer.GetTracks()),
-		"node_id":       trigger.GetNodeId(),
+		"internal_name":    streamBuffer.GetStreamName(),
+		"buffer_state":     streamBuffer.GetBufferState(),
+		"track_count":      len(streamBuffer.GetTracks()),
+		"stream_buffer_ms": streamBuffer.GetStreamBufferMs(),
+		"stream_jitter_ms": streamBuffer.GetStreamJitterMs(),
+		"mist_issues":      streamBuffer.GetMistIssues(),
+		"node_id":          trigger.GetNodeId(),
 	}).Debug("Processing STREAM_BUFFER trigger")
-
-	// Extract issue indicators from structured data (no derived health score)
-	var hasIssues *bool
-	if streamBuffer.HasIssues != nil {
-		hasIssues = streamBuffer.HasIssues
-	}
 
 	// NOTE: stream-status event no longer forwarded to Commodore (Control Plane separation)
 	// Events flow through Decklog to Periscope for tracking
 
+	ctx := context.Background()
+	info := p.getStreamContext(ctx, streamBuffer.GetStreamName())
+	if info.TenantID != "" {
+		trigger.TenantId = &info.TenantID
+	}
+	if info.UserID != "" {
+		trigger.UserId = &info.UserID
+	}
+
 	// Update state from buffer first (this sets StartedAt on first buffer event)
-	_ = state.DefaultManager().UpdateStreamFromBuffer(streamBuffer.GetStreamName(), streamBuffer.GetStreamName(), trigger.GetNodeId(), p.getTenantForInternalName(streamBuffer.GetStreamName()), streamBuffer.GetBufferState(), "")
+	_ = state.DefaultManager().UpdateStreamFromBuffer(
+		streamBuffer.GetStreamName(),
+		streamBuffer.GetStreamName(),
+		trigger.GetNodeId(),
+		info.TenantID,
+		streamBuffer.GetBufferState(),
+		"",
+	)
 
-	// Create stream lifecycle update with enriched data
-	streamLifecycle := &pb.StreamLifecycleUpdate{
-		InternalName: streamBuffer.GetStreamName(),
-		Status:       "live",
-		BufferState:  func() *string { s := streamBuffer.GetBufferState(); return &s }(),
-		NodeId:       trigger.GetNodeId(),
-		TenantId:     func() *string { s := p.getTenantForInternalName(streamBuffer.GetStreamName()); return &s }(),
-		Timestamp:    time.Now().Unix(),
-	}
-
-	// Add started_at from state manager (set when stream first went live)
-	if streamState := state.DefaultManager().GetStreamState(streamBuffer.GetStreamName()); streamState != nil && streamState.StartedAt != nil {
-		startedAt := streamState.StartedAt.Unix()
-		streamLifecycle.StartedAt = &startedAt
-	}
-
-	// Add issue indicators if available
-	if hasIssues != nil {
-		streamLifecycle.HasIssues = hasIssues
-	}
-
-	// Update trigger with enriched stream lifecycle data
-	trigger.TriggerPayload = &pb.MistTrigger_StreamLifecycleUpdate{
-		StreamLifecycleUpdate: streamLifecycle,
-	}
-
-	// Send enriched trigger to Decklog
+	// Forward original StreamBufferTrigger to Decklog (preserves all track data and health metrics)
+	// Helmsman already enriched it with has_issues, issues_description, quality_tier, etc.
 	if err := p.decklogClient.SendTrigger(trigger); err != nil {
 		p.logger.WithFields(logging.Fields{
 			"internal_name": streamBuffer.GetStreamName(),
 			"trigger_type":  trigger.GetTriggerType(),
 			"error":         err,
-		}).Error("Failed to send stream lifecycle trigger to Decklog")
+		}).Error("Failed to send stream buffer trigger to Decklog")
 	}
 
 	return "", false, nil
@@ -526,9 +546,13 @@ func (p *Processor) handleStreamEnd(trigger *pb.MistTrigger) (string, bool, erro
 	// NOTE: stream-end event no longer forwarded to Commodore (Control Plane separation)
 	// Events flow through Decklog to Periscope for tracking
 
-	tenantID := p.getTenantForInternalName(internalName)
-	if tenantID != "" {
-		trigger.TenantId = &tenantID
+	ctx := context.Background()
+	info := p.getStreamContext(ctx, internalName)
+	if info.TenantID != "" {
+		trigger.TenantId = &info.TenantID
+	}
+	if info.UserID != "" {
+		trigger.UserId = &info.UserID
 	}
 	streamEnd.NodeId = &nodeID
 
@@ -563,9 +587,13 @@ func (p *Processor) handleUserEnd(trigger *pb.MistTrigger) (string, bool, error)
 		"node_id":           trigger.GetNodeId(),
 	}).Debug("Processing USER_END trigger")
 
-	tenantID := p.getTenantForInternalName(userEnd.GetStreamName())
-	if tenantID != "" {
-		trigger.TenantId = &tenantID
+	ctx := context.Background()
+	info := p.getStreamContext(ctx, userEnd.GetStreamName())
+	if info.TenantID != "" {
+		trigger.TenantId = &info.TenantID
+	}
+	if info.UserID != "" {
+		trigger.UserId = &info.UserID
 	}
 
 	userEnd.NodeId = func() *string { s := trigger.GetNodeId(); return &s }()
@@ -605,8 +633,8 @@ func (p *Processor) handleUserEnd(trigger *pb.MistTrigger) (string, bool, error)
 		}).Error("Failed to send user disconnect trigger to Decklog")
 	}
 
-	// Update state (viewer -1)
-	state.DefaultManager().UpdateUserConnection(userEnd.GetStreamName(), trigger.GetNodeId(), p.getTenantForInternalName(userEnd.GetStreamName()), -1)
+	// Update state (viewer -1) - reuse info from earlier lookup
+	state.DefaultManager().UpdateUserConnection(userEnd.GetStreamName(), trigger.GetNodeId(), info.TenantID, -1)
 
 	return "", false, nil
 }
@@ -633,9 +661,13 @@ func (p *Processor) handleLiveTrackList(trigger *pb.MistTrigger) (string, bool, 
 
 	// Quality metrics are available but we send raw trackListJSON to protobuf
 
-	tenantID := p.getTenantForInternalName(internalName)
-	if tenantID != "" {
-		trigger.TenantId = &tenantID
+	ctx := context.Background()
+	info := p.getStreamContext(ctx, internalName)
+	if info.TenantID != "" {
+		trigger.TenantId = &info.TenantID
+	}
+	if info.UserID != "" {
+		trigger.UserId = &info.UserID
 	}
 
 	// Send enriched trigger to Decklog
@@ -648,7 +680,7 @@ func (p *Processor) handleLiveTrackList(trigger *pb.MistTrigger) (string, bool, 
 	}
 
 	// Update state track list - using empty JSON string since we have structured data
-	state.DefaultManager().UpdateTrackList(internalName, nodeID, p.getTenantForInternalName(internalName), "")
+	state.DefaultManager().UpdateTrackList(internalName, nodeID, info.TenantID, "")
 
 	return "", false, nil
 }
@@ -667,9 +699,13 @@ func (p *Processor) handleLiveBandwidth(trigger *pb.MistTrigger) (string, bool, 
 		"node_id":               nodeID,
 	}).Debug("Processing LIVE_BANDWIDTH trigger")
 
-	tenantID := p.getTenantForInternalName(internalName)
-	if tenantID != "" {
-		trigger.TenantId = &tenantID
+	ctx := context.Background()
+	info := p.getStreamContext(ctx, internalName)
+	if info.TenantID != "" {
+		trigger.TenantId = &info.TenantID
+	}
+	if info.UserID != "" {
+		trigger.UserId = &info.UserID
 	}
 
 	// Send enriched trigger to Decklog
@@ -709,9 +745,13 @@ func (p *Processor) handleRecordingEnd(trigger *pb.MistTrigger) (string, bool, e
 	// NOTE: recording-status event no longer forwarded to Commodore (Control Plane separation)
 	// Events flow through Decklog to Periscope for tracking
 
-	tenantID := p.getTenantForInternalName(internalName)
-	if tenantID != "" {
-		trigger.TenantId = &tenantID
+	ctx := context.Background()
+	info := p.getStreamContext(ctx, internalName)
+	if info.TenantID != "" {
+		trigger.TenantId = &info.TenantID
+	}
+	if info.UserID != "" {
+		trigger.UserId = &info.UserID
 	}
 
 	// Send enriched trigger to Decklog
@@ -1012,19 +1052,34 @@ func (p *Processor) extractInt64Field(payload []byte, field string) int64 {
 	return int64Val
 }
 
-// getTenantForInternalName gets tenant ID from cache or fallback
-func (p *Processor) getTenantForInternalName(internalName string) string {
+// getStreamContext gets tenant and user IDs from cache, with fallback to Commodore
+func (p *Processor) getStreamContext(ctx context.Context, internalName string) streamContext {
 	if internalName == "" {
-		return ""
+		return streamContext{}
 	}
 
-	if tenantID, exists := p.tenantCache[internalName]; exists {
-		return tenantID
+	// Check cache first
+	if info, exists := p.streamCache[internalName]; exists {
+		return info
 	}
 
-	// TODO: Add fallback logic to resolve tenant from clip hash or other means
-	p.logger.WithField("internal_name", internalName).Debug("No tenant cached for internal name")
-	return ""
+	// Fallback: call Commodore to resolve internal name
+	resp, err := p.commodoreClient.ResolveInternalName(ctx, internalName)
+	if err != nil {
+		p.logger.WithFields(logging.Fields{
+			"internal_name": internalName,
+			"error":         err,
+		}).Warn("Failed to resolve internal name from Commodore")
+		return streamContext{}
+	}
+
+	// Cache the result
+	info := streamContext{
+		TenantID: resp.TenantId,
+		UserID:   resp.UserId,
+	}
+	p.streamCache[internalName] = info
+	return info
 }
 
 // detectProtocol extracts protocol from push URL

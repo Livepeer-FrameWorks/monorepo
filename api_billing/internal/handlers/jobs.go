@@ -246,15 +246,19 @@ func (jm *JobManager) generateMonthlyInvoices() {
 		}
 
 		// Get usage data from the new usage_records table
-		billingMonth := firstOfMonth.AddDate(0, -1, 0).Format("2006-01") // Previous month
+		// Use precise timestamp boundaries instead of billing_month string
+		prevMonthStart := firstOfMonth.AddDate(0, -1, 0) // First of previous month
+		prevMonthEnd := firstOfMonth                      // First of current month (exclusive)
 		usageData := map[string]float64{}
 
 		// Fetch raw records to aggregate correctly (SUM vs MAX)
 		usageRows, err := jm.db.Query(`
 			SELECT usage_type, usage_value
 			FROM purser.usage_records
-			WHERE tenant_id = $1 AND billing_month = $2
-		`, tenantID, billingMonth)
+			WHERE tenant_id = $1
+			  AND period_start >= $2
+			  AND period_end <= $3
+		`, tenantID, prevMonthStart, prevMonthEnd)
 
 		if err != nil {
 			jm.logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to fetch usage data")
@@ -340,8 +344,9 @@ func (jm *JobManager) generateMonthlyInvoices() {
 
 		// Create typed usage details
 		usageDetails := UsageDetails{
-			UsageData:    usageData,
-			BillingMonth: billingMonth,
+			UsageData:   usageData,
+			PeriodStart: prevMonthStart,
+			PeriodEnd:   prevMonthEnd,
 			TierInfo: TierInfo{
 				TierID:          tierID,
 				TierName:        tierName,
@@ -1041,7 +1046,45 @@ func (jm *JobManager) cleanupExpiredWallets() {
 
 // processUsageSummary processes a single usage summary and stores it in the usage records table
 func (jm *JobManager) processUsageSummary(summary models.UsageSummary, source string) error {
-	billingMonth := summary.Timestamp.Format("2006-01")
+	// Parse the period to get the actual start and end time of usage
+	// Format is expected to be "start_time_rfc3339/end_time_rfc3339"
+	var billingMonth string
+	var periodStart, periodEnd time.Time
+	parts := strings.Split(summary.Period, "/")
+	if len(parts) >= 2 {
+		var err error
+		periodStart, err = time.Parse(time.RFC3339, parts[0])
+		if err == nil {
+			billingMonth = periodStart.Format("2006-01")
+		}
+		periodEnd, _ = time.Parse(time.RFC3339, parts[1])
+	} else if len(parts) >= 1 {
+		// Try to parse at least start time
+		var err error
+		periodStart, err = time.Parse(time.RFC3339, parts[0])
+		if err == nil {
+			billingMonth = periodStart.Format("2006-01")
+			// Default end time to start time + 1 hour if not provided?
+			// Better to leave it zero/null or set to start time if we must
+			periodEnd = periodStart
+		}
+	}
+
+	// Fallback if parsing fails
+	if billingMonth == "" {
+		billingMonth = summary.Timestamp.Format("2006-01")
+		// Use timestamp for period start/end fallback to avoid NULL constraint violation if applicable
+		// But ideally we want the constraint to work, so we need distinct values if possible.
+		// For now, use timestamp.
+		periodStart = summary.Timestamp
+		periodEnd = summary.Timestamp
+		
+		jm.logger.WithFields(logging.Fields{
+			"tenant_id": summary.TenantID,
+			"period":    summary.Period,
+		}).Warn("Failed to parse period for billing month/times, falling back to timestamp")
+	}
+
 	usageTypes := map[string]float64{
 		"stream_hours":            summary.StreamHours,
 		"viewer_hours":            summary.ViewerHours,
@@ -1054,6 +1097,8 @@ func (jm *JobManager) processUsageSummary(summary models.UsageSummary, source st
 		"clips_deleted":           float64(summary.ClipsDeleted),
 		"clip_storage_added_gb":   summary.ClipStorageAddedGB,
 		"clip_storage_deleted_gb": summary.ClipStorageDeletedGB,
+		"max_viewers":             float64(summary.MaxViewers),
+		"total_streams":           float64(summary.TotalStreams),
 	}
 
 	// Build usage details JSONB
@@ -1083,13 +1128,13 @@ func (jm *JobManager) processUsageSummary(summary models.UsageSummary, source st
 		}
 
 		_, err := jm.db.Exec(`
-			INSERT INTO purser.usage_records (tenant_id, cluster_id, usage_type, usage_value, usage_details, billing_month, created_at)
-			VALUES ($1, $2, $3, $4, $5, $6, NOW())
-			ON CONFLICT (tenant_id, cluster_id, usage_type, billing_month) DO UPDATE SET
+			INSERT INTO purser.usage_records (tenant_id, cluster_id, usage_type, usage_value, usage_details, billing_month, period_start, period_end, created_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+			ON CONFLICT (tenant_id, cluster_id, usage_type, period_start, period_end) DO UPDATE SET
 				usage_value = purser.usage_records.usage_value + EXCLUDED.usage_value,
 				usage_details = EXCLUDED.usage_details,
 				updated_at = NOW()
-		`, summary.TenantID, summary.ClusterID, usageType, usageValue, usageDetails, billingMonth)
+		`, summary.TenantID, summary.ClusterID, usageType, usageValue, usageDetails, billingMonth, periodStart, periodEnd)
 
 		if err != nil {
 			return fmt.Errorf("failed to upsert %s: %w", usageType, err)
@@ -1134,13 +1179,15 @@ func (jm *JobManager) updateInvoiceDraft(tenantID string) error {
 	periodStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
 	periodEnd := periodStart.AddDate(0, 1, 0).Add(-time.Second)
 
-	// Aggregate usage for current billing period
+	// Aggregate usage for current billing period using precise timestamps
 	rows, err := jm.db.Query(`
 		SELECT usage_type, SUM(usage_value) as total
 		FROM purser.usage_records
-		WHERE tenant_id = $1 AND billing_month = $2
+		WHERE tenant_id = $1
+		  AND period_start >= $2
+		  AND period_end <= $3
 		GROUP BY usage_type
-	`, tenantID, periodStart.Format("2006-01"))
+	`, tenantID, periodStart, periodEnd)
 	if err != nil {
 		return fmt.Errorf("failed to query usage: %w", err)
 	}

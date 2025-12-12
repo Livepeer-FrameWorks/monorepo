@@ -19,6 +19,7 @@
   } from "$lib/components/ui/select";
   import CodecDistributionChart from "$lib/components/charts/CodecDistributionChart.svelte";
   import StorageBreakdownChart from "$lib/components/charts/StorageBreakdownChart.svelte";
+  import { getCountryName } from "$lib/utils/country-names";
 
   // Houdini stores
   const usageRecordsStore = new GetUsageRecordsStore();
@@ -208,27 +209,20 @@
   const ZapIcon = getIconComponent("Zap");
   const GlobeIcon = getIconComponent("Globe2");
 
-  // Country code to name mapping
-  const countryNames: Record<string, string> = {
-    US: 'United States',
-    GB: 'United Kingdom',
-    DE: 'Germany',
-    FR: 'France',
-    JP: 'Japan',
-    CA: 'Canada',
-    AU: 'Australia',
-    BR: 'Brazil',
-    IN: 'India',
-    KR: 'South Korea',
-  };
-
-  function getCountryName(code: string): string {
-    return countryNames[code] || code;
-  }
-
   function formatViewerHours(hours: number): string {
     if (hours >= 1000) return `${(hours / 1000).toFixed(1)}k`;
     return hours.toFixed(1);
+  }
+
+  function formatBillingMonth(yyyymm: string) {
+    if (!yyyymm) return "";
+    try {
+      const [year, month] = yyyymm.split("-");
+      const date = new Date(parseInt(year), parseInt(month) - 1, 1);
+      return new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric" }).format(date);
+    } catch (e) {
+      return yyyymm;
+    }
   }
 </script>
 
@@ -238,7 +232,7 @@
 
 <div class="h-full flex flex-col">
   <!-- Fixed Page Header -->
-  <div class="px-4 sm:px-6 lg:px-8 py-4 border-b border-border shrink-0">
+  <div class="px-4 sm:px-6 lg:px-8 py-4 border-b border-[hsl(var(--tn-fg-gutter)/0.3)] shrink-0">
     <div class="flex justify-between items-center">
       <div class="flex items-center gap-3">
         <GaugeIcon class="w-5 h-5 text-primary" />
@@ -413,6 +407,33 @@
           </div>
         </div>
 
+        <!-- Billing Period Engagement Slab -->
+        {#if billingData?.usageSummary}
+          <div class="slab">
+            <div class="slab-header">
+              <div class="flex items-center gap-2">
+                <UsersIcon class="w-4 h-4 text-accent-purple" />
+                <h3>Billing Period Engagement</h3>
+              </div>
+              <span class="text-xs text-muted-foreground font-medium bg-muted/50 px-2 py-1 rounded">
+                Current period: {formatBillingMonth(billingData.usageSummary.billingMonth)}
+              </span>
+            </div>
+            <div class="slab-body--padded">
+              <div class="space-y-3">
+                <div class="flex items-center justify-between text-sm">
+                  <span class="text-muted-foreground">Viewer Hours</span>
+                  <span class="text-foreground">{formatNumber(billingData.usageSummary.viewerHours)} h</span>
+                </div>
+                <div class="flex items-center justify-between text-sm">
+                  <span class="text-muted-foreground">Peak Viewers</span>
+                  <span class="text-foreground">{formatNumber(billingData.usageSummary.peakViewers)}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        {/if}
+
         <!-- Additional Metrics Slab -->
         {#if usageData.recording_gb > 0 || usageData.peak_bandwidth_mbps > 0}
           <div class="slab">
@@ -467,92 +488,69 @@
           </div>
         </div>
 
-        <!-- Geographic Bandwidth Distribution Slab -->
+        <!-- Geographic Distribution Slab (Full Table) -->
         {#if billingData?.usageSummary?.geoBreakdown && billingData.usageSummary.geoBreakdown.length > 0}
-          <div class="slab">
+          <div class="slab col-span-full">
             <div class="slab-header">
               <div class="flex items-center gap-2">
                 <GlobeIcon class="w-4 h-4 text-tokyo-night-cyan" />
-                <h3>Bandwidth by Region</h3>
+                <h3>Top Regions</h3>
               </div>
+              <span class="text-xs text-muted-foreground">
+                {billingData.usageSummary.uniqueCountries} countries, {billingData.usageSummary.uniqueCities} cities
+              </span>
             </div>
-            <div class="slab-body--padded">
-              <div class="space-y-2">
-                {#each billingData.usageSummary.geoBreakdown.slice(0, 5) as country (country.countryCode)}
-                  <div class="flex items-center gap-3">
-                    <span class="w-20 text-sm text-muted-foreground truncate" title={getCountryName(country.countryCode)}>
-                      {country.countryCode}
-                    </span>
-                    <div class="flex-1 h-2 bg-muted overflow-hidden">
-                      <div
-                        class="h-full bg-tokyo-night-cyan"
-                        style="width: {Math.min(country.percentage, 100)}%"
-                      ></div>
-                    </div>
-                    <span class="w-16 text-right text-sm font-mono">
-                      {country.egressGb.toFixed(1)} GB
-                    </span>
-                  </div>
-                {/each}
-              </div>
-              <div class="mt-4 pt-4 border-t border-border/30 flex justify-between text-sm">
-                <span class="text-muted-foreground">
-                  {billingData.usageSummary.uniqueCountries} countries
-                </span>
-                <span class="text-muted-foreground">
-                  {formatViewerHours(billingData.usageSummary.viewerHours)}h total watch time
-                </span>
-              </div>
+            <div class="slab-body--flush overflow-x-auto">
+              <table class="w-full text-sm">
+                <thead>
+                  <tr class="border-b border-border/50 text-muted-foreground text-xs uppercase tracking-wide">
+                    <th class="text-left py-3 px-4">Country</th>
+                    <th class="text-right py-3 px-4">Viewers</th>
+                    <th class="text-right py-3 px-4">Watch Time</th>
+                    <th class="text-right py-3 px-4">Bandwidth</th>
+                    <th class="text-right py-3 px-4">Share</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {#each billingData.usageSummary.geoBreakdown as country (country.countryCode)}
+                    <tr class="border-b border-border/30 hover:bg-muted/10">
+                      <td class="py-3 px-4">
+                        <span class="font-medium">{getCountryName(country.countryCode)}</span>
+                        <span class="text-muted-foreground ml-1">({country.countryCode})</span>
+                      </td>
+                      <td class="py-3 px-4 text-right font-mono">
+                        {country.viewerCount.toLocaleString()}
+                      </td>
+                      <td class="py-3 px-4 text-right font-mono">
+                        {formatViewerHours(country.viewerHours)}h
+                      </td>
+                      <td class="py-3 px-4 text-right font-mono">
+                        {country.egressGb.toFixed(1)} GB
+                      </td>
+                      <td class="py-3 px-4 text-right">
+                        <div class="flex items-center justify-end gap-2">
+                          <div class="w-16 h-1.5 bg-muted rounded-full overflow-hidden">
+                            <div
+                              class="h-full bg-info"
+                              style="width: {Math.min(country.percentage || 0, 100)}%"
+                            ></div>
+                          </div>
+                          <span class="font-mono text-xs w-12 text-right">{(country.percentage || 0).toFixed(1)}%</span>
+                        </div>
+                      </td>
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
             </div>
             <div class="slab-actions">
               <Button href={resolve("/analytics/geographic")} variant="ghost" class="gap-2">
                 <GlobeIcon class="w-4 h-4" />
-                Full Geographic View
+                Full Geographic Analytics
               </Button>
             </div>
           </div>
         {/if}
-
-        <!-- Navigation Links Slab -->
-        <div class="slab">
-          <div class="slab-header">
-            <h3>More Analytics</h3>
-          </div>
-          <div class="slab-body--padded">
-            <div class="grid grid-cols-1 gap-2">
-              <a
-                href={resolve("/analytics")}
-                class="flex items-center gap-3 p-3 border border-border/30 bg-muted/20 hover:bg-muted/40 transition-colors"
-              >
-                <ChartLineIcon class="w-5 h-5 text-primary" />
-                <div>
-                  <p class="font-medium text-foreground">Analytics Overview</p>
-                  <p class="text-xs text-muted-foreground">Comprehensive streaming analytics</p>
-                </div>
-              </a>
-              <a
-                href={resolve("/account/billing")}
-                class="flex items-center gap-3 p-3 border border-border/30 bg-muted/20 hover:bg-muted/40 transition-colors"
-              >
-                <CreditCardIcon class="w-5 h-5 text-warning" />
-                <div>
-                  <p class="font-medium text-foreground">Billing</p>
-                  <p class="text-xs text-muted-foreground">Manage subscription and payments</p>
-                </div>
-              </a>
-              <a
-                href={resolve("/analytics/geographic")}
-                class="flex items-center gap-3 p-3 border border-border/30 bg-muted/20 hover:bg-muted/40 transition-colors"
-              >
-                <GlobeIcon class="w-5 h-5 text-success" />
-                <div>
-                  <p class="font-medium text-foreground">Geographic</p>
-                  <p class="text-xs text-muted-foreground">Viewer distribution worldwide</p>
-                </div>
-              </a>
-            </div>
-          </div>
-        </div>
 
         <!-- Info Note -->
         <div class="col-span-full px-4 sm:px-6 lg:px-8 -mx-4 sm:-mx-6 lg:-mx-8">

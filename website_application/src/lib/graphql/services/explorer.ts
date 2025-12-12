@@ -8,7 +8,7 @@ import {
   searchTemplates as searchTemplatesFromLoader,
   type Template,
   type TemplateGroups,
-} from './templateLoader';
+} from "./templateLoader";
 
 import {
   type IntrospectedSchema,
@@ -17,7 +17,7 @@ import {
   isUnionType,
   getPossibleTypes,
   isScalarType,
-} from './schemaUtils';
+} from "./schemaUtils";
 
 // Re-export template types for consumers
 export type { Template, TemplateGroups };
@@ -46,17 +46,17 @@ interface GraphQLResponse {
 async function executeGraphQL(
   query: string,
   variables: Record<string, unknown> = {},
-  headers: Record<string, string> = {}
+  headers: Record<string, string> = {},
 ): Promise<GraphQLResponse> {
-  const url = import.meta.env.VITE_GRAPHQL_HTTP_URL || '/graphql/';
+  const url = import.meta.env.VITE_GRAPHQL_HTTP_URL || "/graphql/";
 
   const response = await fetch(url, {
-    method: 'POST',
+    method: "POST",
     headers: {
-      'Content-Type': 'application/json',
+      "Content-Type": "application/json",
       ...headers,
     },
-    credentials: 'include', // Send cookies for auth
+    credentials: "include", // Send cookies for auth
     body: JSON.stringify({ query, variables }),
   });
 
@@ -369,7 +369,9 @@ export const explorerService = {
       const startTime = Date.now();
 
       // Configure headers for demo mode
-      const headers: Record<string, string> = demoMode ? { "X-Demo-Mode": "true" } : {};
+      const headers: Record<string, string> = demoMode
+        ? { "X-Demo-Mode": "true" }
+        : {};
 
       const result = await executeGraphQL(query, variables, headers);
 
@@ -420,7 +422,9 @@ export const explorerService = {
    */
   getQueryTemplates(): QueryTemplates {
     // Return empty arrays - consumers should migrate to async getTemplates()
-    console.warn('getQueryTemplates() is deprecated. Use getTemplates() instead.');
+    console.warn(
+      "getQueryTemplates() is deprecated. Use getTemplates() instead.",
+    );
     return {
       queries: [],
       mutations: [],
@@ -532,12 +536,16 @@ func main() {
     url := "${import.meta.env.VITE_GRAPHQL_HTTP_URL || "http://localhost:18000/graphql/"}"
 
     query := \`${query}\`
-${hasVariables ? `    variables := map[string]interface{}{
+${
+  hasVariables
+    ? `    variables := map[string]interface{}{
 ${Object.entries(variables)
   .map(([key, value]) => `        "${key}": ${JSON.stringify(value)},`)
   .join("\n")}
     }
-` : ""}
+`
+    : ""
+}
     reqBody := GraphQLRequest{
         Query: query,${hasVariables ? "\n        Variables: variables," : ""}
     }
@@ -574,7 +582,8 @@ ${Object.entries(variables)
     operationType: string,
     schema?: IntrospectedSchema,
   ): GeneratedQuery {
-    const fieldNamePascal = field.name.charAt(0).toUpperCase() + field.name.slice(1);
+    const fieldNamePascal =
+      field.name.charAt(0).toUpperCase() + field.name.slice(1);
 
     // Build argument definitions and usage
     const args = field.args || [];
@@ -768,7 +777,10 @@ ${Object.entries(variables)
    * Get common return fields based on the return type
    * Uses schema introspection to properly handle union types with inline fragments
    */
-  getCommonReturnFields(type: TypeRef | undefined, schema?: IntrospectedSchema | null): string {
+  getCommonReturnFields(
+    type: TypeRef | undefined,
+    schema?: IntrospectedSchema | null,
+  ): string {
     if (!type) return "";
 
     // Get the base type name (unwrap NON_NULL and LIST)
@@ -926,7 +938,11 @@ ${Object.entries(variables)
             const childBase = getBaseTypeName(child.type);
             const childTypeDef = findType(schema, childBase);
 
-            if (isScalarType(childBase) || childTypeDef?.kind === "ENUM" || childBase === "ID") {
+            if (
+              isScalarType(childBase) ||
+              childTypeDef?.kind === "ENUM" ||
+              childBase === "ID"
+            ) {
               return child.name;
             }
 
@@ -940,7 +956,10 @@ ${Object.entries(variables)
           })
           .filter((f): f is string => Boolean(f)) || [];
 
-      const body = childSelections.length > 0 ? childSelections.join("\n      ") : "__typename";
+      const body =
+        childSelections.length > 0
+          ? childSelections.join("\n      ")
+          : "__typename";
       return `${field.name} {\n      ${body}\n    }`;
     }
 
@@ -951,7 +970,10 @@ ${Object.entries(variables)
    * Generate inline fragments for union types using schema introspection
    * Dynamically gets the actual member types and their fields from the schema
    */
-  generateUnionFields(unionTypeName: string, schema: IntrospectedSchema): string {
+  generateUnionFields(
+    unionTypeName: string,
+    schema: IntrospectedSchema,
+  ): string {
     // Get all possible types in this union from the schema
     const possibleTypes = getPossibleTypes(schema, unionTypeName);
 
@@ -986,7 +1008,7 @@ ${fieldLines}
 
     return `{
     __typename
-${fragments.join('\n')}
+${fragments.join("\n")}
   }`;
   },
 

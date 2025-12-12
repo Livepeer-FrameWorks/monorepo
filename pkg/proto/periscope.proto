@@ -466,6 +466,8 @@ message NodeMetricHourly {
   bool was_healthy = 11;
   float avg_disk = 12;
   float peak_disk = 13;
+  float avg_shm = 14;
+  float peak_shm = 15;
 }
 
 message GetNodeMetrics1hRequest {
@@ -892,33 +894,6 @@ message GetQualityTierDailyResponse {
   repeated QualityTierDaily records = 2;
 }
 
-// Quality changes hourly (from quality_changes_1h MV)
-message QualityChangesHourly {
-  string id = 1;  // Unique ID for cursor pagination
-  google.protobuf.Timestamp hour = 2;
-  string tenant_id = 3;
-  string internal_name = 4;
-  uint32 total_changes = 5;
-  uint32 resolution_changes = 6;
-  uint32 codec_changes = 7;
-  repeated string quality_tiers = 8;
-  string latest_quality = 9;
-  string latest_codec = 10;
-  string latest_resolution = 11;
-}
-
-message GetQualityChangesHourlyRequest {
-  string tenant_id = 1;
-  optional string stream = 2;
-  common.TimeRange time_range = 3;
-  common.CursorPaginationRequest pagination = 4;
-}
-
-message GetQualityChangesHourlyResponse {
-  common.CursorPaginationResponse pagination = 1;
-  repeated QualityChangesHourly records = 2;
-}
-
 // Storage usage record (from storage_snapshots table)
 // Named "StorageUsageRecord" to avoid conflict with ipc.proto StorageSnapshot
 message StorageUsageRecord {
@@ -950,6 +925,5 @@ service AggregatedAnalyticsService {
   rpc GetStreamConnectionHourly(GetStreamConnectionHourlyRequest) returns (GetStreamConnectionHourlyResponse);
   rpc GetClientMetrics5m(GetClientMetrics5mRequest) returns (GetClientMetrics5mResponse);
   rpc GetQualityTierDaily(GetQualityTierDailyRequest) returns (GetQualityTierDailyResponse);
-  rpc GetQualityChangesHourly(GetQualityChangesHourlyRequest) returns (GetQualityChangesHourlyResponse);
   rpc GetStorageUsage(GetStorageUsageRequest) returns (GetStorageUsageResponse);
 }

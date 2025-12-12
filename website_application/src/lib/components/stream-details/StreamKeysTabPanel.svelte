@@ -19,19 +19,19 @@
   const TrashIcon = getIconComponent("Trash2");
 </script>
 
-<div>
-  <div class="flex items-center justify-between mb-6">
-    <h4 class="text-lg font-semibold gradient-text">Stream Keys Management</h4>
-    <Button class="gap-2 hover:shadow-brand-soft" onclick={onCreateKey}>
+<div class="slab border-t border-[hsl(var(--tn-fg-gutter)/0.3)]">
+  <div class="slab-header flex items-center justify-between">
+    <h3 class="font-semibold text-xs uppercase tracking-wide text-muted-foreground">Stream Keys Management</h3>
+    <Button variant="ghost" class="gap-2 text-primary hover:text-primary/80" onclick={onCreateKey}>
       <PlusIcon class="w-4 h-4" />
       Create Key
     </Button>
   </div>
 
   {#if streamKeys.length > 0}
-    <div class="space-y-4">
+    <div class="slab-body--flush">
       {#each streamKeys as key (key.id ?? key.keyValue)}
-        <div class="border border-border/50 p-4">
+        <div class="p-6 border-b border-[hsl(var(--tn-fg-gutter)/0.3)] last:border-0">
           <div class="flex items-center justify-between">
             <div class="flex-1">
               <div class="flex items-center space-x-3 mb-2">
@@ -48,14 +48,14 @@
 
               <div class="flex items-center space-x-2 mb-2">
                 <code
-                  class="flex-1 px-3 py-2 text-sm font-mono text-info border border-border/50"
+                  class="flex-1 px-3 py-2 text-sm font-mono text-info bg-muted/20"
                 >
                   {key.keyValue}
                 </code>
                 <Button
                   variant="ghost"
                   size="icon-sm"
-                  class="border border-border/50"
+                  class="hover:bg-muted/50"
                   onclick={() => onCopyKey(key.keyValue)}
                 >
                   <CopyIcon class="w-4 h-4" />
@@ -88,12 +88,14 @@
       {/each}
     </div>
   {:else}
-    <EmptyState
-      iconName="Key"
-      title="No Stream Keys"
-      description="Create your first stream key to start broadcasting"
-      actionText="Create Stream Key"
-      onAction={onCreateKey}
-    />
+    <div class="slab-body--padded">
+      <EmptyState
+        iconName="Key"
+        title="No Stream Keys"
+        description="Create your first stream key to start broadcasting"
+        actionText="Create Stream Key"
+        onAction={onCreateKey}
+      />
+    </div>
   {/if}
 </div>

@@ -27,7 +27,7 @@
   }: Props = $props();
 </script>
 
-<div class="metric-card text-center relative">
+<div class="h-full p-6 text-center relative">
   {#if statusIndicator}
     <div class="absolute top-3 right-3">
       <div class="flex items-center space-x-1 text-xs">

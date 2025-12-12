@@ -19,10 +19,16 @@ import { browser } from "$app/environment";
 
 // Type aliases for subscription results
 type StreamEventData = NonNullable<StreamEvents$result["streamEvents"]>;
-type ViewerMetricData = NonNullable<ViewerMetricsStream$result["viewerMetrics"]>;
+type ViewerMetricData = NonNullable<
+  ViewerMetricsStream$result["viewerMetrics"]
+>;
 type SystemHealthData = NonNullable<SystemHealth$result["systemHealth"]>;
-type TrackListEventData = NonNullable<TrackListUpdates$result["trackListUpdates"]>;
-type ClipLifecycleEventData = NonNullable<ClipLifecycle$result["clipLifecycle"]>;
+type TrackListEventData = NonNullable<
+  TrackListUpdates$result["trackListUpdates"]
+>;
+type ClipLifecycleEventData = NonNullable<
+  ClipLifecycle$result["clipLifecycle"]
+>;
 type DvrLifecycleEventData = NonNullable<DvrLifecycle$result["dvrLifecycle"]>;
 
 // Real-time per-client connection event from ViewerMetrics subscription
@@ -32,12 +38,12 @@ interface StreamMetric {
   lastUpdate?: Date;
 
   // From ViewerMetrics subscription (per-client events)
-  action?: string;           // "connect" or "disconnect"
+  action?: string; // "connect" or "disconnect"
   nodeId?: string;
   protocol?: string;
   sessionId?: string;
-  bandwidthInBps?: number;   // Per-client upload bandwidth
-  bandwidthOutBps?: number;  // Per-client download bandwidth
+  bandwidthInBps?: number; // Per-client upload bandwidth
+  bandwidthOutBps?: number; // Per-client download bandwidth
   timestamp?: number;
 
   // Client-side aggregated counts (maintained by tracking connect/disconnect)
@@ -86,12 +92,14 @@ export const nodeMetrics = writable<Record<string, NodeMetric>>({});
 export const realtimeViewers = derived(streamMetrics, ($metrics) => {
   return Object.values($metrics).reduce(
     (total, stream) => total + (stream.activeConnections || 0),
-    0
+    0,
   );
 });
 
 // Track list updates per stream
-export const trackListUpdates = writable<Record<string, TrackListEventData>>({});
+export const trackListUpdates = writable<Record<string, TrackListEventData>>(
+  {},
+);
 
 // Clip/DVR lifecycle events
 export const clipLifecycleEvents = writable<ClipLifecycleEventData[]>([]);
@@ -143,6 +151,32 @@ export function initializeWebSocket(): void {
           },
         }));
 
+        // Update realtimeStreams store with latest stream status
+        realtimeStreams.update((currentStreams) => {
+          const existingStreamIndex = currentStreams.findIndex(
+            (s) => s.id === event.stream,
+          );
+          if (existingStreamIndex !== -1) {
+            // Update existing stream
+            const updatedStreams = [...currentStreams];
+            updatedStreams[existingStreamIndex] = {
+              ...updatedStreams[existingStreamIndex],
+              metrics: { isLive: event.status === "LIVE" },
+            };
+            return updatedStreams;
+          } else {
+            // Add new stream if not found (or if it's a new "LIVE" event)
+            return [
+              ...currentStreams,
+              {
+                id: event.stream,
+                name: event.stream,
+                metrics: { isLive: event.status === "LIVE" },
+              },
+            ];
+          }
+        });
+
         realtimeEvents.update((events) => {
           const newEvents = [event, ...events.slice(0, 99)];
           return newEvents;
@@ -173,7 +207,10 @@ export function subscribeToStreamMetrics(streamId: string): () => void {
 
     const unsubscribe = store.subscribe((result) => {
       if (result.errors?.length) {
-        console.warn(`[ViewerMetrics:${streamId}] Subscription error:`, result.errors);
+        console.warn(
+          `[ViewerMetrics:${streamId}] Subscription error:`,
+          result.errors,
+        );
         return;
       }
 
@@ -182,7 +219,9 @@ export function subscribeToStreamMetrics(streamId: string): () => void {
         const streamName = metrics.internalName;
 
         streamMetrics.update((currentMetrics) => {
-          const existing = currentMetrics[streamName] || { activeConnections: 0 };
+          const existing = currentMetrics[streamName] || {
+            activeConnections: 0,
+          };
           let activeConnections = existing.activeConnections || 0;
 
           if (metrics.action === "connect") {
@@ -217,7 +256,10 @@ export function subscribeToStreamMetrics(streamId: string): () => void {
       }
     };
   } catch (error) {
-    console.error(`Failed to subscribe to stream metrics for ${streamId}:`, error);
+    console.error(
+      `Failed to subscribe to stream metrics for ${streamId}:`,
+      error,
+    );
     return () => {};
   }
 }
@@ -287,7 +329,10 @@ export function subscribeToTrackListUpdates(streamId: string): () => void {
 
     const unsubscribe = store.subscribe((result) => {
       if (result.errors?.length) {
-        console.warn(`[TrackListUpdates:${streamId}] Subscription error:`, result.errors);
+        console.warn(
+          `[TrackListUpdates:${streamId}] Subscription error:`,
+          result.errors,
+        );
         return;
       }
 
@@ -308,7 +353,10 @@ export function subscribeToTrackListUpdates(streamId: string): () => void {
       }
     };
   } catch (error) {
-    console.error(`Failed to subscribe to track list updates for ${streamId}:`, error);
+    console.error(
+      `Failed to subscribe to track list updates for ${streamId}:`,
+      error,
+    );
     return () => {};
   }
 }
@@ -327,14 +375,19 @@ export function subscribeToClipLifecycle(streamId: string): () => void {
 
     const unsubscribe = store.subscribe((result) => {
       if (result.errors?.length) {
-        console.warn(`[ClipLifecycle:${streamId}] Subscription error:`, result.errors);
+        console.warn(
+          `[ClipLifecycle:${streamId}] Subscription error:`,
+          result.errors,
+        );
         return;
       }
 
       if (result.data?.clipLifecycle) {
         const event = result.data.clipLifecycle;
         clipLifecycleEvents.update((events) => {
-          const existingIndex = events.findIndex((e) => e.clipHash === event.clipHash);
+          const existingIndex = events.findIndex(
+            (e) => e.clipHash === event.clipHash,
+          );
           if (existingIndex >= 0) {
             const updated = [...events];
             updated[existingIndex] = event;
@@ -353,7 +406,10 @@ export function subscribeToClipLifecycle(streamId: string): () => void {
       }
     };
   } catch (error) {
-    console.error(`Failed to subscribe to clip lifecycle for ${streamId}:`, error);
+    console.error(
+      `Failed to subscribe to clip lifecycle for ${streamId}:`,
+      error,
+    );
     return () => {};
   }
 }
@@ -372,14 +428,19 @@ export function subscribeToDvrLifecycle(streamId: string): () => void {
 
     const unsubscribe = store.subscribe((result) => {
       if (result.errors?.length) {
-        console.warn(`[DvrLifecycle:${streamId}] Subscription error:`, result.errors);
+        console.warn(
+          `[DvrLifecycle:${streamId}] Subscription error:`,
+          result.errors,
+        );
         return;
       }
 
       if (result.data?.dvrLifecycle) {
         const event = result.data.dvrLifecycle;
         dvrLifecycleEvents.update((events) => {
-          const existingIndex = events.findIndex((e) => e.dvrHash === event.dvrHash);
+          const existingIndex = events.findIndex(
+            (e) => e.dvrHash === event.dvrHash,
+          );
           if (existingIndex >= 0) {
             const updated = [...events];
             updated[existingIndex] = event;
@@ -398,7 +459,10 @@ export function subscribeToDvrLifecycle(streamId: string): () => void {
       }
     };
   } catch (error) {
-    console.error(`Failed to subscribe to DVR lifecycle for ${streamId}:`, error);
+    console.error(
+      `Failed to subscribe to DVR lifecycle for ${streamId}:`,
+      error,
+    );
     return () => {};
   }
 }
@@ -467,7 +531,8 @@ export const connectionStatus = derived(
   ([connected, reconnecting, error]): ConnectionStatus => {
     if (error) return { status: "error", message: error };
     if (connected) return { status: "connected", message: "Connected" };
-    if (reconnecting) return { status: "reconnecting", message: "Reconnecting..." };
+    if (reconnecting)
+      return { status: "reconnecting", message: "Reconnecting..." };
     return { status: "disconnected", message: "Disconnected" };
   },
 );

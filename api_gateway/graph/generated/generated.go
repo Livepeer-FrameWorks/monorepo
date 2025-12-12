@@ -68,7 +68,6 @@ type ResolverRoot interface {
 	PlatformOverview() PlatformOverviewResolver
 	PlaybackInstance() PlaybackInstanceResolver
 	PlaybackMetadata() PlaybackMetadataResolver
-	QualityChangesHourly() QualityChangesHourlyResolver
 	QualityTierDaily() QualityTierDailyResolver
 	Query() QueryResolver
 	Recording() RecordingResolver
@@ -238,20 +237,22 @@ type ComplexityRoot struct {
 	}
 
 	Clip struct {
-		AccessCount func(childComplexity int) int
-		ClipHash    func(childComplexity int) int
-		CreatedAt   func(childComplexity int) int
-		Description func(childComplexity int) int
-		Duration    func(childComplexity int) int
-		Id          func(childComplexity int) int
-		NodeId      func(childComplexity int) int
-		SizeBytes   func(childComplexity int) int
-		StartTime   func(childComplexity int) int
-		Status      func(childComplexity int) int
-		StoragePath func(childComplexity int) int
-		StreamName  func(childComplexity int) int
-		Title       func(childComplexity int) int
-		UpdatedAt   func(childComplexity int) int
+		AccessCount     func(childComplexity int) int
+		ClipHash        func(childComplexity int) int
+		ClipMode        func(childComplexity int) int
+		CreatedAt       func(childComplexity int) int
+		Description     func(childComplexity int) int
+		Duration        func(childComplexity int) int
+		Id              func(childComplexity int) int
+		NodeId          func(childComplexity int) int
+		RequestedParams func(childComplexity int) int
+		SizeBytes       func(childComplexity int) int
+		StartTime       func(childComplexity int) int
+		Status          func(childComplexity int) int
+		StoragePath     func(childComplexity int) int
+		StreamName      func(childComplexity int) int
+		Title           func(childComplexity int) int
+		UpdatedAt       func(childComplexity int) int
 	}
 
 	ClipEdge struct {
@@ -288,7 +289,9 @@ type ComplexityRoot struct {
 
 	ClipLifecycle struct {
 		ClipHash        func(childComplexity int) int
+		ClipMode        func(childComplexity int) int
 		CompletedAt     func(childComplexity int) int
+		DurationSec     func(childComplexity int) int
 		Error           func(childComplexity int) int
 		FilePath        func(childComplexity int) int
 		InternalName    func(childComplexity int) int
@@ -298,7 +301,9 @@ type ComplexityRoot struct {
 		S3Url           func(childComplexity int) int
 		SizeBytes       func(childComplexity int) int
 		Stage           func(childComplexity int) int
+		StartUnix       func(childComplexity int) int
 		StartedAt       func(childComplexity int) int
+		StopUnix        func(childComplexity int) int
 	}
 
 	ClipViewingUrls struct {
@@ -601,22 +606,24 @@ type ComplexityRoot struct {
 	}
 
 	NodeMetric struct {
-		CPUUsage    func(childComplexity int) int
-		DiskTotal   func(childComplexity int) int
-		DiskUsed    func(childComplexity int) int
-		Latitude    func(childComplexity int) int
-		Longitude   func(childComplexity int) int
-		MemoryTotal func(childComplexity int) int
-		MemoryUsed  func(childComplexity int) int
-		Metadata    func(childComplexity int) int
-		NetworkRx   func(childComplexity int) int
-		NetworkTx   func(childComplexity int) int
-		NodeId      func(childComplexity int) int
-		ShmTotal    func(childComplexity int) int
-		ShmUsed     func(childComplexity int) int
-		Status      func(childComplexity int) int
-		Tags        func(childComplexity int) int
-		Timestamp   func(childComplexity int) int
+		CPUUsage           func(childComplexity int) int
+		ConnectionsCurrent func(childComplexity int) int
+		DiskTotal          func(childComplexity int) int
+		DiskUsed           func(childComplexity int) int
+		DownSpeed          func(childComplexity int) int
+		Latitude           func(childComplexity int) int
+		Longitude          func(childComplexity int) int
+		MemoryTotal        func(childComplexity int) int
+		MemoryUsed         func(childComplexity int) int
+		Metadata           func(childComplexity int) int
+		NetworkRx          func(childComplexity int) int
+		NetworkTx          func(childComplexity int) int
+		NodeId             func(childComplexity int) int
+		ShmTotal           func(childComplexity int) int
+		ShmUsed            func(childComplexity int) int
+		Status             func(childComplexity int) int
+		Timestamp          func(childComplexity int) int
+		UpSpeed            func(childComplexity int) int
 	}
 
 	NodeMetricEdge struct {
@@ -628,10 +635,12 @@ type ComplexityRoot struct {
 		AvgCPU            func(childComplexity int) int
 		AvgDisk           func(childComplexity int) int
 		AvgMemory         func(childComplexity int) int
+		AvgShm            func(childComplexity int) int
 		NodeId            func(childComplexity int) int
 		PeakCPU           func(childComplexity int) int
 		PeakDisk          func(childComplexity int) int
 		PeakMemory        func(childComplexity int) int
+		PeakShm           func(childComplexity int) int
 		Timestamp         func(childComplexity int) int
 		TotalBandwidthIn  func(childComplexity int) int
 		TotalBandwidthOut func(childComplexity int) int
@@ -750,30 +759,6 @@ type ComplexityRoot struct {
 		Width       func(childComplexity int) int
 	}
 
-	QualityChangesHourly struct {
-		CodecChanges      func(childComplexity int) int
-		Hour              func(childComplexity int) int
-		Id                func(childComplexity int) int
-		InternalName      func(childComplexity int) int
-		LatestCodec       func(childComplexity int) int
-		LatestQuality     func(childComplexity int) int
-		LatestResolution  func(childComplexity int) int
-		QualityTiers      func(childComplexity int) int
-		ResolutionChanges func(childComplexity int) int
-		TotalChanges      func(childComplexity int) int
-	}
-
-	QualityChangesHourlyConnection struct {
-		Edges      func(childComplexity int) int
-		PageInfo   func(childComplexity int) int
-		TotalCount func(childComplexity int) int
-	}
-
-	QualityChangesHourlyEdge struct {
-		Cursor func(childComplexity int) int
-		Node   func(childComplexity int) int
-	}
-
 	QualityTierDaily struct {
 		AvgBitrate       func(childComplexity int) int
 		AvgFps           func(childComplexity int) int
@@ -834,7 +819,6 @@ type ComplexityRoot struct {
 		Nodes                            func(childComplexity int, clusterID *string, status *model.NodeStatus, typeArg *string, tag *string, pagination *model.PaginationInput) int
 		NodesConnection                  func(childComplexity int, clusterID *string, status *model.NodeStatus, typeArg *string, first *int, after *string, last *int, before *string) int
 		PlatformOverview                 func(childComplexity int, timeRange *model.TimeRangeInput) int
-		QualityChangesHourlyConnection   func(childComplexity int, stream *string, timeRange *model.TimeRangeInput, first *int, after *string, last *int, before *string, noCache *bool) int
 		QualityTierDailyConnection       func(childComplexity int, stream *string, timeRange *model.TimeRangeInput, first *int, after *string, last *int, before *string, noCache *bool) int
 		RebufferingEvents                func(childComplexity int, stream string, timeRange *model.TimeRangeInput) int
 		Recordings                       func(childComplexity int, streamID *string) int
@@ -1601,6 +1585,9 @@ type NodeMetricResolver interface {
 	ShmUsed(ctx context.Context, obj *proto.NodeMetric) (*float64, error)
 	NetworkRx(ctx context.Context, obj *proto.NodeMetric) (int, error)
 	NetworkTx(ctx context.Context, obj *proto.NodeMetric) (int, error)
+	UpSpeed(ctx context.Context, obj *proto.NodeMetric) (*int, error)
+	DownSpeed(ctx context.Context, obj *proto.NodeMetric) (*int, error)
+
 	Status(ctx context.Context, obj *proto.NodeMetric) (string, error)
 
 	Metadata(ctx context.Context, obj *proto.NodeMetric) (*string, error)
@@ -1614,6 +1601,8 @@ type NodeMetricHourlyResolver interface {
 	PeakMemory(ctx context.Context, obj *proto.NodeMetricHourly) (float64, error)
 	AvgDisk(ctx context.Context, obj *proto.NodeMetricHourly) (float64, error)
 	PeakDisk(ctx context.Context, obj *proto.NodeMetricHourly) (float64, error)
+	AvgShm(ctx context.Context, obj *proto.NodeMetricHourly) (float64, error)
+	PeakShm(ctx context.Context, obj *proto.NodeMetricHourly) (float64, error)
 }
 type PaymentResolver interface {
 	Method(ctx context.Context, obj *proto.PaymentResponse) (model.PaymentMethod, error)
@@ -1632,13 +1621,6 @@ type PlaybackInstanceResolver interface {
 }
 type PlaybackMetadataResolver interface {
 	CreatedAt(ctx context.Context, obj *proto.PlaybackMetadata) (*time.Time, error)
-}
-type QualityChangesHourlyResolver interface {
-	Hour(ctx context.Context, obj *proto.QualityChangesHourly) (*time.Time, error)
-
-	TotalChanges(ctx context.Context, obj *proto.QualityChangesHourly) (int, error)
-	ResolutionChanges(ctx context.Context, obj *proto.QualityChangesHourly) (int, error)
-	CodecChanges(ctx context.Context, obj *proto.QualityChangesHourly) (int, error)
 }
 type QualityTierDailyResolver interface {
 	Day(ctx context.Context, obj *proto.QualityTierDaily) (*time.Time, error)
@@ -1674,7 +1656,6 @@ type QueryResolver interface {
 	StreamConnectionHourlyConnection(ctx context.Context, stream *string, timeRange *model.TimeRangeInput, first *int, after *string, last *int, before *string, noCache *bool) (*model.StreamConnectionHourlyConnection, error)
 	ClientMetrics5mConnection(ctx context.Context, stream *string, nodeID *string, timeRange *model.TimeRangeInput, first *int, after *string, last *int, before *string, noCache *bool) (*model.ClientMetrics5mConnection, error)
 	QualityTierDailyConnection(ctx context.Context, stream *string, timeRange *model.TimeRangeInput, first *int, after *string, last *int, before *string, noCache *bool) (*model.QualityTierDailyConnection, error)
-	QualityChangesHourlyConnection(ctx context.Context, stream *string, timeRange *model.TimeRangeInput, first *int, after *string, last *int, before *string, noCache *bool) (*model.QualityChangesHourlyConnection, error)
 	StorageUsageConnection(ctx context.Context, nodeID *string, timeRange *model.TimeRangeInput, first *int, after *string, last *int, before *string, noCache *bool) (*model.StorageUsageConnection, error)
 	ServiceInstances(ctx context.Context, clusterID *string, nodeID *string, status *model.InstanceStatus, pagination *model.PaginationInput) ([]*proto.ServiceInstance, error)
 	ServiceInstancesConnection(ctx context.Context, clusterID *string, nodeID *string, status *model.InstanceStatus, first *int, after *string, last *int, before *string) (*model.ServiceInstancesConnection, error)
@@ -2597,6 +2578,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.Clip.ClipHash(childComplexity), true
 
+	case "Clip.clipMode":
+		if e.complexity.Clip.ClipMode == nil {
+			break
+		}
+
+		return e.complexity.Clip.ClipMode(childComplexity), true
+
 	case "Clip.createdAt":
 		if e.complexity.Clip.CreatedAt == nil {
 			break
@@ -2631,6 +2619,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.complexity.Clip.NodeId(childComplexity), true
+
+	case "Clip.requestedParams":
+		if e.complexity.Clip.RequestedParams == nil {
+			break
+		}
+
+		return e.complexity.Clip.RequestedParams(childComplexity), true
 
 	case "Clip.sizeBytes":
 		if e.complexity.Clip.SizeBytes == nil {
@@ -2828,12 +2823,26 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.ClipLifecycle.ClipHash(childComplexity), true
 
+	case "ClipLifecycle.clipMode":
+		if e.complexity.ClipLifecycle.ClipMode == nil {
+			break
+		}
+
+		return e.complexity.ClipLifecycle.ClipMode(childComplexity), true
+
 	case "ClipLifecycle.completedAt":
 		if e.complexity.ClipLifecycle.CompletedAt == nil {
 			break
 		}
 
 		return e.complexity.ClipLifecycle.CompletedAt(childComplexity), true
+
+	case "ClipLifecycle.durationSec":
+		if e.complexity.ClipLifecycle.DurationSec == nil {
+			break
+		}
+
+		return e.complexity.ClipLifecycle.DurationSec(childComplexity), true
 
 	case "ClipLifecycle.error":
 		if e.complexity.ClipLifecycle.Error == nil {
@@ -2898,12 +2907,26 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.ClipLifecycle.Stage(childComplexity), true
 
+	case "ClipLifecycle.startUnix":
+		if e.complexity.ClipLifecycle.StartUnix == nil {
+			break
+		}
+
+		return e.complexity.ClipLifecycle.StartUnix(childComplexity), true
+
 	case "ClipLifecycle.startedAt":
 		if e.complexity.ClipLifecycle.StartedAt == nil {
 			break
 		}
 
 		return e.complexity.ClipLifecycle.StartedAt(childComplexity), true
+
+	case "ClipLifecycle.stopUnix":
+		if e.complexity.ClipLifecycle.StopUnix == nil {
+			break
+		}
+
+		return e.complexity.ClipLifecycle.StopUnix(childComplexity), true
 
 	case "ClipViewingUrls.expiresAt":
 		if e.complexity.ClipViewingUrls.ExpiresAt == nil {
@@ -4475,6 +4498,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.NodeMetric.CPUUsage(childComplexity), true
 
+	case "NodeMetric.connectionsCurrent":
+		if e.complexity.NodeMetric.ConnectionsCurrent == nil {
+			break
+		}
+
+		return e.complexity.NodeMetric.ConnectionsCurrent(childComplexity), true
+
 	case "NodeMetric.diskTotal":
 		if e.complexity.NodeMetric.DiskTotal == nil {
 			break
@@ -4488,6 +4518,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.complexity.NodeMetric.DiskUsed(childComplexity), true
+
+	case "NodeMetric.downSpeed":
+		if e.complexity.NodeMetric.DownSpeed == nil {
+			break
+		}
+
+		return e.complexity.NodeMetric.DownSpeed(childComplexity), true
 
 	case "NodeMetric.latitude":
 		if e.complexity.NodeMetric.Latitude == nil {
@@ -4566,19 +4603,19 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.NodeMetric.Status(childComplexity), true
 
-	case "NodeMetric.tags":
-		if e.complexity.NodeMetric.Tags == nil {
-			break
-		}
-
-		return e.complexity.NodeMetric.Tags(childComplexity), true
-
 	case "NodeMetric.timestamp":
 		if e.complexity.NodeMetric.Timestamp == nil {
 			break
 		}
 
 		return e.complexity.NodeMetric.Timestamp(childComplexity), true
+
+	case "NodeMetric.upSpeed":
+		if e.complexity.NodeMetric.UpSpeed == nil {
+			break
+		}
+
+		return e.complexity.NodeMetric.UpSpeed(childComplexity), true
 
 	case "NodeMetricEdge.cursor":
 		if e.complexity.NodeMetricEdge.Cursor == nil {
@@ -4615,6 +4652,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.NodeMetricHourly.AvgMemory(childComplexity), true
 
+	case "NodeMetricHourly.avgShm":
+		if e.complexity.NodeMetricHourly.AvgShm == nil {
+			break
+		}
+
+		return e.complexity.NodeMetricHourly.AvgShm(childComplexity), true
+
 	case "NodeMetricHourly.nodeId":
 		if e.complexity.NodeMetricHourly.NodeId == nil {
 			break
@@ -4642,6 +4686,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.complexity.NodeMetricHourly.PeakMemory(childComplexity), true
+
+	case "NodeMetricHourly.peakShm":
+		if e.complexity.NodeMetricHourly.PeakShm == nil {
+			break
+		}
+
+		return e.complexity.NodeMetricHourly.PeakShm(childComplexity), true
 
 	case "NodeMetricHourly.timestamp":
 		if e.complexity.NodeMetricHourly.Timestamp == nil {
@@ -5203,111 +5254,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.complexity.PlaybackTrack.Width(childComplexity), true
 
-	case "QualityChangesHourly.codecChanges":
-		if e.complexity.QualityChangesHourly.CodecChanges == nil {
-			break
-		}
-
-		return e.complexity.QualityChangesHourly.CodecChanges(childComplexity), true
-
-	case "QualityChangesHourly.hour":
-		if e.complexity.QualityChangesHourly.Hour == nil {
-			break
-		}
-
-		return e.complexity.QualityChangesHourly.Hour(childComplexity), true
-
-	case "QualityChangesHourly.id":
-		if e.complexity.QualityChangesHourly.Id == nil {
-			break
-		}
-
-		return e.complexity.QualityChangesHourly.Id(childComplexity), true
-
-	case "QualityChangesHourly.internalName":
-		if e.complexity.QualityChangesHourly.InternalName == nil {
-			break
-		}
-
-		return e.complexity.QualityChangesHourly.InternalName(childComplexity), true
-
-	case "QualityChangesHourly.latestCodec":
-		if e.complexity.QualityChangesHourly.LatestCodec == nil {
-			break
-		}
-
-		return e.complexity.QualityChangesHourly.LatestCodec(childComplexity), true
-
-	case "QualityChangesHourly.latestQuality":
-		if e.complexity.QualityChangesHourly.LatestQuality == nil {
-			break
-		}
-
-		return e.complexity.QualityChangesHourly.LatestQuality(childComplexity), true
-
-	case "QualityChangesHourly.latestResolution":
-		if e.complexity.QualityChangesHourly.LatestResolution == nil {
-			break
-		}
-
-		return e.complexity.QualityChangesHourly.LatestResolution(childComplexity), true
-
-	case "QualityChangesHourly.qualityTiers":
-		if e.complexity.QualityChangesHourly.QualityTiers == nil {
-			break
-		}
-
-		return e.complexity.QualityChangesHourly.QualityTiers(childComplexity), true
-
-	case "QualityChangesHourly.resolutionChanges":
-		if e.complexity.QualityChangesHourly.ResolutionChanges == nil {
-			break
-		}
-
-		return e.complexity.QualityChangesHourly.ResolutionChanges(childComplexity), true
-
-	case "QualityChangesHourly.totalChanges":
-		if e.complexity.QualityChangesHourly.TotalChanges == nil {
-			break
-		}
-
-		return e.complexity.QualityChangesHourly.TotalChanges(childComplexity), true
-
-	case "QualityChangesHourlyConnection.edges":
-		if e.complexity.QualityChangesHourlyConnection.Edges == nil {
-			break
-		}
-
-		return e.complexity.QualityChangesHourlyConnection.Edges(childComplexity), true
-
-	case "QualityChangesHourlyConnection.pageInfo":
-		if e.complexity.QualityChangesHourlyConnection.PageInfo == nil {
-			break
-		}
-
-		return e.complexity.QualityChangesHourlyConnection.PageInfo(childComplexity), true
-
-	case "QualityChangesHourlyConnection.totalCount":
-		if e.complexity.QualityChangesHourlyConnection.TotalCount == nil {
-			break
-		}
-
-		return e.complexity.QualityChangesHourlyConnection.TotalCount(childComplexity), true
-
-	case "QualityChangesHourlyEdge.cursor":
-		if e.complexity.QualityChangesHourlyEdge.Cursor == nil {
-			break
-		}
-
-		return e.complexity.QualityChangesHourlyEdge.Cursor(childComplexity), true
-
-	case "QualityChangesHourlyEdge.node":
-		if e.complexity.QualityChangesHourlyEdge.Node == nil {
-			break
-		}
-
-		return e.complexity.QualityChangesHourlyEdge.Node(childComplexity), true
-
 	case "QualityTierDaily.avgBitrate":
 		if e.complexity.QualityTierDaily.AvgBitrate == nil {
 			break
@@ -5797,18 +5743,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.complexity.Query.PlatformOverview(childComplexity, args["timeRange"].(*model.TimeRangeInput)), true
-
-	case "Query.qualityChangesHourlyConnection":
-		if e.complexity.Query.QualityChangesHourlyConnection == nil {
-			break
-		}
-
-		args, err := ec.field_Query_qualityChangesHourlyConnection_args(ctx, rawArgs)
-		if err != nil {
-			return 0, false
-		}
-
-		return e.complexity.Query.QualityChangesHourlyConnection(childComplexity, args["stream"].(*string), args["timeRange"].(*model.TimeRangeInput), args["first"].(*int), args["after"].(*string), args["last"].(*int), args["before"].(*string), args["noCache"].(*bool)), true
 
 	case "Query.qualityTierDailyConnection":
 		if e.complexity.Query.QualityTierDailyConnection == nil {
@@ -9280,7 +9214,6 @@ type Query {
   streamConnectionHourlyConnection(stream: String, timeRange: TimeRangeInput, first: Int = 100, after: String, last: Int, before: String, noCache: Boolean = false): StreamConnectionHourlyConnection!
   clientMetrics5mConnection(stream: String, nodeId: String, timeRange: TimeRangeInput, first: Int = 100, after: String, last: Int, before: String, noCache: Boolean = false): ClientMetrics5mConnection!
   qualityTierDailyConnection(stream: String, timeRange: TimeRangeInput, first: Int = 100, after: String, last: Int, before: String, noCache: Boolean = false): QualityTierDailyConnection!
-  qualityChangesHourlyConnection(stream: String, timeRange: TimeRangeInput, first: Int = 100, after: String, last: Int, before: String, noCache: Boolean = false): QualityChangesHourlyConnection!
   storageUsageConnection(nodeId: String, timeRange: TimeRangeInput, first: Int = 100, after: String, last: Int, before: String, noCache: Boolean = false): StorageUsageConnection!
 
   # Infrastructure Service Monitoring
@@ -9526,6 +9459,11 @@ type ClipLifecycle {
   completedAt: Int
   nodeId: String
   internalName: String
+  # Timing info for progress display (enriched by Foghorn)
+  startUnix: Int
+  stopUnix: Int
+  durationSec: Int
+  clipMode: String
 }
 
 # Input types
@@ -9542,12 +9480,36 @@ input UpdateStreamInput {
   record: Boolean
 }
 
+# Clip creation mode - determines how time fields are interpreted
+enum ClipCreationMode {
+  ABSOLUTE     # start_unix + stop_unix (Unix timestamps)
+  RELATIVE     # start (media time) + stop (media time from stream start)
+  DURATION     # start + duration
+  CLIP_NOW     # duration only (relative to live - clips last N seconds from now)
+}
+
 input CreateClipInput {
   stream: String!
-  startTime: Int!
-  endTime: Int!
   title: String!
   description: String
+
+  # Mode selection (default: ABSOLUTE for backward compatibility)
+  mode: ClipCreationMode
+
+  # ABSOLUTE mode: Unix timestamps in seconds
+  startUnix: Int
+  stopUnix: Int
+
+  # RELATIVE mode: Media time in seconds from stream start
+  startMedia: Int
+  stopMedia: Int
+
+  # DURATION / CLIP_NOW: Duration in seconds
+  duration: Int
+
+  # Legacy fields (deprecated, map to startUnix/stopUnix)
+  startTime: Int @deprecated(reason: "Use startUnix instead")
+  endTime: Int @deprecated(reason: "Use stopUnix instead")
 }
 
 # DVR types
@@ -10060,31 +10022,6 @@ type QualityTierDailyConnection {
   totalCount: Int!
 }
 
-# Hourly quality changes
-type QualityChangesHourly {
-  id: ID!
-  hour: Time!
-  internalName: String!
-  totalChanges: Int!
-  resolutionChanges: Int!
-  codecChanges: Int!
-  qualityTiers: [String!]!
-  latestQuality: String
-  latestCodec: String
-  latestResolution: String
-}
-
-type QualityChangesHourlyEdge {
-  cursor: String!
-  node: QualityChangesHourly!
-}
-
-type QualityChangesHourlyConnection {
-  edges: [QualityChangesHourlyEdge!]!
-  pageInfo: PageInfo!
-  totalCount: Int!
-}
-
 # Storage usage records
 type StorageUsageRecord {
   id: ID!
@@ -10486,8 +10423,8 @@ type Clip {
   streamName: String!
   title: String!
   description: String
-  startTime: Int!
-  duration: Int!
+  startTime: Int!           # Resolved start time (unix seconds)
+  duration: Int!            # Resolved duration (seconds)
   nodeId: String
   storagePath: String
   sizeBytes: Int
@@ -10495,6 +10432,9 @@ type Clip {
   accessCount: Int
   createdAt: Time
   updatedAt: Time
+  # Original request parameters for display/audit
+  clipMode: String          # Mode used: ABSOLUTE, RELATIVE, DURATION, CLIP_NOW
+  requestedParams: JSON     # Full original request params (startUnix, stopUnix, etc.)
 }
 
 # Bound to proto.ClipViewingURLs - uses map for flexibility
@@ -10830,10 +10770,10 @@ type ArtifactStatesConnection {
 type NodeMetric {
   timestamp: Time!
   nodeId: String!
-  
+
   # Resource usage
   cpuUsage: Float!
-  
+
   # Raw resource metrics (Bytes)
   memoryTotal: Float
   memoryUsed: Float
@@ -10841,9 +10781,17 @@ type NodeMetric {
   diskUsed: Float
   shmTotal: Float
   shmUsed: Float
-  
+
+  # Network bandwidth (cumulative bytes)
   networkRx: Int!
   networkTx: Int!
+
+  # Network throughput rates (bytes/sec) - use for real-time display
+  upSpeed: Int
+  downSpeed: Int
+
+  # Current viewer connections (gauge)
+  connectionsCurrent: Int
 
   # Status
   status: String!
@@ -10851,7 +10799,6 @@ type NodeMetric {
   # Optional geo and metadata available from Periscope
   latitude: Float
   longitude: Float
-  tags: [String!]
   metadata: JSON
 }
 
@@ -10865,6 +10812,8 @@ type NodeMetricHourly {
   peakMemory: Float!
   avgDisk: Float!
   peakDisk: Float!
+  avgShm: Float!
+  peakShm: Float!
   totalBandwidthIn: Int!
   totalBandwidthOut: Int!
   wasHealthy: Boolean!
@@ -12001,47 +11950,6 @@ func (ec *executionContext) field_Query_platformOverview_args(ctx context.Contex
 		return nil, err
 	}
 	args["timeRange"] = arg0
-	return args, nil
-}
-
-func (ec *executionContext) field_Query_qualityChangesHourlyConnection_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
-	var err error
-	args := map[string]any{}
-	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "stream", ec.unmarshalOString2ᚖstring)
-	if err != nil {
-		return nil, err
-	}
-	args["stream"] = arg0
-	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "timeRange", ec.unmarshalOTimeRangeInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐTimeRangeInput)
-	if err != nil {
-		return nil, err
-	}
-	args["timeRange"] = arg1
-	arg2, err := graphql.ProcessArgField(ctx, rawArgs, "first", ec.unmarshalOInt2ᚖint)
-	if err != nil {
-		return nil, err
-	}
-	args["first"] = arg2
-	arg3, err := graphql.ProcessArgField(ctx, rawArgs, "after", ec.unmarshalOString2ᚖstring)
-	if err != nil {
-		return nil, err
-	}
-	args["after"] = arg3
-	arg4, err := graphql.ProcessArgField(ctx, rawArgs, "last", ec.unmarshalOInt2ᚖint)
-	if err != nil {
-		return nil, err
-	}
-	args["last"] = arg4
-	arg5, err := graphql.ProcessArgField(ctx, rawArgs, "before", ec.unmarshalOString2ᚖstring)
-	if err != nil {
-		return nil, err
-	}
-	args["before"] = arg5
-	arg6, err := graphql.ProcessArgField(ctx, rawArgs, "noCache", ec.unmarshalOBoolean2ᚖbool)
-	if err != nil {
-		return nil, err
-	}
-	args["noCache"] = arg6
 	return args, nil
 }
 
@@ -17548,6 +17456,88 @@ func (ec *executionContext) fieldContext_Clip_updatedAt(_ context.Context, field
 	return fc, nil
 }
 
+func (ec *executionContext) _Clip_clipMode(ctx context.Context, field graphql.CollectedField, obj *proto.ClipInfo) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Clip_clipMode(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.ClipMode, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Clip_clipMode(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Clip",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Clip_requestedParams(ctx context.Context, field graphql.CollectedField, obj *proto.ClipInfo) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Clip_requestedParams(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.RequestedParams, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOJSON2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Clip_requestedParams(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Clip",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type JSON does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _ClipEdge_cursor(ctx context.Context, field graphql.CollectedField, obj *model.ClipEdge) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_ClipEdge_cursor(ctx, field)
 	if err != nil {
@@ -17659,6 +17649,10 @@ func (ec *executionContext) fieldContext_ClipEdge_node(_ context.Context, field 
 				return ec.fieldContext_Clip_createdAt(ctx, field)
 			case "updatedAt":
 				return ec.fieldContext_Clip_updatedAt(ctx, field)
+			case "clipMode":
+				return ec.fieldContext_Clip_clipMode(ctx, field)
+			case "requestedParams":
+				return ec.fieldContext_Clip_requestedParams(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Clip", field.Name)
 		},
@@ -18961,6 +18955,170 @@ func (ec *executionContext) _ClipLifecycle_internalName(ctx context.Context, fie
 }
 
 func (ec *executionContext) fieldContext_ClipLifecycle_internalName(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ClipLifecycle",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ClipLifecycle_startUnix(ctx context.Context, field graphql.CollectedField, obj *proto.ClipLifecycleData) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ClipLifecycle_startUnix(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.StartUnix, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*int64)
+	fc.Result = res
+	return ec.marshalOInt2ᚖint64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ClipLifecycle_startUnix(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ClipLifecycle",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ClipLifecycle_stopUnix(ctx context.Context, field graphql.CollectedField, obj *proto.ClipLifecycleData) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ClipLifecycle_stopUnix(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.StopUnix, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*int64)
+	fc.Result = res
+	return ec.marshalOInt2ᚖint64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ClipLifecycle_stopUnix(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ClipLifecycle",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ClipLifecycle_durationSec(ctx context.Context, field graphql.CollectedField, obj *proto.ClipLifecycleData) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ClipLifecycle_durationSec(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.DurationSec, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*int64)
+	fc.Result = res
+	return ec.marshalOInt2ᚖint64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ClipLifecycle_durationSec(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ClipLifecycle",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ClipLifecycle_clipMode(ctx context.Context, field graphql.CollectedField, obj *proto.ClipLifecycleData) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ClipLifecycle_clipMode(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.ClipMode, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ClipLifecycle_clipMode(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "ClipLifecycle",
 		Field:      field,
@@ -29041,6 +29199,129 @@ func (ec *executionContext) fieldContext_NodeMetric_networkTx(_ context.Context,
 	return fc, nil
 }
 
+func (ec *executionContext) _NodeMetric_upSpeed(ctx context.Context, field graphql.CollectedField, obj *proto.NodeMetric) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_NodeMetric_upSpeed(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.NodeMetric().UpSpeed(rctx, obj)
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*int)
+	fc.Result = res
+	return ec.marshalOInt2ᚖint(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_NodeMetric_upSpeed(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "NodeMetric",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _NodeMetric_downSpeed(ctx context.Context, field graphql.CollectedField, obj *proto.NodeMetric) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_NodeMetric_downSpeed(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.NodeMetric().DownSpeed(rctx, obj)
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*int)
+	fc.Result = res
+	return ec.marshalOInt2ᚖint(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_NodeMetric_downSpeed(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "NodeMetric",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _NodeMetric_connectionsCurrent(ctx context.Context, field graphql.CollectedField, obj *proto.NodeMetric) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_NodeMetric_connectionsCurrent(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.ConnectionsCurrent, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(int32)
+	fc.Result = res
+	return ec.marshalOInt2int32(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_NodeMetric_connectionsCurrent(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "NodeMetric",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _NodeMetric_status(ctx context.Context, field graphql.CollectedField, obj *proto.NodeMetric) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_NodeMetric_status(ctx, field)
 	if err != nil {
@@ -29162,47 +29443,6 @@ func (ec *executionContext) fieldContext_NodeMetric_longitude(_ context.Context,
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type Float does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _NodeMetric_tags(ctx context.Context, field graphql.CollectedField, obj *proto.NodeMetric) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_NodeMetric_tags(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.Tags, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		return graphql.Null
-	}
-	res := resTmp.([]string)
-	fc.Result = res
-	return ec.marshalOString2ᚕstringᚄ(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_NodeMetric_tags(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "NodeMetric",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type String does not have child fields")
 		},
 	}
 	return fc, nil
@@ -29354,14 +29594,18 @@ func (ec *executionContext) fieldContext_NodeMetricEdge_node(_ context.Context, 
 				return ec.fieldContext_NodeMetric_networkRx(ctx, field)
 			case "networkTx":
 				return ec.fieldContext_NodeMetric_networkTx(ctx, field)
+			case "upSpeed":
+				return ec.fieldContext_NodeMetric_upSpeed(ctx, field)
+			case "downSpeed":
+				return ec.fieldContext_NodeMetric_downSpeed(ctx, field)
+			case "connectionsCurrent":
+				return ec.fieldContext_NodeMetric_connectionsCurrent(ctx, field)
 			case "status":
 				return ec.fieldContext_NodeMetric_status(ctx, field)
 			case "latitude":
 				return ec.fieldContext_NodeMetric_latitude(ctx, field)
 			case "longitude":
 				return ec.fieldContext_NodeMetric_longitude(ctx, field)
-			case "tags":
-				return ec.fieldContext_NodeMetric_tags(ctx, field)
 			case "metadata":
 				return ec.fieldContext_NodeMetric_metadata(ctx, field)
 			}
@@ -29723,6 +29967,94 @@ func (ec *executionContext) fieldContext_NodeMetricHourly_peakDisk(_ context.Con
 	return fc, nil
 }
 
+func (ec *executionContext) _NodeMetricHourly_avgShm(ctx context.Context, field graphql.CollectedField, obj *proto.NodeMetricHourly) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_NodeMetricHourly_avgShm(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.NodeMetricHourly().AvgShm(rctx, obj)
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(float64)
+	fc.Result = res
+	return ec.marshalNFloat2float64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_NodeMetricHourly_avgShm(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "NodeMetricHourly",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _NodeMetricHourly_peakShm(ctx context.Context, field graphql.CollectedField, obj *proto.NodeMetricHourly) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_NodeMetricHourly_peakShm(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.NodeMetricHourly().PeakShm(rctx, obj)
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(float64)
+	fc.Result = res
+	return ec.marshalNFloat2float64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_NodeMetricHourly_peakShm(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "NodeMetricHourly",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _NodeMetricHourly_totalBandwidthIn(ctx context.Context, field graphql.CollectedField, obj *proto.NodeMetricHourly) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_NodeMetricHourly_totalBandwidthIn(ctx, field)
 	if err != nil {
@@ -29954,6 +30286,10 @@ func (ec *executionContext) fieldContext_NodeMetricHourlyEdge_node(_ context.Con
 				return ec.fieldContext_NodeMetricHourly_avgDisk(ctx, field)
 			case "peakDisk":
 				return ec.fieldContext_NodeMetricHourly_peakDisk(ctx, field)
+			case "avgShm":
+				return ec.fieldContext_NodeMetricHourly_avgShm(ctx, field)
+			case "peakShm":
+				return ec.fieldContext_NodeMetricHourly_peakShm(ctx, field)
 			case "totalBandwidthIn":
 				return ec.fieldContext_NodeMetricHourly_totalBandwidthIn(ctx, field)
 			case "totalBandwidthOut":
@@ -33263,695 +33599,6 @@ func (ec *executionContext) fieldContext_PlaybackTrack_sampleRate(_ context.Cont
 	return fc, nil
 }
 
-func (ec *executionContext) _QualityChangesHourly_id(ctx context.Context, field graphql.CollectedField, obj *proto.QualityChangesHourly) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_QualityChangesHourly_id(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.Id, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.(string)
-	fc.Result = res
-	return ec.marshalNID2string(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_QualityChangesHourly_id(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "QualityChangesHourly",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type ID does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _QualityChangesHourly_hour(ctx context.Context, field graphql.CollectedField, obj *proto.QualityChangesHourly) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_QualityChangesHourly_hour(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return ec.resolvers.QualityChangesHourly().Hour(rctx, obj)
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.(*time.Time)
-	fc.Result = res
-	return ec.marshalNTime2ᚖtimeᚐTime(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_QualityChangesHourly_hour(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "QualityChangesHourly",
-		Field:      field,
-		IsMethod:   true,
-		IsResolver: true,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Time does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _QualityChangesHourly_internalName(ctx context.Context, field graphql.CollectedField, obj *proto.QualityChangesHourly) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_QualityChangesHourly_internalName(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.InternalName, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.(string)
-	fc.Result = res
-	return ec.marshalNString2string(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_QualityChangesHourly_internalName(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "QualityChangesHourly",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type String does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _QualityChangesHourly_totalChanges(ctx context.Context, field graphql.CollectedField, obj *proto.QualityChangesHourly) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_QualityChangesHourly_totalChanges(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return ec.resolvers.QualityChangesHourly().TotalChanges(rctx, obj)
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.(int)
-	fc.Result = res
-	return ec.marshalNInt2int(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_QualityChangesHourly_totalChanges(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "QualityChangesHourly",
-		Field:      field,
-		IsMethod:   true,
-		IsResolver: true,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Int does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _QualityChangesHourly_resolutionChanges(ctx context.Context, field graphql.CollectedField, obj *proto.QualityChangesHourly) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_QualityChangesHourly_resolutionChanges(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return ec.resolvers.QualityChangesHourly().ResolutionChanges(rctx, obj)
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.(int)
-	fc.Result = res
-	return ec.marshalNInt2int(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_QualityChangesHourly_resolutionChanges(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "QualityChangesHourly",
-		Field:      field,
-		IsMethod:   true,
-		IsResolver: true,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Int does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _QualityChangesHourly_codecChanges(ctx context.Context, field graphql.CollectedField, obj *proto.QualityChangesHourly) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_QualityChangesHourly_codecChanges(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return ec.resolvers.QualityChangesHourly().CodecChanges(rctx, obj)
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.(int)
-	fc.Result = res
-	return ec.marshalNInt2int(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_QualityChangesHourly_codecChanges(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "QualityChangesHourly",
-		Field:      field,
-		IsMethod:   true,
-		IsResolver: true,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Int does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _QualityChangesHourly_qualityTiers(ctx context.Context, field graphql.CollectedField, obj *proto.QualityChangesHourly) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_QualityChangesHourly_qualityTiers(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.QualityTiers, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.([]string)
-	fc.Result = res
-	return ec.marshalNString2ᚕstringᚄ(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_QualityChangesHourly_qualityTiers(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "QualityChangesHourly",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type String does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _QualityChangesHourly_latestQuality(ctx context.Context, field graphql.CollectedField, obj *proto.QualityChangesHourly) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_QualityChangesHourly_latestQuality(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.LatestQuality, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		return graphql.Null
-	}
-	res := resTmp.(string)
-	fc.Result = res
-	return ec.marshalOString2string(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_QualityChangesHourly_latestQuality(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "QualityChangesHourly",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type String does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _QualityChangesHourly_latestCodec(ctx context.Context, field graphql.CollectedField, obj *proto.QualityChangesHourly) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_QualityChangesHourly_latestCodec(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.LatestCodec, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		return graphql.Null
-	}
-	res := resTmp.(string)
-	fc.Result = res
-	return ec.marshalOString2string(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_QualityChangesHourly_latestCodec(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "QualityChangesHourly",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type String does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _QualityChangesHourly_latestResolution(ctx context.Context, field graphql.CollectedField, obj *proto.QualityChangesHourly) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_QualityChangesHourly_latestResolution(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.LatestResolution, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		return graphql.Null
-	}
-	res := resTmp.(string)
-	fc.Result = res
-	return ec.marshalOString2string(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_QualityChangesHourly_latestResolution(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "QualityChangesHourly",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type String does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _QualityChangesHourlyConnection_edges(ctx context.Context, field graphql.CollectedField, obj *model.QualityChangesHourlyConnection) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_QualityChangesHourlyConnection_edges(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.Edges, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.([]*model.QualityChangesHourlyEdge)
-	fc.Result = res
-	return ec.marshalNQualityChangesHourlyEdge2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐQualityChangesHourlyEdgeᚄ(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_QualityChangesHourlyConnection_edges(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "QualityChangesHourlyConnection",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			switch field.Name {
-			case "cursor":
-				return ec.fieldContext_QualityChangesHourlyEdge_cursor(ctx, field)
-			case "node":
-				return ec.fieldContext_QualityChangesHourlyEdge_node(ctx, field)
-			}
-			return nil, fmt.Errorf("no field named %q was found under type QualityChangesHourlyEdge", field.Name)
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _QualityChangesHourlyConnection_pageInfo(ctx context.Context, field graphql.CollectedField, obj *model.QualityChangesHourlyConnection) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_QualityChangesHourlyConnection_pageInfo(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.PageInfo, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.(*model.PageInfo)
-	fc.Result = res
-	return ec.marshalNPageInfo2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐPageInfo(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_QualityChangesHourlyConnection_pageInfo(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "QualityChangesHourlyConnection",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			switch field.Name {
-			case "startCursor":
-				return ec.fieldContext_PageInfo_startCursor(ctx, field)
-			case "endCursor":
-				return ec.fieldContext_PageInfo_endCursor(ctx, field)
-			case "hasNextPage":
-				return ec.fieldContext_PageInfo_hasNextPage(ctx, field)
-			case "hasPreviousPage":
-				return ec.fieldContext_PageInfo_hasPreviousPage(ctx, field)
-			}
-			return nil, fmt.Errorf("no field named %q was found under type PageInfo", field.Name)
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _QualityChangesHourlyConnection_totalCount(ctx context.Context, field graphql.CollectedField, obj *model.QualityChangesHourlyConnection) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_QualityChangesHourlyConnection_totalCount(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.TotalCount, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.(int)
-	fc.Result = res
-	return ec.marshalNInt2int(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_QualityChangesHourlyConnection_totalCount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "QualityChangesHourlyConnection",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Int does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _QualityChangesHourlyEdge_cursor(ctx context.Context, field graphql.CollectedField, obj *model.QualityChangesHourlyEdge) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_QualityChangesHourlyEdge_cursor(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.Cursor, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.(string)
-	fc.Result = res
-	return ec.marshalNString2string(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_QualityChangesHourlyEdge_cursor(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "QualityChangesHourlyEdge",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type String does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _QualityChangesHourlyEdge_node(ctx context.Context, field graphql.CollectedField, obj *model.QualityChangesHourlyEdge) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_QualityChangesHourlyEdge_node(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return obj.Node, nil
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.(*proto.QualityChangesHourly)
-	fc.Result = res
-	return ec.marshalNQualityChangesHourly2ᚖframeworksᚋpkgᚋprotoᚐQualityChangesHourly(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_QualityChangesHourlyEdge_node(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "QualityChangesHourlyEdge",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			switch field.Name {
-			case "id":
-				return ec.fieldContext_QualityChangesHourly_id(ctx, field)
-			case "hour":
-				return ec.fieldContext_QualityChangesHourly_hour(ctx, field)
-			case "internalName":
-				return ec.fieldContext_QualityChangesHourly_internalName(ctx, field)
-			case "totalChanges":
-				return ec.fieldContext_QualityChangesHourly_totalChanges(ctx, field)
-			case "resolutionChanges":
-				return ec.fieldContext_QualityChangesHourly_resolutionChanges(ctx, field)
-			case "codecChanges":
-				return ec.fieldContext_QualityChangesHourly_codecChanges(ctx, field)
-			case "qualityTiers":
-				return ec.fieldContext_QualityChangesHourly_qualityTiers(ctx, field)
-			case "latestQuality":
-				return ec.fieldContext_QualityChangesHourly_latestQuality(ctx, field)
-			case "latestCodec":
-				return ec.fieldContext_QualityChangesHourly_latestCodec(ctx, field)
-			case "latestResolution":
-				return ec.fieldContext_QualityChangesHourly_latestResolution(ctx, field)
-			}
-			return nil, fmt.Errorf("no field named %q was found under type QualityChangesHourly", field.Name)
-		},
-	}
-	return fc, nil
-}
-
 func (ec *executionContext) _QualityTierDaily_id(ctx context.Context, field graphql.CollectedField, obj *proto.QualityTierDaily) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_QualityTierDaily_id(ctx, field)
 	if err != nil {
@@ -36210,69 +35857,6 @@ func (ec *executionContext) fieldContext_Query_qualityTierDailyConnection(ctx co
 	return fc, nil
 }
 
-func (ec *executionContext) _Query_qualityChangesHourlyConnection(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
-	fc, err := ec.fieldContext_Query_qualityChangesHourlyConnection(ctx, field)
-	if err != nil {
-		return graphql.Null
-	}
-	ctx = graphql.WithFieldContext(ctx, fc)
-	defer func() {
-		if r := recover(); r != nil {
-			ec.Error(ctx, ec.Recover(ctx, r))
-			ret = graphql.Null
-		}
-	}()
-	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
-		ctx = rctx // use context from middleware stack in children
-		return ec.resolvers.Query().QualityChangesHourlyConnection(rctx, fc.Args["stream"].(*string), fc.Args["timeRange"].(*model.TimeRangeInput), fc.Args["first"].(*int), fc.Args["after"].(*string), fc.Args["last"].(*int), fc.Args["before"].(*string), fc.Args["noCache"].(*bool))
-	})
-	if err != nil {
-		ec.Error(ctx, err)
-		return graphql.Null
-	}
-	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
-		return graphql.Null
-	}
-	res := resTmp.(*model.QualityChangesHourlyConnection)
-	fc.Result = res
-	return ec.marshalNQualityChangesHourlyConnection2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐQualityChangesHourlyConnection(ctx, field.Selections, res)
-}
-
-func (ec *executionContext) fieldContext_Query_qualityChangesHourlyConnection(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "Query",
-		Field:      field,
-		IsMethod:   true,
-		IsResolver: true,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			switch field.Name {
-			case "edges":
-				return ec.fieldContext_QualityChangesHourlyConnection_edges(ctx, field)
-			case "pageInfo":
-				return ec.fieldContext_QualityChangesHourlyConnection_pageInfo(ctx, field)
-			case "totalCount":
-				return ec.fieldContext_QualityChangesHourlyConnection_totalCount(ctx, field)
-			}
-			return nil, fmt.Errorf("no field named %q was found under type QualityChangesHourlyConnection", field.Name)
-		},
-	}
-	defer func() {
-		if r := recover(); r != nil {
-			err = ec.Recover(ctx, r)
-			ec.Error(ctx, err)
-		}
-	}()
-	ctx = graphql.WithFieldContext(ctx, fc)
-	if fc.Args, err = ec.field_Query_qualityChangesHourlyConnection_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
-		ec.Error(ctx, err)
-		return fc, err
-	}
-	return fc, nil
-}
-
 func (ec *executionContext) _Query_storageUsageConnection(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_Query_storageUsageConnection(ctx, field)
 	if err != nil {
@@ -36762,6 +36346,10 @@ func (ec *executionContext) fieldContext_Query_clips(ctx context.Context, field 
 				return ec.fieldContext_Clip_createdAt(ctx, field)
 			case "updatedAt":
 				return ec.fieldContext_Clip_updatedAt(ctx, field)
+			case "clipMode":
+				return ec.fieldContext_Clip_clipMode(ctx, field)
+			case "requestedParams":
+				return ec.fieldContext_Clip_requestedParams(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Clip", field.Name)
 		},
@@ -36907,6 +36495,10 @@ func (ec *executionContext) fieldContext_Query_clip(ctx context.Context, field g
 				return ec.fieldContext_Clip_createdAt(ctx, field)
 			case "updatedAt":
 				return ec.fieldContext_Clip_updatedAt(ctx, field)
+			case "clipMode":
+				return ec.fieldContext_Clip_clipMode(ctx, field)
+			case "requestedParams":
+				return ec.fieldContext_Clip_requestedParams(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Clip", field.Name)
 		},
@@ -50910,6 +50502,14 @@ func (ec *executionContext) fieldContext_Subscription_clipLifecycle(ctx context.
 				return ec.fieldContext_ClipLifecycle_nodeId(ctx, field)
 			case "internalName":
 				return ec.fieldContext_ClipLifecycle_internalName(ctx, field)
+			case "startUnix":
+				return ec.fieldContext_ClipLifecycle_startUnix(ctx, field)
+			case "stopUnix":
+				return ec.fieldContext_ClipLifecycle_stopUnix(ctx, field)
+			case "durationSec":
+				return ec.fieldContext_ClipLifecycle_durationSec(ctx, field)
+			case "clipMode":
+				return ec.fieldContext_ClipLifecycle_clipMode(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type ClipLifecycle", field.Name)
 		},
@@ -52269,6 +51869,14 @@ func (ec *executionContext) fieldContext_TenantEvent_clipLifecycle(_ context.Con
 				return ec.fieldContext_ClipLifecycle_nodeId(ctx, field)
 			case "internalName":
 				return ec.fieldContext_ClipLifecycle_internalName(ctx, field)
+			case "startUnix":
+				return ec.fieldContext_ClipLifecycle_startUnix(ctx, field)
+			case "stopUnix":
+				return ec.fieldContext_ClipLifecycle_stopUnix(ctx, field)
+			case "durationSec":
+				return ec.fieldContext_ClipLifecycle_durationSec(ctx, field)
+			case "clipMode":
+				return ec.fieldContext_ClipLifecycle_clipMode(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type ClipLifecycle", field.Name)
 		},
@@ -60464,7 +60072,7 @@ func (ec *executionContext) unmarshalInputCreateClipInput(ctx context.Context, o
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"stream", "startTime", "endTime", "title", "description"}
+	fieldsInOrder := [...]string{"stream", "title", "description", "mode", "startUnix", "stopUnix", "startMedia", "stopMedia", "duration", "startTime", "endTime"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -60478,20 +60086,6 @@ func (ec *executionContext) unmarshalInputCreateClipInput(ctx context.Context, o
 				return it, err
 			}
 			it.Stream = data
-		case "startTime":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("startTime"))
-			data, err := ec.unmarshalNInt2int(ctx, v)
-			if err != nil {
-				return it, err
-			}
-			it.StartTime = data
-		case "endTime":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("endTime"))
-			data, err := ec.unmarshalNInt2int(ctx, v)
-			if err != nil {
-				return it, err
-			}
-			it.EndTime = data
 		case "title":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("title"))
 			data, err := ec.unmarshalNString2string(ctx, v)
@@ -60506,6 +60100,62 @@ func (ec *executionContext) unmarshalInputCreateClipInput(ctx context.Context, o
 				return it, err
 			}
 			it.Description = data
+		case "mode":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("mode"))
+			data, err := ec.unmarshalOClipCreationMode2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐClipCreationMode(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Mode = data
+		case "startUnix":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("startUnix"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.StartUnix = data
+		case "stopUnix":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("stopUnix"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.StopUnix = data
+		case "startMedia":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("startMedia"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.StartMedia = data
+		case "stopMedia":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("stopMedia"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.StopMedia = data
+		case "duration":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("duration"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Duration = data
+		case "startTime":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("startTime"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.StartTime = data
+		case "endTime":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("endTime"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.EndTime = data
 		}
 	}
 
@@ -62901,6 +62551,10 @@ func (ec *executionContext) _Clip(ctx context.Context, sel ast.SelectionSet, obj
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "clipMode":
+			out.Values[i] = ec._Clip_clipMode(ctx, field, obj)
+		case "requestedParams":
+			out.Values[i] = ec._Clip_requestedParams(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -63360,6 +63014,14 @@ func (ec *executionContext) _ClipLifecycle(ctx context.Context, sel ast.Selectio
 			out.Values[i] = ec._ClipLifecycle_nodeId(ctx, field, obj)
 		case "internalName":
 			out.Values[i] = ec._ClipLifecycle_internalName(ctx, field, obj)
+		case "startUnix":
+			out.Values[i] = ec._ClipLifecycle_startUnix(ctx, field, obj)
+		case "stopUnix":
+			out.Values[i] = ec._ClipLifecycle_stopUnix(ctx, field, obj)
+		case "durationSec":
+			out.Values[i] = ec._ClipLifecycle_durationSec(ctx, field, obj)
+		case "clipMode":
+			out.Values[i] = ec._ClipLifecycle_clipMode(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -66707,6 +66369,74 @@ func (ec *executionContext) _NodeMetric(ctx context.Context, sel ast.SelectionSe
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "upSpeed":
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._NodeMetric_upSpeed(ctx, field, obj)
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "downSpeed":
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._NodeMetric_downSpeed(ctx, field, obj)
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "connectionsCurrent":
+			out.Values[i] = ec._NodeMetric_connectionsCurrent(ctx, field, obj)
 		case "status":
 			field := field
 
@@ -66747,8 +66477,6 @@ func (ec *executionContext) _NodeMetric(ctx context.Context, sel ast.SelectionSe
 			out.Values[i] = ec._NodeMetric_latitude(ctx, field, obj)
 		case "longitude":
 			out.Values[i] = ec._NodeMetric_longitude(ctx, field, obj)
-		case "tags":
-			out.Values[i] = ec._NodeMetric_tags(ctx, field, obj)
 		case "metadata":
 			field := field
 
@@ -67091,6 +66819,78 @@ func (ec *executionContext) _NodeMetricHourly(ctx context.Context, sel ast.Selec
 					}
 				}()
 				res = ec._NodeMetricHourly_peakDisk(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "avgShm":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._NodeMetricHourly_avgShm(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "peakShm":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._NodeMetricHourly_peakShm(ctx, field, obj)
 				if res == graphql.Null {
 					atomic.AddUint32(&fs.Invalids, 1)
 				}
@@ -68150,298 +67950,6 @@ func (ec *executionContext) _PlaybackTrack(ctx context.Context, sel ast.Selectio
 	return out
 }
 
-var qualityChangesHourlyImplementors = []string{"QualityChangesHourly"}
-
-func (ec *executionContext) _QualityChangesHourly(ctx context.Context, sel ast.SelectionSet, obj *proto.QualityChangesHourly) graphql.Marshaler {
-	fields := graphql.CollectFields(ec.OperationContext, sel, qualityChangesHourlyImplementors)
-
-	out := graphql.NewFieldSet(fields)
-	deferred := make(map[string]*graphql.FieldSet)
-	for i, field := range fields {
-		switch field.Name {
-		case "__typename":
-			out.Values[i] = graphql.MarshalString("QualityChangesHourly")
-		case "id":
-			out.Values[i] = ec._QualityChangesHourly_id(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				atomic.AddUint32(&out.Invalids, 1)
-			}
-		case "hour":
-			field := field
-
-			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
-				defer func() {
-					if r := recover(); r != nil {
-						ec.Error(ctx, ec.Recover(ctx, r))
-					}
-				}()
-				res = ec._QualityChangesHourly_hour(ctx, field, obj)
-				if res == graphql.Null {
-					atomic.AddUint32(&fs.Invalids, 1)
-				}
-				return res
-			}
-
-			if field.Deferrable != nil {
-				dfs, ok := deferred[field.Deferrable.Label]
-				di := 0
-				if ok {
-					dfs.AddField(field)
-					di = len(dfs.Values) - 1
-				} else {
-					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
-					deferred[field.Deferrable.Label] = dfs
-				}
-				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
-					return innerFunc(ctx, dfs)
-				})
-
-				// don't run the out.Concurrently() call below
-				out.Values[i] = graphql.Null
-				continue
-			}
-
-			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
-		case "internalName":
-			out.Values[i] = ec._QualityChangesHourly_internalName(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				atomic.AddUint32(&out.Invalids, 1)
-			}
-		case "totalChanges":
-			field := field
-
-			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
-				defer func() {
-					if r := recover(); r != nil {
-						ec.Error(ctx, ec.Recover(ctx, r))
-					}
-				}()
-				res = ec._QualityChangesHourly_totalChanges(ctx, field, obj)
-				if res == graphql.Null {
-					atomic.AddUint32(&fs.Invalids, 1)
-				}
-				return res
-			}
-
-			if field.Deferrable != nil {
-				dfs, ok := deferred[field.Deferrable.Label]
-				di := 0
-				if ok {
-					dfs.AddField(field)
-					di = len(dfs.Values) - 1
-				} else {
-					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
-					deferred[field.Deferrable.Label] = dfs
-				}
-				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
-					return innerFunc(ctx, dfs)
-				})
-
-				// don't run the out.Concurrently() call below
-				out.Values[i] = graphql.Null
-				continue
-			}
-
-			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
-		case "resolutionChanges":
-			field := field
-
-			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
-				defer func() {
-					if r := recover(); r != nil {
-						ec.Error(ctx, ec.Recover(ctx, r))
-					}
-				}()
-				res = ec._QualityChangesHourly_resolutionChanges(ctx, field, obj)
-				if res == graphql.Null {
-					atomic.AddUint32(&fs.Invalids, 1)
-				}
-				return res
-			}
-
-			if field.Deferrable != nil {
-				dfs, ok := deferred[field.Deferrable.Label]
-				di := 0
-				if ok {
-					dfs.AddField(field)
-					di = len(dfs.Values) - 1
-				} else {
-					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
-					deferred[field.Deferrable.Label] = dfs
-				}
-				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
-					return innerFunc(ctx, dfs)
-				})
-
-				// don't run the out.Concurrently() call below
-				out.Values[i] = graphql.Null
-				continue
-			}
-
-			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
-		case "codecChanges":
-			field := field
-
-			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
-				defer func() {
-					if r := recover(); r != nil {
-						ec.Error(ctx, ec.Recover(ctx, r))
-					}
-				}()
-				res = ec._QualityChangesHourly_codecChanges(ctx, field, obj)
-				if res == graphql.Null {
-					atomic.AddUint32(&fs.Invalids, 1)
-				}
-				return res
-			}
-
-			if field.Deferrable != nil {
-				dfs, ok := deferred[field.Deferrable.Label]
-				di := 0
-				if ok {
-					dfs.AddField(field)
-					di = len(dfs.Values) - 1
-				} else {
-					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
-					deferred[field.Deferrable.Label] = dfs
-				}
-				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
-					return innerFunc(ctx, dfs)
-				})
-
-				// don't run the out.Concurrently() call below
-				out.Values[i] = graphql.Null
-				continue
-			}
-
-			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
-		case "qualityTiers":
-			out.Values[i] = ec._QualityChangesHourly_qualityTiers(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				atomic.AddUint32(&out.Invalids, 1)
-			}
-		case "latestQuality":
-			out.Values[i] = ec._QualityChangesHourly_latestQuality(ctx, field, obj)
-		case "latestCodec":
-			out.Values[i] = ec._QualityChangesHourly_latestCodec(ctx, field, obj)
-		case "latestResolution":
-			out.Values[i] = ec._QualityChangesHourly_latestResolution(ctx, field, obj)
-		default:
-			panic("unknown field " + strconv.Quote(field.Name))
-		}
-	}
-	out.Dispatch(ctx)
-	if out.Invalids > 0 {
-		return graphql.Null
-	}
-
-	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
-
-	for label, dfs := range deferred {
-		ec.processDeferredGroup(graphql.DeferredGroup{
-			Label:    label,
-			Path:     graphql.GetPath(ctx),
-			FieldSet: dfs,
-			Context:  ctx,
-		})
-	}
-
-	return out
-}
-
-var qualityChangesHourlyConnectionImplementors = []string{"QualityChangesHourlyConnection"}
-
-func (ec *executionContext) _QualityChangesHourlyConnection(ctx context.Context, sel ast.SelectionSet, obj *model.QualityChangesHourlyConnection) graphql.Marshaler {
-	fields := graphql.CollectFields(ec.OperationContext, sel, qualityChangesHourlyConnectionImplementors)
-
-	out := graphql.NewFieldSet(fields)
-	deferred := make(map[string]*graphql.FieldSet)
-	for i, field := range fields {
-		switch field.Name {
-		case "__typename":
-			out.Values[i] = graphql.MarshalString("QualityChangesHourlyConnection")
-		case "edges":
-			out.Values[i] = ec._QualityChangesHourlyConnection_edges(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "pageInfo":
-			out.Values[i] = ec._QualityChangesHourlyConnection_pageInfo(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "totalCount":
-			out.Values[i] = ec._QualityChangesHourlyConnection_totalCount(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		default:
-			panic("unknown field " + strconv.Quote(field.Name))
-		}
-	}
-	out.Dispatch(ctx)
-	if out.Invalids > 0 {
-		return graphql.Null
-	}
-
-	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
-
-	for label, dfs := range deferred {
-		ec.processDeferredGroup(graphql.DeferredGroup{
-			Label:    label,
-			Path:     graphql.GetPath(ctx),
-			FieldSet: dfs,
-			Context:  ctx,
-		})
-	}
-
-	return out
-}
-
-var qualityChangesHourlyEdgeImplementors = []string{"QualityChangesHourlyEdge"}
-
-func (ec *executionContext) _QualityChangesHourlyEdge(ctx context.Context, sel ast.SelectionSet, obj *model.QualityChangesHourlyEdge) graphql.Marshaler {
-	fields := graphql.CollectFields(ec.OperationContext, sel, qualityChangesHourlyEdgeImplementors)
-
-	out := graphql.NewFieldSet(fields)
-	deferred := make(map[string]*graphql.FieldSet)
-	for i, field := range fields {
-		switch field.Name {
-		case "__typename":
-			out.Values[i] = graphql.MarshalString("QualityChangesHourlyEdge")
-		case "cursor":
-			out.Values[i] = ec._QualityChangesHourlyEdge_cursor(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "node":
-			out.Values[i] = ec._QualityChangesHourlyEdge_node(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		default:
-			panic("unknown field " + strconv.Quote(field.Name))
-		}
-	}
-	out.Dispatch(ctx)
-	if out.Invalids > 0 {
-		return graphql.Null
-	}
-
-	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
-
-	for label, dfs := range deferred {
-		ec.processDeferredGroup(graphql.DeferredGroup{
-			Label:    label,
-			Path:     graphql.GetPath(ctx),
-			FieldSet: dfs,
-			Context:  ctx,
-		})
-	}
-
-	return out
-}
-
 var qualityTierDailyImplementors = []string{"QualityTierDaily"}
 
 func (ec *executionContext) _QualityTierDaily(ctx context.Context, sel ast.SelectionSet, obj *proto.QualityTierDaily) graphql.Marshaler {
@@ -69328,28 +68836,6 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 					}
 				}()
 				res = ec._Query_qualityTierDailyConnection(ctx, field)
-				if res == graphql.Null {
-					atomic.AddUint32(&fs.Invalids, 1)
-				}
-				return res
-			}
-
-			rrm := func(ctx context.Context) graphql.Marshaler {
-				return ec.OperationContext.RootResolverMiddleware(ctx,
-					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
-			}
-
-			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
-		case "qualityChangesHourlyConnection":
-			field := field
-
-			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
-				defer func() {
-					if r := recover(); r != nil {
-						ec.Error(ctx, ec.Recover(ctx, r))
-					}
-				}()
-				res = ec._Query_qualityChangesHourlyConnection(ctx, field)
 				if res == graphql.Null {
 					atomic.AddUint32(&fs.Invalids, 1)
 				}
@@ -79004,84 +78490,6 @@ func (ec *executionContext) marshalNPlaybackTrack2ᚖframeworksᚋpkgᚋprotoᚐ
 	return ec._PlaybackTrack(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalNQualityChangesHourly2ᚖframeworksᚋpkgᚋprotoᚐQualityChangesHourly(ctx context.Context, sel ast.SelectionSet, v *proto.QualityChangesHourly) graphql.Marshaler {
-	if v == nil {
-		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
-			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
-		}
-		return graphql.Null
-	}
-	return ec._QualityChangesHourly(ctx, sel, v)
-}
-
-func (ec *executionContext) marshalNQualityChangesHourlyConnection2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐQualityChangesHourlyConnection(ctx context.Context, sel ast.SelectionSet, v model.QualityChangesHourlyConnection) graphql.Marshaler {
-	return ec._QualityChangesHourlyConnection(ctx, sel, &v)
-}
-
-func (ec *executionContext) marshalNQualityChangesHourlyConnection2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐQualityChangesHourlyConnection(ctx context.Context, sel ast.SelectionSet, v *model.QualityChangesHourlyConnection) graphql.Marshaler {
-	if v == nil {
-		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
-			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
-		}
-		return graphql.Null
-	}
-	return ec._QualityChangesHourlyConnection(ctx, sel, v)
-}
-
-func (ec *executionContext) marshalNQualityChangesHourlyEdge2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐQualityChangesHourlyEdgeᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.QualityChangesHourlyEdge) graphql.Marshaler {
-	ret := make(graphql.Array, len(v))
-	var wg sync.WaitGroup
-	isLen1 := len(v) == 1
-	if !isLen1 {
-		wg.Add(len(v))
-	}
-	for i := range v {
-		i := i
-		fc := &graphql.FieldContext{
-			Index:  &i,
-			Result: &v[i],
-		}
-		ctx := graphql.WithFieldContext(ctx, fc)
-		f := func(i int) {
-			defer func() {
-				if r := recover(); r != nil {
-					ec.Error(ctx, ec.Recover(ctx, r))
-					ret = nil
-				}
-			}()
-			if !isLen1 {
-				defer wg.Done()
-			}
-			ret[i] = ec.marshalNQualityChangesHourlyEdge2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐQualityChangesHourlyEdge(ctx, sel, v[i])
-		}
-		if isLen1 {
-			f(i)
-		} else {
-			go f(i)
-		}
-
-	}
-	wg.Wait()
-
-	for _, e := range ret {
-		if e == graphql.Null {
-			return graphql.Null
-		}
-	}
-
-	return ret
-}
-
-func (ec *executionContext) marshalNQualityChangesHourlyEdge2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐQualityChangesHourlyEdge(ctx context.Context, sel ast.SelectionSet, v *model.QualityChangesHourlyEdge) graphql.Marshaler {
-	if v == nil {
-		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
-			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
-		}
-		return graphql.Null
-	}
-	return ec._QualityChangesHourlyEdge(ctx, sel, v)
-}
-
 func (ec *executionContext) marshalNQualityTierDaily2ᚖframeworksᚋpkgᚋprotoᚐQualityTierDaily(ctx context.Context, sel ast.SelectionSet, v *proto.QualityTierDaily) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
@@ -80842,6 +80250,22 @@ func (ec *executionContext) marshalOClip2ᚖframeworksᚋpkgᚋprotoᚐClipInfo(
 		return graphql.Null
 	}
 	return ec._Clip(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalOClipCreationMode2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐClipCreationMode(ctx context.Context, v any) (*model.ClipCreationMode, error) {
+	if v == nil {
+		return nil, nil
+	}
+	var res = new(model.ClipCreationMode)
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalOClipCreationMode2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐClipCreationMode(ctx context.Context, sel ast.SelectionSet, v *model.ClipCreationMode) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return v
 }
 
 func (ec *executionContext) marshalOClipLifecycle2ᚖframeworksᚋpkgᚋprotoᚐClipLifecycleData(ctx context.Context, sel ast.SelectionSet, v *proto.ClipLifecycleData) graphql.Marshaler {

@@ -1,18 +1,18 @@
 <script lang="ts">
-  import { preventDefault } from "svelte/legacy";
-
   import { onMount, onDestroy } from "svelte";
-  import { resolve } from "$app/paths";
+  import { resolve, base } from "$app/paths"; // Ensure base is imported for correct path resolution
+  import { goto } from "$app/navigation";
   import { auth } from "$lib/stores/auth";
   import {
     GetStreamsStore,
     GetClipsConnectionStore,
     CreateClipStore,
-    ClipLifecycleStore
+    ClipLifecycleStore,
+    ClipCreationMode
   } from "$houdini";
   import type { ClipLifecycle$result } from "$houdini";
   import { toast } from "$lib/stores/toast.js";
-  import LoadingCard from "$lib/components/LoadingCard.svelte";
+  import LoadingCard from "$lib/components/LoadingCard.svelte"; // Still needed for skeleton fallback? No, replacing with slab-skeletons.
   import EmptyState from "$lib/components/EmptyState.svelte";
   import ClipModal from "$lib/components/ClipModal.svelte";
   import { Button } from "$lib/components/ui/button";
@@ -48,6 +48,17 @@
   type ClipData = NonNullable<NonNullable<NonNullable<typeof $clipsConnectionStore.data>["clipsConnection"]>["edges"]>[0]["node"];
   type ClipLifecycleEvent = NonNullable<ClipLifecycle$result["clipLifecycle"]>;
 
+  // Clip creation modes
+  type ClipModeType = 'CLIP_NOW' | 'DURATION' | 'ABSOLUTE';
+
+  // Duration presets for Clip Now mode
+  const durationPresets = [
+    { label: '30s', value: 30 },
+    { label: '1 min', value: 60 },
+    { label: '2 min', value: 120 },
+    { label: '5 min', value: 300 },
+  ];
+
   let isAuthenticated = false;
 
   // Derived state from Houdini stores
@@ -67,6 +78,7 @@
   let showCreateModal = $state(false);
   let creatingClip = $state(false);
   let selectedStreamId = $state("");
+  let clipMode = $state<ClipModeType>('CLIP_NOW');
 
   let selectedStreamLabel = $derived(
     !selectedStreamId
@@ -76,8 +88,9 @@
 
   let clipTitle = $state("");
   let clipDescription = $state("");
+  let duration = $state(60);  // Default 60 seconds for Clip Now
   let startTime = $state(0);
-  let endTime = $state(300); // 5 minutes default
+  let endTime = $state(300); // 5 minutes default for Absolute mode
 
   // Clip viewing
   let selectedClip = $state<ClipData | null>(null);
@@ -209,8 +222,14 @@
       return;
     }
 
-    if (endTime <= startTime) {
+    // Validate based on mode
+    if (clipMode === 'ABSOLUTE' && endTime <= startTime) {
       toast.warning("End time must be after start time");
+      return;
+    }
+
+    if ((clipMode === 'CLIP_NOW' || clipMode === 'DURATION') && duration <= 0) {
+      toast.warning("Duration must be greater than 0");
       return;
     }
 
@@ -223,21 +242,43 @@
         startClipSubscription(selectedStream.id);
       }
 
-      const result = await createClipMutation.mutate({
-        input: {
-          stream: selectedStreamId,
-          title: clipTitle.trim(),
-          description: clipDescription.trim() || undefined,
-          startTime: Math.floor(startTime),
-          endTime: Math.floor(endTime),
-        },
-      });
+      // Build input based on mode
+      const input: Parameters<typeof createClipMutation.mutate>[0]['input'] = {
+        stream: selectedStreamId,
+        title: clipTitle.trim(),
+        description: clipDescription.trim() || undefined,
+      };
+
+      switch (clipMode) {
+        case 'CLIP_NOW':
+          // Clip Now: Just duration, backend calculates relative to live
+          input.mode = ClipCreationMode.CLIP_NOW;
+          input.duration = Math.floor(duration);
+          break;
+
+        case 'DURATION':
+          // Duration mode: Start time + duration
+          input.mode = ClipCreationMode.DURATION;
+          input.startUnix = Math.floor(startTime);
+          input.duration = Math.floor(duration);
+          break;
+
+        case 'ABSOLUTE':
+          // Absolute mode: Start and end unix timestamps
+          input.mode = ClipCreationMode.ABSOLUTE;
+          input.startUnix = Math.floor(startTime);
+          input.stopUnix = Math.floor(endTime);
+          break;
+      }
+
+      const result = await createClipMutation.mutate({ input });
 
       // Check for errors in the union type response using __typename
       const createResult = result.data?.createClip;
       if (createResult?.__typename === "Clip") {
         // Success - Houdini's @list directive will auto-update the list
-        toast.success("Clip created successfully!");
+        const modeLabel = clipMode === 'CLIP_NOW' ? ' (from live)' : '';
+        toast.success(`Clip created successfully${modeLabel}!`);
       } else if (createResult) {
         // Error response - access message from the error types
         // Houdini types error variants with a "non-exhaustive" pattern, so we cast
@@ -247,17 +288,23 @@
 
       // Reset form
       showCreateModal = false;
-      clipTitle = "";
-      clipDescription = "";
-      selectedStreamId = "";
-      startTime = 0;
-      endTime = 300;
+      resetClipForm();
     } catch (error) {
       console.error("Failed to create clip:", error);
       toast.error("Failed to create clip. Please try again.");
     } finally {
       creatingClip = false;
     }
+  }
+
+  function resetClipForm() {
+    clipTitle = "";
+    clipDescription = "";
+    selectedStreamId = "";
+    clipMode = 'CLIP_NOW';
+    duration = 60;
+    startTime = 0;
+    endTime = 300;
   }
 
   function formatDuration(seconds: number) {
@@ -287,9 +334,9 @@
   <title>Clips - FrameWorks</title>
 </svelte:head>
 
-<div class="h-full flex flex-col">
+<div class="h-full flex flex-col overflow-hidden">
   <!-- Fixed Page Header -->
-  <div class="px-4 sm:px-6 lg:px-8 py-4 border-b border-border shrink-0">
+  <div class="px-4 sm:px-6 lg:px-8 py-4 border-b border-[hsl(var(--tn-fg-gutter)/0.3)] shrink-0 z-10 bg-background">
     <div class="flex justify-between items-center">
       <div class="flex items-center gap-3">
         <ScissorsIcon class="w-5 h-5 text-primary" />
@@ -320,8 +367,12 @@
             Create Clip
           </Button>
         {:else}
-          <Button onclick={() => (showCreateModal = true)}>
-            <PlusIcon class="w-4 h-4 mr-2" />
+          <Button
+            variant="default"
+            class="gap-2"
+            onclick={() => (showCreateModal = true)}
+          >
+            <PlusIcon class="w-4 h-4" />
             Create Clip
           </Button>
         {/if}
@@ -330,120 +381,139 @@
   </div>
 
   <!-- Scrollable Content -->
-  <div class="flex-1 overflow-y-auto">
-  {#if loading}
-    <div class="px-4 sm:px-6 lg:px-8 py-6">
-      <div class="flex items-center justify-center min-h-64">
-        <div class="loading-spinner w-8 h-8"></div>
-      </div>
-    </div>
-  {:else}
-    <div class="page-transition">
-
-      <!-- Stats Bar -->
-      <GridSeam cols={4} stack="2x2" surface="panel" flush={true} class="mb-0">
-        <div>
-          <DashboardMetricCard
-            icon={ScissorsIcon}
-            iconColor="text-primary"
-            value={totalClipsCount}
-            valueColor="text-primary"
-            label="Total Clips"
-          />
-        </div>
-        <div>
-          <DashboardMetricCard
-            icon={LoaderIcon}
-            iconColor="text-warning"
-            value={processingClips}
-            valueColor="text-warning"
-            label="Processing"
-          />
-        </div>
-        <div>
-          <DashboardMetricCard
-            icon={CheckCircleIcon}
-            iconColor="text-success"
-            value={completedClips}
-            valueColor="text-success"
-            label="Completed"
-          />
-        </div>
-        <div>
-          <DashboardMetricCard
-            icon={XCircleIcon}
-            iconColor="text-destructive"
-            value={failedClips}
-            valueColor="text-destructive"
-            label="Failed"
-          />
-        </div>
-      </GridSeam>
-
-      <!-- Main Content -->
-      <div class="dashboard-grid">
-        <!-- Clips Grid Slab -->
-        <div class="slab col-span-full">
-          <div class="slab-header">
-            <div class="flex items-center gap-2">
-              <ScissorsIcon class="w-4 h-4 text-accent-purple" />
-              <h3>Your Clips</h3>
+  <div class="flex-1 overflow-y-auto bg-background/50">
+    {#if loading}
+      <!-- Loading Skeleton -->
+      <GridSeam cols={4} stack="2x2" flush={true} class="min-h-full content-start">
+        {#each Array.from({ length: 8 }) as _, i (i)}
+          <div class="slab h-full !p-0">
+            <div class="slab-header">
+              <div class="h-4 bg-muted rounded w-3/4 animate-pulse"></div>
+            </div>
+            <div class="slab-body--padded">
+              <div class="space-y-3">
+                <div class="h-4 bg-muted rounded w-full animate-pulse"></div>
+                <div class="h-4 bg-muted rounded w-1/2 animate-pulse"></div>
+              </div>
+            </div>
+            <div class="slab-actions">
+              <div class="h-10 bg-muted/50 rounded-none w-full animate-pulse"></div>
             </div>
           </div>
-          <div class="slab-body--padded">
-            {#if clips.length === 0}
-              <EmptyState
-                title="No clips yet"
-                description="Create your first clip from a stream to get started"
-                actionText={streams.length > 0 ? "Create Your First Clip" : ""}
-                onAction={() => (showCreateModal = true)}
-                showAction={streams.length > 0}
-              >
-                <ScissorsIcon class="w-6 h-6 text-muted-foreground mx-auto mb-4" />
-                {#if streams.length === 0}
-                  <p class="text-muted-foreground text-sm mt-2">
-                    You need at least one stream to create clips
-                  </p>
-                {/if}
-              </EmptyState>
-            {:else}
-              <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                {#each clips as clip (clip.id)}
-                  <ClipCard
-                    {clip}
-                    streamName={clip.streamName}
-                    onPlay={() => openClip(clip)}
-                  />
-                {/each}
-              </div>
-
-              {#if hasMoreClips}
-                <div class="flex justify-center pt-6">
-                  <Button
-                    variant="outline"
-                    onclick={loadMoreClips}
-                    disabled={loadingMoreClips}
-                  >
-                    {#if loadingMoreClips}
-                      Loading...
-                    {:else}
-                      Load More Clips
-                    {/if}
-                  </Button>
-                </div>
-              {/if}
-            {/if}
+        {/each}
+      </GridSeam>
+    {:else}
+      <div class="page-transition">
+        <!-- Stats Bar -->
+        <GridSeam cols={4} stack="2x2" surface="panel" flush={true} class="min-h-full content-start">
+          <div>
+            <DashboardMetricCard
+              icon={ScissorsIcon}
+              iconColor="text-primary"
+              value={totalClipsCount}
+              valueColor="text-primary"
+              label="Total Clips"
+            />
           </div>
-          <div class="slab-actions">
-            <Button href={resolve("/recordings")} variant="ghost" class="gap-2">
-              <FilmIcon class="w-4 h-4" />
-              View Recordings
-            </Button>
+          <div>
+            <DashboardMetricCard
+              icon={LoaderIcon}
+              iconColor="text-warning"
+              value={processingClips}
+              valueColor="text-warning"
+              label="Processing"
+            />
+          </div>
+          <div>
+            <DashboardMetricCard
+              icon={CheckCircleIcon}
+              iconColor="text-success"
+              value={completedClips}
+              valueColor="text-success"
+              label="Completed"
+            />
+          </div>
+          <div>
+            <DashboardMetricCard
+              icon={XCircleIcon}
+              iconColor="text-destructive"
+              value={failedClips}
+              valueColor="text-destructive"
+              label="Failed"
+            />
+          </div>
+        </GridSeam>
+
+        <!-- Main Content -->
+        <div class="dashboard-grid">
+          <!-- Clips Grid Slab -->
+          <div class="slab col-span-full">
+            <div class="slab-header">
+              <div class="flex items-center gap-2">
+                <ScissorsIcon class="w-4 h-4 text-accent-purple" />
+                <h3>Your Clips</h3>
+              </div>
+            </div>
+            <div class="slab-body--padded">
+              {#if clips.length === 0}
+                <div class="flex flex-col items-center justify-center py-16 m-4 border-2 border-dashed border-border/50 rounded-lg bg-muted/5">
+                  <div class="w-16 h-16 rounded-full bg-muted/30 flex items-center justify-center mb-6">
+                    <ScissorsIcon class="w-8 h-8 text-muted-foreground" />
+                  </div>
+                  <h3 class="text-xl font-semibold mb-3">No clips yet</h3>
+                  <p class="text-muted-foreground mb-8 max-w-sm text-lg text-center">
+                    Create your first clip from a stream to get started
+                  </p>
+                  {#if streams.length > 0}
+                    <Button variant="ghost" size="lg" class="h-14 px-8" onclick={() => (showCreateModal = true)}>
+                      <PlusIcon class="w-5 h-5 mr-2" />
+                      Create Your First Clip
+                    </Button>
+                  {:else}
+                    <p class="text-muted-foreground text-sm mt-2">
+                      You need at least one stream to create clips
+                    </p>
+                  {/if}
+                </div>
+              {:else}
+                <GridSeam cols={3} stack="md" flush={true} class="min-h-full content-start">
+                  {#each clips as clip (clip.id)}
+                    <ClipCard
+                      {clip}
+                      streamName={clip.streamName}
+                      onPlay={() => openClip(clip)}
+                      class="h-auto"
+                    />
+                  {/each}
+                </GridSeam>
+
+                {#if hasMoreClips}
+                  <div class="flex justify-center pt-6">
+                    <Button
+                      variant="outline"
+                      onclick={loadMoreClips}
+                      disabled={loadingMoreClips}
+                    >
+                      {#if loadingMoreClips}
+                        Loading...
+                      {:else}
+                        Load More Clips
+                      {/if}
+                    </Button>
+                  </div>
+                {/if}
+              {/if}
+            </div>
+            <div class="slab-actions slab-actions--row">
+              <Button href={resolve("/recordings")} variant="ghost" class="gap-2">
+                <FilmIcon class="w-4 h-4" />
+                View Recordings
+              </Button>
+            </div>
           </div>
         </div>
       </div>
-    </div>
-  {/if}
+    {/if}
   </div>
 </div>
 
@@ -452,79 +522,170 @@
   open={showCreateModal}
   onOpenChange={(value) => (showCreateModal = value)}
 >
-  <DialogContent class="max-w-lg">
-    <form class="space-y-6" onsubmit={preventDefault(createClip)}>
-      <DialogHeader>
-        <DialogTitle>Create New Clip</DialogTitle>
-        <DialogDescription>
-          Choose a stream and time range to generate a clip.
-        </DialogDescription>
-      </DialogHeader>
+  <DialogContent class="max-w-md rounded-none border-[hsl(var(--tn-fg-gutter)/0.3)] bg-background p-0 gap-0 overflow-hidden">
+    <DialogHeader class="slab-header text-left space-y-1">
+      <DialogTitle class="uppercase tracking-wide text-sm font-semibold text-muted-foreground">Create New Clip</DialogTitle>
+      <DialogDescription class="text-xs text-muted-foreground/70">
+        Choose a stream and time range to generate a clip.
+      </DialogDescription>
+    </DialogHeader>
 
-      <div class="space-y-4">
-        <div class="space-y-2">
-          <label
-            for="stream-select"
-            class="text-sm font-medium text-muted-foreground"
+    <form id="create-clip-form" class="slab-body--padded space-y-4" onsubmit={() => { /* preventDefault(createClip) */ createClip(); }}>
+      <!-- Mode Tabs -->
+      <div class="space-y-2">
+        <label class="block text-sm font-medium text-muted-foreground mb-2">
+          Clipping Mode
+        </label>
+        <div class="flex border border-border rounded-md overflow-hidden">
+          <button
+            type="button"
+            class="flex-1 px-3 py-2 text-sm font-medium transition-colors {clipMode === 'CLIP_NOW' ? 'bg-primary text-primary-foreground' : 'bg-muted/30 text-muted-foreground hover:bg-muted/50'}"
+            onclick={() => clipMode = 'CLIP_NOW'}
           >
-            Stream
-          </label>
-          <Select bind:value={selectedStreamId} type="single">
-            <SelectTrigger id="stream-select" class="w-full">
-              <span class={selectedStreamId ? "" : "text-muted-foreground"}>
-                {selectedStreamLabel}
-              </span>
-            </SelectTrigger>
-            <SelectContent>
-              {#if streams.length === 0}
-                <SelectItem value="" disabled>No streams available</SelectItem>
-              {:else}
-                {#each streams as stream (stream.id ?? stream.name)}
-                  <SelectItem value={stream.id}>{stream.name}</SelectItem>
-                {/each}
-              {/if}
-            </SelectContent>
-          </Select>
-        </div>
-
-        <div class="space-y-2">
-          <label
-            for="clip-title"
-            class="text-sm font-medium text-muted-foreground"
+            Clip Now
+          </button>
+          <button
+            type="button"
+            class="flex-1 px-3 py-2 text-sm font-medium transition-colors border-x border-border {clipMode === 'DURATION' ? 'bg-primary text-primary-foreground' : 'bg-muted/30 text-muted-foreground hover:bg-muted/50'}"
+            onclick={() => clipMode = 'DURATION'}
           >
-            Title
-          </label>
-          <Input
-            id="clip-title"
-            type="text"
-            bind:value={clipTitle}
-            placeholder="Enter clip title"
-            required
-          />
-        </div>
-
-        <div class="space-y-2">
-          <label
-            for="clip-description"
-            class="text-sm font-medium text-muted-foreground"
+            Duration
+          </button>
+          <button
+            type="button"
+            class="flex-1 px-3 py-2 text-sm font-medium transition-colors {clipMode === 'ABSOLUTE' ? 'bg-primary text-primary-foreground' : 'bg-muted/30 text-muted-foreground hover:bg-muted/50'}"
+            onclick={() => clipMode = 'ABSOLUTE'}
           >
-            Description (optional)
-          </label>
-          <Textarea
-            id="clip-description"
-            bind:value={clipDescription}
-            placeholder="Enter clip description"
-            rows={3}
-          />
+            Timestamps
+          </button>
         </div>
+      </div>
 
+      <div class="space-y-2">
+        <label
+          for="stream-select"
+          class="block text-sm font-medium text-muted-foreground mb-2"
+        >
+          Stream
+        </label>
+        <Select bind:value={selectedStreamId} type="single">
+          <SelectTrigger id="stream-select" class="w-full">
+            <span class={selectedStreamId ? "" : "text-muted-foreground"}>
+              {selectedStreamLabel}
+            </span>
+          </SelectTrigger>
+          <SelectContent>
+            {#if streams.length === 0}
+              <SelectItem value="" disabled>No streams available</SelectItem>
+            {:else}
+              {#each streams as stream (stream.id ?? stream.name)}
+                <SelectItem value={stream.id}>{stream.name}</SelectItem>
+              {/each}
+            {/if}
+          </SelectContent>
+        </Select>
+      </div>
+
+      <div class="space-y-2">
+        <label
+          for="clip-title"
+          class="block text-sm font-medium text-muted-foreground mb-2"
+        >
+          Title
+        </label>
+        <Input
+          id="clip-title"
+          type="text"
+          bind:value={clipTitle}
+          placeholder="Enter clip title"
+          required
+        />
+      </div>
+
+      <div class="space-y-2">
+        <label
+          for="clip-description"
+          class="block text-sm font-medium text-muted-foreground mb-2"
+        >
+          Description (optional)
+        </label>
+        <Textarea
+          id="clip-description"
+          bind:value={clipDescription}
+          placeholder="Enter clip description"
+          rows={2}
+        />
+      </div>
+
+      <!-- Conditional timing fields based on mode -->
+      {#if clipMode === 'CLIP_NOW'}
+        <!-- Clip Now: Duration presets -->
+        <div class="space-y-2">
+          <label class="block text-sm font-medium text-muted-foreground mb-2">
+            Duration
+          </label>
+          <div class="flex gap-2">
+            {#each durationPresets as preset (preset.value)}
+              <button
+                type="button"
+                class="flex-1 px-3 py-2 text-sm font-medium rounded border transition-colors {duration === preset.value ? 'bg-primary text-primary-foreground border-primary' : 'bg-muted/30 text-muted-foreground border-border hover:bg-muted/50'}"
+                onclick={() => duration = preset.value}
+              >
+                {preset.label}
+              </button>
+            {/each}
+          </div>
+          <p class="text-xs text-muted-foreground/70">
+            Captures the last {formatDuration(duration)} from the live stream
+          </p>
+        </div>
+      {:else if clipMode === 'DURATION'}
+        <!-- Duration mode: Start time + duration -->
         <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div class="space-y-2">
             <label
               for="start-time"
-              class="text-sm font-medium text-muted-foreground"
+              class="block text-sm font-medium text-muted-foreground mb-2"
             >
-              Start Time (seconds)
+              Start Time (unix)
+            </label>
+            <Input
+              id="start-time"
+              type="number"
+              bind:value={startTime}
+              min="0"
+              required
+            />
+          </div>
+
+          <div class="space-y-2">
+            <label
+              for="duration-input"
+              class="block text-sm font-medium text-muted-foreground mb-2"
+            >
+              Duration (seconds)
+            </label>
+            <Input
+              id="duration-input"
+              type="number"
+              bind:value={duration}
+              min="1"
+              required
+            />
+          </div>
+        </div>
+        <p class="text-xs text-muted-foreground/70 bg-muted/30 p-2 rounded border border-border/50">
+          <span class="font-medium">Clip Length:</span> {formatDuration(duration)}
+        </p>
+      {:else}
+        <!-- Absolute mode: Start and end timestamps -->
+        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div class="space-y-2">
+            <label
+              for="start-time"
+              class="block text-sm font-medium text-muted-foreground mb-2"
+            >
+              Start Time (unix)
             </label>
             <Input
               id="start-time"
@@ -538,9 +699,9 @@
           <div class="space-y-2">
             <label
               for="end-time"
-              class="text-sm font-medium text-muted-foreground"
+              class="block text-sm font-medium text-muted-foreground mb-2"
             >
-              End Time (seconds)
+              End Time (unix)
             </label>
             <Input
               id="end-time"
@@ -552,25 +713,32 @@
           </div>
         </div>
 
-        <p class="text-sm text-muted-foreground">
-          Duration: {formatDuration(Math.max(0, endTime - startTime))}
+        <p class="text-xs text-muted-foreground/70 bg-muted/30 p-2 rounded border border-border/50">
+          <span class="font-medium">Duration:</span> {formatDuration(Math.max(0, endTime - startTime))}
         </p>
-      </div>
-
-      <DialogFooter class="gap-2">
-        <Button
-          type="button"
-          variant="outline"
-          onclick={() => (showCreateModal = false)}
-          disabled={creatingClip}
-        >
-          Cancel
-        </Button>
-        <Button type="submit" disabled={creatingClip || !selectedStreamId}>
-          {creatingClip ? "Creating..." : "Create Clip"}
-        </Button>
-      </DialogFooter>
+      {/if}
     </form>
+
+    <DialogFooter class="slab-actions slab-actions--row gap-0">
+      <Button
+        type="button"
+        variant="ghost"
+        class="rounded-none h-12 flex-1 border-r border-[hsl(var(--tn-fg-gutter)/0.3)] hover:bg-muted/10 text-muted-foreground hover:text-foreground"
+        onclick={() => (showCreateModal = false)}
+        disabled={creatingClip}
+      >
+        Cancel
+      </Button>
+      <Button 
+        type="submit" 
+        variant="ghost"
+        class="rounded-none h-12 flex-1 hover:bg-muted/10 text-primary hover:text-primary/80"
+        disabled={creatingClip || !selectedStreamId}
+        form="create-clip-form"
+      >
+        {creatingClip ? "Creating..." : "Create Clip"}
+      </Button>
+    </DialogFooter>
   </DialogContent>
 </Dialog>
 

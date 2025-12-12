@@ -25,9 +25,15 @@
                 <g transform="matrix(1,0,0,1,116.951,132.648)">
                     <g>
                         <g>
-                            <g transform="matrix(8,0,0,8,66.2695,0)">
+                            <g>
+                                <text x="0px" y="0px" style="font-family:'Helvetica';font-size:8px;fill:rgb(102,102,102);">Control</text>
+                                <g transform="matrix(1,0,0,1,27.574,0)">
+                                    <text x="0px" y="0px" style="font-family:'Helvetica';font-size:8px;fill:rgb(102,102,102);">API &amp;</text>
+                                </g>
+                                <g transform="matrix(1,0,0,1,49.813,0)">
+                                    <text x="0px" y="0px" style="font-family:'Helvetica';font-size:8px;fill:rgb(102,102,102);">Auth</text>
+                                </g>
                             </g>
-                            <text x="0px" y="0px" style="font-family:'Helvetica';font-size:8px;fill:rgb(102,102,102);">Control <tspan x="27.574px 32.91px " y="0px 0px ">AP</tspan>I &amp; <tspan x="49.813px 55.148px " y="0px 0px ">Au</tspan>th</text>
                         </g>
                     </g>
                 </g>
@@ -40,9 +46,12 @@
                     <text x="0px" y="0px" style="font-family:'Helvetica';font-size:11px;fill:rgb(51,51,51);">Quartermaster</text>
                 </g>
                 <g transform="matrix(1,0,0,1,274.954,132)">
-                    <g transform="matrix(8,0,0,8,67.1406,0)">
+                    <g>
+                        <text x="0px" y="0px" style="font-family:'Helvetica';font-size:8px;fill:rgb(102,102,102);">T</text>
+                        <g transform="matrix(1,0,0,1,4,0)">
+                            <text x="0px" y="0px" style="font-family:'Helvetica';font-size:8px;fill:rgb(102,102,102);">enants &amp; Clusters</text>
+                        </g>
                     </g>
-                    <text x="0px" y="0px" style="font-family:'Helvetica';font-size:8px;fill:rgb(102,102,102);">T<tspan x="4px 8.449px " y="0px 0px ">en</tspan>ants &amp; Clusters</text>
                 </g>
             </g>
             <g transform="matrix(1,0,0,1,-21.9492,0)">
@@ -88,8 +97,6 @@
                     <text x="0px" y="0px" style="font-family:'Helvetica';font-size:10px;fill:rgb(51,51,51);">Signalman</text>
                 </g>
                 <g transform="matrix(1,0,0,1,639.338,252)">
-                    <g transform="matrix(8,0,0,8,60.9102,0)">
-                    </g>
                     <text x="0px" y="0px" style="font-family:'Helvetica';font-size:8px;fill:rgb(102,102,102);">Real-time Events</text>
                 </g>
             </g>
@@ -174,8 +181,6 @@
                 <text x="0px" y="0px" style="font-family:'Helvetica';font-size:9px;fill:rgb(51,51,51);">CLI</text>
             </g>
             <g transform="matrix(1,0,0,1,76.9056,555.733)">
-                <g transform="matrix(9,0,0,9,20.5049,0)">
-                </g>
                 <text x="0px" y="0px" style="font-family:'Helvetica';font-size:9px;fill:rgb(51,51,51);">Docs</text>
             </g>
             <g transform="matrix(1,0,0,1,10.5996,30.0492)">
@@ -194,9 +199,6 @@
                     </g>
                 </g>
             </g>
-            <g transform="matrix(7.23754,7.33202,-4.3796,-2.84678,-1385.38,-1682.32)">
-                <path d="M360,250L380,240" style="fill:none;fill-rule:nonzero;stroke:rgb(102,102,102);stroke-width:0.48px;"/>
-            </g>
             <g>
                 <path d="M390,405L390,435C390,437.76 387.76,440 385,440L255,440C252.24,440 250,437.76 250,435L250,405C250,402.24 252.24,400 255,400L385,400C387.76,400 390,402.24 390,405Z" style="fill:white;stroke:rgb(76,175,80);stroke-width:1px;"/>
                 <g transform="matrix(1,0,0,1,293.717,418)">
@@ -212,8 +214,6 @@
                     <text x="0px" y="0px" style="font-family:'Helvetica';font-size:10px;fill:rgb(51,51,51);">Decklog</text>
                 </g>
                 <g transform="matrix(1,0,0,1,102.93,252.799)">
-                    <g transform="matrix(8,0,0,8,53.8047,0)">
-                    </g>
                     <text x="0px" y="0px" style="font-family:'Helvetica';font-size:8px;fill:rgb(102,102,102);">Event Firehose</text>
                 </g>
             </g>
@@ -229,26 +229,23 @@
                     <path d="M220,405L220,435C220,437.76 217.76,440 215,440L85,440C82.24,440 80,437.76 80,435L80,405C80,402.24 82.24,400 85,400L215,400C217.76,400 220,402.24 220,405Z" style="fill:white;stroke:rgb(76,175,80);stroke-width:1px;"/>
                 </g>
                 <g transform="matrix(1,0,0,1,646.416,509.796)">
-                    <g transform="matrix(11,0,0,11,49.5322,0)">
-                    </g>
                     <text x="0px" y="0px" style="font-family:'Helvetica';font-size:11px;fill:rgb(51,51,51);">Deckhand</text>
                 </g>
                 <g transform="matrix(1,0,0,1,636.654,521.339)">
-                    <g transform="matrix(8,0,0,8,69.3789,0)">
+                    <g>
+                        <text x="0px" y="0px" style="font-family:'Helvetica';font-size:8px;fill:rgb(102,102,102);">Support &amp;</text>
+                        <g transform="matrix(1,0,0,1,37.66,0)">
+                            <text x="0px" y="0px" style="font-family:'Helvetica';font-size:8px;fill:rgb(102,102,102);">Ti<tspan x="6.664px " y="0px ">c</tspan>keting</text>
+                        </g>
                     </g>
-                    <text x="0px" y="0px" style="font-family:'Helvetica';font-size:8px;fill:rgb(102,102,102);">Support &amp; <tspan x="37.66px 42.254px 44.031px " y="0px 0px 0px ">Tic</tspan>keting</text>
                 </g>
                 <g transform="matrix(0.764592,0,0,1,669.697,90)">
                     <path d="M220,405L220,435C220,437.76 217.76,440 215,440L85,440C82.24,440 80,437.76 80,435L80,405C80,402.24 82.24,400 85,400L215,400C217.76,400 220,402.24 220,405Z" style="fill:white;stroke:rgb(76,175,80);stroke-width:1px;"/>
                 </g>
                 <g transform="matrix(1,0,0,1,769.31,509.791)">
-                    <g transform="matrix(11,0,0,11,29.3423,0)">
-                    </g>
                     <text x="0px" y="0px" style="font-family:'Helvetica';font-size:11px;fill:rgb(51,51,51);">Parlor</text>
                 </g>
                 <g transform="matrix(1,0,0,1,750.007,522)">
-                    <g transform="matrix(8,0,0,8,68.4648,0)">
-                    </g>
                     <text x="0px" y="0px" style="font-family:'Helvetica';font-size:8px;fill:rgb(102,102,102);">Stream Interactivity</text>
                 </g>
             </g>
@@ -263,10 +260,8 @@
                     <g transform="matrix(1,0,0,1,601.335,118)">
                         <text x="0px" y="0px" style="font-family:'Helvetica';font-size:11px;fill:rgb(51,51,51);">Foghorn</text>
                     </g>
-                    <g transform="matrix(1,0,0,1,553.303,130.704)">
-                        <g transform="matrix(8,0,0,8,136.52,0)">
-                        </g>
-                        <text x="0px" y="0px" style="font-family:'Helvetica';font-size:8px;fill:rgb(102,102,102);">Load Balancer &amp; Pipeline Orchestrator</text>
+                    <g transform="matrix(1,0,0,1,563.322,130.704)">
+                        <text x="0px" y="0px" style="font-family:'Helvetica';font-size:8px;fill:rgb(102,102,102);">Balancer &amp; Pipeline Orchestrator</text>
                     </g>
                 </g>
             </g>
@@ -329,8 +324,6 @@
                 </g>
                 <g transform="matrix(1,0,0,1,525.303,311.24)">
                     <g>
-                        <g transform="matrix(8,0,0,8,47.5703,0)">
-                        </g>
                         <text x="0px" y="0px" style="font-family:'Helvetica';font-size:8px;fill:rgb(102,102,102);">Billing Cursor</text>
                     </g>
                 </g>
@@ -340,43 +333,27 @@
             <path d="M220,405L220,435C220,437.76 217.76,440 215,440L85,440C82.24,440 80,437.76 80,435L80,405C80,402.24 82.24,400 85,400L215,400C217.76,400 220,402.24 220,405Z" style="fill:white;stroke:rgb(76,175,80);stroke-width:1px;"/>
         </g>
         <g transform="matrix(5.55556,0,0,5.55556,2974.07,2822.96)">
-            <g transform="matrix(11,0,0,11,44.0161,0)">
-            </g>
             <text x="0px" y="0px" style="font-family:'Helvetica';font-size:11px;fill:rgb(51,51,51);">Privateer</text>
         </g>
         <g transform="matrix(5.55556,0,0,5.55556,2875.95,2894.29)">
-            <g transform="matrix(8,0,0,8,80.0391,0)">
-            </g>
             <text x="0px" y="0px" style="font-family:'Helvetica';font-size:8px;fill:rgb(102,102,102);">VPN agent &amp; Resolver</text>
         </g>
         <g transform="matrix(4.24774,0,0,5.55556,2461.43,746.286)">
             <path d="M220,405L220,435C220,437.76 217.76,440 215,440L85,440C82.24,440 80,437.76 80,435L80,405C80,402.24 82.24,400 85,400L215,400C217.76,400 220,402.24 220,405Z" style="fill:white;stroke:rgb(76,175,80);stroke-width:1px;"/>
         </g>
         <g transform="matrix(5.55556,0,0,5.55556,2974.07,3078.49)">
-            <g transform="matrix(11,0,0,11,39.1445,0)">
-            </g>
             <text x="0px" y="0px" style="font-family:'Helvetica';font-size:11px;fill:rgb(51,51,51);">Lookout</text>
         </g>
         <g transform="matrix(5.55556,0,0,5.55556,2869.04,3146.22)">
-            <g transform="matrix(8,0,0,8,76.9375,0)">
-            </g>
             <text x="0px" y="0px" style="font-family:'Helvetica';font-size:8px;fill:rgb(102,102,102);">Incident management</text>
         </g>
         <g transform="matrix(4.24774,0,0,5.55556,3091.43,746.286)">
             <path d="M220,405L220,435C220,437.76 217.76,440 215,440L85,440C82.24,440 80,437.76 80,435L80,405C80,402.24 82.24,400 85,400L215,400C217.76,400 220,402.24 220,405Z" style="fill:white;stroke:rgb(76,175,80);stroke-width:1px;"/>
         </g>
         <g transform="matrix(5.55556,0,0,5.55556,3604.07,3078.49)">
-            <g transform="matrix(11,0,0,11,47.0776,0)">
-            </g>
             <text x="0px" y="0px" style="font-family:'Helvetica';font-size:11px;fill:rgb(51,51,51);">Navigator</text>
         </g>
         <g transform="matrix(5.55556,0,0,5.55556,3550.59,3153.42)">
-            <g transform="matrix(8,0,0,8,43.5625,0)">
-            </g>
-            <g transform="matrix(8,0,0,8,45.7852,0)">
-            </g>
-            <g transform="matrix(8,0,0,8,66.6836,0)">
-            </g>
             <text x="0px" y="0px" style="font-family:'Helvetica';font-size:8px;fill:rgb(102,102,102);">DNS &amp; Certiﬁcates</text>
         </g>
     </g>

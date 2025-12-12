@@ -14,7 +14,6 @@
   import { Badge } from "$lib/components/ui/badge";
   import { Band } from "$lib/components/layout";
   import { getIconComponent } from "$lib/iconUtils";
-  import { EventLog, type StreamEvent } from "$lib/components/stream-details";
 
   // Icons
   const ServerIcon = getIconComponent("Server");
@@ -56,34 +55,13 @@
   // Recent system health events (for the live feed)
   let recentHealthEvents = $state<{ event: SystemHealthEvent; ts: Date }[]>([]);
 
-  // Infrastructure events for EventLog
-  let infrastructureEvents = $state<StreamEvent[]>([]);
-  let eventLogCollapsed = $state(false);
-
-  // Helper to add infrastructure events
-  function addInfraEvent(
-    type: StreamEvent["type"],
-    message: string,
-    details?: string,
-    nodeName?: string
-  ) {
-    const event: StreamEvent = {
-      id: `infra-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-      timestamp: new Date().toISOString(),
-      type,
-      message,
-      details,
-      nodeName,
-    };
-    infrastructureEvents = [event, ...infrastructureEvents].slice(0, 100);
-  }
-
   // Performance analytics types
   interface NodePerformanceMetric {
     nodeId: string;
     avgCpuUsage: number;
     avgMemoryUsage: number;
     avgDiskUsage: number;
+    avgShmUsage: number;
   }
 
   interface NetworkIOMetric {
@@ -114,11 +92,13 @@
       const avgCpu = nodeEdges.reduce((sum, e) => sum + (e.node!.avgCpu || 0), 0) / nodeEdges.length;
       const avgMemory = nodeEdges.reduce((sum, e) => sum + (e.node!.avgMemory || 0), 0) / nodeEdges.length;
       const avgDisk = nodeEdges.reduce((sum, e) => sum + (e.node!.avgDisk || 0), 0) / nodeEdges.length;
+      const avgShm = nodeEdges.reduce((sum, e) => sum + (e.node!.avgShm || 0), 0) / nodeEdges.length;
       metrics.push({
         nodeId,
         avgCpuUsage: avgCpu,
         avgMemoryUsage: avgMemory,
         avgDiskUsage: avgDisk,
+        avgShmUsage: avgShm,
       });
     }
     return metrics;
@@ -307,9 +287,9 @@
         if (prevHealth && prevHealth.event.status !== healthData.status) {
           // Status changed
           if (healthData.status === "HEALTHY") {
-            addInfraEvent("node_health", `Node recovered`, `Status: ${healthData.status}`, nodeKey);
+            // Previously logged via addInfraEvent, now only affects systemHealth map and recentHealthEvents
           } else if (healthData.status === "UNHEALTHY" || healthData.status === "DEGRADED") {
-            addInfraEvent("warning", `Node health degraded`, `Status: ${healthData.status}`, nodeKey);
+            // Previously logged via addInfraEvent, now only affects systemHealth map and recentHealthEvents
           }
         }
 
@@ -452,7 +432,7 @@
 
 <div class="h-full flex flex-col">
   <!-- Fixed Page Header -->
-  <div class="px-4 sm:px-6 lg:px-8 py-4 border-b border-border shrink-0">
+  <div class="px-4 sm:px-6 lg:px-8 py-4 border-b border-[hsl(var(--tn-fg-gutter)/0.3)] shrink-0">
     <div class="flex items-center gap-3">
       <ServerIcon class="w-5 h-5 text-primary" />
       <div>
@@ -564,19 +544,38 @@
           </p>
         </div>
         <div class="slab-body--padded">
-          <Band surface="elevated" class="p-4 mb-4">
-            <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-              {#each platformPerformanceCards as stat (stat.key)}
-                <InfrastructureMetricCard
-                  label={stat.label}
-                  value={stat.value}
-                  tone={stat.tone}
-                />
-              {/each}
-            </div>
-          </Band>
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            {#each platformPerformanceCards as stat (stat.key)}
+              <InfrastructureMetricCard
+                label={stat.label}
+                value={stat.value}
+                tone={stat.tone}
+              />
+            {/each}
+          </div>
+        </div>
+      </div>
 
-          <NodePerformanceTable {nodePerformanceMetrics} />
+      <!-- Node Performance Details -->
+      <div class="slab col-span-full">
+        <div class="slab-header">
+          <div class="flex items-center justify-between w-full">
+            <div class="flex items-center gap-2">
+              <HardDriveIcon class="w-4 h-4 text-info" />
+              <h3>Node Performance Details</h3>
+            </div>
+            {#if nodePerformanceMetrics.length > 0}
+              <Badge variant="outline" class="uppercase tracking-wide text-[0.65rem]">
+                Showing {Math.min(nodePerformanceMetrics.length, 10)} of {nodePerformanceMetrics.length}
+              </Badge>
+            {/if}
+          </div>
+          <p class="text-sm text-muted-foreground mt-1">
+            Detailed resource usage and status per node.
+          </p>
+        </div>
+        <div class="slab-body--padded">
+          <NodePerformanceTable {nodePerformanceMetrics} {systemHealth} />
         </div>
       </div>
 
@@ -733,14 +732,14 @@
             {/if}
           </div>
           <p class="text-sm text-muted-foreground mt-1">
-            Control-plane services and their health status from periodic health checks.
+            FrameWorks services and their health status from periodic health checks.
           </p>
         </div>
         <div class="slab-body--padded">
           {#if !serviceInstances || serviceInstances.length === 0}
             <EmptyState
               title="No service instances found"
-              description="Service instances will appear here when the control plane is running"
+              description="Service instances will appear here when FrameWorks is running (correctly)"
               size="sm"
               showAction={false}
             >
@@ -807,57 +806,9 @@
         </div>
       </div>
 
-      <!-- Nodes Grid -->
-      <div class="slab col-span-full">
-        <div class="slab-header">
-          <div class="flex items-center gap-2">
-            <HardDriveIcon class="w-4 h-4 text-info" />
-            <h3>Nodes</h3>
-          </div>
-          <p class="text-sm text-muted-foreground mt-1">
-            Inspect resource usage and recent health updates for each node.
-          </p>
-        </div>
-        <div class="slab-body--padded">
-          {#if !nodes || nodes.length === 0}
-            <EmptyState
-              title="No nodes found"
-              description="Infrastructure nodes will appear here when deployed"
-              size="sm"
-              showAction={false}
-            >
-              <HardDriveIcon class="w-6 h-6 text-muted-foreground mx-auto mb-2" />
-            </EmptyState>
-          {:else}
-            <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              {#each nodes as node, index (`${node.id}-${index}`)}
-                <NodeCard
-                  {node}
-                  {systemHealth}
-                  {getNodeStatus}
-                  {getNodeHealthScore}
-                  {formatCpuUsage}
-                  {formatMemoryUsage}
-                  {getStatusBadgeClass}
-                />
-              {/each}
-            </div>
-          {/if}
-        </div>
-      </div>
 
-      <!-- Infrastructure Event Log -->
-      <div class="slab col-span-full">
-        <EventLog
-          events={infrastructureEvents}
-          title="Infrastructure Events"
-          maxVisible={10}
-          collapsed={eventLogCollapsed}
-          onToggle={() => (eventLogCollapsed = !eventLogCollapsed)}
-          showStreamName={false}
-          emptyMessage="No infrastructure events. Status changes will appear here as nodes report health updates."
-        />
-      </div>
+
+
     </div>
   {/if}
   </div>

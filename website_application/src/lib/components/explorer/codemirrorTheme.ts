@@ -3,113 +3,113 @@
  * Custom theme matching the application's Tokyo Night palette
  */
 
-import { EditorView } from '@codemirror/view';
-import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
-import { tags } from '@lezer/highlight';
+import { EditorView } from "@codemirror/view";
+import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
+import { tags } from "@lezer/highlight";
 
 // Tokyo Night color palette
 const colors = {
-  bg: '#1a1b26',
-  bgDark: '#16161e',
-  bgHighlight: '#24283b',
-  bgSelection: '#33467c',
-  fg: '#a9b1d6',
-  fgDark: '#565f89',
-  comment: '#565f89',
-  blue: '#7aa2f7',
-  cyan: '#7dcfff',
-  green: '#9ece6a',
-  magenta: '#bb9af7',
-  orange: '#ff9e64',
-  red: '#f7768e',
-  yellow: '#e0af68',
-  white: '#c0caf5',
+  bg: "#1a1b26",
+  bgDark: "#16161e",
+  bgHighlight: "#24283b",
+  bgSelection: "#33467c",
+  fg: "#a9b1d6",
+  fgDark: "#565f89",
+  comment: "#565f89",
+  blue: "#7aa2f7",
+  cyan: "#7dcfff",
+  green: "#9ece6a",
+  magenta: "#bb9af7",
+  orange: "#ff9e64",
+  red: "#f7768e",
+  yellow: "#e0af68",
+  white: "#c0caf5",
 };
 
 // Editor theme (background, cursor, selection, etc.)
 export const tokyoNightTheme = EditorView.theme(
   {
-    '&': {
+    "&": {
       backgroundColor: colors.bg,
       color: colors.fg,
     },
-    '.cm-content': {
+    ".cm-content": {
       caretColor: colors.blue,
       fontFamily: '"JetBrains Mono", "Fira Code", monospace',
-      fontSize: '13px',
-      lineHeight: '1.6',
+      fontSize: "13px",
+      lineHeight: "1.6",
     },
-    '.cm-cursor, .cm-dropCursor': {
+    ".cm-cursor, .cm-dropCursor": {
       borderLeftColor: colors.blue,
-      borderLeftWidth: '2px',
+      borderLeftWidth: "2px",
     },
-    '&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection':
+    "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection":
       {
         backgroundColor: colors.bgSelection,
       },
-    '.cm-activeLine': {
+    ".cm-activeLine": {
       backgroundColor: colors.bgHighlight,
     },
-    '.cm-activeLineGutter': {
+    ".cm-activeLineGutter": {
       backgroundColor: colors.bgHighlight,
     },
-    '.cm-gutters': {
+    ".cm-gutters": {
       backgroundColor: colors.bgDark,
       color: colors.fgDark,
-      border: 'none',
+      border: "none",
       borderRight: `1px solid ${colors.bgHighlight}`,
     },
-    '.cm-lineNumbers .cm-gutterElement': {
-      padding: '0 8px 0 12px',
+    ".cm-lineNumbers .cm-gutterElement": {
+      padding: "0 8px 0 12px",
     },
-    '.cm-foldGutter': {
+    ".cm-foldGutter": {
       color: colors.fgDark,
     },
-    '.cm-matchingBracket, .cm-nonmatchingBracket': {
+    ".cm-matchingBracket, .cm-nonmatchingBracket": {
       backgroundColor: colors.bgSelection,
       outline: `1px solid ${colors.blue}`,
     },
-    '.cm-searchMatch': {
-      backgroundColor: colors.yellow + '40',
+    ".cm-searchMatch": {
+      backgroundColor: colors.yellow + "40",
       outline: `1px solid ${colors.yellow}`,
     },
-    '.cm-searchMatch.cm-searchMatch-selected': {
-      backgroundColor: colors.yellow + '60',
+    ".cm-searchMatch.cm-searchMatch-selected": {
+      backgroundColor: colors.yellow + "60",
     },
-    '.cm-tooltip': {
+    ".cm-tooltip": {
       backgroundColor: colors.bgDark,
       border: `1px solid ${colors.bgHighlight}`,
       color: colors.fg,
     },
-    '.cm-tooltip-autocomplete': {
-      '& > ul > li[aria-selected]': {
+    ".cm-tooltip-autocomplete": {
+      "& > ul > li[aria-selected]": {
         backgroundColor: colors.bgSelection,
         color: colors.white,
       },
     },
-    '.cm-panels': {
+    ".cm-panels": {
       backgroundColor: colors.bgDark,
       color: colors.fg,
     },
-    '.cm-panels.cm-panels-top': {
+    ".cm-panels.cm-panels-top": {
       borderBottom: `1px solid ${colors.bgHighlight}`,
     },
-    '.cm-panels.cm-panels-bottom': {
+    ".cm-panels.cm-panels-bottom": {
       borderTop: `1px solid ${colors.bgHighlight}`,
     },
-    '.cm-scroller': {
+    ".cm-scroller": {
       fontFamily: '"JetBrains Mono", "Fira Code", monospace',
     },
   },
-  { dark: true }
+  { dark: true },
 );
 
 // Syntax highlighting
 export const tokyoNightHighlightStyle = HighlightStyle.define([
   // Comments
-  { tag: tags.comment, color: colors.comment, fontStyle: 'italic' },
-  { tag: tags.lineComment, color: colors.comment, fontStyle: 'italic' },
-  { tag: tags.blockComment, color: colors.comment, fontStyle: 'italic' },
+  { tag: tags.comment, color: colors.comment, fontStyle: "italic" },
+  { tag: tags.lineComment, color: colors.comment, fontStyle: "italic" },
+  { tag: tags.blockComment, color: colors.comment, fontStyle: "italic" },
 
   // Strings
   { tag: tags.string, color: colors.green },
@@ -173,7 +173,7 @@ export const tokyoNightHighlightStyle = HighlightStyle.define([
   { tag: tags.attributeValue, color: colors.green },
 
   // Invalid
-  { tag: tags.invalid, color: colors.red, textDecoration: 'underline wavy' },
+  { tag: tags.invalid, color: colors.red, textDecoration: "underline wavy" },
 ]);
 
 // Combined theme extension

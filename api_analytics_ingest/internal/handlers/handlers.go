@@ -291,7 +291,7 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, event kaf
 	// 2. Write to stream_events (historical log - MergeTree)
 	eventBatch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO stream_events (
-			timestamp, event_id, tenant_id, internal_name, node_id, event_type,
+			timestamp, event_id, tenant_id, internal_name, node_id, event_type, status,
 			buffer_state, downloaded_bytes, uploaded_bytes, total_viewers, total_inputs,
 			total_outputs, viewer_seconds, has_issues, issues_description,
 			track_count, quality_tier, primary_width, primary_height, primary_fps, event_data
@@ -311,6 +311,7 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, event kaf
 		internalName,
 		mt.GetNodeId(),
 		"stream_lifecycle",
+		status,
 		streamLifecycle.GetBufferState(),
 		streamLifecycle.GetDownloadedBytes(),
 		streamLifecycle.GetUploadedBytes(),
@@ -405,7 +406,7 @@ func (h *AnalyticsHandler) processPlayRewrite(ctx context.Context, event kafka.A
 		nil, // protocol N/A
 		nilIfZeroFloat64(streamIngest.GetLatitude()),
 		nilIfZeroFloat64(streamIngest.GetLongitude()),
-		nil, // location N/A for viewer events (node location only)
+		nilIfEmptyString(streamIngest.GetNodeLocation()), // node location name (enriched by Foghorn)
 		nilIfEmptyString(streamIngest.GetCountryCode()),
 		nilIfEmptyString(streamIngest.GetCity()),
 		marshalTypedEventData(&streamIngest),
@@ -999,7 +1000,7 @@ func (h *AnalyticsHandler) processClientLifecycle(ctx context.Context, event kaf
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO client_metrics (
 			timestamp, tenant_id, internal_name, session_id, node_id, protocol, host,
-			connection_time, bandwidth_in, bandwidth_out, bytes_downloaded, bytes_uploaded,
+			connection_time, position, bandwidth_in, bandwidth_out, bytes_downloaded, bytes_uploaded,
 			packets_sent, packets_lost, packets_retransmitted, connection_quality
 		)`)
 	if err != nil {
@@ -1016,6 +1017,7 @@ func (h *AnalyticsHandler) processClientLifecycle(ctx context.Context, event kaf
 		clientLifecycle.GetProtocol(),
 		clientLifecycle.GetHost(),
 		clientLifecycle.GetConnectionTime(),
+		clientLifecycle.GetPosition(),
 		uint64(clientLifecycle.GetBandwidthInBps()),
 		uint64(clientLifecycle.GetBandwidthOutBps()),
 		uint64(clientLifecycle.GetBytesDownloaded()),
@@ -1137,7 +1139,8 @@ func (h *AnalyticsHandler) processNodeLifecycle(ctx context.Context, event kafka
 		INSERT INTO node_metrics (
 			timestamp, tenant_id, node_id, cpu_usage, ram_max, ram_current,
 			shm_total_bytes, shm_used_bytes, disk_total_bytes, disk_used_bytes,
-			up_speed, down_speed, stream_count, is_healthy, latitude, longitude, metadata
+			bandwidth_in, bandwidth_out, up_speed, down_speed, connections_current,
+			stream_count, is_healthy, latitude, longitude, metadata
 		)`)
 	if err != nil {
 		h.logger.Errorf("Failed to prepare node_metrics batch: %v", err)
@@ -1158,8 +1161,11 @@ func (h *AnalyticsHandler) processNodeLifecycle(ctx context.Context, event kafka
 		uint64(nodeLifecycle.GetShmUsedBytes()),
 		uint64(nodeLifecycle.GetDiskTotalBytes()),
 		uint64(nodeLifecycle.GetDiskUsedBytes()),
-		int64(nodeLifecycle.GetUpSpeed()),
-		int64(nodeLifecycle.GetDownSpeed()),
+		uint64(nodeLifecycle.GetBandwidthInTotal()),  // cumulative bytes received
+		uint64(nodeLifecycle.GetBandwidthOutTotal()), // cumulative bytes sent
+		int64(nodeLifecycle.GetUpSpeed()),            // rate: bytes/sec
+		int64(nodeLifecycle.GetDownSpeed()),          // rate: bytes/sec
+		uint32(nodeLifecycle.GetConnectionsCurrent()), // current viewer connections
 		int(nodeLifecycle.GetActiveStreams()),
 		nodeLifecycle.GetIsHealthy(),
 		nodeLifecycle.GetLatitude(),
@@ -1212,10 +1218,85 @@ func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event kafka.
 	// Normalize internal name by stripping live+/vod+ prefix for consistent analytics keys
 	internalName := mist.ExtractInternalName(streamBuffer.GetStreamName())
 
+	// Extract primary video and audio tracks for dedicated columns
+	primaryVideo, primaryAudio := extractPrimaryTracks(streamBuffer.GetTracks())
+
+	// Extract primary video track fields
+	var (
+		bitrate                          *uint32
+		fps                              *float32
+		width, height                    *uint16
+		codec                            *string
+		frameMsMax, frameMsMin           *float32
+		keyframeMsMax, keyframeMsMin     *float32
+	)
+	if primaryVideo != nil {
+		if v := primaryVideo.GetBitrateKbps(); v > 0 {
+			b := uint32(v)
+			bitrate = &b
+		}
+		if v := primaryVideo.GetFps(); v > 0 {
+			f := float32(v)
+			fps = &f
+		}
+		if v := primaryVideo.GetWidth(); v > 0 {
+			w := uint16(v)
+			width = &w
+		}
+		if v := primaryVideo.GetHeight(); v > 0 {
+			ht := uint16(v)
+			height = &ht
+		}
+		if v := primaryVideo.GetCodec(); v != "" {
+			codec = &v
+		}
+		if v := primaryVideo.GetFrameMsMax(); v > 0 {
+			f := float32(v)
+			frameMsMax = &f
+		}
+		if v := primaryVideo.GetFrameMsMin(); v > 0 {
+			f := float32(v)
+			frameMsMin = &f
+		}
+		if v := primaryVideo.GetKeyframeMsMax(); v > 0 {
+			f := float32(v)
+			keyframeMsMax = &f
+		}
+		if v := primaryVideo.GetKeyframeMsMin(); v > 0 {
+			f := float32(v)
+			keyframeMsMin = &f
+		}
+	}
+
+	// Extract primary audio track fields
+	var (
+		audioChannels   *uint8
+		audioSampleRate *uint32
+		audioCodec      *string
+		audioBitrate    *uint32
+	)
+	if primaryAudio != nil {
+		if v := primaryAudio.GetChannels(); v > 0 {
+			c := uint8(v)
+			audioChannels = &c
+		}
+		if v := primaryAudio.GetSampleRate(); v > 0 {
+			sr := uint32(v)
+			audioSampleRate = &sr
+		}
+		if v := primaryAudio.GetCodec(); v != "" {
+			audioCodec = &v
+		}
+		if v := primaryAudio.GetBitrateKbps(); v > 0 {
+			b := uint32(v)
+			audioBitrate = &b
+		}
+	}
+
 	// Write to ClickHouse stream_events table
 	streamEventsBatch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO stream_events (
-			timestamp, event_id, tenant_id, internal_name, node_id, event_type,
+			timestamp, event_id, tenant_id, internal_name, node_id, event_type, status,
 			buffer_state, has_issues, issues_description, track_count,
 			quality_tier, primary_width, primary_height, primary_fps, event_data
 		)`)
@@ -1231,14 +1312,15 @@ func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event kafka.
 		internalName,
 		mt.GetNodeId(),
 		"stream_buffer",
+		"live", // stream_buffer events only fire for live streams
 		streamBuffer.GetBufferState(),
 		nilIfZeroBool(streamBuffer.GetHasIssues()),
 		nilIfEmptyString(streamBuffer.GetIssuesDescription()),
 		nilIfZeroInt32(streamBuffer.GetTrackCount()),
 		nilIfEmptyString(streamBuffer.GetQualityTier()),
-		nil, // width N/A
-		nil, // height N/A
-		nil, // fps N/A
+		width,
+		height,
+		fps,
 		marshalTypedEventData(&streamBuffer),
 	); err != nil {
 		h.logger.Errorf("Failed to append to stream_events batch: %v", err)
@@ -1262,7 +1344,10 @@ func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event kafka.
 	healthBatch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO stream_health_metrics (
 			timestamp, tenant_id, internal_name, node_id, buffer_state,
-			has_issues, issues_description, track_count, track_metadata
+			has_issues, issues_description, track_count, track_metadata,
+			bitrate, fps, width, height, codec,
+			frame_ms_max, frame_ms_min, keyframe_ms_max, keyframe_ms_min,
+			audio_channels, audio_sample_rate, audio_codec, audio_bitrate
 		)`)
 	if err != nil {
 		h.logger.Errorf("Failed to prepare stream_health_metrics batch: %v", err)
@@ -1279,6 +1364,19 @@ func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event kafka.
 		nilIfEmptyString(streamBuffer.GetIssuesDescription()),
 		nilIfZeroUint16(streamBuffer.GetTrackCount()),
 		trackMetadataJSON,
+		bitrate,
+		fps,
+		width,
+		height,
+		codec,
+		frameMsMax,
+		frameMsMin,
+		keyframeMsMax,
+		keyframeMsMin,
+		audioChannels,
+		audioSampleRate,
+		audioCodec,
+		audioBitrate,
 	); err != nil {
 		h.logger.Errorf("Failed to append to stream_health_metrics batch: %v", err)
 		return err
@@ -1291,6 +1389,22 @@ func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event kafka.
 
 	h.logger.Debugf("Successfully processed stream buffer event for stream: %s (written to both stream_events and stream_health_metrics)", streamBuffer.GetStreamName())
 	return nil
+}
+
+// extractPrimaryTracks finds the first video and audio tracks from a list of StreamTracks
+func extractPrimaryTracks(tracks []*pb.StreamTrack) (video, audio *pb.StreamTrack) {
+	for _, t := range tracks {
+		if t.GetTrackType() == "video" && video == nil {
+			video = t
+		}
+		if t.GetTrackType() == "audio" && audio == nil {
+			audio = t
+		}
+		if video != nil && audio != nil {
+			break
+		}
+	}
+	return
 }
 
 // processStreamEnd handles STREAM_END webhook events
@@ -1443,12 +1557,6 @@ func (h *AnalyticsHandler) processTrackList(ctx context.Context, event kafka.Ana
 		return err
 	}
 
-	// Detect quality changes if we have previous track data
-	if err := h.detectQualityChanges(ctx, event); err != nil {
-		h.logger.Errorf("Failed to detect quality changes: %v", err)
-		// Don't fail the main operation for this
-	}
-
 	h.logger.Debugf("Successfully processed track list for stream: %s", trackList.GetStreamName())
 	return nil
 }
@@ -1503,63 +1611,6 @@ func (h *AnalyticsHandler) processBandwidthThreshold(ctx context.Context, event 
 	}
 
 	h.logger.Debugf("Successfully processed bandwidth threshold for stream: %s", bandwidthThreshold.GetStreamName())
-	return nil
-}
-
-// detectQualityChanges detects and records quality tier changes
-func (h *AnalyticsHandler) detectQualityChanges(ctx context.Context, event kafka.AnalyticsEvent) error {
-	// For now, we'll record every track list event as a potential change
-	// In a full implementation, we'd query the previous state and compare
-
-	// Parse LiveTrackListTrigger from MistTrigger envelope
-	var mt pb.MistTrigger
-	if err := h.parseProtobufData(event, &mt); err != nil {
-		return fmt.Errorf("failed to parse MistTrigger: %w", err)
-	}
-	tp, ok := mt.GetTriggerPayload().(*pb.MistTrigger_TrackList)
-	if !ok || tp == nil {
-		return fmt.Errorf("unexpected payload for track_list")
-	}
-	trackList := tp.TrackList
-
-	currentQuality := trackList.GetQualityTier()
-	currentCodec := trackList.GetPrimaryVideoCodec()
-	currentResolution := ""
-	if trackList.GetPrimaryWidth() > 0 && trackList.GetPrimaryHeight() > 0 {
-		currentResolution = fmt.Sprintf("%dx%d", trackList.GetPrimaryWidth(), trackList.GetPrimaryHeight())
-	}
-
-	// Simple change detection - record when we have quality info
-	if currentQuality != "" || currentCodec != "" {
-		batch, err := h.clickhouse.PrepareBatch(ctx, `
-			INSERT INTO track_change_events (
-				timestamp, event_id, tenant_id, internal_name, node_id,
-				change_type, new_tracks, new_quality_tier, new_resolution, new_codec
-			)`)
-		if err != nil {
-			return err
-		}
-
-		if err := batch.Append(
-			event.Timestamp,
-			event.EventID,
-			event.TenantID,
-			trackList.GetStreamName(),
-			"",             // node_id not in LiveTrackListTrigger
-			"track_update", // Generic change type
-			marshalTypedEventData(trackList.GetTracks()),
-			currentQuality,
-			currentResolution,
-			currentCodec,
-		); err != nil {
-			return err
-		}
-
-		if err := batch.Send(); err != nil {
-			return err
-		}
-	}
-
 	return nil
 }
 

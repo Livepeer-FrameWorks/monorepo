@@ -14,11 +14,7 @@ fragment DVRRequestInfo on DVRRequest {
   updatedAt
 }
 
-query GetDVRRequests(
-  $internalName: String
-  $first: Int = 50
-  $after: String
-) {
+query GetDVRRequests($internalName: String, $first: Int = 50, $after: String) {
   dvrRecordingsConnection(
     internalName: $internalName
     first: $first

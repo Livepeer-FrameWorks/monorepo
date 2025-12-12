@@ -364,43 +364,44 @@ func GenerateBillingStatus() *pb.BillingStatusResponse {
 }
 
 // GenerateUsageRecords creates demo usage records
+// Usage types must match what frontend expects: stream_hours, egress_gb, recording_gb,
+// peak_bandwidth_mbps, total_streams, peak_viewers
 func GenerateUsageRecords() []*pb.UsageRecord {
 	now := time.Now()
-	records := make([]*pb.UsageRecord, 10)
 
-	usageTypes := []string{"streaming", "storage", "bandwidth", "transcoding"}
+	// Define usage type data: type name, value, unit for details
+	usageData := []struct {
+		usageType string
+		value     float64
+		unit      string
+	}{
+		{"stream_hours", 25, "hours"},
+		{"egress_gb", 1628, "GB"},
+		{"recording_gb", 37.25, "GB"},
+		{"peak_bandwidth_mbps", 850.5, "Mbps"},
+		{"total_streams", 1, "streams"},
+		{"peak_viewers", 342, "viewers"},
+	}
 
-	for i := 0; i < 10; i++ {
-		usageType := usageTypes[i%len(usageTypes)]
-		var value float64
+	records := make([]*pb.UsageRecord, len(usageData))
 
-		switch usageType {
-		case "streaming":
-			value = float64(2 + i*3) // hours
-		case "storage":
-			value = float64(5 + i*2) // GB
-		case "bandwidth":
-			value = float64(50 + i*25) // GB
-		case "transcoding":
-			value = float64(10 + i*5) // minutes
-		}
-
+	for i, data := range usageData {
 		// Build usage details as structpb.Struct
 		usageDetails, _ := structpb.NewStruct(map[string]interface{}{
 			"cost": map[string]interface{}{
-				"quantity":   value,
+				"quantity":   data.value,
 				"unit_price": 0.5,
-				"unit":       "units",
+				"unit":       data.unit,
 			},
 		})
 
 		records[i] = &pb.UsageRecord{
-			Id:           "usage_demo_" + time.Now().Format("20060102") + "_" + string(rune(i+'a')),
+			Id:           "usage_demo_" + now.Format("20060102") + "_" + data.usageType,
 			TenantId:     "demo_tenant_frameworks",
 			ClusterId:    "cluster_demo_us_west",
 			ClusterName:  stringPtr("US West Demo Cluster"),
-			UsageType:    usageType,
-			UsageValue:   value,
+			UsageType:    data.usageType,
+			UsageValue:   data.value,
 			UsageDetails: usageDetails,
 			BillingMonth: now.Format("2006-01"),
 			CreatedAt:    timestamppb.New(now.Add(-time.Duration(i) * 24 * time.Hour)),
@@ -1377,43 +1378,52 @@ func GenerateNodeMetricsConnection() *model.NodeMetricsConnection {
 
 	metrics := []*pb.NodeMetric{
 		{
-			Id:           "nm_demo_001",
-			Timestamp:    timestamppb.New(now.Add(-5 * time.Minute)),
-			NodeId:       "node_demo_us_west_01",
-			CpuUsage:     65.2,
-			RamMax:       16000000000,
-			RamCurrent:   12500000000,
-			BandwidthIn:  125000000,
-			BandwidthOut: 250000000,
-			IsHealthy:    true,
-			Latitude:     37.7749,
-			Longitude:    -122.4194,
+			Id:                 "nm_demo_001",
+			Timestamp:          timestamppb.New(now.Add(-5 * time.Minute)),
+			NodeId:             "node_demo_us_west_01",
+			CpuUsage:           65.2,
+			RamMax:             16000000000,
+			RamCurrent:         12500000000,
+			BandwidthIn:        125000000,  // cumulative bytes
+			BandwidthOut:       250000000,  // cumulative bytes
+			UpSpeed:            15000000,   // 15 MB/s (bytes/sec)
+			DownSpeed:          30000000,   // 30 MB/s (bytes/sec)
+			ConnectionsCurrent: 42,         // current viewer connections
+			IsHealthy:          true,
+			Latitude:           37.7749,
+			Longitude:          -122.4194,
 		},
 		{
-			Id:           "nm_demo_002",
-			Timestamp:    timestamppb.New(now.Add(-10 * time.Minute)),
-			NodeId:       "node_demo_us_west_01",
-			CpuUsage:     58.7,
-			RamMax:       16000000000,
-			RamCurrent:   11800000000,
-			BandwidthIn:  118000000,
-			BandwidthOut: 235000000,
-			IsHealthy:    true,
-			Latitude:     37.7749,
-			Longitude:    -122.4194,
+			Id:                 "nm_demo_002",
+			Timestamp:          timestamppb.New(now.Add(-10 * time.Minute)),
+			NodeId:             "node_demo_us_west_01",
+			CpuUsage:           58.7,
+			RamMax:             16000000000,
+			RamCurrent:         11800000000,
+			BandwidthIn:        118000000,  // cumulative bytes
+			BandwidthOut:       235000000,  // cumulative bytes
+			UpSpeed:            12000000,   // 12 MB/s (bytes/sec)
+			DownSpeed:          25000000,   // 25 MB/s (bytes/sec)
+			ConnectionsCurrent: 38,         // current viewer connections
+			IsHealthy:          true,
+			Latitude:           37.7749,
+			Longitude:          -122.4194,
 		},
 		{
-			Id:           "nm_demo_003",
-			Timestamp:    timestamppb.New(now.Add(-5 * time.Minute)),
-			NodeId:       "node_demo_eu_west_01",
-			CpuUsage:     72.1,
-			RamMax:       16000000000,
-			RamCurrent:   13200000000,
-			BandwidthIn:  100000000,
-			BandwidthOut: 200000000,
-			IsHealthy:    true,
-			Latitude:     51.5074,
-			Longitude:    -0.1278,
+			Id:                 "nm_demo_003",
+			Timestamp:          timestamppb.New(now.Add(-5 * time.Minute)),
+			NodeId:             "node_demo_eu_west_01",
+			CpuUsage:           72.1,
+			RamMax:             16000000000,
+			RamCurrent:         13200000000,
+			BandwidthIn:        100000000,  // cumulative bytes
+			BandwidthOut:       200000000,  // cumulative bytes
+			UpSpeed:            10000000,   // 10 MB/s (bytes/sec)
+			DownSpeed:          20000000,   // 20 MB/s (bytes/sec)
+			ConnectionsCurrent: 55,         // current viewer connections
+			IsHealthy:          true,
+			Latitude:           51.5074,
+			Longitude:          -0.1278,
 		},
 	}
 
@@ -1848,54 +1858,6 @@ func GenerateQualityTierDailyConnection() *model.QualityTierDailyConnection {
 	}
 
 	return &model.QualityTierDailyConnection{
-		Edges:      edges,
-		PageInfo:   &model.PageInfo{HasNextPage: false, HasPreviousPage: false},
-		TotalCount: len(records),
-	}
-}
-
-// GenerateQualityChangesHourlyConnection creates demo hourly quality changes
-func GenerateQualityChangesHourlyConnection() *model.QualityChangesHourlyConnection {
-	now := time.Now()
-
-	records := []*pb.QualityChangesHourly{
-		{
-			Id:                "qch_demo_001",
-			Hour:              timestamppb.New(now.Truncate(time.Hour)),
-			TenantId:          "demo_tenant_frameworks",
-			InternalName:      "demo_live_stream_001",
-			TotalChanges:      15,
-			ResolutionChanges: 12,
-			CodecChanges:      3,
-			QualityTiers:      []string{"1080p", "720p", "1080p"},
-			LatestQuality:     "1080p",
-			LatestCodec:       "H264",
-			LatestResolution:  "1920x1080",
-		},
-		{
-			Id:                "qch_demo_002",
-			Hour:              timestamppb.New(now.Add(-1 * time.Hour).Truncate(time.Hour)),
-			TenantId:          "demo_tenant_frameworks",
-			InternalName:      "demo_live_stream_001",
-			TotalChanges:      13,
-			ResolutionChanges: 8,
-			CodecChanges:      5,
-			QualityTiers:      []string{"720p", "1080p"},
-			LatestQuality:     "1080p",
-			LatestCodec:       "H264",
-			LatestResolution:  "1920x1080",
-		},
-	}
-
-	edges := make([]*model.QualityChangesHourlyEdge, len(records))
-	for i, record := range records {
-		edges[i] = &model.QualityChangesHourlyEdge{
-			Cursor: record.Id,
-			Node:   record,
-		}
-	}
-
-	return &model.QualityChangesHourlyConnection{
 		Edges:      edges,
 		PageInfo:   &model.PageInfo{HasNextPage: false, HasPreviousPage: false},
 		TotalCount: len(records),

@@ -1,6 +1,6 @@
-import { browser } from '$app/environment';
+import { browser } from "$app/environment";
 
-const STORAGE_KEY = 'frameworks-sidebar-prefs';
+const STORAGE_KEY = "frameworks-sidebar-prefs";
 
 interface SidebarPreferences {
   collapsed: boolean;
@@ -9,7 +9,7 @@ interface SidebarPreferences {
 
 const DEFAULT_PREFS: SidebarPreferences = {
   collapsed: false,
-  expandedSections: []
+  expandedSections: [],
 };
 
 function loadFromStorage(): SidebarPreferences {
@@ -20,8 +20,13 @@ function loadFromStorage(): SidebarPreferences {
     if (stored) {
       const parsed = JSON.parse(stored);
       return {
-        collapsed: typeof parsed.collapsed === 'boolean' ? parsed.collapsed : DEFAULT_PREFS.collapsed,
-        expandedSections: Array.isArray(parsed.expandedSections) ? parsed.expandedSections : DEFAULT_PREFS.expandedSections
+        collapsed:
+          typeof parsed.collapsed === "boolean"
+            ? parsed.collapsed
+            : DEFAULT_PREFS.collapsed,
+        expandedSections: Array.isArray(parsed.expandedSections)
+          ? parsed.expandedSections
+          : DEFAULT_PREFS.expandedSections,
       };
     }
   } catch {
@@ -43,7 +48,9 @@ function saveToStorage(prefs: SidebarPreferences): void {
 
 function createSidebarStore() {
   let collapsed = $state(DEFAULT_PREFS.collapsed);
-  let expandedSections = $state<Set<string>>(new Set(DEFAULT_PREFS.expandedSections));
+  let expandedSections = $state<Set<string>>(
+    new Set(DEFAULT_PREFS.expandedSections),
+  );
   let initialized = $state(false);
 
   // Load from storage on init (browser only)
@@ -57,7 +64,7 @@ function createSidebarStore() {
   function persist() {
     saveToStorage({
       collapsed,
-      expandedSections: Array.from(expandedSections)
+      expandedSections: Array.from(expandedSections),
     });
   }
 
@@ -122,7 +129,7 @@ function createSidebarStore() {
         expandedSections = new Set([...expandedSections, sectionKey]);
         // Don't persist auto-expansions - only user actions
       }
-    }
+    },
   };
 }
 

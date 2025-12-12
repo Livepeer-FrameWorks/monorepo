@@ -12,5 +12,9 @@ subscription ClipLifecycle($stream: String!) {
     completedAt
     nodeId
     internalName
+    startUnix
+    stopUnix
+    durationSec
+    clipMode
   }
 }

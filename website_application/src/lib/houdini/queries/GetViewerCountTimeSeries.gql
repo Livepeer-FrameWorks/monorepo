@@ -3,7 +3,11 @@ query GetViewerCountTimeSeries(
   $timeRange: TimeRangeInput
   $interval: String = "5m"
 ) {
-  viewerCountTimeSeries(stream: $stream, timeRange: $timeRange, interval: $interval) {
+  viewerCountTimeSeries(
+    stream: $stream
+    timeRange: $timeRange
+    interval: $interval
+  ) {
     timestamp
     viewerCount
     stream

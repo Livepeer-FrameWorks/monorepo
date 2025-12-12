@@ -325,17 +325,19 @@
 
 <div class="h-full flex flex-col">
   <!-- Fixed Page Header -->
-  <div class="px-4 sm:px-6 lg:px-8 py-4 border-b border-border shrink-0">
+  <div class="px-4 sm:px-6 lg:px-8 py-4 border-b border-[hsl(var(--tn-fg-gutter)/0.3)] shrink-0">
     <div class="flex items-center gap-4">
-      <button
+      <Button
+        variant="ghost"
+        size="icon"
+        class="rounded-full"
         onclick={navigateBack}
-        class="p-2 border border-border/50 hover:bg-muted/50 transition-colors"
       >
         <ArrowLeftIcon class="w-5 h-5" />
-      </button>
+      </Button>
       <div>
         <h1 class="text-xl font-bold text-foreground">Stream Health</h1>
-        <p class="text-sm text-muted-foreground">
+        <p class="text-sm text-muted-foreground mt-0.5">
           {#if stream}{stream.name} • {/if}Last 24 hours
         </p>
       </div>

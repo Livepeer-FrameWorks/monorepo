@@ -278,33 +278,46 @@
   <title>Recordings - FrameWorks</title>
 </svelte:head>
 
-<div class="h-full flex flex-col">
+<div class="h-full flex flex-col overflow-hidden">
   <!-- Fixed Page Header -->
-  <div class="px-4 sm:px-6 lg:px-8 py-4 border-b border-border shrink-0">
-    <div class="flex items-center gap-3">
-      <FilmIcon class="w-5 h-5 text-primary" />
-      <div>
-        <h1 class="text-xl font-bold text-foreground">Recordings</h1>
-        <p class="text-sm text-muted-foreground">
-          Manage and monitor all stream recordings
-        </p>
+  <div class="px-4 sm:px-6 lg:px-8 py-4 border-b border-[hsl(var(--tn-fg-gutter)/0.3)] shrink-0 z-10 bg-background">
+    <div class="flex justify-between items-center">
+      <div class="flex items-center gap-3">
+        <FilmIcon class="w-5 h-5 text-primary" />
+        <div>
+          <h1 class="text-xl font-bold text-foreground">Recordings</h1>
+          <p class="text-sm text-muted-foreground">
+            Manage and monitor all stream recordings
+          </p>
+        </div>
       </div>
     </div>
   </div>
 
   <!-- Scrollable Content -->
-  <div class="flex-1 overflow-y-auto">
+  <div class="flex-1 overflow-y-auto bg-background/50">
   {#if loading}
-    <div class="px-4 sm:px-6 lg:px-8 py-6">
-      <div class="flex items-center justify-center min-h-64">
-        <div class="loading-spinner w-8 h-8"></div>
-      </div>
-    </div>
+    <!-- Loading Skeleton -->
+    <GridSeam cols={4} stack="2x2" flush={true} class="min-h-full content-start">
+      {#each Array.from({ length: 8 }) as _, i (i)}
+        <div class="slab h-full !p-0">
+          <div class="slab-header">
+            <div class="h-4 bg-muted rounded w-3/4 animate-pulse"></div>
+          </div>
+          <div class="slab-body--padded">
+            <div class="space-y-3">
+              <div class="h-4 bg-muted rounded w-full animate-pulse"></div>
+              <div class="h-4 bg-muted rounded w-1/2 animate-pulse"></div>
+            </div>
+          </div>
+        </div>
+      {/each}
+    </GridSeam>
   {:else}
     <div class="page-transition">
 
       <!-- Stats Bar -->
-      <GridSeam cols={4} stack="2x2" surface="panel" flush={true} class="mb-0">
+      <GridSeam cols={4} stack="2x2" surface="panel" flush={true} class="mb-0 min-h-full content-start">
         <div>
           <DashboardMetricCard
             icon={FilmIcon}
@@ -421,15 +434,22 @@
                 </div>
               </div>
             {:else if paginatedRecordings.length === 0}
-              <div class="p-12 text-center">
-                <FilmIcon class="w-6 h-6 text-muted-foreground mx-auto mb-4" />
-                <div class="text-muted-foreground mb-4">No recordings found</div>
+              <div class="flex flex-col items-center justify-center py-16 m-4 border-2 border-dashed border-border/50 rounded-lg bg-muted/5">
+                <div class="w-16 h-16 rounded-full bg-muted/30 flex items-center justify-center mb-6">
+                  <FilmIcon class="w-8 h-8 text-muted-foreground" />
+                </div>
+                <h3 class="text-xl font-semibold mb-3">No recordings found</h3>
+                <p class="text-muted-foreground mb-8 max-w-sm text-lg text-center">
+                  {#if searchQuery || statusFilter !== "all"}
+                    Try adjusting your search query or changing the status filters.
+                  {:else}
+                    Recordings of your live streams will appear here.
+                  {/if}
+                </p>
                 {#if searchQuery || statusFilter !== "all"}
-                  <div class="text-muted-foreground text-sm mb-4">
-                    Try adjusting your filters
-                  </div>
                   <Button
                     variant="outline"
+                    size="lg"
                     onclick={() => {
                       searchQuery = "";
                       statusFilter = "all";

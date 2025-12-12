@@ -40,13 +40,19 @@ fragment NodeMetricHourlyFields on NodeMetricHourly {
   peakMemory
   avgDisk
   peakDisk
+  avgShm
+  peakShm
   totalBandwidthIn
   totalBandwidthOut
   wasHealthy
 }
 
 # Combined query for infrastructure dashboard - fetches all data in one request
-query GetInfrastructureOverview($timeRange: TimeRangeInput, $first: Int = 100, $noCache: Boolean = false) {
+query GetInfrastructureOverview(
+  $timeRange: TimeRangeInput
+  $first: Int = 100
+  $noCache: Boolean = false
+) {
   tenant {
     id
     name
@@ -66,7 +72,11 @@ query GetInfrastructureOverview($timeRange: TimeRangeInput, $first: Int = 100, $
   }
 
   # Node metrics for performance data (1-hour aggregates)
-  nodeMetrics1hConnection(timeRange: $timeRange, first: $first, noCache: $noCache) {
+  nodeMetrics1hConnection(
+    timeRange: $timeRange
+    first: $first
+    noCache: $noCache
+  ) {
     edges {
       node {
         ...NodeMetricHourlyFields
@@ -205,5 +215,25 @@ fragment ServiceInstanceInfo on ServiceInstance {
 query GetServiceInstances($clusterId: String) {
   serviceInstances(clusterId: $clusterId) {
     ...ServiceInstanceInfo
+  }
+}
+
+query GetNodesConnection(
+  $first: Int = 50
+  $after: String
+  $last: Int
+  $before: String
+) {
+  nodesConnection(first: $first, after: $after, last: $last, before: $before) {
+    edges {
+      node {
+        ...NodeFields
+      }
+    }
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+    totalCount
   }
 }

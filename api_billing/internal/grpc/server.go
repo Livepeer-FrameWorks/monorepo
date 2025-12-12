@@ -358,9 +358,20 @@ func (s *PurserServer) GetUsageRecords(ctx context.Context, req *pb.GetUsageReco
 		argIdx++
 	}
 	if req.GetBillingMonth() != "" {
-		whereClause += fmt.Sprintf(" AND billing_month = $%d", argIdx)
-		args = append(args, req.GetBillingMonth())
-		argIdx++
+		// Convert billing_month (YYYY-MM) to timestamp range for consistency
+		// Parse as first of month, query for that month's period boundaries
+		monthStart, err := time.Parse("2006-01", req.GetBillingMonth())
+		if err == nil {
+			monthEnd := monthStart.AddDate(0, 1, 0)
+			whereClause += fmt.Sprintf(" AND period_start >= $%d AND period_end < $%d", argIdx, argIdx+1)
+			args = append(args, monthStart, monthEnd)
+			argIdx += 2
+		} else {
+			// Fallback to string match if parse fails
+			whereClause += fmt.Sprintf(" AND billing_month = $%d", argIdx)
+			args = append(args, req.GetBillingMonth())
+			argIdx++
+		}
 	}
 
 	// Add cursor condition for keyset pagination (direction-aware)
@@ -1526,7 +1537,10 @@ func (s *PurserServer) getRecentPayments(ctx context.Context, tenantID string, l
 
 // getCurrentMonthUsageSummary gets aggregated usage for current billing month
 func (s *PurserServer) getCurrentMonthUsageSummary(ctx context.Context, tenantID string) (*pb.UsageSummary, error) {
-	billingMonth := time.Now().Format("2006-01")
+	// Use precise timestamp boundaries instead of billing_month string
+	now := time.Now()
+	periodStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+	periodEnd := periodStart.AddDate(0, 1, 0) // First of next month (exclusive)
 
 	var streamHours, viewerHours, egressGb, recordingGb, storageGb, peakBandwidthMbps float64
 	var totalStreams, totalViewers, peakViewers int32
@@ -1546,19 +1560,21 @@ func (s *PurserServer) getCurrentMonthUsageSummary(ctx context.Context, tenantID
 				COALESCE(SUM(CASE WHEN usage_type = 'total_viewers' THEN usage_value ELSE 0 END), 0)::int as total_viewers,
 				COALESCE(MAX(CASE WHEN usage_type = 'peak_viewers' THEN usage_value ELSE 0 END), 0)::int as peak_viewers
 			FROM purser.usage_records
-			WHERE tenant_id = $1 AND billing_month = $2
+			WHERE tenant_id = $1 AND period_start >= $2 AND period_end < $3
 		),
 		latest_details AS (
 			SELECT usage_details
 			FROM purser.usage_records
-			WHERE tenant_id = $1 AND billing_month = $2 AND usage_details IS NOT NULL
+			WHERE tenant_id = $1 AND period_start >= $2 AND period_end < $3
+			  AND usage_details IS NOT NULL
+			  AND usage_details ? 'geo_breakdown'
 			ORDER BY created_at DESC
 			LIMIT 1
 		)
 		SELECT a.*, COALESCE(d.usage_details, '{}'::jsonb)
 		FROM aggregated a
 		LEFT JOIN latest_details d ON true
-	`, tenantID, billingMonth).Scan(
+	`, tenantID, periodStart, periodEnd).Scan(
 		&streamHours, &viewerHours, &egressGb, &recordingGb,
 		&storageGb, &peakBandwidthMbps, &totalStreams, &totalViewers, &peakViewers,
 		&usageDetailsJSON,
@@ -1608,7 +1624,7 @@ func (s *PurserServer) getCurrentMonthUsageSummary(ctx context.Context, tenantID
 
 	return &pb.UsageSummary{
 		TenantId:          tenantID,
-		BillingMonth:      billingMonth,
+		BillingMonth:      periodStart.Format("2006-01"), // For display/backwards compat
 		Period:            "month",
 		StreamHours:       streamHours,
 		ViewerHours:       viewerHours,
@@ -1690,14 +1706,13 @@ func (s *PurserServer) GetTenantUsage(ctx context.Context, req *pb.TenantUsageRe
 		return nil, status.Error(codes.InvalidArgument, "start_date and end_date required")
 	}
 
-	// Query aggregated usage by type
-	// Note: billing_month is stored as YYYY-MM format, so extract month from dates
+	// Query aggregated usage by type using precise timestamp boundaries
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT usage_type, SUM(usage_value) as total
 		FROM purser.usage_records
 		WHERE tenant_id = $1
-		  AND billing_month >= TO_CHAR($2::date, 'YYYY-MM')
-		  AND billing_month <= TO_CHAR($3::date, 'YYYY-MM')
+		  AND period_start >= $2::date
+		  AND period_end <= ($3::date + INTERVAL '1 day')
 		GROUP BY usage_type
 	`, tenantID, startDate, endDate)
 	if err != nil {

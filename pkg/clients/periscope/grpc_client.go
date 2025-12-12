@@ -497,19 +497,6 @@ func (c *GRPCClient) GetQualityTierDaily(ctx context.Context, tenantID string, s
 	return c.aggregated.GetQualityTierDaily(ctx, req)
 }
 
-// GetQualityChangesHourly returns hourly quality changes
-func (c *GRPCClient) GetQualityChangesHourly(ctx context.Context, tenantID string, stream *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetQualityChangesHourlyResponse, error) {
-	req := &pb.GetQualityChangesHourlyRequest{
-		TenantId:   tenantID,
-		TimeRange:  buildTimeRange(timeRange),
-		Pagination: buildCursorPagination(opts),
-	}
-	if stream != nil {
-		req.Stream = stream
-	}
-	return c.aggregated.GetQualityChangesHourly(ctx, req)
-}
-
 // GetStorageUsage returns storage usage records
 func (c *GRPCClient) GetStorageUsage(ctx context.Context, tenantID string, nodeID *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetStorageUsageResponse, error) {
 	req := &pb.GetStorageUsageRequest{

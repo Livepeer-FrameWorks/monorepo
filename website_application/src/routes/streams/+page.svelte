@@ -19,6 +19,7 @@
   import StreamCard from "$lib/components/stream-details/StreamCard.svelte";
   import CreateStreamModal from "$lib/components/stream-details/CreateStreamModal.svelte";
   import DeleteStreamModal from "$lib/components/stream-details/DeleteStreamModal.svelte";
+  import GridSeam from "$lib/components/layout/GridSeam.svelte";
   import { getIconComponent } from "$lib/iconUtils";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
@@ -352,23 +353,30 @@
 
 <div class="h-full flex flex-col">
   <!-- Fixed Page Header -->
-  <div class="px-4 sm:px-6 lg:px-8 py-4 border-b border-border shrink-0">
-    <div class="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
+  <div class="px-4 sm:px-6 lg:px-8 py-4 border-b border-[hsl(var(--tn-fg-gutter)/0.3)] shrink-0 z-10 bg-background">
+    <div class="flex justify-between items-center">
       <div class="flex items-center gap-3">
         <VideoIcon class="w-5 h-5 text-primary" />
         <div>
-          <h1 class="text-xl font-bold text-foreground">Streams</h1>
-          <p class="text-sm text-muted-foreground">
-            {totalStreamCount > 0 ? totalStreamCount : streams.length} stream{streams.length !== 1 ? 's' : ''}
+          <div class="flex items-center gap-3">
+            <h1 class="text-xl font-bold text-foreground">Streams</h1>
+            <span class="text-xs text-muted-foreground font-mono bg-muted px-1.5 py-0.5 rounded">
+              {totalStreamCount > 0 ? totalStreamCount : streams.length}
+            </span>
             {#if liveStreamCount > 0}
-              <span class="text-success">• {liveStreamCount} live</span>
+              <span class="text-xs text-success font-medium flex items-center gap-1.5">
+                <div class="w-1.5 h-1.5 rounded-full bg-success animate-pulse"></div>
+                {liveStreamCount} LIVE
+              </span>
             {/if}
+          </div>
+          <p class="text-sm text-muted-foreground">
+            Manage your live streams and broadcasts
           </p>
         </div>
       </div>
-
       <Button
-        variant="cta"
+        variant="default"
         class="gap-2"
         onclick={() => (showCreateModal = true)}
       >
@@ -376,84 +384,111 @@
         Create Stream
       </Button>
     </div>
+  </div>
 
-    <!-- Search and Filters -->
-    <div class="flex flex-col sm:flex-row gap-3 mt-4">
+  <!-- Filters Toolbar -->
+  <div class="w-full border-b border-[hsl(var(--tn-fg-gutter)/0.3)] bg-muted/20 shrink-0">
+    <div class="py-3 px-6 flex gap-4 items-center">
       <div class="relative flex-1 max-w-md">
         <SearchIcon class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
         <Input
           type="text"
           placeholder="Search streams..."
-          class="pl-9"
+          class="pl-9 bg-background/50 border-border/50 focus:bg-background transition-colors h-9"
           bind:value={searchQuery}
         />
       </div>
-
-      <div class="flex gap-2">
+      <div class="flex items-center gap-2 ml-auto">
         <Button
-          variant={statusFilter === "all" ? "default" : "outline"}
+          variant="ghost"
           size="sm"
-          class="gap-1.5"
-          onclick={() => (statusFilter = "all")}
+          class={statusFilter === 'all' ? 'text-primary bg-primary/5' : 'text-muted-foreground'}
+          onclick={() => statusFilter = 'all'}
         >
-          <LayoutGridIcon class="w-3.5 h-3.5" />
-          All
+          <LayoutGridIcon class="w-4 h-4 mr-2" /> All
         </Button>
         <Button
-          variant={statusFilter === "live" ? "default" : "outline"}
+          variant="ghost"
           size="sm"
-          class="gap-1.5"
-          onclick={() => (statusFilter = "live")}
+          class={statusFilter === 'live' ? 'text-primary bg-primary/5' : 'text-muted-foreground'}
+          onclick={() => statusFilter = 'live'}
         >
-          <RadioIcon class="w-3.5 h-3.5" />
-          Live
+          <RadioIcon class="w-4 h-4 mr-2" /> Live
         </Button>
         <Button
-          variant={statusFilter === "offline" ? "default" : "outline"}
+          variant="ghost"
           size="sm"
-          class="gap-1.5"
-          onclick={() => (statusFilter = "offline")}
+          class={statusFilter === 'offline' ? 'text-primary bg-primary/5' : 'text-muted-foreground'}
+          onclick={() => statusFilter = 'offline'}
         >
-          <CircleOffIcon class="w-3.5 h-3.5" />
-          Offline
+          <CircleOffIcon class="w-4 h-4 mr-2" /> Offline
         </Button>
       </div>
     </div>
   </div>
 
   <!-- Scrollable Content -->
-  <div class="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">
+  <div class="flex-1 overflow-y-auto min-h-0 bg-background/50">
     {#if loading}
       <!-- Loading Skeleton -->
-      <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+      <GridSeam cols={3} stack="md" flush={true} class="min-h-full content-start">
         {#each Array.from({ length: 6 }) as _, i (i)}
-          <LoadingCard variant="stream" />
+          <div class="slab h-full !p-0">
+             <div class="slab-body--padded">
+               <div class="space-y-3 animate-pulse">
+                 <div class="h-4 bg-muted rounded w-3/4"></div>
+                 <div class="h-32 bg-muted rounded"></div>
+               </div>
+             </div>
+          </div>
         {/each}
-      </div>
+      </GridSeam>
     {:else if streams.length === 0}
       <!-- No Streams State -->
-      <EmptyState
-        iconName="Video"
-        title="No Streams Found"
-        description="Create your first stream to get started with broadcasting"
-        actionText="Create Stream"
-        onAction={() => (showCreateModal = true)}
-      />
+      <div class="h-full flex items-center justify-center p-8">
+        <div class="slab w-full max-w-lg border border-border/50 shadow-xl">
+          <div class="slab-body--padded flex flex-col items-center text-center py-12">
+            <div class="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center mb-4">
+              <VideoIcon class="w-6 h-6 text-primary" />
+            </div>
+            <h3 class="text-lg font-semibold mb-2">No Streams Found</h3>
+            <p class="text-muted-foreground mb-6 max-w-xs">
+              Create your first stream to get started with broadcasting to the world.
+            </p>
+            <Button variant="default" onclick={() => (showCreateModal = true)}>
+              <PlusIcon class="w-4 h-4 mr-2" />
+              Create Stream
+            </Button>
+          </div>
+        </div>
+      </div>
     {:else if filteredStreams.length === 0}
       <!-- No Results State -->
-      <EmptyState
-        iconName="Search"
-        title="No Matching Streams"
-        description="Try adjusting your search or filter criteria"
-        actionText="Clear Filters"
-        onAction={() => {
-          searchQuery = "";
-          statusFilter = "all";
-        }}
-      />
+      <div class="h-full flex items-center justify-center p-8">
+        <div class="slab w-full max-w-lg border border-border/50">
+          <div class="slab-body--padded flex flex-col items-center text-center py-12">
+            <div class="w-12 h-12 rounded-full bg-muted flex items-center justify-center mb-4">
+              <SearchIcon class="w-6 h-6 text-muted-foreground" />
+            </div>
+            <h3 class="text-lg font-semibold mb-2">No Matching Streams</h3>
+            <p class="text-muted-foreground mb-6 max-w-xs">
+              Try adjusting your search query or changing the status filters.
+            </p>
+            <Button 
+              variant="outline" 
+              onclick={() => {
+                searchQuery = "";
+                statusFilter = "all";
+              }}
+            >
+              Clear Filters
+            </Button>
+          </div>
+        </div>
+      </div>
     {:else}
       <!-- Stream Cards Grid -->
-      <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+      <GridSeam cols={3} stack="md" flush={true} class="min-h-full content-start">
         {#each filteredStreams as stream (stream.id)}
           <StreamCard
             {stream}
@@ -464,10 +499,10 @@
             deleting={deletingStreamId === stream.id}
           />
         {/each}
-      </div>
+      </GridSeam>
 
       {#if hasMoreStreams}
-        <div class="flex justify-center mt-6">
+        <div class="flex justify-center py-8">
           <Button
             variant="outline"
             onclick={loadMoreStreams}

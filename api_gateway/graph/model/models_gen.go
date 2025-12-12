@@ -215,11 +215,17 @@ type CreateBootstrapTokenInput struct {
 }
 
 type CreateClipInput struct {
-	Stream      string  `json:"stream"`
-	StartTime   int     `json:"startTime"`
-	EndTime     int     `json:"endTime"`
-	Title       string  `json:"title"`
-	Description *string `json:"description,omitempty"`
+	Stream      string            `json:"stream"`
+	Title       string            `json:"title"`
+	Description *string           `json:"description,omitempty"`
+	Mode        *ClipCreationMode `json:"mode,omitempty"`
+	StartUnix   *int              `json:"startUnix,omitempty"`
+	StopUnix    *int              `json:"stopUnix,omitempty"`
+	StartMedia  *int              `json:"startMedia,omitempty"`
+	StopMedia   *int              `json:"stopMedia,omitempty"`
+	Duration    *int              `json:"duration,omitempty"`
+	StartTime   *int              `json:"startTime,omitempty"`
+	EndTime     *int              `json:"endTime,omitempty"`
 }
 
 type CreateDeveloperTokenInput struct {
@@ -380,17 +386,6 @@ type PageInfo struct {
 type PaginationInput struct {
 	Limit  *int `json:"limit,omitempty"`
 	Offset *int `json:"offset,omitempty"`
-}
-
-type QualityChangesHourlyConnection struct {
-	Edges      []*QualityChangesHourlyEdge `json:"edges"`
-	PageInfo   *PageInfo                   `json:"pageInfo"`
-	TotalCount int                         `json:"totalCount"`
-}
-
-type QualityChangesHourlyEdge struct {
-	Cursor string                      `json:"cursor"`
-	Node   *proto.QualityChangesHourly `json:"node"`
 }
 
 type QualityTierDailyConnection struct {
@@ -717,6 +712,65 @@ func (e *BufferState) UnmarshalJSON(b []byte) error {
 }
 
 func (e BufferState) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type ClipCreationMode string
+
+const (
+	ClipCreationModeAbsolute ClipCreationMode = "ABSOLUTE"
+	ClipCreationModeRelative ClipCreationMode = "RELATIVE"
+	ClipCreationModeDuration ClipCreationMode = "DURATION"
+	ClipCreationModeClipNow  ClipCreationMode = "CLIP_NOW"
+)
+
+var AllClipCreationMode = []ClipCreationMode{
+	ClipCreationModeAbsolute,
+	ClipCreationModeRelative,
+	ClipCreationModeDuration,
+	ClipCreationModeClipNow,
+}
+
+func (e ClipCreationMode) IsValid() bool {
+	switch e {
+	case ClipCreationModeAbsolute, ClipCreationModeRelative, ClipCreationModeDuration, ClipCreationModeClipNow:
+		return true
+	}
+	return false
+}
+
+func (e ClipCreationMode) String() string {
+	return string(e)
+}
+
+func (e *ClipCreationMode) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = ClipCreationMode(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid ClipCreationMode", str)
+	}
+	return nil
+}
+
+func (e ClipCreationMode) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *ClipCreationMode) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e ClipCreationMode) MarshalJSON() ([]byte, error) {
 	var buf bytes.Buffer
 	e.MarshalGQL(&buf)
 	return buf.Bytes(), nil

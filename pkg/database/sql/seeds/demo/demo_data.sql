@@ -151,6 +151,14 @@ VALUES
     -- Storage GB - current month
     ('00000000-0000-0000-0000-000000000001', 'central-primary', 'storage_gb', 89.3,
      '{"dvr_gb": 45.2, "clips_gb": 12.8, "recordings_gb": 31.3}',
+     TO_CHAR(NOW(), 'YYYY-MM'), DATE_TRUNC('month', NOW()), NOW()),
+    -- Total Streams - current month
+    ('00000000-0000-0000-0000-000000000001', 'central-primary', 'total_streams', 3,
+     '{"live_streams": 2, "vod_streams": 1}',
+     TO_CHAR(NOW(), 'YYYY-MM'), DATE_TRUNC('month', NOW()), NOW()),
+    -- Peak Viewers - current month
+    ('00000000-0000-0000-0000-000000000001', 'central-primary', 'peak_viewers', 89,
+     '{"stream_id": "demo_live_stream_001", "timestamp": "2023-10-15T14:30:00Z"}',
      TO_CHAR(NOW(), 'YYYY-MM'), DATE_TRUNC('month', NOW()), NOW())
 ON CONFLICT (tenant_id, cluster_id, usage_type, period_start, period_end) DO UPDATE SET
     usage_value = EXCLUDED.usage_value,
@@ -173,6 +181,16 @@ VALUES
      '{"dvr_gb": 38.1, "clips_gb": 10.2, "recordings_gb": 24.2}',
      TO_CHAR(NOW() - INTERVAL '1 month', 'YYYY-MM'),
      DATE_TRUNC('month', NOW() - INTERVAL '1 month'),
+     DATE_TRUNC('month', NOW()) - INTERVAL '1 second'),
+    ('00000000-0000-0000-0000-000000000001', 'central-primary', 'total_streams', 8,
+     '{"live_streams": 5, "vod_streams": 3}',
+     TO_CHAR(NOW() - INTERVAL '1 month', 'YYYY-MM'),
+     DATE_TRUNC('month', NOW() - INTERVAL '1 month'),
+     DATE_TRUNC('month', NOW()) - INTERVAL '1 second'),
+    ('00000000-0000-0000-0000-000000000001', 'central-primary', 'peak_viewers', 145,
+     '{"stream_id": "demo_live_stream_001", "timestamp": "2023-09-20T18:45:00Z"}',
+     TO_CHAR(NOW() - INTERVAL '1 month', 'YYYY-MM'),
+     DATE_TRUNC('month', NOW() - INTERVAL '1 month'),
      DATE_TRUNC('month', NOW()) - INTERVAL '1 second')
 ON CONFLICT (tenant_id, cluster_id, usage_type, period_start, period_end) DO UPDATE SET
     usage_value = EXCLUDED.usage_value,
@@ -193,6 +211,16 @@ VALUES
      DATE_TRUNC('month', NOW() - INTERVAL '1 month') - INTERVAL '1 second'),
     ('00000000-0000-0000-0000-000000000001', 'central-primary', 'storage_gb', 58.9,
      '{"dvr_gb": 30.5, "clips_gb": 8.4, "recordings_gb": 20.0}',
+     TO_CHAR(NOW() - INTERVAL '2 months', 'YYYY-MM'),
+     DATE_TRUNC('month', NOW() - INTERVAL '2 months'),
+     DATE_TRUNC('month', NOW() - INTERVAL '1 month') - INTERVAL '1 second'),
+    ('00000000-0000-0000-0000-000000000001', 'central-primary', 'total_streams', 5,
+     '{"live_streams": 3, "vod_streams": 2}',
+     TO_CHAR(NOW() - INTERVAL '2 months', 'YYYY-MM'),
+     DATE_TRUNC('month', NOW() - INTERVAL '2 months'),
+     DATE_TRUNC('month', NOW() - INTERVAL '1 month') - INTERVAL '1 second'),
+    ('00000000-0000-0000-0000-000000000001', 'central-primary', 'peak_viewers', 112,
+     '{"stream_id": "demo_live_stream_001", "timestamp": "2023-08-10T12:15:00Z"}',
      TO_CHAR(NOW() - INTERVAL '2 months', 'YYYY-MM'),
      DATE_TRUNC('month', NOW() - INTERVAL '2 months'),
      DATE_TRUNC('month', NOW() - INTERVAL '1 month') - INTERVAL '1 second')

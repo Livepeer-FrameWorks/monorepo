@@ -170,7 +170,10 @@ export function createPagination<T>(options: UsePaginationOptions<T>) {
   /**
    * Update an item in place
    */
-  function update(predicate: (item: T) => boolean, updater: (item: T) => T): void {
+  function update(
+    predicate: (item: T) => boolean,
+    updater: (item: T) => T,
+  ): void {
     items = items.map((item) => (predicate(item) ? updater(item) : item));
   }
 

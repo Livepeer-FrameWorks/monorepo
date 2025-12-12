@@ -5,7 +5,15 @@
     /** Content to render inside the band */
     children: Snippet;
     /** Visual surface variant */
-    surface?: "default" | "subtle" | "elevated";
+    surface?:
+      | "default"
+      | "subtle"
+      | "elevated"
+      | "slate"
+      | "midnight"
+      | "mesh"
+      | "panel"
+      | "beam";
     /** Vertical spacing variant */
     spacing?: "compact" | "default" | "spacious";
     /** Apply container max-width to content */

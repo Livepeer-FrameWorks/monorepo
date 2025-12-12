@@ -32,9 +32,7 @@
 </script>
 
 {#if stream}
-  <div
-    class="bg-muted p-4 border border-border"
-  >
+  <div class="space-y-4">
     <div class="flex items-center justify-between mb-3">
       <h3 class="font-semibold text-foreground">
         {stream.name || `Stream ${stream.id.slice(0, 8)}`}
@@ -98,12 +96,14 @@
 {:else}
   {@const VideoIcon = getIconComponent("Video")}
   {@const PlusIcon = getIconComponent("Plus")}
-  <div class="text-center py-6">
-    <div class="text-4xl mb-2">
-      <VideoIcon class="w-10 h-10 text-muted-foreground mx-auto" />
+  <div class="bg-[hsl(var(--tn-bg-dark)/0.3)] border border-[hsl(var(--tn-fg-gutter)/0.3)] p-6 space-y-4">
+    <div class="text-center space-y-2">
+      <div class="text-4xl">
+        <VideoIcon class="w-10 h-10 text-muted-foreground mx-auto" />
+      </div>
+      <p class="text-muted-foreground">No streams found</p>
     </div>
-    <p class="text-muted-foreground mb-4">No streams found</p>
-    <Button href={createStreamUrl}>
+    <Button href={createStreamUrl} variant="ghost" class="w-full">
       <PlusIcon class="w-4 h-4 mr-2" />
       Create Your First Stream
     </Button>

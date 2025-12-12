@@ -73,43 +73,36 @@
 </script>
 
 <div
-  class="bg-muted p-4 border cursor-pointer transition-all group {selected
-    ? 'border-primary ring-2 ring-primary/20 bg-primary/5'
-    : 'border-border hover:border-info hover:bg-muted/80'}"
+  class="slab h-full transition-all duration-200 group !p-0 cursor-pointer {selected
+    ? 'ring-1 ring-inset ring-primary'
+    : 'hover:bg-muted/30 hover:shadow-lg'}"
   role="button"
   tabindex="0"
   onclick={onSelect}
   onkeydown={(e) => e.key === "Enter" && onSelect()}
 >
-  <div class="flex items-center justify-between mb-3">
+  <div class="slab-header flex items-center justify-between">
     <div class="flex items-center gap-2 min-w-0">
-      <h3 class="font-semibold text-foreground truncate">
+      <h3 class="truncate text-foreground" title={stream.name}>
         {stream.name || `Stream ${stream.id.slice(0, 8)}`}
       </h3>
       {#if selected}
-        <span class="text-xs bg-primary/20 text-primary px-1.5 py-0.5 rounded font-medium shrink-0">
+        <span class="text-[10px] bg-primary/20 text-primary px-1.5 py-0.5 rounded-sm font-medium shrink-0 uppercase tracking-wider">
           Selected
         </span>
       {/if}
     </div>
-    <div class="flex items-center space-x-2">
+    
+    <div class="flex items-center gap-3">
       <div
-        class="w-2 h-2 rounded-full {isLive
+        class="w-2 h-2 rounded-full shrink-0 {isLive
           ? 'bg-success animate-pulse'
-          : 'bg-destructive'}"
+          : 'bg-muted-foreground/30'}"
+        title={isLive ? "Live" : "Offline"}
       ></div>
-      {#if isLive}
-        <a
-          href={resolve(`/view?type=live&id=${stream.playbackId || stream.id}` as any)}
-          class="text-info hover:text-primary text-sm p-1"
-          onclick={(event) => event.stopPropagation()}
-          title="Watch live stream"
-        >
-          <PlayIcon class="w-4 h-4" />
-        </a>
-      {/if}
+      
       <button
-        class="p-1.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100"
+        class="text-muted-foreground hover:text-destructive transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100 p-1 -mr-2"
         onclick={(event) => {
           event.stopPropagation();
           onDelete();
@@ -118,70 +111,67 @@
         title="Delete stream"
       >
         {#if deleting}
-          <Loader2Icon class="w-4 h-4 animate-spin" />
+          <Loader2Icon class="w-3.5 h-3.5 animate-spin" />
         {:else}
-          <Trash2Icon class="w-4 h-4" />
+          <Trash2Icon class="w-3.5 h-3.5" />
         {/if}
       </button>
     </div>
   </div>
 
-  <div class="grid grid-cols-2 gap-4 text-sm mb-3">
-    <div>
-      <p class="text-muted-foreground">Status</p>
-      <p class="font-semibold text-foreground capitalize">
-        {status?.toLowerCase() || "offline"}
-      </p>
+  <div class="slab-body--padded flex-1 flex flex-col gap-3">
+    <div class="grid grid-cols-2 gap-4 text-sm">
+      <div>
+        <p class="text-xs text-muted-foreground uppercase tracking-wider mb-1">Status</p>
+        <p class="font-medium text-foreground capitalize">
+          {status?.toLowerCase() || "offline"}
+        </p>
+      </div>
+      <div>
+        <p class="text-xs text-muted-foreground uppercase tracking-wider mb-1">Viewers</p>
+        <p class="font-medium text-foreground">
+          {stream.viewers || 0}
+        </p>
+      </div>
     </div>
-    <div>
-      <p class="text-muted-foreground">Viewers</p>
-      <p class="font-semibold text-foreground">
-        {stream.viewers || 0}
-      </p>
-    </div>
-  </div>
 
-  <!-- Health Indicator -->
-  <div class="mb-3">
-    <div class="flex items-center justify-between">
-      {#if effectiveHealthData}
-        <div class="flex items-center gap-3">
-          <div class="flex items-center gap-1.5">
-            <BufferStateIndicator
-              bufferState={effectiveHealthData.bufferState ?? undefined}
-              compact
-            />
-            <span class="text-xs text-muted-foreground capitalize">
-              {(effectiveHealthData.bufferState ?? 'unknown').toLowerCase()}
-            </span>
-          </div>
+    <!-- Health Indicator -->
+    {#if effectiveHealthData}
+      <div class="pt-3 border-t border-border/30">
+        <div class="flex items-center gap-2 mb-1">
+          <BufferStateIndicator
+            bufferState={effectiveHealthData.bufferState ?? undefined}
+            compact
+          />
+          <span class="text-xs font-medium capitalize">
+            {(effectiveHealthData.bufferState ?? 'unknown').toLowerCase()}
+          </span>
           {#if effectiveHealthData.qualityTier}
-            <span class="text-xs px-1.5 py-0.5 bg-accent/10 text-accent border border-accent/20">
+            <span class="ml-auto text-[10px] px-1.5 py-0.5 bg-accent/10 text-accent border border-accent/20 rounded-sm">
               {effectiveHealthData.qualityTier}
             </span>
           {/if}
         </div>
-      {:else}
-        <span class="text-xs text-muted-foreground">—</span>
-      {/if}
-      <a
-        href={resolve(`/streams/${stream.id}`)}
-        class="text-xs text-info hover:text-primary hover:underline transition-colors"
-        onclick={(event) => event.stopPropagation()}
-      >
-        Details →
-      </a>
-    </div>
-    {#if effectiveHealthData?.hasIssues && effectiveHealthData?.issuesDescription}
-      <p class="text-xs text-destructive mt-1.5 truncate">
-        ⚠ {effectiveHealthData.issuesDescription}
-      </p>
+        {#if effectiveHealthData?.hasIssues && effectiveHealthData?.issuesDescription}
+          <p class="text-xs text-destructive mt-1.5 truncate" title={effectiveHealthData.issuesDescription}>
+            ⚠ {effectiveHealthData.issuesDescription}
+          </p>
+        {/if}
+      </div>
     {/if}
   </div>
 
-  <div class="pt-3 border-t border-border">
-    <p class="text-xs text-muted-foreground truncate">
-      ID: {stream.playbackId || stream.id.slice(0, 16)}
-    </p>
-  </div>
+  {#if isLive}
+    <div class="slab-actions">
+      <a
+        href={resolve(`/view?type=live&id=${stream.playbackId || stream.id}` as any)}
+        class="flex items-center justify-center py-3 text-sm font-medium text-primary hover:bg-primary/5 transition-colors"
+        onclick={(event) => event.stopPropagation()}
+        title="Watch live stream"
+      >
+        <PlayIcon class="w-4 h-4 mr-2" />
+        Watch Live
+      </a>
+    </div>
+  {/if}
 </div>

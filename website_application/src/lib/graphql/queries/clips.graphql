@@ -15,6 +15,9 @@ fragment ClipInfo on Clip {
   accessCount
   createdAt
   updatedAt
+  # Mode and request params for UI display
+  clipMode
+  requestedParams
 }
 
 query GetClips($streamId: ID) {

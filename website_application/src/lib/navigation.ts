@@ -40,29 +40,21 @@ export const navigationConfig: Record<string, NavigationItem> = {
     icon: "Video",
     children: {
       overview: {
-        name: "Stream Overview",
+        name: "Streams",
         href: "/streams",
         icon: "Radio",
         active: true,
         description: "Quickly browse and manage your live streams",
       },
       browser: {
-        name: "Browser Streaming",
+        name: "Go Live",
         href: "/streams/browser",
         icon: "Globe",
         active: "soon",
         description: "Stream directly from your browser with WebRTC",
       },
-      settings: {
-        name: "Stream Settings",
-        href: "/streams/settings",
-        icon: "Settings",
-        active: "soon",
-        description:
-          "Configure transcoding, recording, and other stream options",
-      },
       composer: {
-        name: "Stream Composer",
+        name: "Composer",
         href: "/streams/composer",
         icon: "Clapperboard",
         active: "soon",
@@ -100,21 +92,22 @@ export const navigationConfig: Record<string, NavigationItem> = {
     icon: "BarChart3",
     children: {
       overview: {
-        name: "Analytics Overview",
+        name: "Overview",
         href: "/analytics",
         icon: "ChartLine",
         active: true,
-        description: "View comprehensive streaming analytics with real-time metrics",
+        description:
+          "View comprehensive streaming analytics with real-time metrics",
       },
       geographic: {
-        name: "Geographic Analytics",
+        name: "Geolytics",
         href: "/analytics/geographic",
         icon: "Globe2",
         active: true,
         description: "View viewer distribution and regional metrics",
       },
       usage: {
-        name: "Usage & Costs",
+        name: "Usage",
         href: "/analytics/usage",
         icon: "Gauge",
         active: true,
@@ -129,25 +122,32 @@ export const navigationConfig: Record<string, NavigationItem> = {
     icon: "Building2",
     children: {
       overview: {
-        name: "Infrastructure Overview",
+        name: "Overview",
         href: "/infrastructure",
         icon: "Server",
         active: true,
         description: "Monitor clusters, nodes, and system health in real-time",
       },
+      nodes: {
+        name: "Nodes",
+        href: "/nodes",
+        icon: "HardDrive",
+        active: true,
+        description: "Manage your Edge nodes and capacity",
+      },
       network: {
-        name: "Network Explorer",
+        name: "Network",
         href: "/infrastructure/network",
         icon: "Network",
         active: true,
         description: "Discover and connect to global video infrastructure",
       },
       devices: {
-        name: "Device Discovery",
+        name: "Devices",
         href: "/devices",
         icon: "Camera",
         active: "soon",
-        description: "Auto-discover and configure AV devices",
+        description: "Manage your fleet of remote AV devices",
       },
     },
   },
@@ -158,8 +158,8 @@ export const navigationConfig: Record<string, NavigationItem> = {
     icon: "Bot",
     children: {
       processing: {
-        name: "AI Processing",
-        href: "/ai",
+        name: "Computer Vision",
+        href: "/ai/vision",
         icon: "Brain",
         active: "soon",
         description: "Real-time AI analysis and processing",
@@ -170,6 +170,13 @@ export const navigationConfig: Record<string, NavigationItem> = {
         icon: "FileText",
         active: "soon",
         description: "Automatic speech-to-text for streams",
+      },
+      daydream: {
+        name: "Daydream",
+        href: "/ai/daydream",
+        icon: "Sparkles",
+        active: "soon",
+        description: "Live video-to-video generative effects for streams",
       },
     },
   },

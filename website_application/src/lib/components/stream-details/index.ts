@@ -8,5 +8,9 @@ export { default as OverviewTabPanel } from "./OverviewTabPanel.svelte";
 export { default as StreamKeysTabPanel } from "./StreamKeysTabPanel.svelte";
 export { default as RecordingsTabPanel } from "./RecordingsTabPanel.svelte";
 export { default as HealthSidebar } from "./HealthSidebar.svelte";
-export { default as EventLog, type EventType, type StreamEvent } from "./EventLog.svelte";
+export {
+  default as EventLog,
+  type EventType,
+  type StreamEvent,
+} from "./EventLog.svelte";
 export { default as StreamSetupPanel } from "./StreamSetupPanel.svelte";

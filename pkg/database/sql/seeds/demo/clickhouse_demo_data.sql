@@ -577,7 +577,6 @@ OPTIMIZE TABLE periscope.stream_health_5m FINAL;
 OPTIMIZE TABLE periscope.client_metrics_5m FINAL;
 OPTIMIZE TABLE periscope.node_metrics_1h FINAL;
 OPTIMIZE TABLE periscope.stream_connection_hourly FINAL;
-OPTIMIZE TABLE periscope.quality_changes_1h FINAL;
 OPTIMIZE TABLE periscope.quality_tier_daily FINAL;
 OPTIMIZE TABLE periscope.tenant_connection_daily FINAL;
 OPTIMIZE TABLE periscope.clip_events_1h FINAL;

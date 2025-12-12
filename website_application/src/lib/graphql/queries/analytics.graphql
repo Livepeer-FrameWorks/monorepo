@@ -88,7 +88,11 @@ query GetViewerCountTimeSeries(
   $timeRange: TimeRangeInput
   $interval: String = "5m"
 ) {
-  viewerCountTimeSeries(stream: $stream, timeRange: $timeRange, interval: $interval) {
+  viewerCountTimeSeries(
+    stream: $stream
+    timeRange: $timeRange
+    interval: $interval
+  ) {
     timestamp
     viewerCount
     stream
@@ -186,10 +190,16 @@ query GetLoadBalancingMetrics($timeRange: TimeRangeInput) {
     clientCountry
     clientLatitude
     clientLongitude
-    clientBucket { h3Index resolution }
+    clientBucket {
+      h3Index
+      resolution
+    }
     nodeLatitude
     nodeLongitude
-    nodeBucket { h3Index resolution }
+    nodeBucket {
+      h3Index
+      resolution
+    }
     nodeName
     score
     status
@@ -198,7 +208,6 @@ query GetLoadBalancingMetrics($timeRange: TimeRangeInput) {
     eventType
     source
     # Routing decision metadata
-    algorithm
     candidatesCount
     latencyMs
   }

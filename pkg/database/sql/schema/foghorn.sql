@@ -31,9 +31,13 @@ CREATE TABLE IF NOT EXISTS foghorn.clips (
     stream_name VARCHAR(255) NOT NULL,
     title VARCHAR(255),
     description TEXT,            -- User-provided description
-    start_time BIGINT NOT NULL,  -- Unix timestamp in milliseconds
-    duration BIGINT NOT NULL,    -- Duration in milliseconds
-    
+    start_time BIGINT NOT NULL,  -- Resolved start time (Unix timestamp in milliseconds)
+    duration BIGINT NOT NULL,    -- Resolved duration in milliseconds
+
+    -- ===== CLIP CREATION MODE & ORIGINAL PARAMS =====
+    clip_mode VARCHAR(20) DEFAULT 'absolute', -- absolute, relative, duration, clip_now
+    requested_params JSONB,      -- Original request params for audit (start_unix, stop_unix, etc.)
+
     -- ===== STORAGE LOCATION =====
     node_id VARCHAR(100),        -- Storage node assignment
     storage_path VARCHAR(500),   -- File path on storage node
@@ -67,6 +71,7 @@ CREATE INDEX IF NOT EXISTS idx_foghorn_clips_status ON foghorn.clips(status);
 CREATE INDEX IF NOT EXISTS idx_foghorn_clips_created_at ON foghorn.clips(created_at);
 CREATE INDEX IF NOT EXISTS idx_foghorn_clips_retention ON foghorn.clips(retention_until);
 CREATE INDEX IF NOT EXISTS idx_foghorn_clips_request_id ON foghorn.clips(request_id);
+CREATE INDEX IF NOT EXISTS idx_foghorn_clips_mode ON foghorn.clips(clip_mode);
 
 -- ============================================================================
 -- NODE OUTPUT CACHING & LOAD BALANCING

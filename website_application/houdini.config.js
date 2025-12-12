@@ -1,34 +1,39 @@
 /** @type {import('houdini').ConfigFile} */
 const config = {
-  schemaPath: '../pkg/graphql/schema.graphql',
-  runtimeDir: '$houdini',
+  schemaPath: "../pkg/graphql/schema.graphql",
+  runtimeDir: "$houdini",
 
   // Only include Houdini-specific files, exclude old Apollo graphql files
-  include: ['src/lib/houdini/**/*.gql', 'src/routes/**/*.svelte', 'src/routes/**/*.js', 'src/routes/**/*.ts'],
-  exclude: ['src/lib/graphql/**/*'],
+  include: [
+    "src/lib/houdini/**/*.gql",
+    "src/routes/**/*.svelte",
+    "src/routes/**/*.js",
+    "src/routes/**/*.ts",
+  ],
+  exclude: ["src/lib/graphql/**/*"],
 
   // Custom scalars matching existing types
   scalars: {
     Time: {
-      type: 'string',
+      type: "string",
     },
     JSON: {
-      type: 'Record<string, unknown>',
+      type: "Record<string, unknown>",
     },
     ID: {
-      type: 'string',
+      type: "string",
     },
   },
 
   // Default cache behavior
-  defaultCachePolicy: 'CacheOrNetwork',
+  defaultCachePolicy: "CacheOrNetwork",
 
   // Default list operations
-  defaultListPosition: 'first',
+  defaultListPosition: "first",
 
   plugins: {
-    'houdini-svelte': {
-      client: './src/lib/houdini/client',
+    "houdini-svelte": {
+      client: "./src/lib/houdini/client",
     },
   },
 };

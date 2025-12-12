@@ -35,6 +35,8 @@
     onToggle?: () => void;
     showStreamName?: boolean;
     emptyMessage?: string;
+    class?: string;
+    [key: string]: unknown;
   }
 
   let {
@@ -45,6 +47,8 @@
     onToggle,
     showStreamName = false,
     emptyMessage = "No events recorded",
+    class: className = "",
+    ...rest
   }: Props = $props();
 
   let visibleCount = $state(maxVisible);
@@ -132,18 +136,18 @@
   const ChevronUpIcon = getIconComponent("ChevronUp");
 </script>
 
-<div class="border border-border">
+<div class={`slab h-full ${className}`} {...rest}>
   <!-- Header -->
 <button
   type="button"
   onclick={onToggle}
-  class="w-full flex items-center justify-between px-4 py-3 bg-brand-surface-muted hover:bg-muted/50 transition-colors cursor-pointer"
+  class="slab-header w-full flex items-center justify-between text-left transition-colors cursor-pointer hover:bg-white/5"
   aria-expanded={!collapsed}
   aria-controls="event-log-panel"
   disabled={!onToggle}
 >
     <div class="flex items-center gap-2">
-      <span class="font-medium text-sm text-foreground">{title}</span>
+      <span class="font-semibold text-xs uppercase tracking-wide text-muted-foreground">{title}</span>
       {#if events.length > 0}
         <span class="text-xs text-muted-foreground">({events.length})</span>
       {/if}
@@ -159,7 +163,7 @@
 
   <!-- Content -->
   {#if !collapsed}
-    <div class="max-h-64 overflow-y-auto">
+    <div class="slab-body--flush max-h-64 overflow-y-auto">
       {#if events.length === 0}
         <div class="px-4 py-8 text-center text-muted-foreground text-sm">
           {emptyMessage}

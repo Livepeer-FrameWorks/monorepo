@@ -19,29 +19,33 @@
 </script>
 
 <Dialog {open} onOpenChange={(value) => (open = value)}>
-  <DialogContent class="max-w-md backdrop-blur-sm">
-    <DialogHeader>
-      <DialogTitle class="text-destructive">Delete Stream</DialogTitle>
-      <DialogDescription>
+  <DialogContent class="max-w-md rounded-none border-[hsl(var(--tn-fg-gutter)/0.3)] bg-background p-0 gap-0 overflow-hidden">
+    <DialogHeader class="slab-header text-left space-y-1">
+      <DialogTitle class="uppercase tracking-wide text-sm font-semibold text-muted-foreground">Delete Stream</DialogTitle>
+      <DialogDescription class="text-xs text-muted-foreground/70">
         This action cannot be undone. All associated keys and recordings will
         also be removed.
       </DialogDescription>
     </DialogHeader>
 
-    <div class="p-4 bg-destructive/10 border border-destructive/30">
-      <p class="text-sm text-foreground">
+    <div class="slab-body--padded">
+      <p class="text-sm text-muted-foreground">
         Are you sure you want to delete
-        <strong class="text-destructive">{streamName}</strong>?
+        <strong class="text-foreground">{streamName}</strong>?
       </p>
     </div>
 
-    <DialogFooter class="gap-2">
-      <Button variant="outline" onclick={() => (open = false)}>
+    <DialogFooter class="slab-actions slab-actions--row gap-0">
+      <Button 
+        variant="ghost" 
+        class="rounded-none h-12 flex-1 border-r border-[hsl(var(--tn-fg-gutter)/0.3)] hover:bg-muted/10 text-muted-foreground hover:text-foreground"
+        onclick={() => (open = false)}
+      >
         Cancel
       </Button>
       <Button
-        variant="destructive"
-        class="gap-2 transition-all hover:shadow-lg hover:shadow-destructive/50"
+        variant="ghost"
+        class="rounded-none h-12 flex-1 hover:bg-destructive/10 text-destructive hover:text-destructive gap-2"
         onclick={onConfirm}
         disabled={loading}
       >

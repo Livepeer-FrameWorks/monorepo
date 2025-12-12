@@ -61,56 +61,68 @@ export interface IntrospectedSchema {
  * e.g., NON_NULL -> LIST -> Stream becomes [Stream!]!
  */
 export function formatTypeString(typeRef: TypeRef | undefined): string {
-  if (!typeRef) return 'unknown';
+  if (!typeRef) return "unknown";
 
   // Build the type string recursively
   return formatTypeRecursive(typeRef);
 }
 
 function formatTypeRecursive(type: TypeRef): string {
-  if (!type) return 'unknown';
+  if (!type) return "unknown";
 
-  if (type.kind === 'NON_NULL') {
-    const inner = type.ofType ? formatTypeRecursive(type.ofType) : 'unknown';
+  if (type.kind === "NON_NULL") {
+    const inner = type.ofType ? formatTypeRecursive(type.ofType) : "unknown";
     return `${inner}!`;
   }
 
-  if (type.kind === 'LIST') {
-    const inner = type.ofType ? formatTypeRecursive(type.ofType) : 'unknown';
+  if (type.kind === "LIST") {
+    const inner = type.ofType ? formatTypeRecursive(type.ofType) : "unknown";
     return `[${inner}]`;
   }
 
   // Named type
-  return type.name || 'unknown';
+  return type.name || "unknown";
 }
 
 /**
  * Get the base type name, unwrapping all wrappers
  */
 export function getBaseTypeName(typeRef: TypeRef | undefined): string {
-  if (!typeRef) return 'unknown';
+  if (!typeRef) return "unknown";
 
   let current: TypeRef | undefined = typeRef;
   while (current?.ofType) {
     current = current.ofType;
   }
 
-  return current?.name || 'unknown';
+  return current?.name || "unknown";
 }
 
 /**
  * Check if a type is a scalar type
  */
 export function isScalarType(typeName: string): boolean {
-  const scalars = ['String', 'Int', 'Float', 'Boolean', 'ID', 'Time', 'DateTime', 'JSON'];
+  const scalars = [
+    "String",
+    "Int",
+    "Float",
+    "Boolean",
+    "ID",
+    "Time",
+    "DateTime",
+    "JSON",
+  ];
   return scalars.includes(typeName);
 }
 
 /**
  * Find a type definition by name in the schema
  */
-export function findType(schema: IntrospectedSchema, typeName: string): FullType | undefined {
-  return schema.types?.find(t => t.name === typeName);
+export function findType(
+  schema: IntrospectedSchema,
+  typeName: string,
+): FullType | undefined {
+  return schema.types?.find((t) => t.name === typeName);
 }
 
 /**
@@ -118,7 +130,7 @@ export function findType(schema: IntrospectedSchema, typeName: string): FullType
  */
 export function getInputTypeFields(
   schema: IntrospectedSchema,
-  typeName: string
+  typeName: string,
 ): InputField[] {
   const type = findType(schema, typeName);
   return type?.inputFields || [];
@@ -129,10 +141,10 @@ export function getInputTypeFields(
  */
 export function getEnumValues(
   schema: IntrospectedSchema,
-  typeName: string
+  typeName: string,
 ): EnumValue[] | null {
   const type = findType(schema, typeName);
-  if (type?.kind !== 'ENUM') return null;
+  if (type?.kind !== "ENUM") return null;
   return type.enumValues || null;
 }
 
@@ -152,25 +164,34 @@ export function getDeprecationInfo(field: SchemaField): {
 /**
  * Check if a type is an input type
  */
-export function isInputType(schema: IntrospectedSchema, typeName: string): boolean {
+export function isInputType(
+  schema: IntrospectedSchema,
+  typeName: string,
+): boolean {
   const type = findType(schema, typeName);
-  return type?.kind === 'INPUT_OBJECT';
+  return type?.kind === "INPUT_OBJECT";
 }
 
 /**
  * Check if a type is an enum
  */
-export function isEnumType(schema: IntrospectedSchema, typeName: string): boolean {
+export function isEnumType(
+  schema: IntrospectedSchema,
+  typeName: string,
+): boolean {
   const type = findType(schema, typeName);
-  return type?.kind === 'ENUM';
+  return type?.kind === "ENUM";
 }
 
 /**
  * Check if a type is an object type (has fields)
  */
-export function isObjectType(schema: IntrospectedSchema, typeName: string): boolean {
+export function isObjectType(
+  schema: IntrospectedSchema,
+  typeName: string,
+): boolean {
   const type = findType(schema, typeName);
-  return type?.kind === 'OBJECT';
+  return type?.kind === "OBJECT";
 }
 
 /**
@@ -178,10 +199,10 @@ export function isObjectType(schema: IntrospectedSchema, typeName: string): bool
  */
 export function getObjectTypeFields(
   schema: IntrospectedSchema,
-  typeName: string
+  typeName: string,
 ): SchemaField[] {
   const type = findType(schema, typeName);
-  if (type?.kind !== 'OBJECT') return [];
+  if (type?.kind !== "OBJECT") return [];
   return type.fields || [];
 }
 
@@ -190,27 +211,33 @@ export function getObjectTypeFields(
  */
 export function getPossibleTypes(
   schema: IntrospectedSchema,
-  typeName: string
+  typeName: string,
 ): string[] {
   const type = findType(schema, typeName);
   if (!type?.possibleTypes) return [];
-  return type.possibleTypes.map(t => t.name).filter((n): n is string => !!n);
+  return type.possibleTypes.map((t) => t.name).filter((n): n is string => !!n);
 }
 
 /**
  * Check if a type is a union type
  */
-export function isUnionType(schema: IntrospectedSchema, typeName: string): boolean {
+export function isUnionType(
+  schema: IntrospectedSchema,
+  typeName: string,
+): boolean {
   const type = findType(schema, typeName);
-  return type?.kind === 'UNION';
+  return type?.kind === "UNION";
 }
 
 /**
  * Check if a type is an interface type
  */
-export function isInterfaceType(schema: IntrospectedSchema, typeName: string): boolean {
+export function isInterfaceType(
+  schema: IntrospectedSchema,
+  typeName: string,
+): boolean {
   const type = findType(schema, typeName);
-  return type?.kind === 'INTERFACE';
+  return type?.kind === "INTERFACE";
 }
 
 /**
@@ -220,17 +247,24 @@ export function isInterfaceType(schema: IntrospectedSchema, typeName: string): b
 export function getPreviewFields(
   schema: IntrospectedSchema,
   typeName: string,
-  maxFields: number = 8
+  maxFields: number = 8,
 ): string[] {
   const type = findType(schema, typeName);
-  if (type?.kind !== 'OBJECT' || !type.fields) return [];
+  if (type?.kind !== "OBJECT" || !type.fields) return [];
 
   // Priority fields that should always be included if present
-  const priorityFields = ['id', 'name', 'message', 'success', 'status', 'createdAt'];
+  const priorityFields = [
+    "id",
+    "name",
+    "message",
+    "success",
+    "status",
+    "createdAt",
+  ];
 
   const fields = type.fields
-    .filter(f => !f.name.startsWith('__'))
-    .map(f => f.name);
+    .filter((f) => !f.name.startsWith("__"))
+    .map((f) => f.name);
 
   // Sort: priority fields first, then alphabetically
   const sorted = fields.sort((a, b) => {
@@ -249,13 +283,15 @@ export function getPreviewFields(
  * Format a field's argument list for display
  */
 export function formatArguments(args: InputField[] | undefined): string {
-  if (!args || args.length === 0) return '';
+  if (!args || args.length === 0) return "";
 
-  return args.map(arg => {
-    const typeName = formatTypeString(arg.type);
-    const defaultVal = arg.defaultValue ? ` = ${arg.defaultValue}` : '';
-    return `${arg.name}: ${typeName}${defaultVal}`;
-  }).join(', ');
+  return args
+    .map((arg) => {
+      const typeName = formatTypeString(arg.type);
+      const defaultVal = arg.defaultValue ? ` = ${arg.defaultValue}` : "";
+      return `${arg.name}: ${typeName}${defaultVal}`;
+    })
+    .join(", ");
 }
 
 /**
@@ -263,31 +299,32 @@ export function formatArguments(args: InputField[] | undefined): string {
  */
 export function getTypeSummary(
   schema: IntrospectedSchema,
-  typeName: string
+  typeName: string,
 ): string {
   const type = findType(schema, typeName);
-  if (!type) return 'Unknown type';
+  if (!type) return "Unknown type";
 
   switch (type.kind) {
-    case 'SCALAR':
+    case "SCALAR":
       return `Scalar type`;
-    case 'ENUM':
-      const values = type.enumValues?.map(v => v.name).join(' | ') || '';
+    case "ENUM":
+      const values = type.enumValues?.map((v) => v.name).join(" | ") || "";
       return `Enum: ${values}`;
-    case 'INPUT_OBJECT':
+    case "INPUT_OBJECT":
       const inputCount = type.inputFields?.length || 0;
-      return `Input type with ${inputCount} field${inputCount !== 1 ? 's' : ''}`;
-    case 'OBJECT':
+      return `Input type with ${inputCount} field${inputCount !== 1 ? "s" : ""}`;
+    case "OBJECT":
       const fieldCount = type.fields?.length || 0;
-      return `Object type with ${fieldCount} field${fieldCount !== 1 ? 's' : ''}`;
-    case 'UNION':
-      const unionTypes = type.possibleTypes?.map(t => t.name).join(' | ') || '';
+      return `Object type with ${fieldCount} field${fieldCount !== 1 ? "s" : ""}`;
+    case "UNION":
+      const unionTypes =
+        type.possibleTypes?.map((t) => t.name).join(" | ") || "";
       return `Union: ${unionTypes}`;
-    case 'INTERFACE':
+    case "INTERFACE":
       const implCount = type.possibleTypes?.length || 0;
-      return `Interface with ${implCount} implementation${implCount !== 1 ? 's' : ''}`;
+      return `Interface with ${implCount} implementation${implCount !== 1 ? "s" : ""}`;
     default:
-      return type.description || 'Type';
+      return type.description || "Type";
   }
 }
 
@@ -295,30 +332,42 @@ export function getTypeSummary(
  * Check if a field has required arguments
  */
 export function hasRequiredArguments(field: SchemaField): boolean {
-  return field.args?.some(arg => {
-    return arg.type?.kind === 'NON_NULL';
-  }) || false;
+  return (
+    field.args?.some((arg) => {
+      return arg.type?.kind === "NON_NULL";
+    }) || false
+  );
 }
 
 /**
  * Get a flat list of all type names in the schema
  */
 export function getAllTypeNames(schema: IntrospectedSchema): string[] {
-  return schema.types
-    ?.map(t => t.name)
-    .filter((n): n is string => !!n && !n.startsWith('__')) || [];
+  return (
+    schema.types
+      ?.map((t) => t.name)
+      .filter((n): n is string => !!n && !n.startsWith("__")) || []
+  );
 }
 
 /**
  * Get all input types in the schema
  */
 export function getAllInputTypes(schema: IntrospectedSchema): FullType[] {
-  return schema.types?.filter(t => t.kind === 'INPUT_OBJECT' && !t.name?.startsWith('__')) || [];
+  return (
+    schema.types?.filter(
+      (t) => t.kind === "INPUT_OBJECT" && !t.name?.startsWith("__"),
+    ) || []
+  );
 }
 
 /**
  * Get all enum types in the schema
  */
 export function getAllEnumTypes(schema: IntrospectedSchema): FullType[] {
-  return schema.types?.filter(t => t.kind === 'ENUM' && !t.name?.startsWith('__')) || [];
+  return (
+    schema.types?.filter(
+      (t) => t.kind === "ENUM" && !t.name?.startsWith("__"),
+    ) || []
+  );
 }

@@ -96,6 +96,46 @@ func StartGRPCServer(addr string, server *FoghornGRPCServer) error {
 // CLIP CONTROL SERVICE IMPLEMENTATION
 // =============================================================================
 
+// buildClipLifecycleData creates an enriched ClipLifecycleData with timing fields
+// CRITICAL: This function fixes the missing enrichment bug documented in ipc.proto lines 575-580
+func buildClipLifecycleData(stage pb.ClipLifecycleData_Stage, req *pb.CreateClipRequest, reqID, clipHash string) *pb.ClipLifecycleData {
+	data := &pb.ClipLifecycleData{
+		Stage:     stage,
+		RequestId: &reqID,
+	}
+	if clipHash != "" {
+		data.ClipHash = clipHash
+	}
+	if req.TenantId != "" {
+		data.TenantId = &req.TenantId
+	}
+	if req.InternalName != "" {
+		data.InternalName = &req.InternalName
+	}
+	// CRITICAL: Enrich with timing fields for analytics
+	if req.StartUnix != nil {
+		data.StartUnix = req.StartUnix
+	}
+	if req.StopUnix != nil {
+		data.StopUnix = req.StopUnix
+	}
+	if req.StartMs != nil {
+		data.StartMs = req.StartMs
+	}
+	if req.StopMs != nil {
+		data.StopMs = req.StopMs
+	}
+	if req.DurationSec != nil {
+		data.DurationSec = req.DurationSec
+	}
+	// Include mode for analytics
+	if req.Mode != pb.ClipMode_CLIP_MODE_UNSPECIFIED {
+		modeStr := req.Mode.String()
+		data.ClipMode = &modeStr
+	}
+	return data
+}
+
 // CreateClip creates a new clip from a stream
 func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRequest) (*pb.CreateClipResponse, error) {
 	if req.InternalName == "" {
@@ -127,24 +167,9 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 	// Generate request_id for correlation
 	reqID := uuid.New().String()
 
-	// Emit STAGE_REQUESTED event to Decklog
+	// Emit STAGE_REQUESTED event to Decklog (with enriched timing fields)
 	if s.decklogClient != nil {
-		clipData := &pb.ClipLifecycleData{
-			Stage:     pb.ClipLifecycleData_STAGE_REQUESTED,
-			RequestId: &reqID,
-			TenantId: func() *string {
-				if req.TenantId != "" {
-					return &req.TenantId
-				}
-				return nil
-			}(),
-			InternalName: func() *string {
-				if req.InternalName != "" {
-					return &req.InternalName
-				}
-				return nil
-			}(),
-		}
+		clipData := buildClipLifecycleData(pb.ClipLifecycleData_STAGE_REQUESTED, req, reqID, "")
 		go func() { _ = s.decklogClient.SendClipLifecycle(clipData) }()
 	}
 
@@ -154,13 +179,20 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 		return nil, status.Error(codes.Unavailable, "storage node not connected")
 	}
 
-	// Generate secure clip hash
+	// Resolve timing for hash generation and DB storage
+	// Use start_unix or start_ms depending on mode, convert to milliseconds for storage
 	var startMs, durationMs int64
-	if req.StartMs != nil {
-		startMs = *req.StartMs
+	if req.StartUnix != nil {
+		startMs = *req.StartUnix * 1000 // Convert seconds to ms
+	} else if req.StartMs != nil {
+		startMs = *req.StartMs * 1000 // start_ms is actually seconds, convert to ms
 	}
 	if req.DurationSec != nil {
-		durationMs = *req.DurationSec * 1000
+		durationMs = *req.DurationSec * 1000 // Convert seconds to ms
+	} else if req.StopUnix != nil && req.StartUnix != nil {
+		durationMs = (*req.StopUnix - *req.StartUnix) * 1000
+	} else if req.StopMs != nil && req.StartMs != nil {
+		durationMs = (*req.StopMs - *req.StartMs) * 1000
 	}
 
 	clipHash, err := clips.GenerateClipHash(req.InternalName, startMs, durationMs)
@@ -169,14 +201,37 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 		return nil, status.Error(codes.Internal, "failed to generate clip hash")
 	}
 
-	// Store clip metadata in database
+	// Build requested_params JSON for audit
+	requestedParams := map[string]interface{}{
+		"mode": req.Mode.String(),
+	}
+	if req.StartUnix != nil {
+		requestedParams["start_unix"] = *req.StartUnix
+	}
+	if req.StopUnix != nil {
+		requestedParams["stop_unix"] = *req.StopUnix
+	}
+	if req.StartMs != nil {
+		requestedParams["start_ms"] = *req.StartMs
+	}
+	if req.StopMs != nil {
+		requestedParams["stop_ms"] = *req.StopMs
+	}
+	if req.DurationSec != nil {
+		requestedParams["duration_sec"] = *req.DurationSec
+	}
+	paramsJSON, _ := json.Marshal(requestedParams)
+
+	// Store clip metadata in database with mode and params
 	clipID := uuid.New().String()
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO foghorn.clips (id, tenant_id, stream_id, user_id, clip_hash, stream_name, title, description,
-		                           start_time, duration, node_id, storage_path, status, request_id, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW(), NOW())
+		                           start_time, duration, clip_mode, requested_params,
+		                           node_id, storage_path, status, request_id, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NOW(), NOW())
 	`, clipID, req.TenantId, uuid.Nil, uuid.Nil, clipHash, req.InternalName, req.GetTitle(), req.GetDescription(),
-		startMs, durationMs, storageNodeID, clips.BuildClipStoragePath(req.InternalName, clipHash, format), "requested", reqID)
+		startMs, durationMs, req.Mode.String(), paramsJSON,
+		storageNodeID, clips.BuildClipStoragePath(req.InternalName, clipHash, format), "requested", reqID)
 
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to store clip metadata in database")
@@ -212,26 +267,10 @@ func (s *FoghornGRPCServer) CreateClip(ctx context.Context, req *pb.CreateClipRe
 		return nil, status.Errorf(codes.Unavailable, "storage node unavailable: %v", err)
 	}
 
-	// Emit STAGE_QUEUED event to Decklog
+	// Emit STAGE_QUEUED event to Decklog (with enriched timing fields)
 	if s.decklogClient != nil {
-		clipData := &pb.ClipLifecycleData{
-			Stage:       pb.ClipLifecycleData_STAGE_QUEUED,
-			ClipHash:    clipHash,
-			RequestId:   &reqID,
-			CompletedAt: func() *int64 { t := time.Now().Unix(); return &t }(),
-			TenantId: func() *string {
-				if req.TenantId != "" {
-					return &req.TenantId
-				}
-				return nil
-			}(),
-			InternalName: func() *string {
-				if req.InternalName != "" {
-					return &req.InternalName
-				}
-				return nil
-			}(),
-		}
+		clipData := buildClipLifecycleData(pb.ClipLifecycleData_STAGE_QUEUED, req, reqID, clipHash)
+		clipData.CompletedAt = func() *int64 { t := time.Now().Unix(); return &t }()
 		go func() { _ = s.decklogClient.SendClipLifecycle(clipData) }()
 	}
 

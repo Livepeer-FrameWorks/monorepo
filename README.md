@@ -44,31 +44,6 @@ Principles
 
 ## Quick Start
 
-### Edge Node Deployment (CLI)
-
-For deploying edge streaming nodes, use the FrameWorks CLI:
-
-```bash
-# Install CLI (choose your platform)
-# Linux (amd64)
-curl -L https://github.com/Livepeer-FrameWorks/monorepo/releases/latest/download/frameworks-linux-amd64 -o frameworks
-# Linux (arm64)
-# curl -L https://github.com/Livepeer-FrameWorks/monorepo/releases/latest/download/frameworks-linux-arm64 -o frameworks
-# macOS (Apple Silicon)
-# curl -L https://github.com/Livepeer-FrameWorks/monorepo/releases/latest/download/frameworks-darwin-arm64 -o frameworks
-# macOS (Intel)
-# curl -L https://github.com/Livepeer-FrameWorks/monorepo/releases/latest/download/frameworks-darwin-amd64 -o frameworks
-
-chmod +x frameworks
-sudo mv frameworks /usr/local/bin/
-
-# Deploy edge node
-frameworks edge bootstrap --domain stream.example.com --token YOUR_TOKEN
-frameworks edge up
-```
-
-See [CLI documentation](./cli/) for details.
-
 ### Development Setup (docker-compose)
 
 For local development and testing:
@@ -82,12 +57,6 @@ docker-compose up
 ```
 
 The Compose stack loads `${ENV_FILE:-.env}` automatically. Override `ENV_FILE` (and pass `--env-file` to docker compose) when you want to use a different generated env file (for example `.env.staging`).
-
-Prefer the CLI? You can generate env files with:
-
-```bash
-frameworks config env generate --context dev --output .env
-```
 
 Endpoints (local)
 - GraphQL Gateway: http://localhost:18090/graphql

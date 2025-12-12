@@ -26,8 +26,14 @@ query GetConnectionEvents(
         city
         latitude
         longitude
-        clientBucket { h3Index resolution }
-        nodeBucket { h3Index resolution }
+        clientBucket {
+          h3Index
+          resolution
+        }
+        nodeBucket {
+          h3Index
+          resolution
+        }
         eventType
         sessionDurationSeconds
         bytesTransferred

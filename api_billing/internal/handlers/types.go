@@ -1,10 +1,13 @@
 package handlers
 
+import "time"
+
 // UsageDetails represents structured usage details for JSONB storage in invoices
 type UsageDetails struct {
-	UsageData    map[string]float64 `json:"usage_data"`
-	BillingMonth string             `json:"billing_month"`
-	TierInfo     TierInfo           `json:"tier_info"`
+	UsageData   map[string]float64 `json:"usage_data"`
+	PeriodStart time.Time          `json:"period_start"`
+	PeriodEnd   time.Time          `json:"period_end"`
+	TierInfo    TierInfo           `json:"tier_info"`
 }
 
 // TierInfo represents tier information within usage details

@@ -147,56 +147,69 @@ function openExternal(url: string) {
     {#if isAuthenticated}
       <!-- Authenticated Layout with Sidebar -->
       <div class="flex flex-col h-screen">
-        <!-- Top Navigation - Full Width -->
+        <!-- Top Navigation - Slab Style -->
         <nav
-          class="bg-[color-mix(in_srgb,hsl(var(--background))_98%,rgba(0,0,0,0.1))] backdrop-blur-[18px] border-b border-[hsl(var(--border)/0.45)] shadow-[0_12px_24px_rgba(6,15,65,0.15)] px-6 py-4"
+          class="bg-background border-b border-[hsl(var(--tn-fg-gutter)/0.3)] h-16 flex items-stretch justify-between sticky top-0 z-50"
         >
-          <div class="flex justify-between items-center">
-            <div class="flex items-center space-x-4">
-              <!-- Sidebar Toggle -->
-              <button
-                onclick={toggleSidebar}
-                class="p-2 rounded-lg text-muted-foreground hover:text-foreground hover:bg-background-dark/50 transition-colors"
-                title="Toggle Sidebar"
-              >
-                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  {#if sidebarStore.collapsed}
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
-                  {:else}
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
-                  {/if}
-                </svg>
-              </button>
-              
-              <!-- FrameWorks Branding -->
-              <a
-                href={dashboardPath}
-                class="flex items-center hover:opacity-80 transition-opacity"
-              >
-                <img
-                  src="/frameworks-dark-horizontal-lockup-transparent.svg"
-                  alt="FrameWorks"
-                  class="h-10"
-                />
-              </a>
-              
-              <!-- Beta Badge -->
-              <BetaBadge />
+          <!-- Left Content (Padded) -->
+          <div class="flex items-center px-6 gap-4 flex-1">
+            <!-- Sidebar Toggle -->
+            <button
+              onclick={toggleSidebar}
+              class="p-2 rounded-lg text-muted-foreground hover:text-foreground hover:bg-[hsl(var(--tn-bg-visual))] transition-colors cursor-pointer"
+              title="Toggle Sidebar"
+            >
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                {#if sidebarStore.collapsed}
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
+                {:else}
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
+                {/if}
+              </svg>
+            </button>
+            
+            <!-- FrameWorks Branding -->
+            <a
+              href={dashboardPath}
+              class="flex items-center hover:opacity-80 transition-opacity"
+            >
+              <img
+                src="/frameworks-dark-horizontal-lockup-transparent.svg"
+                alt="FrameWorks"
+                class="h-8"
+              />
+            </a>
+            
+            <!-- Beta Badge -->
+            <BetaBadge />
 
-              <!-- Page Title -->
-              <div class="text-muted-foreground">•</div>
-              <h1 class="text-lg font-semibold text-foreground">
-                {currentPageTitle}
-              </h1>
-            </div>
+            <!-- Page Title -->
+            <div class="text-[hsl(var(--tn-fg-gutter))]">|</div>
+            <h1 class="text-sm font-semibold text-foreground uppercase tracking-wide">
+              {currentPageTitle}
+            </h1>
+          </div>
 
-            <div class="flex items-center space-x-4">
-              <span class="text-foreground-dark"
-                >Welcome, <span class="text-primary"
+          <!-- Right Actions (Flush & Seamed) -->
+          <div class="flex items-stretch">
+            <!-- User Info (Seamed, Padded) -->
+            <div class="hidden md:flex items-center px-6 border-l border-[hsl(var(--tn-fg-gutter)/0.3)] bg-[hsl(var(--tn-bg-dark)/0.3)]">
+              <span class="text-sm text-muted-foreground"
+                >Welcome, <span class="text-primary font-medium"
                   >{user?.name || user?.email}</span
                 ></span
               >
-              <Button variant="outline" onclick={logout}>Logout</Button>
+            </div>
+
+            <!-- Logout Button (Flush, Seamed, Full Height) -->
+            <div class="w-24 border-l border-[hsl(var(--tn-fg-gutter)/0.3)]">
+              <Button 
+                variant="ghost" 
+                onclick={logout}
+                class="w-full h-full rounded-none hover:translate-y-0 hover:bg-[hsl(var(--tn-red)/0.1)] hover:text-[hsl(var(--tn-red))]"
+              >
+                Logout
+              </Button>
             </div>
           </div>
         </nav>

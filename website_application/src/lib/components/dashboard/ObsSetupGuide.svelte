@@ -25,16 +25,6 @@
   const CopyIcon = getIconComponent("Copy");
 </script>
 
-<div class="mt-8">
-  <div class="slab">
-    <div class="slab-header">
-      <h3>New to Streaming?</h3>
-      <p class="text-sm text-muted-foreground mt-1">
-        Quick setup guide for streaming with OBS
-      </p>
-    </div>
-    <div class="slab-body--padded">
-
     <div class="space-y-4">
       <!-- Step 1 -->
       <div class="flex items-start space-x-4">
@@ -75,7 +65,7 @@
             Just copy these settings into OBS (Settings → Stream):
           </p>
           <div
-            class="bg-muted p-3 border border-border space-y-3"
+            class="bg-muted/30 p-3 space-y-3"
           >
             <div class="flex items-center justify-between gap-2">
               <div class="min-w-0 flex-1">
@@ -130,6 +120,3 @@
         </div>
       </div>
     </div>
-    </div>
-  </div>
-</div>

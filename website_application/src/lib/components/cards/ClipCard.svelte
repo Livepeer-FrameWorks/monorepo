@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { cn } from "$lib/utils";
 	import { Badge } from "$lib/components/ui/badge";
 	import { Button } from "$lib/components/ui/button";
 	import { getIconComponent } from "$lib/iconUtils";
@@ -27,7 +26,7 @@
 	}: {
 		clip: ClipData;
 		streamName: string;
-		onPlay?: () => void;
+		onPlay?: () => void; // This onPlay is for direct playback
 		class?: string;
 		[key: string]: unknown;
 	} = $props();
@@ -56,27 +55,28 @@
 	const PlayIcon = getIconComponent("Play");
 </script>
 
-<div class={cn("slab slab--compact", className)} {...restProps}>
-	<div class="slab-header">
-		<div class="flex items-center justify-between w-full gap-2">
-			<div class="min-w-0">
-				<h3 class="font-semibold text-foreground truncate">{clip.title}</h3>
-				<p class="text-xs text-muted-foreground">From: {streamName}</p>
-			</div>
-			<Badge tone={statusTone} class="text-xs shrink-0">
-				{clip.status}
-			</Badge>
+<div
+	class="slab h-full !p-0 transition-all group hover:bg-muted/30"
+	{...restProps}
+>
+	<div class="slab-header flex items-center justify-between gap-2">
+		<div class="min-w-0">
+			<h3 class="font-semibold text-foreground truncate">{clip.title}</h3>
+			<p class="text-xs text-muted-foreground">From: {streamName}</p>
 		</div>
+		<Badge tone={statusTone} class="text-xs shrink-0">
+			{clip.status}
+		</Badge>
 	</div>
 
-	<div class="slab-body--padded">
+	<div class="slab-body--padded flex-1 flex flex-col justify-between">
 		{#if clip.description}
-			<p class="text-sm text-muted-foreground mb-3 line-clamp-2">
+			<p class="text-sm text-muted-foreground mb-3 line-clamp-2" title={clip.description}>
 				{clip.description}
 			</p>
 		{/if}
 
-		<div class="space-y-2 text-sm">
+		<div class="space-y-2 text-sm mt-auto">
 			<div class="flex justify-between">
 				<span class="text-muted-foreground">Duration</span>
 				<span class="text-foreground">{formatDuration(clip.duration)}</span>
@@ -92,18 +92,20 @@
 		</div>
 	</div>
 
-	{#if onPlay}
+	{#if onPlay && (clip.status === "Available" || clip.status === "completed")}
 		<div class="slab-actions">
-			<Button
-				variant="ghost"
-				class="gap-2 justify-center"
-				onclick={onPlay}
+			<button
+				class="flex items-center justify-center py-3 text-sm font-medium text-primary hover:bg-primary/5 transition-colors"
+				onclick={(event) => {
+					event.stopPropagation();
+					onPlay();
+				}}
 			>
 				{#if PlayIcon}
-					<PlayIcon class="size-4" />
+					<PlayIcon class="size-4 mr-2" />
 				{/if}
 				<span>Play Clip</span>
-			</Button>
+			</button>
 		</div>
 	{/if}
 </div>

@@ -180,7 +180,6 @@ CREATE TABLE IF NOT EXISTS node_metrics (
     longitude Float64,
     
     -- ===== ADDITIONAL METADATA =====
-    tags Array(String),
     metadata JSON
 ) ENGINE = MergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
@@ -340,34 +339,6 @@ PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (timestamp, internal_name)
 TTL timestamp + INTERVAL 90 DAY;
 
--- Track change diffs per stream
-CREATE TABLE IF NOT EXISTS track_change_events (
-    -- ===== TIME & STREAM IDENTIFICATION =====
-    timestamp DateTime,
-    event_id UUID,
-    tenant_id UUID,
-    internal_name String,
-    node_id LowCardinality(String),
-    
-    -- ===== CHANGE METADATA =====
-    change_type LowCardinality(String), -- add, remove, modify
-    
-    -- ===== TRACK COMPARISON =====
-    previous_tracks String,             -- Previous track list JSON
-    new_tracks String,                  -- New track list JSON
-    
-    -- ===== QUALITY CHANGES =====
-    previous_quality_tier LowCardinality(String),
-    new_quality_tier LowCardinality(String),
-    previous_resolution String,
-    new_resolution String,
-    previous_codec LowCardinality(String),
-    new_codec LowCardinality(String)
-) ENGINE = MergeTree()
-PARTITION BY (toYYYYMM(timestamp), tenant_id)
-ORDER BY (timestamp, internal_name)
-TTL timestamp + INTERVAL 90 DAY;
-
 -- Hourly connection aggregates for bandwidth/session charts
 CREATE TABLE IF NOT EXISTS stream_connection_hourly (
     hour DateTime,
@@ -434,6 +405,8 @@ CREATE TABLE IF NOT EXISTS node_metrics_1h (
     peak_memory Float32,
     avg_disk Float32,
     peak_disk Float32,
+    avg_shm Float32,
+    peak_shm Float32,
     total_bandwidth_in UInt64,
     total_bandwidth_out UInt64,
     was_healthy UInt8
@@ -443,6 +416,7 @@ ORDER BY (timestamp_1h, node_id)
 TTL timestamp_1h + INTERVAL 365 DAY;
 
 -- Aggregation MV → node_metrics_1h
+-- Note: bandwidth_in/out are cumulative counters, so we compute delta (max - min) per hour
 CREATE MATERIALIZED VIEW IF NOT EXISTS node_metrics_1h_mv TO node_metrics_1h AS
 SELECT
     toStartOfHour(timestamp) AS timestamp_1h,
@@ -453,8 +427,10 @@ SELECT
     max(if(ram_max > 0, ram_current / ram_max * 100, 0)) AS peak_memory,
     avg(if(disk_total_bytes > 0, disk_used_bytes / disk_total_bytes * 100, 0)) AS avg_disk,
     max(if(disk_total_bytes > 0, disk_used_bytes / disk_total_bytes * 100, 0)) AS peak_disk,
-    sum(bandwidth_in) AS total_bandwidth_in,
-    sum(bandwidth_out) AS total_bandwidth_out,
+    avg(if(shm_total_bytes > 0, shm_used_bytes / shm_total_bytes * 100, 0)) AS avg_shm,
+    max(if(shm_total_bytes > 0, shm_used_bytes / shm_total_bytes * 100, 0)) AS peak_shm,
+    max(bandwidth_in) - min(bandwidth_in) AS total_bandwidth_in,
+    max(bandwidth_out) - min(bandwidth_out) AS total_bandwidth_out,
     if(avg(is_healthy) >= 0.5, 1, 0) AS was_healthy
 FROM node_metrics
 GROUP BY timestamp_1h, node_id;
@@ -520,39 +496,6 @@ SELECT
     ) AS quality_tier
 FROM stream_health_metrics
 GROUP BY timestamp_5m, tenant_id, internal_name, node_id;
-
--- Quality changes per hour (resolution/codec)
-CREATE TABLE IF NOT EXISTS quality_changes_1h (
-    hour DateTime,
-    tenant_id UUID,
-    internal_name String,
-    total_changes UInt32,
-    resolution_changes UInt32,
-    codec_changes UInt32,
-    quality_tiers Array(String),
-    latest_quality LowCardinality(String),
-    latest_codec LowCardinality(String),
-    latest_resolution String
-) ENGINE = MergeTree()
-PARTITION BY toYYYYMM(hour)
-ORDER BY (hour, tenant_id, internal_name)
-TTL hour + INTERVAL 365 DAY;
-
--- Aggregation MV → quality_changes_1h
-CREATE MATERIALIZED VIEW IF NOT EXISTS quality_changes_1h_mv TO quality_changes_1h AS
-SELECT
-    toStartOfHour(timestamp) AS hour,
-    tenant_id,
-    internal_name,
-    count() AS total_changes,
-    countIf(change_type = 'resolution_change') AS resolution_changes,
-    countIf(change_type = 'codec_change') AS codec_changes,
-    groupArray(new_quality_tier) AS quality_tiers,
-    argMax(new_quality_tier, timestamp) AS latest_quality,
-    argMax(new_codec, timestamp) AS latest_codec,
-    argMax(new_resolution, timestamp) AS latest_resolution
-FROM track_change_events
-GROUP BY hour, tenant_id, internal_name;
 
 -- Rebuffering events derived from health samples
 CREATE TABLE IF NOT EXISTS rebuffering_events (

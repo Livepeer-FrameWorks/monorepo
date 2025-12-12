@@ -258,6 +258,19 @@ func (r *Resolver) DoValidateStreamKey(ctx context.Context, streamKey string) (*
 
 // DoCreateClip creates a new clip
 func (r *Resolver) DoCreateClip(ctx context.Context, input model.CreateClipInput) (*pb.ClipInfo, error) {
+	// Determine mode (default to ABSOLUTE for backward compatibility)
+	mode := pb.ClipMode_CLIP_MODE_ABSOLUTE
+	if input.Mode != nil {
+		switch *input.Mode {
+		case model.ClipCreationModeRelative:
+			mode = pb.ClipMode_CLIP_MODE_RELATIVE
+		case model.ClipCreationModeDuration:
+			mode = pb.ClipMode_CLIP_MODE_DURATION
+		case model.ClipCreationModeClipNow:
+			mode = pb.ClipMode_CLIP_MODE_CLIP_NOW
+		}
+	}
+
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo clip creation")
 		now := time.Now()
@@ -265,36 +278,126 @@ func (r *Resolver) DoCreateClip(ctx context.Context, input model.CreateClipInput
 		if input.Description != nil {
 			description = *input.Description
 		}
+		// Calculate demo timing based on mode
+		var startTime, duration int64
+		switch mode {
+		case pb.ClipMode_CLIP_MODE_CLIP_NOW:
+			if input.Duration != nil {
+				duration = int64(*input.Duration)
+				startTime = now.Unix() - duration
+			} else {
+				duration = 60
+				startTime = now.Unix() - 60
+			}
+		case pb.ClipMode_CLIP_MODE_DURATION:
+			if input.Duration != nil {
+				duration = int64(*input.Duration)
+			}
+			if input.StartUnix != nil {
+				startTime = int64(*input.StartUnix)
+			} else if input.StartTime != nil {
+				startTime = int64(*input.StartTime)
+			}
+		default:
+			// ABSOLUTE or legacy
+			if input.StartUnix != nil {
+				startTime = int64(*input.StartUnix)
+			} else if input.StartTime != nil {
+				startTime = int64(*input.StartTime)
+			}
+			if input.StopUnix != nil {
+				duration = int64(*input.StopUnix) - startTime
+			} else if input.EndTime != nil {
+				duration = int64(*input.EndTime) - startTime
+			}
+		}
+		modeStr := mode.String()
 		return &pb.ClipInfo{
 			Id:          "clip_demo_" + now.Format("20060102150405"),
 			StreamName:  input.Stream,
 			Title:       input.Title,
 			Description: description,
-			StartTime:   int64(input.StartTime),
-			Duration:    int64(input.EndTime - input.StartTime),
+			StartTime:   startTime,
+			Duration:    duration,
 			ClipHash:    "pb_clip_demo_" + now.Format("150405"),
 			Status:      "processing",
 			CreatedAt:   timestamppb.New(now),
 			UpdatedAt:   timestamppb.New(now),
+			ClipMode:    &modeStr,
 		}, nil
 	}
 
-	// Build gRPC request - proto uses StartUnix/StopUnix
-	startUnix := int64(input.StartTime)
-	stopUnix := int64(input.EndTime)
-	durationSec := stopUnix - startUnix
-
+	// Build gRPC request
 	req := &pb.CreateClipRequest{
 		InternalName: input.Stream,
-		StartUnix:    &startUnix,
-		StopUnix:     &stopUnix,
-		DurationSec:  &durationSec,
 		Title:        input.Title,
+		Mode:         mode,
 	}
 
 	// Handle optional description
 	if input.Description != nil {
 		req.Description = *input.Description
+	}
+
+	// Populate timing fields based on mode
+	switch mode {
+	case pb.ClipMode_CLIP_MODE_ABSOLUTE:
+		// Support legacy startTime/endTime or new startUnix/stopUnix
+		if input.StartUnix != nil {
+			startUnix := int64(*input.StartUnix)
+			req.StartUnix = &startUnix
+		} else if input.StartTime != nil {
+			startUnix := int64(*input.StartTime)
+			req.StartUnix = &startUnix
+		}
+		if input.StopUnix != nil {
+			stopUnix := int64(*input.StopUnix)
+			req.StopUnix = &stopUnix
+		} else if input.EndTime != nil {
+			stopUnix := int64(*input.EndTime)
+			req.StopUnix = &stopUnix
+		}
+		// Calculate duration if both are set
+		if req.StartUnix != nil && req.StopUnix != nil {
+			durationSec := *req.StopUnix - *req.StartUnix
+			req.DurationSec = &durationSec
+		}
+
+	case pb.ClipMode_CLIP_MODE_RELATIVE:
+		if input.StartMedia != nil {
+			startMs := int64(*input.StartMedia)
+			req.StartMs = &startMs
+		}
+		if input.StopMedia != nil {
+			stopMs := int64(*input.StopMedia)
+			req.StopMs = &stopMs
+		}
+		// Calculate duration if both are set
+		if req.StartMs != nil && req.StopMs != nil {
+			durationSec := *req.StopMs - *req.StartMs
+			req.DurationSec = &durationSec
+		}
+
+	case pb.ClipMode_CLIP_MODE_DURATION:
+		if input.StartUnix != nil {
+			startUnix := int64(*input.StartUnix)
+			req.StartUnix = &startUnix
+		} else if input.StartMedia != nil {
+			startMs := int64(*input.StartMedia)
+			req.StartMs = &startMs
+		}
+		if input.Duration != nil {
+			durationSec := int64(*input.Duration)
+			req.DurationSec = &durationSec
+		}
+
+	case pb.ClipMode_CLIP_MODE_CLIP_NOW:
+		if input.Duration != nil {
+			dur := int64(*input.Duration)
+			negDur := -dur
+			req.StartUnix = &negDur // Negative = relative to now
+			req.DurationSec = &dur
+		}
 	}
 
 	// Call Commodore gRPC (context metadata carries auth)
@@ -310,18 +413,36 @@ func (r *Resolver) DoCreateClip(ctx context.Context, input model.CreateClipInput
 	if input.Description != nil {
 		description = *input.Description
 	}
+
+	// Calculate resolved start/duration for response
+	var startTime, duration int64
+	if req.StartUnix != nil {
+		startTime = *req.StartUnix
+		if startTime < 0 {
+			// Clip now mode - resolve to actual time
+			startTime = now.Unix() + startTime
+		}
+	}
+	if req.DurationSec != nil {
+		duration = *req.DurationSec
+	} else if req.StopUnix != nil && req.StartUnix != nil {
+		duration = *req.StopUnix - *req.StartUnix
+	}
+
+	modeStr := mode.String()
 	return &pb.ClipInfo{
 		Id:          clipResp.RequestId,
 		ClipHash:    clipResp.ClipHash,
 		StreamName:  input.Stream,
 		Title:       input.Title,
 		Description: description,
-		StartTime:   startUnix,
-		Duration:    durationSec,
+		StartTime:   startTime,
+		Duration:    duration,
 		NodeId:      clipResp.NodeId,
 		Status:      clipResp.Status,
 		CreatedAt:   timestamppb.New(now),
 		UpdatedAt:   timestamppb.New(now),
+		ClipMode:    &modeStr,
 	}, nil
 }
 

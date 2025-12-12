@@ -1171,6 +1171,7 @@ type MistTrigger struct {
 	Blocking    bool                   `protobuf:"varint,5,opt,name=blocking,proto3" json:"blocking,omitempty"`                         // Does this trigger need a response from Foghorn?
 	RequestId   string                 `protobuf:"bytes,6,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`       // For correlating responses
 	TenantId    *string                `protobuf:"bytes,7,opt,name=tenant_id,json=tenantId,proto3,oneof" json:"tenant_id,omitempty"`    // Tenant context (enriched by Foghorn)
+	UserId      *string                `protobuf:"bytes,8,opt,name=user_id,json=userId,proto3,oneof" json:"user_id,omitempty"`          // User context (enriched by Foghorn)
 	// Typed trigger payloads (one of these will be set based on trigger_type)
 	//
 	// Types that are valid to be assigned to TriggerPayload:
@@ -1267,6 +1268,13 @@ func (x *MistTrigger) GetRequestId() string {
 func (x *MistTrigger) GetTenantId() string {
 	if x != nil && x.TenantId != nil {
 		return *x.TenantId
+	}
+	return ""
+}
+
+func (x *MistTrigger) GetUserId() string {
+	if x != nil && x.UserId != nil {
+		return *x.UserId
 	}
 	return ""
 }
@@ -2634,8 +2642,10 @@ type ViewerResolveTrigger struct {
 	// Resolved internal name (UUID format, no live+ prefix) for analytics correlation.
 	// This is the canonical stream identifier that matches across all analytics tables.
 	ResolvedInternalName *string `protobuf:"bytes,13,opt,name=resolved_internal_name,json=resolvedInternalName,proto3,oneof" json:"resolved_internal_name,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	// Node location name (e.g., "us-east-1", "Frankfurt") - enriched by Foghorn
+	NodeLocation  *string `protobuf:"bytes,14,opt,name=node_location,json=nodeLocation,proto3,oneof" json:"node_location,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ViewerResolveTrigger) Reset() {
@@ -2748,6 +2758,13 @@ func (x *ViewerResolveTrigger) GetNodeBucket() *GeoBucket {
 func (x *ViewerResolveTrigger) GetResolvedInternalName() string {
 	if x != nil && x.ResolvedInternalName != nil {
 		return *x.ResolvedInternalName
+	}
+	return ""
+}
+
+func (x *ViewerResolveTrigger) GetNodeLocation() string {
+	if x != nil && x.NodeLocation != nil {
+		return *x.NodeLocation
 	}
 	return ""
 }
@@ -3283,8 +3300,13 @@ type StreamBufferTrigger struct {
 	IssuesDescription *string `protobuf:"bytes,6,opt,name=issues_description,json=issuesDescription,proto3,oneof" json:"issues_description,omitempty"`
 	TrackCount        *int32  `protobuf:"varint,7,opt,name=track_count,json=trackCount,proto3,oneof" json:"track_count,omitempty"`
 	QualityTier       *string `protobuf:"bytes,8,opt,name=quality_tier,json=qualityTier,proto3,oneof" json:"quality_tier,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// Top-level health wrapper fields from MistServer (stream-wide summary)
+	StreamBufferMs *int32  `protobuf:"varint,9,opt,name=stream_buffer_ms,json=streamBufferMs,proto3,oneof" json:"stream_buffer_ms,omitempty"`  // health.buffer (overall buffer in ms)
+	StreamJitterMs *int32  `protobuf:"varint,10,opt,name=stream_jitter_ms,json=streamJitterMs,proto3,oneof" json:"stream_jitter_ms,omitempty"` // health.jitter (max jitter across tracks)
+	MistIssues     *string `protobuf:"bytes,11,opt,name=mist_issues,json=mistIssues,proto3,oneof" json:"mist_issues,omitempty"`                // health.issues (Mist's issue string, e.g. "HLSnoaudio!")
+	MaxKeepawayMs  *int32  `protobuf:"varint,12,opt,name=max_keepaway_ms,json=maxKeepawayMs,proto3,oneof" json:"max_keepaway_ms,omitempty"`    // health.maxkeepaway (max viewer distance from live)
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *StreamBufferTrigger) Reset() {
@@ -3364,6 +3386,34 @@ func (x *StreamBufferTrigger) GetQualityTier() string {
 		return *x.QualityTier
 	}
 	return ""
+}
+
+func (x *StreamBufferTrigger) GetStreamBufferMs() int32 {
+	if x != nil && x.StreamBufferMs != nil {
+		return *x.StreamBufferMs
+	}
+	return 0
+}
+
+func (x *StreamBufferTrigger) GetStreamJitterMs() int32 {
+	if x != nil && x.StreamJitterMs != nil {
+		return *x.StreamJitterMs
+	}
+	return 0
+}
+
+func (x *StreamBufferTrigger) GetMistIssues() string {
+	if x != nil && x.MistIssues != nil {
+		return *x.MistIssues
+	}
+	return ""
+}
+
+func (x *StreamBufferTrigger) GetMaxKeepawayMs() int32 {
+	if x != nil && x.MaxKeepawayMs != nil {
+		return *x.MaxKeepawayMs
+	}
+	return 0
 }
 
 type StreamEndTrigger struct {
@@ -4280,9 +4330,14 @@ type NodeLifecycleUpdate struct {
 	// MistServer outputs configuration (parsed from koekjes endpoint)
 	OutputsJson string `protobuf:"bytes,25,opt,name=outputs_json,json=outputsJson,proto3" json:"outputs_json,omitempty"`
 	// Enrichment fields added by Foghorn
-	TenantId      *string `protobuf:"bytes,26,opt,name=tenant_id,json=tenantId,proto3,oneof" json:"tenant_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	TenantId *string `protobuf:"bytes,26,opt,name=tenant_id,json=tenantId,proto3,oneof" json:"tenant_id,omitempty"`
+	// Cumulative bandwidth counters (bytes since server start)
+	BandwidthInTotal  uint64 `protobuf:"varint,27,opt,name=bandwidth_in_total,json=bandwidthInTotal,proto3" json:"bandwidth_in_total,omitempty"`    // bw[1] - total bytes received
+	BandwidthOutTotal uint64 `protobuf:"varint,28,opt,name=bandwidth_out_total,json=bandwidthOutTotal,proto3" json:"bandwidth_out_total,omitempty"` // bw[0] - total bytes sent
+	// Current active viewer connections
+	ConnectionsCurrent uint32 `protobuf:"varint,29,opt,name=connections_current,json=connectionsCurrent,proto3" json:"connections_current,omitempty"` // curr[0] - current viewer count
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *NodeLifecycleUpdate) Reset() {
@@ -4497,6 +4552,27 @@ func (x *NodeLifecycleUpdate) GetTenantId() string {
 	return ""
 }
 
+func (x *NodeLifecycleUpdate) GetBandwidthInTotal() uint64 {
+	if x != nil {
+		return x.BandwidthInTotal
+	}
+	return 0
+}
+
+func (x *NodeLifecycleUpdate) GetBandwidthOutTotal() uint64 {
+	if x != nil {
+		return x.BandwidthOutTotal
+	}
+	return 0
+}
+
+func (x *NodeLifecycleUpdate) GetConnectionsCurrent() uint32 {
+	if x != nil {
+		return x.ConnectionsCurrent
+	}
+	return 0
+}
+
 // Load balancing specific data (no trigger equivalent - generated by Foghorn routing)
 type LoadBalancingData struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
@@ -4696,11 +4772,13 @@ type ClipLifecycleData struct {
 	TenantId     *string `protobuf:"bytes,12,opt,name=tenant_id,json=tenantId,proto3,oneof" json:"tenant_id,omitempty"`
 	InternalName *string `protobuf:"bytes,13,opt,name=internal_name,json=internalName,proto3,oneof" json:"internal_name,omitempty"`
 	// Clip time boundaries (enriched by Foghorn from original ClipPullRequest)
-	StartUnix     *int64 `protobuf:"varint,14,opt,name=start_unix,json=startUnix,proto3,oneof" json:"start_unix,omitempty"`
-	StopUnix      *int64 `protobuf:"varint,15,opt,name=stop_unix,json=stopUnix,proto3,oneof" json:"stop_unix,omitempty"`
-	StartMs       *int64 `protobuf:"varint,16,opt,name=start_ms,json=startMs,proto3,oneof" json:"start_ms,omitempty"`
-	StopMs        *int64 `protobuf:"varint,17,opt,name=stop_ms,json=stopMs,proto3,oneof" json:"stop_ms,omitempty"`
-	DurationSec   *int64 `protobuf:"varint,18,opt,name=duration_sec,json=durationSec,proto3,oneof" json:"duration_sec,omitempty"`
+	StartUnix   *int64 `protobuf:"varint,14,opt,name=start_unix,json=startUnix,proto3,oneof" json:"start_unix,omitempty"`
+	StopUnix    *int64 `protobuf:"varint,15,opt,name=stop_unix,json=stopUnix,proto3,oneof" json:"stop_unix,omitempty"`
+	StartMs     *int64 `protobuf:"varint,16,opt,name=start_ms,json=startMs,proto3,oneof" json:"start_ms,omitempty"`
+	StopMs      *int64 `protobuf:"varint,17,opt,name=stop_ms,json=stopMs,proto3,oneof" json:"stop_ms,omitempty"`
+	DurationSec *int64 `protobuf:"varint,18,opt,name=duration_sec,json=durationSec,proto3,oneof" json:"duration_sec,omitempty"`
+	// Clip creation mode (enriched by Foghorn)
+	ClipMode      *string `protobuf:"bytes,19,opt,name=clip_mode,json=clipMode,proto3,oneof" json:"clip_mode,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4859,6 +4937,13 @@ func (x *ClipLifecycleData) GetDurationSec() int64 {
 		return *x.DurationSec
 	}
 	return 0
+}
+
+func (x *ClipLifecycleData) GetClipMode() string {
+	if x != nil && x.ClipMode != nil {
+		return *x.ClipMode
+	}
+	return ""
 }
 
 // DVR lifecycle specific data (separate from DVR control messages)
@@ -6004,7 +6089,7 @@ const file_ipc_proto_rawDesc = "" +
 	"\x04code\x18\x01 \x01(\tR\x04code\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\"$\n" +
 	"\tHeartbeat\x12\x17\n" +
-	"\anode_id\x18\x01 \x01(\tR\x06nodeId\"\xf8\r\n" +
+	"\anode_id\x18\x01 \x01(\tR\x06nodeId\"\xa2\x0e\n" +
 	"\vMistTrigger\x12!\n" +
 	"\ftrigger_type\x18\x01 \x01(\tR\vtriggerType\x12\x17\n" +
 	"\anode_id\x18\x03 \x01(\tR\x06nodeId\x12\x1c\n" +
@@ -6012,7 +6097,8 @@ const file_ipc_proto_rawDesc = "" +
 	"\bblocking\x18\x05 \x01(\bR\bblocking\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x06 \x01(\tR\trequestId\x12 \n" +
-	"\ttenant_id\x18\a \x01(\tH\x01R\btenantId\x88\x01\x01\x12H\n" +
+	"\ttenant_id\x18\a \x01(\tH\x01R\btenantId\x88\x01\x01\x12\x1c\n" +
+	"\auser_id\x18\b \x01(\tH\x02R\x06userId\x88\x01\x01\x12H\n" +
 	"\fpush_rewrite\x18\n" +
 	" \x01(\v2#.helmsmancontrol.PushRewriteTriggerH\x00R\vpushRewrite\x12J\n" +
 	"\fplay_rewrite\x18\v \x01(\v2%.helmsmancontrol.ViewerResolveTriggerH\x00R\vplayRewrite\x12K\n" +
@@ -6037,7 +6123,9 @@ const file_ipc_proto_rawDesc = "" +
 	"\x10storage_snapshot\x18\x1c \x01(\v2 .helmsmancontrol.StorageSnapshotH\x00R\x0fstorageSnapshotB\x11\n" +
 	"\x0ftrigger_payloadB\f\n" +
 	"\n" +
-	"_tenant_id\"f\n" +
+	"_tenant_idB\n" +
+	"\n" +
+	"\b_user_id\"f\n" +
 	"\x13MistTriggerResponse\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12\x1a\n" +
@@ -6162,7 +6250,7 @@ const file_ipc_proto_rawDesc = "" +
 	"\x13_publisher_latitudeB\x16\n" +
 	"\x14_publisher_longitudeB\x13\n" +
 	"\x11_publisher_bucketB\x0e\n" +
-	"\f_node_bucket\"\x88\x05\n" +
+	"\f_node_bucket\"\xc4\x05\n" +
 	"\x14ViewerResolveTrigger\x12)\n" +
 	"\x10requested_stream\x18\x02 \x01(\tR\x0frequestedStream\x12\x1f\n" +
 	"\vviewer_host\x18\x03 \x01(\tR\n" +
@@ -6180,7 +6268,8 @@ const file_ipc_proto_rawDesc = "" +
 	"\rclient_bucket\x18\v \x01(\v2\x1a.helmsmancontrol.GeoBucketH\x05R\fclientBucket\x88\x01\x01\x12@\n" +
 	"\vnode_bucket\x18\f \x01(\v2\x1a.helmsmancontrol.GeoBucketH\x06R\n" +
 	"nodeBucket\x88\x01\x01\x129\n" +
-	"\x16resolved_internal_name\x18\r \x01(\tH\aR\x14resolvedInternalName\x88\x01\x01B\n" +
+	"\x16resolved_internal_name\x18\r \x01(\tH\aR\x14resolvedInternalName\x88\x01\x01\x12(\n" +
+	"\rnode_location\x18\x0e \x01(\tH\bR\fnodeLocation\x88\x01\x01B\n" +
 	"\n" +
 	"\b_node_idB\x0f\n" +
 	"\r_country_codeB\a\n" +
@@ -6190,7 +6279,8 @@ const file_ipc_proto_rawDesc = "" +
 	"_longitudeB\x10\n" +
 	"\x0e_client_bucketB\x0e\n" +
 	"\f_node_bucketB\x19\n" +
-	"\x17_resolved_internal_name\"6\n" +
+	"\x17_resolved_internal_nameB\x10\n" +
+	"\x0e_node_location\"6\n" +
 	"\x13StreamSourceTrigger\x12\x1f\n" +
 	"\vstream_name\x18\x01 \x01(\tR\n" +
 	"streamName\"\x81\x01\n" +
@@ -6278,7 +6368,7 @@ const file_ipc_proto_rawDesc = "" +
 	"\x13_session_identifierB\x14\n" +
 	"\x12_seconds_connectedB\x10\n" +
 	"\x0e_client_bucketB\x0e\n" +
-	"\f_node_bucket\"\xfc\x02\n" +
+	"\f_node_bucket\"\xfb\x04\n" +
 	"\x13StreamBufferTrigger\x12\x1f\n" +
 	"\vstream_name\x18\x01 \x01(\tR\n" +
 	"streamName\x12!\n" +
@@ -6289,11 +6379,21 @@ const file_ipc_proto_rawDesc = "" +
 	"\x12issues_description\x18\x06 \x01(\tH\x01R\x11issuesDescription\x88\x01\x01\x12$\n" +
 	"\vtrack_count\x18\a \x01(\x05H\x02R\n" +
 	"trackCount\x88\x01\x01\x12&\n" +
-	"\fquality_tier\x18\b \x01(\tH\x03R\vqualityTier\x88\x01\x01B\r\n" +
+	"\fquality_tier\x18\b \x01(\tH\x03R\vqualityTier\x88\x01\x01\x12-\n" +
+	"\x10stream_buffer_ms\x18\t \x01(\x05H\x04R\x0estreamBufferMs\x88\x01\x01\x12-\n" +
+	"\x10stream_jitter_ms\x18\n" +
+	" \x01(\x05H\x05R\x0estreamJitterMs\x88\x01\x01\x12$\n" +
+	"\vmist_issues\x18\v \x01(\tH\x06R\n" +
+	"mistIssues\x88\x01\x01\x12+\n" +
+	"\x0fmax_keepaway_ms\x18\f \x01(\x05H\aR\rmaxKeepawayMs\x88\x01\x01B\r\n" +
 	"\v_has_issuesB\x15\n" +
 	"\x13_issues_descriptionB\x0e\n" +
 	"\f_track_countB\x0f\n" +
-	"\r_quality_tier\"\xd1\x03\n" +
+	"\r_quality_tierB\x13\n" +
+	"\x11_stream_buffer_msB\x13\n" +
+	"\x11_stream_jitter_msB\x0e\n" +
+	"\f_mist_issuesB\x12\n" +
+	"\x10_max_keepaway_ms\"\xd1\x03\n" +
 	"\x10StreamEndTrigger\x12\x1f\n" +
 	"\vstream_name\x18\x01 \x01(\tR\n" +
 	"streamName\x12.\n" +
@@ -6462,7 +6562,7 @@ const file_ipc_proto_rawDesc = "" +
 	"\x0f_client_countryB\x0e\n" +
 	"\f_client_cityB\x12\n" +
 	"\x10_client_latitudeB\x13\n" +
-	"\x11_client_longitude\"\xdc\b\n" +
+	"\x11_client_longitude\"\xeb\t\n" +
 	"\x13NodeLifecycleUpdate\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x1d\n" +
 	"\n" +
@@ -6495,7 +6595,10 @@ const file_ipc_proto_rawDesc = "" +
 	"\astreams\x18\x17 \x03(\v21.helmsmancontrol.NodeLifecycleUpdate.StreamsEntryR\astreams\x12=\n" +
 	"\tartifacts\x18\x18 \x03(\v2\x1f.helmsmancontrol.StoredArtifactR\tartifacts\x12!\n" +
 	"\foutputs_json\x18\x19 \x01(\tR\voutputsJson\x12 \n" +
-	"\ttenant_id\x18\x1a \x01(\tH\x00R\btenantId\x88\x01\x01\x1aW\n" +
+	"\ttenant_id\x18\x1a \x01(\tH\x00R\btenantId\x88\x01\x01\x12,\n" +
+	"\x12bandwidth_in_total\x18\x1b \x01(\x04R\x10bandwidthInTotal\x12.\n" +
+	"\x13bandwidth_out_total\x18\x1c \x01(\x04R\x11bandwidthOutTotal\x12/\n" +
+	"\x13connections_current\x18\x1d \x01(\rR\x12connectionsCurrent\x1aW\n" +
 	"\fStreamsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x121\n" +
 	"\x05value\x18\x02 \x01(\v2\x1b.helmsmancontrol.StreamDataR\x05value:\x028\x01B\f\n" +
@@ -6527,7 +6630,7 @@ const file_ipc_proto_rawDesc = "" +
 	"_tenant_idB\x10\n" +
 	"\x0e_internal_nameB\x10\n" +
 	"\x0e_client_bucketB\x0e\n" +
-	"\f_node_bucket\"\x9d\b\n" +
+	"\f_node_bucket\"\xcd\b\n" +
 	"\x11ClipLifecycleData\x12>\n" +
 	"\x05stage\x18\x01 \x01(\x0e2(.helmsmancontrol.ClipLifecycleData.StageR\x05stage\x12\x1b\n" +
 	"\tclip_hash\x18\x02 \x01(\tR\bclipHash\x12\"\n" +
@@ -6552,7 +6655,8 @@ const file_ipc_proto_rawDesc = "" +
 	"\tstop_unix\x18\x0f \x01(\x03H\fR\bstopUnix\x88\x01\x01\x12\x1e\n" +
 	"\bstart_ms\x18\x10 \x01(\x03H\rR\astartMs\x88\x01\x01\x12\x1c\n" +
 	"\astop_ms\x18\x11 \x01(\x03H\x0eR\x06stopMs\x88\x01\x01\x12&\n" +
-	"\fduration_sec\x18\x12 \x01(\x03H\x0fR\vdurationSec\x88\x01\x01\"\x8e\x01\n" +
+	"\fduration_sec\x18\x12 \x01(\x03H\x0fR\vdurationSec\x88\x01\x01\x12 \n" +
+	"\tclip_mode\x18\x13 \x01(\tH\x10R\bclipMode\x88\x01\x01\"\x8e\x01\n" +
 	"\x05Stage\x12\x15\n" +
 	"\x11STAGE_UNSPECIFIED\x10\x00\x12\x13\n" +
 	"\x0fSTAGE_REQUESTED\x10\x01\x12\x10\n" +
@@ -6582,7 +6686,9 @@ const file_ipc_proto_rawDesc = "" +
 	"\t_start_msB\n" +
 	"\n" +
 	"\b_stop_msB\x0f\n" +
-	"\r_duration_sec\"\xbd\x05\n" +
+	"\r_duration_secB\f\n" +
+	"\n" +
+	"_clip_mode\"\xbd\x05\n" +
 	"\x10DVRLifecycleData\x12@\n" +
 	"\x06status\x18\x01 \x01(\x0e2(.helmsmancontrol.DVRLifecycleData.StatusR\x06status\x12\x19\n" +
 	"\bdvr_hash\x18\x02 \x01(\tR\advrHash\x12(\n" +

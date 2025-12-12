@@ -2072,7 +2072,7 @@ func (s *PeriscopeServer) GetNodeMetrics1H(ctx context.Context, req *pb.GetNodeM
 	// Query uses actual schema columns (no id column)
 	query := `
 		SELECT timestamp_1h, node_id, avg_cpu, peak_cpu, avg_memory, peak_memory,
-		       avg_disk, peak_disk, total_bandwidth_in, total_bandwidth_out, was_healthy
+		       avg_disk, peak_disk, avg_shm, peak_shm, total_bandwidth_in, total_bandwidth_out, was_healthy
 		FROM periscope.node_metrics_1h
 		WHERE timestamp_1h >= ? AND timestamp_1h <= ?
 	`
@@ -2114,7 +2114,7 @@ func (s *PeriscopeServer) GetNodeMetrics1H(ctx context.Context, req *pb.GetNodeM
 
 		err := rows.Scan(
 			&ts, &m.NodeId, &m.AvgCpu, &m.PeakCpu, &m.AvgMemory, &m.PeakMemory,
-			&m.AvgDisk, &m.PeakDisk, &m.TotalBandwidthIn, &m.TotalBandwidthOut, &wasHealthy,
+			&m.AvgDisk, &m.PeakDisk, &m.AvgShm, &m.PeakShm, &m.TotalBandwidthIn, &m.TotalBandwidthOut, &wasHealthy,
 		)
 		if err != nil {
 			s.logger.WithError(err).Warn("Failed to scan node_metrics_1h row")
@@ -3364,114 +3364,6 @@ func (s *PeriscopeServer) GetQualityTierDaily(ctx context.Context, req *pb.GetQu
 	}
 
 	return &pb.GetQualityTierDailyResponse{
-		Pagination: buildCursorResponse(resultsLen, params.Limit, params.Direction, total, startCursor, endCursor),
-		Records:    records,
-	}, nil
-}
-
-// GetQualityChangesHourly returns hourly quality changes from quality_changes_1h MV
-func (s *PeriscopeServer) GetQualityChangesHourly(ctx context.Context, req *pb.GetQualityChangesHourlyRequest) (*pb.GetQualityChangesHourlyResponse, error) {
-	tenantID := getTenantID(ctx, req.GetTenantId())
-	if tenantID == "" {
-		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
-	}
-
-	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
-	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "invalid time range: %v", err)
-	}
-
-	params, err := getCursorPagination(req.GetPagination())
-	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "invalid pagination: %v", err)
-	}
-
-	stream := req.GetStream()
-
-	// Build count query
-	countQuery := `SELECT count(*) FROM quality_changes_1h WHERE tenant_id = ? AND hour >= ? AND hour <= ?`
-	countArgs := []interface{}{tenantID, startTime, endTime}
-	if stream != "" {
-		countQuery += " AND internal_name = ?"
-		countArgs = append(countArgs, stream)
-	}
-	countCh := s.countAsync(ctx, countQuery, countArgs...)
-
-	query := `
-		SELECT hour, tenant_id, internal_name, total_changes, resolution_changes, codec_changes,
-		       quality_tiers, latest_quality, latest_codec, latest_resolution
-		FROM quality_changes_1h
-		WHERE tenant_id = ? AND hour >= ? AND hour <= ?
-	`
-	args := []interface{}{tenantID, startTime, endTime}
-
-	if stream != "" {
-		query += " AND internal_name = ?"
-		args = append(args, stream)
-	}
-
-	keysetCond, keysetArgs := buildKeysetCondition(params, "hour", "internal_name")
-	if keysetCond != "" {
-		query += keysetCond
-		args = append(args, keysetArgs...)
-	}
-
-	query += buildOrderBy(params, "hour", "internal_name")
-	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
-
-	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
-	}
-	defer rows.Close()
-
-	var records []*pb.QualityChangesHourly
-	for rows.Next() {
-		var hour time.Time
-		var tenantIDStr, internalName, latestQuality, latestCodec, latestResolution string
-		var totalChanges, resolutionChanges, codecChanges uint32
-		var qualityTiers []string
-
-		err := rows.Scan(&hour, &tenantIDStr, &internalName, &totalChanges, &resolutionChanges, &codecChanges,
-			&qualityTiers, &latestQuality, &latestCodec, &latestResolution)
-		if err != nil {
-			s.logger.WithError(err).Error("Failed to scan quality_changes_1h row")
-			continue
-		}
-
-		records = append(records, &pb.QualityChangesHourly{
-			Id:                fmt.Sprintf("%s_%s", hour.Format(time.RFC3339), internalName),
-			Hour:              timestamppb.New(hour),
-			TenantId:          tenantIDStr,
-			InternalName:      internalName,
-			TotalChanges:      totalChanges,
-			ResolutionChanges: resolutionChanges,
-			CodecChanges:      codecChanges,
-			QualityTiers:      qualityTiers,
-			LatestQuality:     latestQuality,
-			LatestCodec:       latestCodec,
-			LatestResolution:  latestResolution,
-		})
-	}
-
-	resultsLen := len(records)
-	if resultsLen > params.Limit {
-		records = records[:params.Limit]
-	}
-
-	if params.Direction == pagination.Backward {
-		slices.Reverse(records)
-	}
-
-	total := <-countCh
-
-	var startCursor, endCursor string
-	if len(records) > 0 {
-		startCursor = pagination.EncodeCursor(records[0].Hour.AsTime(), records[0].InternalName)
-		endCursor = pagination.EncodeCursor(records[len(records)-1].Hour.AsTime(), records[len(records)-1].InternalName)
-	}
-
-	return &pb.GetQualityChangesHourlyResponse{
 		Pagination: buildCursorResponse(resultsLen, params.Limit, params.Direction, total, startCursor, endCursor),
 		Records:    records,
 	}, nil

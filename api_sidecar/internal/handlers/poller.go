@@ -59,6 +59,11 @@ type PrometheusMonitor struct {
 	// Shared Mist API client
 	mistClient *mist.Client
 	mistMu     sync.Mutex
+
+	// Bandwidth rate calculation state
+	lastBwUp     uint64
+	lastBwDown   uint64
+	lastPollTime time.Time
 }
 
 var prometheusMonitor *PrometheusMonitor
@@ -666,7 +671,7 @@ func (pm *PrometheusMonitor) forwardNodeMetrics(nodeID string) {
 	roles := rolesFromCapabilityFlags(capIngest, capEdge, capStorage, capProcessing)
 
 	// Convert API response to MistTrigger using converter
-	mistTrigger := convertNodeAPIToMistTrigger(nodeID, pm.getLastJSONData(), monitorLogger)
+	mistTrigger := pm.convertNodeAPIToMistTrigger(nodeID, pm.getLastJSONData(), monitorLogger)
 
 	// Enrich with Helmsman-specific capabilities, storage, limits
 	enrichNodeLifecycleTrigger(mistTrigger, capIngest, capEdge, capStorage, capProcessing, roles)
@@ -1527,7 +1532,7 @@ func GetStoredArtifacts() []*pb.StoredArtifact {
 }
 
 // convertNodeAPIToMistTrigger converts MistServer JSON API response to MistTrigger
-func convertNodeAPIToMistTrigger(nodeID string, jsonData map[string]interface{}, logger logging.Logger) *pb.MistTrigger {
+func (pm *PrometheusMonitor) convertNodeAPIToMistTrigger(nodeID string, jsonData map[string]interface{}, logger logging.Logger) *pb.MistTrigger {
 	nodeUpdate := &pb.NodeLifecycleUpdate{
 		NodeId:    nodeID,
 		EventType: "node_lifecycle_update",
@@ -1567,21 +1572,48 @@ func convertNodeAPIToMistTrigger(nodeID string, jsonData map[string]interface{},
 			nodeUpdate.ShmUsedBytes = uint64(shmUsed)
 		}
 
-		// Extract bandwidth info
+		// Extract bandwidth data from bw array: [up_total, down_total]
 		if bw, ok := jsonData["bw"].([]interface{}); ok && len(bw) >= 2 {
+			var currentUp, currentDown uint64
 			if up, ok := bw[0].(float64); ok {
-				nodeUpdate.UpSpeed = uint64(up)
+				currentUp = uint64(up)
 			}
 			if down, ok := bw[1].(float64); ok {
-				nodeUpdate.DownSpeed = uint64(down)
+				currentDown = uint64(down)
 			}
+
+			// Store cumulative totals
+			nodeUpdate.BandwidthOutTotal = currentUp
+			nodeUpdate.BandwidthInTotal = currentDown
+
+			// Compute rates (bytes/sec) from delta
+			elapsed := time.Since(pm.lastPollTime).Seconds()
+			if pm.lastBwUp > 0 && elapsed > 1.0 && currentUp >= pm.lastBwUp {
+				// Normal case: compute rate from delta
+				nodeUpdate.UpSpeed = uint64(float64(currentUp-pm.lastBwUp) / elapsed)
+				nodeUpdate.DownSpeed = uint64(float64(currentDown-pm.lastBwDown) / elapsed)
+			}
+			// Else: first poll or counter reset - leave rates at 0
+
+			// Store for next poll
+			pm.lastBwUp = currentUp
+			pm.lastBwDown = currentDown
+			pm.lastPollTime = time.Now()
 		} else if bandwidth, ok := jsonData["bandwidth"].(map[string]interface{}); ok {
-			// Fallback to old 'bandwidth' object
+			// Fallback to old 'bandwidth' object (legacy)
 			if up, ok := bandwidth["up"].(float64); ok {
 				nodeUpdate.UpSpeed = uint64(up)
 			}
 			if down, ok := bandwidth["down"].(float64); ok {
 				nodeUpdate.DownSpeed = uint64(down)
+			}
+		}
+
+		// Extract current connections from curr array
+		// curr = [viewers, incoming, outgoing, unspecified, cached]
+		if curr, ok := jsonData["curr"].([]interface{}); ok && len(curr) >= 1 {
+			if viewers, ok := curr[0].(float64); ok {
+				nodeUpdate.ConnectionsCurrent = uint32(viewers)
 			}
 		}
 

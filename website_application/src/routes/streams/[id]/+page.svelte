@@ -18,11 +18,15 @@
     StreamEventsStore,
     ViewerMetricsStreamStore,
     TrackListUpdatesStore,
+    ClipLifecycleStore,
+    DvrLifecycleStore,
   } from "$houdini";
   import type {
     StreamEvents$result,
     ViewerMetricsStream$result,
     TrackListUpdates$result,
+    ClipLifecycle$result,
+    DvrLifecycle$result,
   } from "$houdini";
   import { toast } from "$lib/stores/toast.js";
   import LoadingCard from "$lib/components/LoadingCard.svelte";
@@ -48,6 +52,7 @@
     EventLog,
     StreamSetupPanel,
   } from "$lib/components/stream-details";
+  import { SectionDivider } from "$lib/components/layout";
   import type { StreamEvent, EventType } from "$lib/components/stream-details/EventLog.svelte";
 
   // Houdini stores
@@ -65,6 +70,8 @@
   const streamEventsSub = new StreamEventsStore();
   const viewerMetricsSub = new ViewerMetricsStreamStore();
   const trackListSub = new TrackListUpdatesStore();
+  const clipLifecycleSub = new ClipLifecycleStore();
+  const dvrLifecycleSub = new DvrLifecycleStore();
 
   // Types from Houdini
   type StreamType = NonNullable<NonNullable<typeof $streamStore.data>["stream"]>;
@@ -127,6 +134,12 @@
     if ($trackListSub.errors?.length) {
       console.warn("Track list subscription error:", $trackListSub.errors);
     }
+    if ($clipLifecycleSub.errors?.length) {
+      console.warn("Clip lifecycle subscription error:", $clipLifecycleSub.errors);
+    }
+    if ($dvrLifecycleSub.errors?.length) {
+      console.warn("DVR lifecycle subscription error:", $dvrLifecycleSub.errors);
+    }
   });
 
   // Effect to handle stream events subscription
@@ -154,6 +167,20 @@
         currentTracks = tracks;
         addEvent("track_change", `Track list updated: ${tracks.totalTracks} track(s)`);
       });
+    }
+  });
+
+  $effect(() => {
+    const event = $clipLifecycleSub.data?.clipLifecycle;
+    if (event) {
+      untrack(() => handleClipLifecycleEvent(event));
+    }
+  });
+
+  $effect(() => {
+    const event = $dvrLifecycleSub.data?.dvrLifecycle;
+    if (event) {
+      untrack(() => handleDvrLifecycleEvent(event));
     }
   });
 
@@ -189,6 +216,8 @@
     streamEventsSub.unlisten();
     viewerMetricsSub.unlisten();
     trackListSub.unlisten();
+    clipLifecycleSub.unlisten();
+    dvrLifecycleSub.unlisten();
   });
 
   function startSubscriptions() {
@@ -199,6 +228,8 @@
     streamEventsSub.listen({ stream: streamData.id });
     viewerMetricsSub.listen({ stream: streamData.id });
     trackListSub.listen({ stream: streamData.id });
+    clipLifecycleSub.listen({ stream: streamData.id });
+    dvrLifecycleSub.listen({ stream: streamData.id });
   }
 
   function addEvent(type: EventType, message: string, details?: string) {
@@ -216,6 +247,16 @@
       streamEvents = [event, ...streamEvents].slice(0, 100);
     });
   }
+
+  // Clip Lifecycle Stages (mapped from proto/ipc.proto)
+  const ClipLifecycleStage = {
+    REQUESTED: 1,
+    QUEUED: 2,
+    PROGRESS: 3,
+    DONE: 4,
+    FAILED: 5,
+    DELETED: 6,
+  };
 
   function handleStreamEvent(event: NonNullable<StreamEvents$result["streamEvents"]>) {
     if (event.type === "STREAM_START" || event.status === "LIVE") {
@@ -249,6 +290,34 @@
     } else if (metrics.action === "disconnect") {
       realtimeViewers = Math.max(0, realtimeViewers - 1);
       addEvent("viewer_disconnect", "Viewer disconnected");
+    }
+  }
+
+  function handleClipLifecycleEvent(event: NonNullable<ClipLifecycle$result["clipLifecycle"]>) {
+    if (event.stage === ClipLifecycleStage.DONE) {
+      if (event.s3Url) {
+        addEvent("info", `Clip '${event.clipHash}' uploaded`, `URL: ${event.s3Url}`);
+      } else {
+        addEvent("info", `Clip '${event.clipHash}' created`, `Path: ${event.filePath}`);
+      }
+    } else if (event.stage === ClipLifecycleStage.FAILED) {
+      addEvent("error", `Clip '${event.clipHash}' failed`, `Error: ${event.error}`);
+    } else if (event.stage === ClipLifecycleStage.DELETED) {
+      addEvent("info", `Clip '${event.clipHash}' deleted`);
+    } else if (event.stage === ClipLifecycleStage.REQUESTED) {
+      addEvent("info", `Clip '${event.clipHash}' requested`);
+    }
+  }
+
+  function handleDvrLifecycleEvent(event: NonNullable<DvrLifecycle$result["dvrLifecycle"]>) {
+    if (event.status === "RECORDING") {
+      addEvent("dvr_start", `DVR recording started for '${event.internalName}'`);
+    } else if (event.status === "COMPLETED") {
+      addEvent("dvr_stop", `DVR recording completed for '${event.internalName}'`, `Segments: ${event.segmentCount}`);
+    } else if (event.status === "FAILED") {
+      addEvent("error", `DVR recording failed for '${event.internalName}'`, `Error: ${event.error}`);
+    } else if (event.status === "DELETED") {
+      addEvent("info", `DVR recording deleted for '${event.internalName}'`);
     }
   }
 
@@ -454,35 +523,45 @@
 
 <div class="h-full flex flex-col">
   <!-- Fixed Page Header -->
-  <div class="px-4 sm:px-6 lg:px-8 py-4 border-b border-border shrink-0">
+  <div class="px-4 sm:px-6 lg:px-8 py-4 border-b border-[hsl(var(--tn-fg-gutter)/0.3)] shrink-0">
     <div class="flex items-center justify-between">
-      <div class="flex items-center space-x-4">
-        <button
+      <div class="flex items-center gap-4">
+        <Button
+          variant="ghost"
+          size="icon"
+          class="rounded-full"
           onclick={navigateBack}
-          class="p-2 border border-border/50 hover:bg-muted/50 transition-colors"
         >
           <ArrowLeftIcon class="w-5 h-5" />
-        </button>
+        </Button>
 
-        <div class="flex items-center gap-3">
+        <div>
           <h1 class="text-xl font-bold text-foreground">
-            {stream?.name || "Stream Details"}
+            Stream Details
           </h1>
-
-          {#if stream}
-            <!-- Status Badge -->
-            <span class="flex items-center gap-1.5 px-2 py-1 text-xs font-medium {isLive ? 'bg-success/20 text-success' : 'bg-muted text-muted-foreground'}">
-              <CircleIcon class="w-2 h-2 {isLive ? 'fill-current animate-pulse' : ''}" />
-              {isLive ? "LIVE" : "OFFLINE"}
+          <div class="flex items-center gap-2 mt-0.5">
+            <span class="text-sm font-medium text-foreground">
+              {stream?.name || "Loading..."}
             </span>
-
-            {#if stream.record}
-              <span class="flex items-center gap-1.5 px-2 py-1 text-xs font-medium bg-error/20 text-error">
-                <CircleIcon class="w-2 h-2 fill-current" />
-                REC
+            <span class="text-xs text-muted-foreground">•</span>
+            <span class="text-xs text-muted-foreground font-mono">
+              {stream?.id?.slice(0, 8) || ""}...
+            </span>
+            {#if stream}
+              <!-- Status Badge -->
+              <span class="flex items-center gap-1.5 px-2 py-0.5 rounded text-[10px] font-medium {isLive ? 'bg-success/20 text-success' : 'bg-muted text-muted-foreground'}">
+                <CircleIcon class="w-1.5 h-1.5 {isLive ? 'fill-current animate-pulse' : ''}" />
+                {isLive ? "LIVE" : "OFFLINE"}
               </span>
+
+              {#if stream.record}
+                <span class="flex items-center gap-1.5 px-2 py-0.5 rounded text-[10px] font-medium bg-error/20 text-error">
+                  <CircleIcon class="w-1.5 h-1.5 fill-current" />
+                  REC
+                </span>
+              {/if}
             {/if}
-          {/if}
+          </div>
         </div>
       </div>
 
@@ -490,9 +569,9 @@
         <div class="flex items-center space-x-2">
           <!-- Health Toggle (desktop) -->
           <Button
-            variant={healthSidebarCollapsed ? "outline" : "default"}
+            variant="ghost"
             size="sm"
-            class="gap-2 hidden md:flex"
+            class="gap-2 hidden md:flex {healthSidebarCollapsed ? '' : 'bg-[hsl(var(--tn-bg-visual))] text-primary'}"
             onclick={toggleHealthSidebar}
           >
             <ActivityIcon class="w-4 h-4" />
@@ -500,7 +579,7 @@
           </Button>
 
           <Button
-            variant="outline"
+            variant="ghost"
             size="sm"
             class="gap-2"
             onclick={() => (showEditModal = true)}
@@ -510,9 +589,9 @@
           </Button>
 
           <Button
-            variant="destructive"
+            variant="ghost"
             size="sm"
-            class="gap-2"
+            class="gap-2 text-destructive hover:text-destructive hover:bg-destructive/10"
             onclick={() => (showDeleteModal = true)}
           >
             <Trash2Icon class="w-4 h-4" />
@@ -542,62 +621,56 @@
     {:else if stream}
       <!-- Main Content (scrollable) -->
       <div class="flex-1 overflow-y-auto">
-        <div class="p-4 sm:p-6 lg:p-8 space-y-6">
+        <div class="flex flex-col">
           <!-- Stream Overview Cards -->
-          <div class="grid grid-cols-1 md:grid-cols-3 border border-border/30">
-            <div class="border-b md:border-b-0 md:border-r border-border/30">
-              <StreamStatusCard {stream} {analytics} />
-            </div>
-            <div class="border-b md:border-b-0 md:border-r border-border/30">
-              <StreamKeyCard
-                {stream}
-                loading={actionLoading.refreshKey}
-                onRefresh={handleRefreshStreamKey}
-                onCopy={copyToClipboard}
-              />
-            </div>
-            <div>
-              <StreamPlaybackCard {stream} onCopy={copyToClipboard} />
-            </div>
+          <div class="grid grid-cols-1 md:grid-cols-3 divide-y md:divide-y-0 md:divide-x divide-[hsl(var(--tn-fg-gutter)/0.3)] bg-background">
+            <StreamStatusCard {stream} {analytics} />
+            <StreamKeyCard
+              {stream}
+              loading={actionLoading.refreshKey}
+              onRefresh={handleRefreshStreamKey}
+              onCopy={copyToClipboard}
+            />
+            <StreamPlaybackCard {stream} onCopy={copyToClipboard} />
           </div>
 
+          <SectionDivider showBar={false} class="p-0" />
+
           <!-- Tabbed Content -->
-          <div class="border border-border">
+          <div class="slab border-b border-[hsl(var(--tn-fg-gutter)/0.3)]">
             <Tabs value="overview" class="w-full">
-              <div class="border-b border-border bg-brand-surface-muted">
-                <TabsList class="flex px-4 bg-transparent w-full justify-start overflow-x-auto">
+              <TabsList class="flex w-full rounded-none p-0 h-auto bg-[hsl(var(--tn-bg-dark)/0.5)] border-b border-[hsl(var(--tn-fg-gutter)/0.3)] justify-start overflow-x-auto items-center">
                   <TabsTrigger
                     value="overview"
-                    class="gap-2 px-4 py-3 text-sm font-medium text-muted-foreground border-b-2 border-transparent rounded-none data-[state=active]:text-info data-[state=active]:border-info"
+                    class="gap-2 px-4 py-3 text-sm font-medium text-muted-foreground border-b-2 border-transparent rounded-none data-[state=active]:text-info data-[state=active]:border-info cursor-pointer hover:bg-muted/20 transition-colors"
                   >
                     <InfoIcon class="w-4 h-4" />
                     Overview
                   </TabsTrigger>
                   <TabsTrigger
                     value="setup"
-                    class="gap-2 px-4 py-3 text-sm font-medium text-muted-foreground border-b-2 border-transparent rounded-none data-[state=active]:text-info data-[state=active]:border-info"
+                    class="gap-2 px-4 py-3 text-sm font-medium text-muted-foreground border-b-2 border-transparent rounded-none data-[state=active]:text-info data-[state=active]:border-info cursor-pointer hover:bg-muted/20 transition-colors"
                   >
                     <SettingsIcon class="w-4 h-4" />
                     Setup
                   </TabsTrigger>
                   <TabsTrigger
                     value="keys"
-                    class="gap-2 px-4 py-3 text-sm font-medium text-muted-foreground border-b-2 border-transparent rounded-none data-[state=active]:text-info data-[state=active]:border-info"
+                    class="gap-2 px-4 py-3 text-sm font-medium text-muted-foreground border-b-2 border-transparent rounded-none data-[state=active]:text-info data-[state=active]:border-info cursor-pointer hover:bg-muted/20 transition-colors"
                   >
                     <KeyIcon class="w-4 h-4" />
                     Keys ({streamKeys.length})
                   </TabsTrigger>
                   <TabsTrigger
                     value="recordings"
-                    class="gap-2 px-4 py-3 text-sm font-medium text-muted-foreground border-b-2 border-transparent rounded-none data-[state=active]:text-info data-[state=active]:border-info"
+                    class="gap-2 px-4 py-3 text-sm font-medium text-muted-foreground border-b-2 border-transparent rounded-none data-[state=active]:text-info data-[state=active]:border-info cursor-pointer hover:bg-muted/20 transition-colors"
                   >
                     <VideoIcon class="w-4 h-4" />
                     Recordings ({recordings.length})
                   </TabsTrigger>
                 </TabsList>
-              </div>
 
-              <TabsContent value="overview" class="p-4 sm:p-6 min-h-[20rem]">
+              <TabsContent value="overview" class="p-0 min-h-[20rem]">
                 <OverviewTabPanel
                   {stream}
                   {streamKeys}
@@ -608,7 +681,7 @@
                 />
               </TabsContent>
 
-              <TabsContent value="setup" class="p-4 sm:p-6 min-h-[20rem]">
+              <TabsContent value="setup" class="p-0 min-h-[20rem]">
                 <StreamSetupPanel
                   {stream}
                   onRefreshKey={handleRefreshStreamKey}
@@ -616,7 +689,7 @@
                 />
               </TabsContent>
 
-              <TabsContent value="keys" class="p-4 sm:p-6 min-h-[20rem]">
+              <TabsContent value="keys" class="p-0 min-h-[20rem]">
                 <StreamKeysTabPanel
                   {streamKeys}
                   onCreateKey={() => (showCreateKeyModal = true)}
@@ -626,7 +699,7 @@
                 />
               </TabsContent>
 
-              <TabsContent value="recordings" class="p-4 sm:p-6 min-h-[20rem]">
+              <TabsContent value="recordings" class="p-0 min-h-[20rem]">
                 <RecordingsTabPanel
                   {recordings}
                   onEnableRecording={() => (showEditModal = true)}

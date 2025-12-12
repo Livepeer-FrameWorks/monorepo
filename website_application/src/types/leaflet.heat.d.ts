@@ -11,7 +11,7 @@ declare module "leaflet.heat" {
       gradient?: Record<number, string>;
       minOpacity?: number;
       max?: number;
-    }
+    },
   ): L.Layer;
 
   export { heatLayer };

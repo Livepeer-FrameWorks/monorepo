@@ -1,6 +1,6 @@
-import { writable } from 'svelte/store';
-import { authAPI } from '$lib/authAPI.js';
-import { initializeWebSocket, disconnectWebSocket } from './realtime.js';
+import { writable } from "svelte/store";
+import { authAPI } from "$lib/authAPI.js";
+import { initializeWebSocket, disconnectWebSocket } from "./realtime.js";
 
 interface User {
   id: string;
@@ -50,24 +50,27 @@ function createAuthStore() {
     async login(
       email: string,
       password: string,
-      botProtectionData: BotProtectionData = {}
+      botProtectionData: BotProtectionData = {},
     ): Promise<LoginResponse> {
       update((state) => ({ ...state, loading: true, error: null }));
 
       try {
         // Backend now sets httpOnly cookies automatically
         // Response only contains user data (no token in body)
-        const response = await authAPI.post<{ user: User; expires_at: string }>('/login', {
-          email,
-          password,
-          turnstile_token: botProtectionData.turnstileToken,
-          ...botProtectionData,
-        });
+        const response = await authAPI.post<{ user: User; expires_at: string }>(
+          "/login",
+          {
+            email,
+            password,
+            turnstile_token: botProtectionData.turnstileToken,
+            ...botProtectionData,
+          },
+        );
 
         const { user } = response.data;
 
         // Store user in localStorage for client-side access to non-sensitive data
-        localStorage.setItem('user', JSON.stringify(user));
+        localStorage.setItem("user", JSON.stringify(user));
 
         set({
           isAuthenticated: true,
@@ -84,17 +87,17 @@ function createAuthStore() {
       } catch (error: unknown) {
         const errorMessage =
           error &&
-          typeof error === 'object' &&
-          'response' in error &&
+          typeof error === "object" &&
+          "response" in error &&
           error.response &&
-          typeof error.response === 'object' &&
-          'data' in error.response &&
+          typeof error.response === "object" &&
+          "data" in error.response &&
           error.response.data &&
-          typeof error.response.data === 'object' &&
-          'error' in error.response.data &&
-          typeof error.response.data.error === 'string'
+          typeof error.response.data === "object" &&
+          "error" in error.response.data &&
+          typeof error.response.data.error === "string"
             ? error.response.data.error
-            : 'Login failed';
+            : "Login failed";
         update((state) => ({ ...state, loading: false, error: errorMessage }));
         return { success: false, error: errorMessage };
       }
@@ -104,13 +107,13 @@ function createAuthStore() {
       email: string,
       password: string,
       botProtectionData: BotProtectionData = {},
-      firstName: string = '',
-      lastName: string = ''
+      firstName: string = "",
+      lastName: string = "",
     ): Promise<LoginResponse> {
       update((state) => ({ ...state, loading: true, error: null }));
 
       try {
-        await authAPI.post('/register', {
+        await authAPI.post("/register", {
           email,
           password,
           ...(firstName && { first_name: firstName }),
@@ -130,17 +133,17 @@ function createAuthStore() {
       } catch (error: unknown) {
         const errorMessage =
           error &&
-          typeof error === 'object' &&
-          'response' in error &&
+          typeof error === "object" &&
+          "response" in error &&
           error.response &&
-          typeof error.response === 'object' &&
-          'data' in error.response &&
+          typeof error.response === "object" &&
+          "data" in error.response &&
           error.response.data &&
-          typeof error.response.data === 'object' &&
-          'error' in error.response.data &&
-          typeof error.response.data.error === 'string'
+          typeof error.response.data === "object" &&
+          "error" in error.response.data &&
+          typeof error.response.data.error === "string"
             ? error.response.data.error
-            : 'Registration failed';
+            : "Registration failed";
         update((state) => ({ ...state, loading: false, error: errorMessage }));
         return { success: false, error: errorMessage };
       }
@@ -167,11 +170,11 @@ function createAuthStore() {
 
       try {
         // Call /me endpoint - cookies sent automatically with withCredentials
-        const response = await authAPI.get<User>('/me');
+        const response = await authAPI.get<User>("/me");
         const user = response.data;
 
         // Update localStorage with fresh user data
-        localStorage.setItem('user', JSON.stringify(user));
+        localStorage.setItem("user", JSON.stringify(user));
 
         set({
           isAuthenticated: true,
@@ -185,10 +188,12 @@ function createAuthStore() {
       } catch {
         // Not authenticated or token expired - try refresh
         try {
-          const refreshResponse = await authAPI.post<{ user: User }>('/refresh');
+          const refreshResponse = await authAPI.post<{ user: User }>(
+            "/refresh",
+          );
           const { user } = refreshResponse.data;
 
-          localStorage.setItem('user', JSON.stringify(user));
+          localStorage.setItem("user", JSON.stringify(user));
 
           set({
             isAuthenticated: true,
@@ -201,7 +206,7 @@ function createAuthStore() {
           initializeWebSocket();
         } catch {
           // Refresh failed - user is not authenticated
-          localStorage.removeItem('user');
+          localStorage.removeItem("user");
 
           set({
             isAuthenticated: false,
@@ -217,13 +222,13 @@ function createAuthStore() {
     async logout() {
       try {
         // Backend clears all auth cookies
-        await authAPI.post('/logout');
+        await authAPI.post("/logout");
       } catch {
         // Ignore errors - clear local state anyway
       }
 
       disconnectWebSocket();
-      localStorage.removeItem('user');
+      localStorage.removeItem("user");
 
       set({
         isAuthenticated: false,
@@ -234,9 +239,15 @@ function createAuthStore() {
       });
     },
 
-    async resendVerification(email: string, turnstileToken?: string): Promise<LoginResponse> {
+    async resendVerification(
+      email: string,
+      turnstileToken?: string,
+    ): Promise<LoginResponse> {
       try {
-        const response = await authAPI.post<{ success: boolean; message: string }>('/resend-verification', {
+        const response = await authAPI.post<{
+          success: boolean;
+          message: string;
+        }>("/resend-verification", {
           email,
           turnstile_token: turnstileToken,
         });
@@ -244,48 +255,57 @@ function createAuthStore() {
       } catch (error: unknown) {
         const errorMessage =
           error &&
-          typeof error === 'object' &&
-          'response' in error &&
+          typeof error === "object" &&
+          "response" in error &&
           error.response &&
-          typeof error.response === 'object' &&
-          'data' in error.response &&
+          typeof error.response === "object" &&
+          "data" in error.response &&
           error.response.data &&
-          typeof error.response.data === 'object' &&
-          'error' in error.response.data &&
-          typeof error.response.data.error === 'string'
+          typeof error.response.data === "object" &&
+          "error" in error.response.data &&
+          typeof error.response.data.error === "string"
             ? error.response.data.error
-            : 'Failed to send verification email';
+            : "Failed to send verification email";
         return { success: false, error: errorMessage };
       }
     },
 
     async forgotPassword(email: string): Promise<LoginResponse> {
       try {
-        const response = await authAPI.post<{ success: boolean; message: string }>('/forgot-password', {
+        const response = await authAPI.post<{
+          success: boolean;
+          message: string;
+        }>("/forgot-password", {
           email,
         });
         return { success: response.data.success, error: response.data.message };
       } catch (error: unknown) {
         const errorMessage =
           error &&
-          typeof error === 'object' &&
-          'response' in error &&
+          typeof error === "object" &&
+          "response" in error &&
           error.response &&
-          typeof error.response === 'object' &&
-          'data' in error.response &&
+          typeof error.response === "object" &&
+          "data" in error.response &&
           error.response.data &&
-          typeof error.response.data === 'object' &&
-          'error' in error.response.data &&
-          typeof error.response.data.error === 'string'
+          typeof error.response.data === "object" &&
+          "error" in error.response.data &&
+          typeof error.response.data.error === "string"
             ? error.response.data.error
-            : 'Failed to send password reset email';
+            : "Failed to send password reset email";
         return { success: false, error: errorMessage };
       }
     },
 
-    async resetPassword(token: string, password: string): Promise<LoginResponse> {
+    async resetPassword(
+      token: string,
+      password: string,
+    ): Promise<LoginResponse> {
       try {
-        const response = await authAPI.post<{ success: boolean; message: string }>('/reset-password', {
+        const response = await authAPI.post<{
+          success: boolean;
+          message: string;
+        }>("/reset-password", {
           token,
           password,
         });
@@ -293,17 +313,17 @@ function createAuthStore() {
       } catch (error: unknown) {
         const errorMessage =
           error &&
-          typeof error === 'object' &&
-          'response' in error &&
+          typeof error === "object" &&
+          "response" in error &&
           error.response &&
-          typeof error.response === 'object' &&
-          'data' in error.response &&
+          typeof error.response === "object" &&
+          "data" in error.response &&
           error.response.data &&
-          typeof error.response.data === 'object' &&
-          'error' in error.response.data &&
-          typeof error.response.data.error === 'string'
+          typeof error.response.data === "object" &&
+          "error" in error.response.data &&
+          typeof error.response.data.error === "string"
             ? error.response.data.error
-            : 'Failed to reset password';
+            : "Failed to reset password";
         return { success: false, error: errorMessage };
       }
     },

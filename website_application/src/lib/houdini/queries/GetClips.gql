@@ -14,5 +14,7 @@ query GetClips($streamId: ID) {
     accessCount
     createdAt
     updatedAt
+    clipMode
+    requestedParams
   }
 }

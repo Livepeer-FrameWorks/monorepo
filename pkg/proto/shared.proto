@@ -12,6 +12,15 @@ import "common.proto";
 // Used by both Foghorn and Commodore services
 // ============================================================================
 
+// ClipMode - specifies how clip time boundaries are interpreted
+enum ClipMode {
+  CLIP_MODE_UNSPECIFIED = 0;
+  CLIP_MODE_ABSOLUTE = 1;   // start_unix + stop_unix (Unix timestamps in seconds)
+  CLIP_MODE_RELATIVE = 2;   // start_ms + stop_ms (media time in seconds from stream start)
+  CLIP_MODE_DURATION = 3;   // start_unix or start_ms + duration_sec
+  CLIP_MODE_CLIP_NOW = 4;   // negative start_unix + duration_sec (relative to live)
+}
+
 // CreateClipRequest - request to create a clip from a stream
 // Source: pkg/api/foghorn/types.go:CreateClipRequest
 message CreateClipRequest {
@@ -20,11 +29,12 @@ message CreateClipRequest {
   string format = 3;
   string title = 4;
   string description = 5;
-  optional int64 start_unix = 6;
-  optional int64 stop_unix = 7;
-  optional int64 start_ms = 8;
-  optional int64 stop_ms = 9;
-  optional int64 duration_sec = 10;
+  optional int64 start_unix = 6;    // Unix timestamp (seconds), negative for relative-to-now
+  optional int64 stop_unix = 7;     // Unix timestamp (seconds)
+  optional int64 start_ms = 8;      // Media time (seconds from stream start) - legacy name, actually seconds
+  optional int64 stop_ms = 9;       // Media time (seconds from stream start) - legacy name, actually seconds
+  optional int64 duration_sec = 10; // Duration (seconds)
+  ClipMode mode = 11;               // How to interpret the time fields
 }
 
 // CreateClipResponse - response from clip creation
@@ -46,8 +56,8 @@ message ClipInfo {
   string stream_name = 3;
   string title = 4;
   string description = 5;
-  int64 start_time = 6;
-  int64 duration = 7;
+  int64 start_time = 6;       // Resolved start time (seconds)
+  int64 duration = 7;         // Resolved duration (seconds)
   string node_id = 8;
   string storage_path = 9;
   optional int64 size_bytes = 10;
@@ -55,6 +65,9 @@ message ClipInfo {
   int32 access_count = 12;
   google.protobuf.Timestamp created_at = 13;
   google.protobuf.Timestamp updated_at = 14;
+  // NEW: Original request parameters for audit/display
+  optional string clip_mode = 15;         // Mode used: absolute, relative, duration, clip_now
+  optional string requested_params = 16;  // JSON blob of original request params
 }
 
 // GetClipsRequest - request to list clips

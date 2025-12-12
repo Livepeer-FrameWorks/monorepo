@@ -21,11 +21,17 @@ query GetPlatformRoutingEvents(
         clientCountry
         clientLatitude
         clientLongitude
-        clientBucket { h3Index resolution }
+        clientBucket {
+          h3Index
+          resolution
+        }
         nodeLatitude
         nodeLongitude
         nodeName
-        nodeBucket { h3Index resolution }
+        nodeBucket {
+          h3Index
+          resolution
+        }
         details
         routingDistance
       }

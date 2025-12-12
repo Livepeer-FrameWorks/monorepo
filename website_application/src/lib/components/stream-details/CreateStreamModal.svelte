@@ -41,15 +41,15 @@
     if (!value) onCancel();
   }}
 >
-  <DialogContent class="max-w-md">
-    <DialogHeader>
-      <DialogTitle>Create New Stream</DialogTitle>
-      <DialogDescription>
+  <DialogContent class="max-w-md rounded-none border-[hsl(var(--tn-fg-gutter)/0.3)] bg-background p-0 gap-0 overflow-hidden">
+    <DialogHeader class="slab-header text-left space-y-1">
+      <DialogTitle class="uppercase tracking-wide text-sm font-semibold text-muted-foreground">Create New Stream</DialogTitle>
+      <DialogDescription class="text-xs text-muted-foreground/70">
         Configure the basics for your next broadcast.
       </DialogDescription>
     </DialogHeader>
 
-    <form class="space-y-4" onsubmit={preventDefault(onSubmit)}>
+    <form id="create-stream-form" class="slab-body--padded space-y-4" onsubmit={preventDefault(onSubmit)}>
       <div>
         <label
           for="stream-title"
@@ -102,20 +102,27 @@
           </p>
         </div>
       </div>
-
-      <DialogFooter class="gap-2">
-        <Button
-          type="button"
-          variant="outline"
-          onclick={onCancel}
-          disabled={creating}
-        >
-          Cancel
-        </Button>
-        <Button type="submit" disabled={creating || !title.trim()}>
-          {creating ? "Creating..." : "Create Stream"}
-        </Button>
-      </DialogFooter>
     </form>
+
+    <DialogFooter class="slab-actions slab-actions--row gap-0">
+      <Button
+        type="button"
+        variant="ghost"
+        class="rounded-none h-12 flex-1 border-r border-[hsl(var(--tn-fg-gutter)/0.3)] hover:bg-muted/10 text-muted-foreground hover:text-foreground"
+        onclick={onCancel}
+        disabled={creating}
+      >
+        Cancel
+      </Button>
+      <Button 
+        type="submit" 
+        variant="ghost"
+        class="rounded-none h-12 flex-1 hover:bg-muted/10 text-primary hover:text-primary/80"
+        disabled={creating || !title.trim()}
+        form="create-stream-form"
+      >
+        {creating ? "Creating..." : "Create Stream"}
+      </Button>
+    </DialogFooter>
   </DialogContent>
 </Dialog>

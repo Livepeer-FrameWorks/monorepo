@@ -1,7 +1,10 @@
 <script lang="ts">
+  // StreamMetrics matches the StreamMetric interface from realtime.ts
   interface StreamMetrics {
-    bandwidth_in?: number;
-    bandwidth_out?: number;
+    // Bandwidth in bits per second (from ViewerMetrics subscription)
+    bandwidthInBps?: number;
+    bandwidthOutBps?: number;
+    // Legacy fields
     bitrate_kbps?: number;
     video_codec?: string;
     audio_codec?: string;
@@ -15,6 +18,18 @@
   let { liveMetrics, formatBytes }: Props = $props();
 
   let hasLiveStreams = $derived(Object.keys(liveMetrics).length > 0);
+
+  // Convert bits per second to a human-readable format
+  function formatBitsPerSec(bps: number): string {
+    if (bps >= 1_000_000_000) {
+      return `${(bps / 1_000_000_000).toFixed(1)} Gbps`;
+    } else if (bps >= 1_000_000) {
+      return `${(bps / 1_000_000).toFixed(1)} Mbps`;
+    } else if (bps >= 1_000) {
+      return `${(bps / 1_000).toFixed(1)} Kbps`;
+    }
+    return `${bps} bps`;
+  }
 </script>
 
 {#if hasLiveStreams}
@@ -41,9 +56,9 @@
           <div>
             <span class="text-muted-foreground">Bandwidth:</span>
             <span class="text-foreground ml-1"
-              >{formatBytes(
-                (metrics.bandwidth_in || 0) + (metrics.bandwidth_out || 0)
-              )}/s</span
+              >{formatBitsPerSec(
+                (metrics.bandwidthInBps || 0) + (metrics.bandwidthOutBps || 0)
+              )}</span
             >
           </div>
           <div>

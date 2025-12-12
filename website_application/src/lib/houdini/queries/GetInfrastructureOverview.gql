@@ -1,4 +1,8 @@
-query GetInfrastructureOverview($timeRange: TimeRangeInput, $first: Int = 100, $noCache: Boolean = false) {
+query GetInfrastructureOverview(
+  $timeRange: TimeRangeInput
+  $first: Int = 100
+  $noCache: Boolean = false
+) {
   tenant {
     id
     name
@@ -55,7 +59,11 @@ query GetInfrastructureOverview($timeRange: TimeRangeInput, $first: Int = 100, $
     longitude
   }
 
-  nodeMetrics1hConnection(timeRange: $timeRange, first: $first, noCache: $noCache) {
+  nodeMetrics1hConnection(
+    timeRange: $timeRange
+    first: $first
+    noCache: $noCache
+  ) {
     edges {
       node {
         timestamp

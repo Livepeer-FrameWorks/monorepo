@@ -4,7 +4,7 @@
  * without requiring a full GraphQL AST parser
  */
 
-export type OperationType = 'query' | 'mutation' | 'subscription' | 'fragment';
+export type OperationType = "query" | "mutation" | "subscription" | "fragment";
 
 export interface VariableDefinition {
   name: string;
@@ -29,20 +29,21 @@ export interface ParsedOperation {
 export function extractOperationType(query: string): OperationType {
   // Strip comments first to handle files with comment headers
   const withoutComments = query
-    .split('\n')
-    .filter(line => !line.trim().startsWith('#'))
-    .join('\n')
+    .split("\n")
+    .filter((line) => !line.trim().startsWith("#"))
+    .join("\n")
     .trim();
 
-  if (withoutComments.startsWith('mutation')) return 'mutation';
-  if (withoutComments.startsWith('subscription')) return 'subscription';
-  if (withoutComments.startsWith('fragment')) return 'fragment';
-  if (withoutComments.startsWith('query') || withoutComments.startsWith('{')) return 'query';
+  if (withoutComments.startsWith("mutation")) return "mutation";
+  if (withoutComments.startsWith("subscription")) return "subscription";
+  if (withoutComments.startsWith("fragment")) return "fragment";
+  if (withoutComments.startsWith("query") || withoutComments.startsWith("{"))
+    return "query";
 
   // Check for shorthand query (no keyword)
-  if (/^\s*\{/.test(withoutComments)) return 'query';
+  if (/^\s*\{/.test(withoutComments)) return "query";
 
-  return 'query';
+  return "query";
 }
 
 /**
@@ -53,13 +54,15 @@ export function extractOperationName(query: string): string {
   const withoutComments = stripComments(query);
 
   // Match: query|mutation|subscription|fragment OperationName
-  const match = withoutComments.match(/^(query|mutation|subscription|fragment)\s+(\w+)/);
+  const match = withoutComments.match(
+    /^(query|mutation|subscription|fragment)\s+(\w+)/,
+  );
   if (match) {
     return match[2];
   }
 
   // Anonymous query
-  return 'Anonymous';
+  return "Anonymous";
 }
 
 /**
@@ -67,16 +70,18 @@ export function extractOperationName(query: string): string {
  */
 function stripComments(content: string): string {
   return content
-    .split('\n')
-    .filter(line => !line.trim().startsWith('#'))
-    .join('\n')
+    .split("\n")
+    .filter((line) => !line.trim().startsWith("#"))
+    .join("\n")
     .trim();
 }
 
 /**
  * Extract variable definitions from a GraphQL query string
  */
-export function extractVariableDefinitions(query: string): VariableDefinition[] {
+export function extractVariableDefinitions(
+  query: string,
+): VariableDefinition[] {
   const variables: VariableDefinition[] = [];
 
   // Match the variable definition block: ($var1: Type!, $var2: Type)
@@ -103,19 +108,19 @@ export function extractVariableDefinitions(query: string): VariableDefinition[] 
  */
 function splitVariableDefinitions(block: string): string[] {
   const parts: string[] = [];
-  let current = '';
+  let current = "";
   let depth = 0;
 
   for (const char of block) {
-    if (char === '[' || char === '(') {
+    if (char === "[" || char === "(") {
       depth++;
       current += char;
-    } else if (char === ']' || char === ')') {
+    } else if (char === "]" || char === ")") {
       depth--;
       current += char;
-    } else if (char === ',' && depth === 0) {
+    } else if (char === "," && depth === 0) {
       parts.push(current);
-      current = '';
+      current = "";
     } else {
       current += char;
     }
@@ -142,9 +147,11 @@ function parseVariableDefinition(def: string): VariableDefinition | null {
   return {
     name,
     type,
-    required: type.endsWith('!'),
-    isList: type.startsWith('['),
-    defaultValue: defaultStr ? parseDefaultValue(defaultStr.trim(), type) : undefined,
+    required: type.endsWith("!"),
+    isList: type.startsWith("["),
+    defaultValue: defaultStr
+      ? parseDefaultValue(defaultStr.trim(), type)
+      : undefined,
   };
 }
 
@@ -153,11 +160,11 @@ function parseVariableDefinition(def: string): VariableDefinition | null {
  */
 function parseDefaultValue(value: string, type: string): unknown {
   // Handle null
-  if (value === 'null') return null;
+  if (value === "null") return null;
 
   // Handle boolean
-  if (value === 'true') return true;
-  if (value === 'false') return false;
+  if (value === "true") return true;
+  if (value === "false") return false;
 
   // Handle numbers
   if (/^-?\d+$/.test(value)) return parseInt(value, 10);
@@ -176,14 +183,14 @@ function parseDefaultValue(value: string, type: string): unknown {
  * Extract description from comment at the top of a .gql file
  */
 export function extractDescription(content: string): string | undefined {
-  const lines = content.trim().split('\n');
+  const lines = content.trim().split("\n");
   const comments: string[] = [];
 
   for (const line of lines) {
     const trimmed = line.trim();
-    if (trimmed.startsWith('#')) {
+    if (trimmed.startsWith("#")) {
       comments.push(trimmed.slice(1).trim());
-    } else if (trimmed === '' && comments.length > 0) {
+    } else if (trimmed === "" && comments.length > 0) {
       // Allow blank lines within comment block
       continue;
     } else {
@@ -192,13 +199,15 @@ export function extractDescription(content: string): string | undefined {
     }
   }
 
-  return comments.length > 0 ? comments.join(' ') : undefined;
+  return comments.length > 0 ? comments.join(" ") : undefined;
 }
 
 /**
  * Generate default variable values based on type
  */
-export function generateDefaultVariables(variables: VariableDefinition[]): Record<string, unknown> {
+export function generateDefaultVariables(
+  variables: VariableDefinition[],
+): Record<string, unknown> {
   const defaults: Record<string, unknown> = {};
 
   for (const v of variables) {
@@ -218,29 +227,29 @@ export function generateDefaultVariables(variables: VariableDefinition[]): Recor
  */
 function getDefaultForType(type: string): unknown {
   // Remove non-null markers and list brackets for base type
-  const baseType = type.replace(/[!\[\]]/g, '').trim();
+  const baseType = type.replace(/[!\[\]]/g, "").trim();
 
   // Handle list types
-  if (type.startsWith('[')) {
+  if (type.startsWith("[")) {
     return [];
   }
 
   // Handle known scalar types
   switch (baseType) {
-    case 'ID':
-      return 'your-id-here';
-    case 'String':
-      return '';
-    case 'Int':
+    case "ID":
+      return "your-id-here";
+    case "String":
+      return "";
+    case "Int":
       return 0;
-    case 'Float':
+    case "Float":
       return 0.0;
-    case 'Boolean':
+    case "Boolean":
       return false;
-    case 'Time':
-    case 'DateTime':
+    case "Time":
+    case "DateTime":
       return new Date().toISOString();
-    case 'JSON':
+    case "JSON":
       return {};
     default:
       // Handle known input types with proper structure
@@ -258,78 +267,78 @@ function getDefaultForInputType(typeName: string): unknown {
   const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
 
   switch (typeName) {
-    case 'TimeRangeInput':
+    case "TimeRangeInput":
       return {
         start: oneDayAgo.toISOString(),
         end: now.toISOString(),
       };
 
-    case 'PaginationInput':
+    case "PaginationInput":
       return {
         limit: 50,
         offset: 0,
       };
 
-    case 'CreateStreamInput':
+    case "CreateStreamInput":
       return {
-        name: 'my-stream',
-        description: 'Stream description',
+        name: "my-stream",
+        description: "Stream description",
         record: false,
       };
 
-    case 'UpdateStreamInput':
+    case "UpdateStreamInput":
       return {
-        name: 'updated-stream-name',
-        description: 'Updated description',
+        name: "updated-stream-name",
+        description: "Updated description",
         record: false,
       };
 
-    case 'CreateClipInput':
+    case "CreateClipInput":
       return {
-        stream: 'stream-name',
-        title: 'My Clip',
-        description: 'Clip description',
+        stream: "stream-name",
+        title: "My Clip",
+        description: "Clip description",
         startTime: 0,
         endTime: 30,
       };
 
-    case 'CreateStreamKeyInput':
+    case "CreateStreamKeyInput":
       return {
-        name: 'primary-key',
+        name: "primary-key",
       };
 
-    case 'CreateDeveloperTokenInput':
+    case "CreateDeveloperTokenInput":
       return {
-        name: 'my-api-token',
-        permissions: 'read,write',
+        name: "my-api-token",
+        permissions: "read,write",
         expiresIn: null,
       };
 
-    case 'StartDvrInput':
+    case "StartDvrInput":
       return {
-        streamId: 'your-stream-id',
+        streamId: "your-stream-id",
       };
 
-    case 'StopDvrInput':
+    case "StopDvrInput":
       return {
-        streamId: 'your-stream-id',
+        streamId: "your-stream-id",
       };
 
-    case 'PaymentInput':
+    case "PaymentInput":
       return {
         amount: 1000,
-        currency: 'USD',
-        method: 'CARD',
+        currency: "USD",
+        method: "CARD",
       };
 
-    case 'UpdateTenantInput':
+    case "UpdateTenantInput":
       return {
-        name: 'My Organization',
+        name: "My Organization",
       };
 
     default:
       // For unknown input types, return empty object with a hint
-      if (typeName.endsWith('Input')) {
+      if (typeName.endsWith("Input")) {
         return {};
       }
       return null;
@@ -339,7 +348,10 @@ function getDefaultForInputType(typeName: string): unknown {
 /**
  * Parse a complete .gql file content into a ParsedOperation
  */
-export function parseGqlFile(content: string, filePath?: string): ParsedOperation {
+export function parseGqlFile(
+  content: string,
+  filePath?: string,
+): ParsedOperation {
   const description = extractDescription(content);
   const type = extractOperationType(content);
   const name = extractOperationName(content);
@@ -362,18 +374,18 @@ export function parseGqlFile(content: string, filePath?: string): ParsedOperatio
 export function stripClientDirectives(query: string): string {
   // List of Houdini-specific directives to remove
   const clientDirectives = [
-    '@paginate',
-    '@list',
-    '@prepend',
-    '@append',
-    '@allLists',
-    '@parentID',
-    '@loading',
-    '@required',
-    '@optimisticKey',
-    '@blocking',
-    '@cache',
-    '@mask',
+    "@paginate",
+    "@list",
+    "@prepend",
+    "@append",
+    "@allLists",
+    "@parentID",
+    "@loading",
+    "@required",
+    "@optimisticKey",
+    "@blocking",
+    "@cache",
+    "@mask",
   ];
 
   let result = query;
@@ -381,13 +393,16 @@ export function stripClientDirectives(query: string): string {
   for (const directive of clientDirectives) {
     // Remove directive with optional arguments: @directive or @directive(...)
     // This regex handles @directive, @directive(...), and preserves surrounding whitespace
-    const pattern = new RegExp(`\\s*${directive.replace('@', '@')}(?:\\([^)]*\\))?`, 'g');
-    result = result.replace(pattern, '');
+    const pattern = new RegExp(
+      `\\s*${directive.replace("@", "@")}(?:\\([^)]*\\))?`,
+      "g",
+    );
+    result = result.replace(pattern, "");
   }
 
   // Clean up any double spaces or trailing spaces on lines
-  result = result.replace(/  +/g, ' ');
-  result = result.replace(/ +$/gm, '');
+  result = result.replace(/  +/g, " ");
+  result = result.replace(/ +$/gm, "");
 
   return result;
 }
@@ -415,7 +430,7 @@ export function formatOperationForTemplate(op: ParsedOperation): {
  */
 function formatOperationName(name: string): string {
   return name
-    .replace(/([A-Z])/g, ' $1')
+    .replace(/([A-Z])/g, " $1")
     .replace(/^./, (str) => str.toUpperCase())
     .trim();
 }

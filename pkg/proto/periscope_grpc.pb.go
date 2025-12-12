@@ -1520,7 +1520,6 @@ const (
 	AggregatedAnalyticsService_GetStreamConnectionHourly_FullMethodName = "/periscope.AggregatedAnalyticsService/GetStreamConnectionHourly"
 	AggregatedAnalyticsService_GetClientMetrics5M_FullMethodName        = "/periscope.AggregatedAnalyticsService/GetClientMetrics5m"
 	AggregatedAnalyticsService_GetQualityTierDaily_FullMethodName       = "/periscope.AggregatedAnalyticsService/GetQualityTierDaily"
-	AggregatedAnalyticsService_GetQualityChangesHourly_FullMethodName   = "/periscope.AggregatedAnalyticsService/GetQualityChangesHourly"
 	AggregatedAnalyticsService_GetStorageUsage_FullMethodName           = "/periscope.AggregatedAnalyticsService/GetStorageUsage"
 )
 
@@ -1533,7 +1532,6 @@ type AggregatedAnalyticsServiceClient interface {
 	GetStreamConnectionHourly(ctx context.Context, in *GetStreamConnectionHourlyRequest, opts ...grpc.CallOption) (*GetStreamConnectionHourlyResponse, error)
 	GetClientMetrics5M(ctx context.Context, in *GetClientMetrics5MRequest, opts ...grpc.CallOption) (*GetClientMetrics5MResponse, error)
 	GetQualityTierDaily(ctx context.Context, in *GetQualityTierDailyRequest, opts ...grpc.CallOption) (*GetQualityTierDailyResponse, error)
-	GetQualityChangesHourly(ctx context.Context, in *GetQualityChangesHourlyRequest, opts ...grpc.CallOption) (*GetQualityChangesHourlyResponse, error)
 	GetStorageUsage(ctx context.Context, in *GetStorageUsageRequest, opts ...grpc.CallOption) (*GetStorageUsageResponse, error)
 }
 
@@ -1575,16 +1573,6 @@ func (c *aggregatedAnalyticsServiceClient) GetQualityTierDaily(ctx context.Conte
 	return out, nil
 }
 
-func (c *aggregatedAnalyticsServiceClient) GetQualityChangesHourly(ctx context.Context, in *GetQualityChangesHourlyRequest, opts ...grpc.CallOption) (*GetQualityChangesHourlyResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(GetQualityChangesHourlyResponse)
-	err := c.cc.Invoke(ctx, AggregatedAnalyticsService_GetQualityChangesHourly_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *aggregatedAnalyticsServiceClient) GetStorageUsage(ctx context.Context, in *GetStorageUsageRequest, opts ...grpc.CallOption) (*GetStorageUsageResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetStorageUsageResponse)
@@ -1604,7 +1592,6 @@ type AggregatedAnalyticsServiceServer interface {
 	GetStreamConnectionHourly(context.Context, *GetStreamConnectionHourlyRequest) (*GetStreamConnectionHourlyResponse, error)
 	GetClientMetrics5M(context.Context, *GetClientMetrics5MRequest) (*GetClientMetrics5MResponse, error)
 	GetQualityTierDaily(context.Context, *GetQualityTierDailyRequest) (*GetQualityTierDailyResponse, error)
-	GetQualityChangesHourly(context.Context, *GetQualityChangesHourlyRequest) (*GetQualityChangesHourlyResponse, error)
 	GetStorageUsage(context.Context, *GetStorageUsageRequest) (*GetStorageUsageResponse, error)
 	mustEmbedUnimplementedAggregatedAnalyticsServiceServer()
 }
@@ -1624,9 +1611,6 @@ func (UnimplementedAggregatedAnalyticsServiceServer) GetClientMetrics5M(context.
 }
 func (UnimplementedAggregatedAnalyticsServiceServer) GetQualityTierDaily(context.Context, *GetQualityTierDailyRequest) (*GetQualityTierDailyResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetQualityTierDaily not implemented")
-}
-func (UnimplementedAggregatedAnalyticsServiceServer) GetQualityChangesHourly(context.Context, *GetQualityChangesHourlyRequest) (*GetQualityChangesHourlyResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetQualityChangesHourly not implemented")
 }
 func (UnimplementedAggregatedAnalyticsServiceServer) GetStorageUsage(context.Context, *GetStorageUsageRequest) (*GetStorageUsageResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetStorageUsage not implemented")
@@ -1707,24 +1691,6 @@ func _AggregatedAnalyticsService_GetQualityTierDaily_Handler(srv interface{}, ct
 	return interceptor(ctx, in, info, handler)
 }
 
-func _AggregatedAnalyticsService_GetQualityChangesHourly_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(GetQualityChangesHourlyRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(AggregatedAnalyticsServiceServer).GetQualityChangesHourly(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: AggregatedAnalyticsService_GetQualityChangesHourly_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(AggregatedAnalyticsServiceServer).GetQualityChangesHourly(ctx, req.(*GetQualityChangesHourlyRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _AggregatedAnalyticsService_GetStorageUsage_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetStorageUsageRequest)
 	if err := dec(in); err != nil {
@@ -1761,10 +1727,6 @@ var AggregatedAnalyticsService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetQualityTierDaily",
 			Handler:    _AggregatedAnalyticsService_GetQualityTierDaily_Handler,
-		},
-		{
-			MethodName: "GetQualityChangesHourly",
-			Handler:    _AggregatedAnalyticsService_GetQualityChangesHourly_Handler,
 		},
 		{
 			MethodName: "GetStorageUsage",

@@ -43,7 +43,6 @@ type Query {
   streamConnectionHourlyConnection(stream: String, timeRange: TimeRangeInput, first: Int = 100, after: String, last: Int, before: String, noCache: Boolean = false): StreamConnectionHourlyConnection!
   clientMetrics5mConnection(stream: String, nodeId: String, timeRange: TimeRangeInput, first: Int = 100, after: String, last: Int, before: String, noCache: Boolean = false): ClientMetrics5mConnection!
   qualityTierDailyConnection(stream: String, timeRange: TimeRangeInput, first: Int = 100, after: String, last: Int, before: String, noCache: Boolean = false): QualityTierDailyConnection!
-  qualityChangesHourlyConnection(stream: String, timeRange: TimeRangeInput, first: Int = 100, after: String, last: Int, before: String, noCache: Boolean = false): QualityChangesHourlyConnection!
   storageUsageConnection(nodeId: String, timeRange: TimeRangeInput, first: Int = 100, after: String, last: Int, before: String, noCache: Boolean = false): StorageUsageConnection!
 
   # Infrastructure Service Monitoring
@@ -289,6 +288,11 @@ type ClipLifecycle {
   completedAt: Int
   nodeId: String
   internalName: String
+  # Timing info for progress display (enriched by Foghorn)
+  startUnix: Int
+  stopUnix: Int
+  durationSec: Int
+  clipMode: String
 }
 
 # Input types
@@ -305,12 +309,36 @@ input UpdateStreamInput {
   record: Boolean
 }
 
+# Clip creation mode - determines how time fields are interpreted
+enum ClipCreationMode {
+  ABSOLUTE     # start_unix + stop_unix (Unix timestamps)
+  RELATIVE     # start (media time) + stop (media time from stream start)
+  DURATION     # start + duration
+  CLIP_NOW     # duration only (relative to live - clips last N seconds from now)
+}
+
 input CreateClipInput {
   stream: String!
-  startTime: Int!
-  endTime: Int!
   title: String!
   description: String
+
+  # Mode selection (default: ABSOLUTE for backward compatibility)
+  mode: ClipCreationMode
+
+  # ABSOLUTE mode: Unix timestamps in seconds
+  startUnix: Int
+  stopUnix: Int
+
+  # RELATIVE mode: Media time in seconds from stream start
+  startMedia: Int
+  stopMedia: Int
+
+  # DURATION / CLIP_NOW: Duration in seconds
+  duration: Int
+
+  # Legacy fields (deprecated, map to startUnix/stopUnix)
+  startTime: Int @deprecated(reason: "Use startUnix instead")
+  endTime: Int @deprecated(reason: "Use stopUnix instead")
 }
 
 # DVR types
@@ -823,31 +851,6 @@ type QualityTierDailyConnection {
   totalCount: Int!
 }
 
-# Hourly quality changes
-type QualityChangesHourly {
-  id: ID!
-  hour: Time!
-  internalName: String!
-  totalChanges: Int!
-  resolutionChanges: Int!
-  codecChanges: Int!
-  qualityTiers: [String!]!
-  latestQuality: String
-  latestCodec: String
-  latestResolution: String
-}
-
-type QualityChangesHourlyEdge {
-  cursor: String!
-  node: QualityChangesHourly!
-}
-
-type QualityChangesHourlyConnection {
-  edges: [QualityChangesHourlyEdge!]!
-  pageInfo: PageInfo!
-  totalCount: Int!
-}
-
 # Storage usage records
 type StorageUsageRecord {
   id: ID!
@@ -1249,8 +1252,8 @@ type Clip {
   streamName: String!
   title: String!
   description: String
-  startTime: Int!
-  duration: Int!
+  startTime: Int!           # Resolved start time (unix seconds)
+  duration: Int!            # Resolved duration (seconds)
   nodeId: String
   storagePath: String
   sizeBytes: Int
@@ -1258,6 +1261,9 @@ type Clip {
   accessCount: Int
   createdAt: Time
   updatedAt: Time
+  # Original request parameters for display/audit
+  clipMode: String          # Mode used: ABSOLUTE, RELATIVE, DURATION, CLIP_NOW
+  requestedParams: JSON     # Full original request params (startUnix, stopUnix, etc.)
 }
 
 # Bound to proto.ClipViewingURLs - uses map for flexibility
@@ -1593,10 +1599,10 @@ type ArtifactStatesConnection {
 type NodeMetric {
   timestamp: Time!
   nodeId: String!
-  
+
   # Resource usage
   cpuUsage: Float!
-  
+
   # Raw resource metrics (Bytes)
   memoryTotal: Float
   memoryUsed: Float
@@ -1604,9 +1610,17 @@ type NodeMetric {
   diskUsed: Float
   shmTotal: Float
   shmUsed: Float
-  
+
+  # Network bandwidth (cumulative bytes)
   networkRx: Int!
   networkTx: Int!
+
+  # Network throughput rates (bytes/sec) - use for real-time display
+  upSpeed: Int
+  downSpeed: Int
+
+  # Current viewer connections (gauge)
+  connectionsCurrent: Int
 
   # Status
   status: String!
@@ -1614,7 +1628,6 @@ type NodeMetric {
   # Optional geo and metadata available from Periscope
   latitude: Float
   longitude: Float
-  tags: [String!]
   metadata: JSON
 }
 
@@ -1628,6 +1641,8 @@ type NodeMetricHourly {
   peakMemory: Float!
   avgDisk: Float!
   peakDisk: Float!
+  avgShm: Float!
+  peakShm: Float!
   totalBandwidthIn: Int!
   totalBandwidthOut: Int!
   wasHealthy: Boolean!

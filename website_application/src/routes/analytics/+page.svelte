@@ -286,7 +286,8 @@
           },
           hasValue(analyticsData.avgBitrate) && {
             key: "avgBitrate", label: "Avg Bitrate",
-            value: `${((analyticsData.avgBitrate ?? 0) / 1000).toFixed(1)} Mbps`,
+            // avgBitrate is in bps, divide by 1,000,000 for Mbps
+            value: `${((analyticsData.avgBitrate ?? 0) / 1_000_000).toFixed(1)} Mbps`,
             tone: "text-primary",
           },
           hasValue(analyticsData.packetLossRate) && {
@@ -312,7 +313,7 @@
 
 <div class="h-full flex flex-col">
   <!-- Fixed Page Header -->
-  <div class="px-4 sm:px-6 lg:px-8 py-4 border-b border-border shrink-0">
+  <div class="px-4 sm:px-6 lg:px-8 py-4 border-b border-[hsl(var(--tn-fg-gutter)/0.3)] shrink-0">
     <div class="flex items-center gap-3">
       <ChartLineIcon class="w-5 h-5 text-primary" />
       <div>
@@ -490,16 +491,7 @@
                 <p class="text-muted-foreground text-sm">No analytics data available</p>
               {/if}
             </div>
-            <div class="slab-actions slab-actions--row">
-              <Button href={resolve("/analytics/realtime")} variant="ghost" class="gap-2">
-                <ZapIcon class="w-4 h-4" />
-                Real-time
-              </Button>
-              <Button href={resolve("/analytics/geographic")} variant="ghost" class="gap-2">
-                <GlobeIcon class="w-4 h-4" />
-                Geographic
-              </Button>
-            </div>
+
           </div>
         {/if}
 

@@ -25,6 +25,8 @@
     event: {
       diskTotalBytes: number | null;
       diskUsedBytes: number | null;
+      shmTotalBytes: number | null;
+      shmUsedBytes: number | null;
       status: NodeStatus$options;
     };
     ts: Date;
@@ -156,13 +158,26 @@
     </div>
 
     {#if systemHealth[node.nodeName]}
+      {@const shmUsed = systemHealth[node.nodeName].event.shmUsedBytes || 0}
+      {@const shmTotal = systemHealth[node.nodeName].event.shmTotalBytes || 1}
+      {@const shmPercent = (shmUsed / shmTotal) * 100}
       <div
-        class="grid grid-cols-3 gap-2 border-t border-border/40 pt-3 text-xs"
+        class="grid grid-cols-2 md:grid-cols-4 gap-2 border-t border-border/40 pt-3 text-xs"
       >
         <div>
           <p class="text-muted-foreground">Disk</p>
           <p>
             {Math.round((systemHealth[node.nodeName].event.diskUsedBytes || 0) / (systemHealth[node.nodeName].event.diskTotalBytes || 1) * 100)}%
+          </p>
+        </div>
+        <div>
+          <p class="text-muted-foreground">SHM</p>
+          <p>
+            {#if shmPercent > 0 && shmPercent < 1}
+              &lt; 1%
+            {:else}
+              {Math.round(shmPercent)}%
+            {/if}
           </p>
         </div>
         <div>

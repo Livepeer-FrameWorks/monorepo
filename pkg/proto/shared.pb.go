@@ -22,6 +22,62 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// ClipMode - specifies how clip time boundaries are interpreted
+type ClipMode int32
+
+const (
+	ClipMode_CLIP_MODE_UNSPECIFIED ClipMode = 0
+	ClipMode_CLIP_MODE_ABSOLUTE    ClipMode = 1 // start_unix + stop_unix (Unix timestamps in seconds)
+	ClipMode_CLIP_MODE_RELATIVE    ClipMode = 2 // start_ms + stop_ms (media time in seconds from stream start)
+	ClipMode_CLIP_MODE_DURATION    ClipMode = 3 // start_unix or start_ms + duration_sec
+	ClipMode_CLIP_MODE_CLIP_NOW    ClipMode = 4 // negative start_unix + duration_sec (relative to live)
+)
+
+// Enum value maps for ClipMode.
+var (
+	ClipMode_name = map[int32]string{
+		0: "CLIP_MODE_UNSPECIFIED",
+		1: "CLIP_MODE_ABSOLUTE",
+		2: "CLIP_MODE_RELATIVE",
+		3: "CLIP_MODE_DURATION",
+		4: "CLIP_MODE_CLIP_NOW",
+	}
+	ClipMode_value = map[string]int32{
+		"CLIP_MODE_UNSPECIFIED": 0,
+		"CLIP_MODE_ABSOLUTE":    1,
+		"CLIP_MODE_RELATIVE":    2,
+		"CLIP_MODE_DURATION":    3,
+		"CLIP_MODE_CLIP_NOW":    4,
+	}
+)
+
+func (x ClipMode) Enum() *ClipMode {
+	p := new(ClipMode)
+	*p = x
+	return p
+}
+
+func (x ClipMode) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ClipMode) Descriptor() protoreflect.EnumDescriptor {
+	return file_shared_proto_enumTypes[0].Descriptor()
+}
+
+func (ClipMode) Type() protoreflect.EnumType {
+	return &file_shared_proto_enumTypes[0]
+}
+
+func (x ClipMode) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ClipMode.Descriptor instead.
+func (ClipMode) EnumDescriptor() ([]byte, []int) {
+	return file_shared_proto_rawDescGZIP(), []int{0}
+}
+
 // CreateClipRequest - request to create a clip from a stream
 // Source: pkg/api/foghorn/types.go:CreateClipRequest
 type CreateClipRequest struct {
@@ -31,11 +87,12 @@ type CreateClipRequest struct {
 	Format        string                 `protobuf:"bytes,3,opt,name=format,proto3" json:"format,omitempty"`
 	Title         string                 `protobuf:"bytes,4,opt,name=title,proto3" json:"title,omitempty"`
 	Description   string                 `protobuf:"bytes,5,opt,name=description,proto3" json:"description,omitempty"`
-	StartUnix     *int64                 `protobuf:"varint,6,opt,name=start_unix,json=startUnix,proto3,oneof" json:"start_unix,omitempty"`
-	StopUnix      *int64                 `protobuf:"varint,7,opt,name=stop_unix,json=stopUnix,proto3,oneof" json:"stop_unix,omitempty"`
-	StartMs       *int64                 `protobuf:"varint,8,opt,name=start_ms,json=startMs,proto3,oneof" json:"start_ms,omitempty"`
-	StopMs        *int64                 `protobuf:"varint,9,opt,name=stop_ms,json=stopMs,proto3,oneof" json:"stop_ms,omitempty"`
-	DurationSec   *int64                 `protobuf:"varint,10,opt,name=duration_sec,json=durationSec,proto3,oneof" json:"duration_sec,omitempty"`
+	StartUnix     *int64                 `protobuf:"varint,6,opt,name=start_unix,json=startUnix,proto3,oneof" json:"start_unix,omitempty"`        // Unix timestamp (seconds), negative for relative-to-now
+	StopUnix      *int64                 `protobuf:"varint,7,opt,name=stop_unix,json=stopUnix,proto3,oneof" json:"stop_unix,omitempty"`           // Unix timestamp (seconds)
+	StartMs       *int64                 `protobuf:"varint,8,opt,name=start_ms,json=startMs,proto3,oneof" json:"start_ms,omitempty"`              // Media time (seconds from stream start) - legacy name, actually seconds
+	StopMs        *int64                 `protobuf:"varint,9,opt,name=stop_ms,json=stopMs,proto3,oneof" json:"stop_ms,omitempty"`                 // Media time (seconds from stream start) - legacy name, actually seconds
+	DurationSec   *int64                 `protobuf:"varint,10,opt,name=duration_sec,json=durationSec,proto3,oneof" json:"duration_sec,omitempty"` // Duration (seconds)
+	Mode          ClipMode               `protobuf:"varint,11,opt,name=mode,proto3,enum=shared.ClipMode" json:"mode,omitempty"`                   // How to interpret the time fields
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -140,6 +197,13 @@ func (x *CreateClipRequest) GetDurationSec() int64 {
 	return 0
 }
 
+func (x *CreateClipRequest) GetMode() ClipMode {
+	if x != nil {
+		return x.Mode
+	}
+	return ClipMode_CLIP_MODE_UNSPECIFIED
+}
+
 // CreateClipResponse - response from clip creation
 // Source: pkg/api/foghorn/types.go:CreateClipResponse
 type CreateClipResponse struct {
@@ -229,23 +293,26 @@ func (x *CreateClipResponse) GetClipHash() string {
 // ClipInfo - full clip details
 // Source: pkg/api/commodore/types.go:ClipFullResponse
 type ClipInfo struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	ClipHash      string                 `protobuf:"bytes,2,opt,name=clip_hash,json=clipHash,proto3" json:"clip_hash,omitempty"`
-	StreamName    string                 `protobuf:"bytes,3,opt,name=stream_name,json=streamName,proto3" json:"stream_name,omitempty"`
-	Title         string                 `protobuf:"bytes,4,opt,name=title,proto3" json:"title,omitempty"`
-	Description   string                 `protobuf:"bytes,5,opt,name=description,proto3" json:"description,omitempty"`
-	StartTime     int64                  `protobuf:"varint,6,opt,name=start_time,json=startTime,proto3" json:"start_time,omitempty"`
-	Duration      int64                  `protobuf:"varint,7,opt,name=duration,proto3" json:"duration,omitempty"`
-	NodeId        string                 `protobuf:"bytes,8,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
-	StoragePath   string                 `protobuf:"bytes,9,opt,name=storage_path,json=storagePath,proto3" json:"storage_path,omitempty"`
-	SizeBytes     *int64                 `protobuf:"varint,10,opt,name=size_bytes,json=sizeBytes,proto3,oneof" json:"size_bytes,omitempty"`
-	Status        string                 `protobuf:"bytes,11,opt,name=status,proto3" json:"status,omitempty"`
-	AccessCount   int32                  `protobuf:"varint,12,opt,name=access_count,json=accessCount,proto3" json:"access_count,omitempty"`
-	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,13,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	UpdatedAt     *timestamppb.Timestamp `protobuf:"bytes,14,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Id          string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	ClipHash    string                 `protobuf:"bytes,2,opt,name=clip_hash,json=clipHash,proto3" json:"clip_hash,omitempty"`
+	StreamName  string                 `protobuf:"bytes,3,opt,name=stream_name,json=streamName,proto3" json:"stream_name,omitempty"`
+	Title       string                 `protobuf:"bytes,4,opt,name=title,proto3" json:"title,omitempty"`
+	Description string                 `protobuf:"bytes,5,opt,name=description,proto3" json:"description,omitempty"`
+	StartTime   int64                  `protobuf:"varint,6,opt,name=start_time,json=startTime,proto3" json:"start_time,omitempty"` // Resolved start time (seconds)
+	Duration    int64                  `protobuf:"varint,7,opt,name=duration,proto3" json:"duration,omitempty"`                    // Resolved duration (seconds)
+	NodeId      string                 `protobuf:"bytes,8,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	StoragePath string                 `protobuf:"bytes,9,opt,name=storage_path,json=storagePath,proto3" json:"storage_path,omitempty"`
+	SizeBytes   *int64                 `protobuf:"varint,10,opt,name=size_bytes,json=sizeBytes,proto3,oneof" json:"size_bytes,omitempty"`
+	Status      string                 `protobuf:"bytes,11,opt,name=status,proto3" json:"status,omitempty"`
+	AccessCount int32                  `protobuf:"varint,12,opt,name=access_count,json=accessCount,proto3" json:"access_count,omitempty"`
+	CreatedAt   *timestamppb.Timestamp `protobuf:"bytes,13,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	UpdatedAt   *timestamppb.Timestamp `protobuf:"bytes,14,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	// NEW: Original request parameters for audit/display
+	ClipMode        *string `protobuf:"bytes,15,opt,name=clip_mode,json=clipMode,proto3,oneof" json:"clip_mode,omitempty"`                      // Mode used: absolute, relative, duration, clip_now
+	RequestedParams *string `protobuf:"bytes,16,opt,name=requested_params,json=requestedParams,proto3,oneof" json:"requested_params,omitempty"` // JSON blob of original request params
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *ClipInfo) Reset() {
@@ -374,6 +441,20 @@ func (x *ClipInfo) GetUpdatedAt() *timestamppb.Timestamp {
 		return x.UpdatedAt
 	}
 	return nil
+}
+
+func (x *ClipInfo) GetClipMode() string {
+	if x != nil && x.ClipMode != nil {
+		return *x.ClipMode
+	}
+	return ""
+}
+
+func (x *ClipInfo) GetRequestedParams() string {
+	if x != nil && x.RequestedParams != nil {
+		return *x.RequestedParams
+	}
+	return ""
 }
 
 // GetClipsRequest - request to list clips
@@ -2433,7 +2514,7 @@ var File_shared_proto protoreflect.FileDescriptor
 
 const file_shared_proto_rawDesc = "" +
 	"\n" +
-	"\fshared.proto\x12\x06shared\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\fcommon.proto\"\x98\x03\n" +
+	"\fshared.proto\x12\x06shared\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\fcommon.proto\"\xbe\x03\n" +
 	"\x11CreateClipRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12#\n" +
 	"\rinternal_name\x18\x02 \x01(\tR\finternalName\x12\x16\n" +
@@ -2446,7 +2527,8 @@ const file_shared_proto_rawDesc = "" +
 	"\bstart_ms\x18\b \x01(\x03H\x02R\astartMs\x88\x01\x01\x12\x1c\n" +
 	"\astop_ms\x18\t \x01(\x03H\x03R\x06stopMs\x88\x01\x01\x12&\n" +
 	"\fduration_sec\x18\n" +
-	" \x01(\x03H\x04R\vdurationSec\x88\x01\x01B\r\n" +
+	" \x01(\x03H\x04R\vdurationSec\x88\x01\x01\x12$\n" +
+	"\x04mode\x18\v \x01(\x0e2\x10.shared.ClipModeR\x04modeB\r\n" +
 	"\v_start_unixB\f\n" +
 	"\n" +
 	"_stop_unixB\v\n" +
@@ -2462,7 +2544,7 @@ const file_shared_proto_rawDesc = "" +
 	"\anode_id\x18\x04 \x01(\tR\x06nodeId\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x05 \x01(\tR\trequestId\x12\x1b\n" +
-	"\tclip_hash\x18\x06 \x01(\tR\bclipHash\"\xeb\x03\n" +
+	"\tclip_hash\x18\x06 \x01(\tR\bclipHash\"\xe0\x04\n" +
 	"\bClipInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1b\n" +
 	"\tclip_hash\x18\x02 \x01(\tR\bclipHash\x12\x1f\n" +
@@ -2483,8 +2565,13 @@ const file_shared_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\r \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
 	"\n" +
-	"updated_at\x18\x0e \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAtB\r\n" +
-	"\v_size_bytes\"\xab\x01\n" +
+	"updated_at\x18\x0e \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12 \n" +
+	"\tclip_mode\x18\x0f \x01(\tH\x01R\bclipMode\x88\x01\x01\x12.\n" +
+	"\x10requested_params\x18\x10 \x01(\tH\x02R\x0frequestedParams\x88\x01\x01B\r\n" +
+	"\v_size_bytesB\f\n" +
+	"\n" +
+	"_clip_modeB\x13\n" +
+	"\x11_requested_params\"\xab\x01\n" +
 	"\x0fGetClipsRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12(\n" +
 	"\rinternal_name\x18\x02 \x01(\tH\x00R\finternalName\x88\x01\x01\x12?\n" +
@@ -2717,7 +2804,13 @@ const file_shared_proto_rawDesc = "" +
 	"\b_version\"^\n" +
 	"\x12StreamMetaResponse\x126\n" +
 	"\fmeta_summary\x18\x01 \x01(\v2\x13.shared.MetaSummaryR\vmetaSummary\x12\x10\n" +
-	"\x03raw\x18\x02 \x01(\fR\x03rawB\x16Z\x14frameworks/pkg/protob\x06proto3"
+	"\x03raw\x18\x02 \x01(\fR\x03raw*\x85\x01\n" +
+	"\bClipMode\x12\x19\n" +
+	"\x15CLIP_MODE_UNSPECIFIED\x10\x00\x12\x16\n" +
+	"\x12CLIP_MODE_ABSOLUTE\x10\x01\x12\x16\n" +
+	"\x12CLIP_MODE_RELATIVE\x10\x02\x12\x16\n" +
+	"\x12CLIP_MODE_DURATION\x10\x03\x12\x16\n" +
+	"\x12CLIP_MODE_CLIP_NOW\x10\x04B\x16Z\x14frameworks/pkg/protob\x06proto3"
 
 var (
 	file_shared_proto_rawDescOnce sync.Once
@@ -2731,76 +2824,79 @@ func file_shared_proto_rawDescGZIP() []byte {
 	return file_shared_proto_rawDescData
 }
 
+var file_shared_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
 var file_shared_proto_msgTypes = make([]protoimpl.MessageInfo, 32)
 var file_shared_proto_goTypes = []any{
-	(*CreateClipRequest)(nil),         // 0: shared.CreateClipRequest
-	(*CreateClipResponse)(nil),        // 1: shared.CreateClipResponse
-	(*ClipInfo)(nil),                  // 2: shared.ClipInfo
-	(*GetClipsRequest)(nil),           // 3: shared.GetClipsRequest
-	(*GetClipsResponse)(nil),          // 4: shared.GetClipsResponse
-	(*GetClipRequest)(nil),            // 5: shared.GetClipRequest
-	(*GetClipURLsRequest)(nil),        // 6: shared.GetClipURLsRequest
-	(*ClipViewingURLs)(nil),           // 7: shared.ClipViewingURLs
-	(*DeleteClipRequest)(nil),         // 8: shared.DeleteClipRequest
-	(*DeleteClipResponse)(nil),        // 9: shared.DeleteClipResponse
-	(*StartDVRRequest)(nil),           // 10: shared.StartDVRRequest
-	(*StartDVRResponse)(nil),          // 11: shared.StartDVRResponse
-	(*StopDVRRequest)(nil),            // 12: shared.StopDVRRequest
-	(*StopDVRResponse)(nil),           // 13: shared.StopDVRResponse
-	(*GetDVRStatusRequest)(nil),       // 14: shared.GetDVRStatusRequest
-	(*DVRInfo)(nil),                   // 15: shared.DVRInfo
-	(*ListDVRRecordingsRequest)(nil),  // 16: shared.ListDVRRecordingsRequest
-	(*ListDVRRecordingsResponse)(nil), // 17: shared.ListDVRRecordingsResponse
-	(*ViewerEndpointRequest)(nil),     // 18: shared.ViewerEndpointRequest
-	(*OutputCapability)(nil),          // 19: shared.OutputCapability
-	(*OutputEndpoint)(nil),            // 20: shared.OutputEndpoint
-	(*ViewerEndpoint)(nil),            // 21: shared.ViewerEndpoint
-	(*PlaybackTrack)(nil),             // 22: shared.PlaybackTrack
-	(*PlaybackInstance)(nil),          // 23: shared.PlaybackInstance
-	(*PlaybackMetadata)(nil),          // 24: shared.PlaybackMetadata
-	(*ViewerEndpointResponse)(nil),    // 25: shared.ViewerEndpointResponse
-	(*StreamMetaRequest)(nil),         // 26: shared.StreamMetaRequest
-	(*TrackSummary)(nil),              // 27: shared.TrackSummary
-	(*MetaSummary)(nil),               // 28: shared.MetaSummary
-	(*StreamMetaResponse)(nil),        // 29: shared.StreamMetaResponse
-	nil,                               // 30: shared.ClipViewingURLs.UrlsEntry
-	nil,                               // 31: shared.ViewerEndpoint.OutputsEntry
-	(*timestamppb.Timestamp)(nil),     // 32: google.protobuf.Timestamp
-	(*CursorPaginationRequest)(nil),   // 33: common.CursorPaginationRequest
-	(*CursorPaginationResponse)(nil),  // 34: common.CursorPaginationResponse
+	(ClipMode)(0),                     // 0: shared.ClipMode
+	(*CreateClipRequest)(nil),         // 1: shared.CreateClipRequest
+	(*CreateClipResponse)(nil),        // 2: shared.CreateClipResponse
+	(*ClipInfo)(nil),                  // 3: shared.ClipInfo
+	(*GetClipsRequest)(nil),           // 4: shared.GetClipsRequest
+	(*GetClipsResponse)(nil),          // 5: shared.GetClipsResponse
+	(*GetClipRequest)(nil),            // 6: shared.GetClipRequest
+	(*GetClipURLsRequest)(nil),        // 7: shared.GetClipURLsRequest
+	(*ClipViewingURLs)(nil),           // 8: shared.ClipViewingURLs
+	(*DeleteClipRequest)(nil),         // 9: shared.DeleteClipRequest
+	(*DeleteClipResponse)(nil),        // 10: shared.DeleteClipResponse
+	(*StartDVRRequest)(nil),           // 11: shared.StartDVRRequest
+	(*StartDVRResponse)(nil),          // 12: shared.StartDVRResponse
+	(*StopDVRRequest)(nil),            // 13: shared.StopDVRRequest
+	(*StopDVRResponse)(nil),           // 14: shared.StopDVRResponse
+	(*GetDVRStatusRequest)(nil),       // 15: shared.GetDVRStatusRequest
+	(*DVRInfo)(nil),                   // 16: shared.DVRInfo
+	(*ListDVRRecordingsRequest)(nil),  // 17: shared.ListDVRRecordingsRequest
+	(*ListDVRRecordingsResponse)(nil), // 18: shared.ListDVRRecordingsResponse
+	(*ViewerEndpointRequest)(nil),     // 19: shared.ViewerEndpointRequest
+	(*OutputCapability)(nil),          // 20: shared.OutputCapability
+	(*OutputEndpoint)(nil),            // 21: shared.OutputEndpoint
+	(*ViewerEndpoint)(nil),            // 22: shared.ViewerEndpoint
+	(*PlaybackTrack)(nil),             // 23: shared.PlaybackTrack
+	(*PlaybackInstance)(nil),          // 24: shared.PlaybackInstance
+	(*PlaybackMetadata)(nil),          // 25: shared.PlaybackMetadata
+	(*ViewerEndpointResponse)(nil),    // 26: shared.ViewerEndpointResponse
+	(*StreamMetaRequest)(nil),         // 27: shared.StreamMetaRequest
+	(*TrackSummary)(nil),              // 28: shared.TrackSummary
+	(*MetaSummary)(nil),               // 29: shared.MetaSummary
+	(*StreamMetaResponse)(nil),        // 30: shared.StreamMetaResponse
+	nil,                               // 31: shared.ClipViewingURLs.UrlsEntry
+	nil,                               // 32: shared.ViewerEndpoint.OutputsEntry
+	(*timestamppb.Timestamp)(nil),     // 33: google.protobuf.Timestamp
+	(*CursorPaginationRequest)(nil),   // 34: common.CursorPaginationRequest
+	(*CursorPaginationResponse)(nil),  // 35: common.CursorPaginationResponse
 }
 var file_shared_proto_depIdxs = []int32{
-	32, // 0: shared.ClipInfo.created_at:type_name -> google.protobuf.Timestamp
-	32, // 1: shared.ClipInfo.updated_at:type_name -> google.protobuf.Timestamp
-	33, // 2: shared.GetClipsRequest.pagination:type_name -> common.CursorPaginationRequest
-	2,  // 3: shared.GetClipsResponse.clips:type_name -> shared.ClipInfo
-	34, // 4: shared.GetClipsResponse.pagination:type_name -> common.CursorPaginationResponse
-	30, // 5: shared.ClipViewingURLs.urls:type_name -> shared.ClipViewingURLs.UrlsEntry
-	32, // 6: shared.ClipViewingURLs.expires_at:type_name -> google.protobuf.Timestamp
-	32, // 7: shared.DVRInfo.started_at:type_name -> google.protobuf.Timestamp
-	32, // 8: shared.DVRInfo.ended_at:type_name -> google.protobuf.Timestamp
-	32, // 9: shared.DVRInfo.created_at:type_name -> google.protobuf.Timestamp
-	32, // 10: shared.DVRInfo.updated_at:type_name -> google.protobuf.Timestamp
-	33, // 11: shared.ListDVRRecordingsRequest.pagination:type_name -> common.CursorPaginationRequest
-	15, // 12: shared.ListDVRRecordingsResponse.dvr_recordings:type_name -> shared.DVRInfo
-	34, // 13: shared.ListDVRRecordingsResponse.pagination:type_name -> common.CursorPaginationResponse
-	19, // 14: shared.OutputEndpoint.capabilities:type_name -> shared.OutputCapability
-	31, // 15: shared.ViewerEndpoint.outputs:type_name -> shared.ViewerEndpoint.OutputsEntry
-	32, // 16: shared.PlaybackInstance.last_update:type_name -> google.protobuf.Timestamp
-	22, // 17: shared.PlaybackMetadata.tracks:type_name -> shared.PlaybackTrack
-	23, // 18: shared.PlaybackMetadata.instances:type_name -> shared.PlaybackInstance
-	32, // 19: shared.PlaybackMetadata.created_at:type_name -> google.protobuf.Timestamp
-	21, // 20: shared.ViewerEndpointResponse.primary:type_name -> shared.ViewerEndpoint
-	21, // 21: shared.ViewerEndpointResponse.fallbacks:type_name -> shared.ViewerEndpoint
-	24, // 22: shared.ViewerEndpointResponse.metadata:type_name -> shared.PlaybackMetadata
-	27, // 23: shared.MetaSummary.tracks:type_name -> shared.TrackSummary
-	28, // 24: shared.StreamMetaResponse.meta_summary:type_name -> shared.MetaSummary
-	20, // 25: shared.ViewerEndpoint.OutputsEntry.value:type_name -> shared.OutputEndpoint
-	26, // [26:26] is the sub-list for method output_type
-	26, // [26:26] is the sub-list for method input_type
-	26, // [26:26] is the sub-list for extension type_name
-	26, // [26:26] is the sub-list for extension extendee
-	0,  // [0:26] is the sub-list for field type_name
+	0,  // 0: shared.CreateClipRequest.mode:type_name -> shared.ClipMode
+	33, // 1: shared.ClipInfo.created_at:type_name -> google.protobuf.Timestamp
+	33, // 2: shared.ClipInfo.updated_at:type_name -> google.protobuf.Timestamp
+	34, // 3: shared.GetClipsRequest.pagination:type_name -> common.CursorPaginationRequest
+	3,  // 4: shared.GetClipsResponse.clips:type_name -> shared.ClipInfo
+	35, // 5: shared.GetClipsResponse.pagination:type_name -> common.CursorPaginationResponse
+	31, // 6: shared.ClipViewingURLs.urls:type_name -> shared.ClipViewingURLs.UrlsEntry
+	33, // 7: shared.ClipViewingURLs.expires_at:type_name -> google.protobuf.Timestamp
+	33, // 8: shared.DVRInfo.started_at:type_name -> google.protobuf.Timestamp
+	33, // 9: shared.DVRInfo.ended_at:type_name -> google.protobuf.Timestamp
+	33, // 10: shared.DVRInfo.created_at:type_name -> google.protobuf.Timestamp
+	33, // 11: shared.DVRInfo.updated_at:type_name -> google.protobuf.Timestamp
+	34, // 12: shared.ListDVRRecordingsRequest.pagination:type_name -> common.CursorPaginationRequest
+	16, // 13: shared.ListDVRRecordingsResponse.dvr_recordings:type_name -> shared.DVRInfo
+	35, // 14: shared.ListDVRRecordingsResponse.pagination:type_name -> common.CursorPaginationResponse
+	20, // 15: shared.OutputEndpoint.capabilities:type_name -> shared.OutputCapability
+	32, // 16: shared.ViewerEndpoint.outputs:type_name -> shared.ViewerEndpoint.OutputsEntry
+	33, // 17: shared.PlaybackInstance.last_update:type_name -> google.protobuf.Timestamp
+	23, // 18: shared.PlaybackMetadata.tracks:type_name -> shared.PlaybackTrack
+	24, // 19: shared.PlaybackMetadata.instances:type_name -> shared.PlaybackInstance
+	33, // 20: shared.PlaybackMetadata.created_at:type_name -> google.protobuf.Timestamp
+	22, // 21: shared.ViewerEndpointResponse.primary:type_name -> shared.ViewerEndpoint
+	22, // 22: shared.ViewerEndpointResponse.fallbacks:type_name -> shared.ViewerEndpoint
+	25, // 23: shared.ViewerEndpointResponse.metadata:type_name -> shared.PlaybackMetadata
+	28, // 24: shared.MetaSummary.tracks:type_name -> shared.TrackSummary
+	29, // 25: shared.StreamMetaResponse.meta_summary:type_name -> shared.MetaSummary
+	21, // 26: shared.ViewerEndpoint.OutputsEntry.value:type_name -> shared.OutputEndpoint
+	27, // [27:27] is the sub-list for method output_type
+	27, // [27:27] is the sub-list for method input_type
+	27, // [27:27] is the sub-list for extension type_name
+	27, // [27:27] is the sub-list for extension extendee
+	0,  // [0:27] is the sub-list for field type_name
 }
 
 func init() { file_shared_proto_init() }
@@ -2827,13 +2923,14 @@ func file_shared_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_shared_proto_rawDesc), len(file_shared_proto_rawDesc)),
-			NumEnums:      0,
+			NumEnums:      1,
 			NumMessages:   32,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
 		GoTypes:           file_shared_proto_goTypes,
 		DependencyIndexes: file_shared_proto_depIdxs,
+		EnumInfos:         file_shared_proto_enumTypes,
 		MessageInfos:      file_shared_proto_msgTypes,
 	}.Build()
 	File_shared_proto = out.File
