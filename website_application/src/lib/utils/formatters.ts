@@ -71,6 +71,43 @@ export function formatDate(date: string | Date): string {
   });
 }
 
+/**
+ * Format an expiry/retention date for display.
+ * Unlike formatDate which is for past events, this handles future dates.
+ */
+export function formatExpiry(date: string | Date | null | undefined): string {
+  if (!date) return "Never";
+
+  const dateObj = typeof date === "string" ? new Date(date) : date;
+  if (isNaN(dateObj.getTime())) return "Invalid Date";
+
+  const now = new Date();
+  const diffMs = dateObj.getTime() - now.getTime(); // Future is positive
+
+  // Past date - expired
+  if (diffMs < 0) return "Expired";
+
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMs / 3600000);
+  const diffDays = Math.floor(diffMs / 86400000);
+
+  // Less than an hour from now
+  if (diffMins < 60) return `in ${Math.max(1, diffMins)}m`;
+
+  // Less than 24 hours from now
+  if (diffHours < 24) return `in ${diffHours}h`;
+
+  // Less than 7 days from now
+  if (diffDays < 7) return `in ${diffDays}d`;
+
+  // More than a week - show actual date
+  return dateObj.toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+}
+
 export function formatTimestamp(timestamp: string | Date): string {
   if (!timestamp) return "N/A";
 

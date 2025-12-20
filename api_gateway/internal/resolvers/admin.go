@@ -8,6 +8,7 @@ import (
 
 	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/middleware"
+	"frameworks/pkg/pagination"
 	pb "frameworks/pkg/proto"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -32,6 +33,7 @@ func (r *Resolver) DoCreateBootstrapToken(ctx context.Context, input model.Creat
 			Name:       input.Name,
 			Token:      "bt_demo_12345678901234567890123456789012",
 			Kind:       string(input.Type),
+			ClusterId:  input.ClusterID,
 			UsageLimit: usageLimit,
 			UsageCount: 0,
 			ExpiresAt:  timestamppb.New(exp),
@@ -52,6 +54,9 @@ func (r *Resolver) DoCreateBootstrapToken(ctx context.Context, input model.Creat
 	if input.UsageLimit != nil {
 		limit := int32(*input.UsageLimit)
 		req.UsageLimit = &limit
+	}
+	if input.ClusterID != nil {
+		req.ClusterId = input.ClusterID
 	}
 
 	// Handle optional expiration - convert days to TTL string
@@ -150,4 +155,111 @@ func (r *Resolver) DoGetBootstrapTokens(ctx context.Context) ([]*pb.BootstrapTok
 	}
 
 	return tokensResp.Tokens, nil
+}
+
+// DoGetBootstrapTokensConnection retrieves bootstrap tokens with pagination (service token auth required)
+func (r *Resolver) DoGetBootstrapTokensConnection(ctx context.Context, kind *string, first *int, after *string, last *int, before *string) (*model.BootstrapTokenConnection, error) {
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Demo mode: returning synthetic bootstrap tokens connection")
+		now := time.Now()
+		usageLimit1 := int32(10)
+		usageLimit2 := int32(1)
+
+		tokens := []*pb.BootstrapToken{
+			{
+				Id:         "demo_bootstrap_edge_001",
+				Name:       "Edge Node Bootstrap - US West",
+				Kind:       "EDGE_NODE",
+				UsageLimit: &usageLimit1,
+				UsageCount: 3,
+				ExpiresAt:  timestamppb.New(now.AddDate(0, 1, 0)),
+				CreatedAt:  timestamppb.New(now.Add(-7 * 24 * time.Hour)),
+				UsedAt:     timestamppb.New(now.Add(-2 * time.Hour)),
+			},
+			{
+				Id:         "demo_bootstrap_service_001",
+				Name:       "Service Bootstrap - Transcoder",
+				Kind:       "SERVICE",
+				UsageLimit: &usageLimit2,
+				UsageCount: 0,
+				ExpiresAt:  timestamppb.New(now.AddDate(0, 0, 7)),
+				CreatedAt:  timestamppb.New(now.Add(-24 * time.Hour)),
+			},
+		}
+
+		edges := make([]*model.BootstrapTokenEdge, len(tokens))
+		for i, token := range tokens {
+			cursor := pagination.EncodeCursor(token.CreatedAt.AsTime(), token.Id)
+			edges[i] = &model.BootstrapTokenEdge{
+				Cursor: cursor,
+				Node:   token,
+			}
+		}
+
+		return &model.BootstrapTokenConnection{
+			Edges: edges,
+			PageInfo: &model.PageInfo{
+				HasPreviousPage: false,
+				HasNextPage:     false,
+			},
+			TotalCount: len(tokens),
+		}, nil
+	}
+
+	// Require service token authentication
+	if !middleware.HasServiceToken(ctx) {
+		return nil, fmt.Errorf("service token authentication required")
+	}
+
+	// Build pagination request
+	paginationReq := &pb.CursorPaginationRequest{First: 50}
+	if first != nil {
+		paginationReq.First = int32(*first)
+	}
+	if after != nil {
+		paginationReq.After = after
+	}
+	if last != nil {
+		paginationReq.Last = int32(*last)
+	}
+	if before != nil {
+		paginationReq.Before = before
+	}
+
+	// Call Quartermaster to get tokens
+	kindFilter := ""
+	if kind != nil {
+		kindFilter = *kind
+	}
+	tokensResp, err := r.Clients.Quartermaster.ListBootstrapTokens(ctx, kindFilter, "", paginationReq)
+	if err != nil {
+		r.Logger.WithError(err).Error("Failed to get bootstrap tokens")
+		return nil, fmt.Errorf("failed to get bootstrap tokens: %w", err)
+	}
+
+	// Build edges
+	edges := make([]*model.BootstrapTokenEdge, len(tokensResp.Tokens))
+	for i, token := range tokensResp.Tokens {
+		cursor := pagination.EncodeCursor(token.CreatedAt.AsTime(), token.Id)
+		edges[i] = &model.BootstrapTokenEdge{
+			Cursor: cursor,
+			Node:   token,
+		}
+	}
+
+	// Build page info
+	pageInfo := &model.PageInfo{
+		HasPreviousPage: after != nil && *after != "",
+		HasNextPage:     tokensResp.Pagination.GetHasNextPage(),
+	}
+	if len(edges) > 0 {
+		pageInfo.StartCursor = &edges[0].Cursor
+		pageInfo.EndCursor = &edges[len(edges)-1].Cursor
+	}
+
+	return &model.BootstrapTokenConnection{
+		Edges:      edges,
+		PageInfo:   pageInfo,
+		TotalCount: int(tokensResp.Pagination.GetTotalCount()),
+	}, nil
 }

@@ -1,3 +1,4 @@
+# Fetch single clip by ID with metadata and storage details
 query GetClip($id: ID!) {
   clip(id: $id) {
     id

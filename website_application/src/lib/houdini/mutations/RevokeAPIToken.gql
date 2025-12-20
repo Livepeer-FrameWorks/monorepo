@@ -1,3 +1,4 @@
+# Revoke a developer API token by its ID
 mutation RevokeAPIToken($id: ID!) {
   revokeDeveloperToken(id: $id) {
     __typename

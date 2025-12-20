@@ -1,0 +1,40 @@
+query GetStreamAnalyticsDailyConnection(
+  $internalName: String
+  $timeRange: TimeRangeInput
+  $first: Int = 100
+  $after: String
+  $last: Int
+  $before: String
+  $noCache: Boolean = false
+) {
+  streamAnalyticsDailyConnection(
+    internalName: $internalName
+    timeRange: $timeRange
+    first: $first
+    after: $after
+    last: $last
+    before: $before
+    noCache: $noCache
+  ) {
+    edges {
+      cursor
+      node {
+        id
+        day
+        internalName
+        totalViews
+        uniqueViewers
+        uniqueCountries
+        uniqueCities
+        egressBytes
+      }
+    }
+    pageInfo {
+      hasNextPage
+      hasPreviousPage
+      startCursor
+      endCursor
+    }
+    totalCount
+  }
+}

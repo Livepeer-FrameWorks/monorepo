@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/smtp"
 	"net/url"
@@ -89,6 +90,7 @@ type CommodoreServer struct {
 	pb.UnimplementedClipServiceServer
 	pb.UnimplementedDVRServiceServer
 	pb.UnimplementedViewerServiceServer
+	pb.UnimplementedVodServiceServer
 	db                   *sql.DB
 	logger               logging.Logger
 	foghornClient        *foghornclient.GRPCClient
@@ -349,6 +351,12 @@ func (s *CommodoreServer) StartDVR(ctx context.Context, req *pb.StartDVRRequest)
 		"user_id":       userID,
 	}).Info("Starting DVR recording via gRPC")
 
+	// Enforce 30-day default retention if not specified
+	if req.ExpiresAt == nil {
+		expiry := time.Now().Add(30 * 24 * time.Hour).Unix()
+		req.ExpiresAt = &expiry
+	}
+
 	// Generate DVR hash - use crypto/rand for secure hash
 	dvrHash := generateDVRHash()
 
@@ -357,6 +365,395 @@ func (s *CommodoreServer) StartDVR(ctx context.Context, req *pb.StartDVRRequest)
 	return &pb.StartDVRResponse{
 		DvrHash: dvrHash,
 		Status:  "requested",
+	}, nil
+}
+
+// ============================================================================
+// CLIP/DVR REGISTRY (Foghorn → Commodore)
+// Business registry for clips and DVR recordings.
+// See: docs/architecture/CLIP_DVR_REGISTRY.md
+// ============================================================================
+
+// RegisterClip creates a new clip in the business registry
+// Called by Foghorn during the CreateClip flow
+func (s *CommodoreServer) RegisterClip(ctx context.Context, req *pb.RegisterClipRequest) (*pb.RegisterClipResponse, error) {
+	tenantID := req.GetTenantId()
+	userID := req.GetUserId()
+	streamID := req.GetStreamId()
+
+	if tenantID == "" || userID == "" || streamID == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id, user_id, and stream_id are required")
+	}
+
+	// Generate clip hash
+	clipHash := generateClipHash()
+	clipID := uuid.New().String()
+
+	// Insert into business registry
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO commodore.clips (
+			id, tenant_id, user_id, stream_id, clip_hash,
+			title, description, start_time, duration, clip_mode, requested_params,
+			created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW())
+	`, clipID, tenantID, userID, streamID, clipHash,
+		req.GetTitle(), req.GetDescription(), req.GetStartTime(), req.GetDuration(),
+		req.GetClipMode(), req.GetRequestedParams())
+
+	if err != nil {
+		s.logger.WithFields(logging.Fields{
+			"tenant_id": tenantID,
+			"stream_id": streamID,
+			"error":     err,
+		}).Error("Failed to register clip in business registry")
+		return nil, status.Errorf(codes.Internal, "failed to register clip: %v", err)
+	}
+
+	s.logger.WithFields(logging.Fields{
+		"tenant_id": tenantID,
+		"clip_hash": clipHash,
+		"clip_id":   clipID,
+	}).Info("Registered clip in business registry")
+
+	return &pb.RegisterClipResponse{
+		ClipHash: clipHash,
+		ClipId:   clipID,
+	}, nil
+}
+
+// RegisterDVR creates a new DVR recording in the business registry
+// Called by Foghorn during the StartDVR flow
+func (s *CommodoreServer) RegisterDVR(ctx context.Context, req *pb.RegisterDVRRequest) (*pb.RegisterDVRResponse, error) {
+	tenantID := req.GetTenantId()
+	userID := req.GetUserId()
+	internalName := req.GetInternalName()
+
+	if tenantID == "" || userID == "" || internalName == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id, user_id, and internal_name are required")
+	}
+
+	// Generate DVR hash
+	dvrHash := generateDVRHash()
+	dvrID := uuid.New().String()
+
+	// stream_id is optional (legacy DVRs may not have it)
+	var streamID *string
+	if req.GetStreamId() != "" {
+		sid := req.GetStreamId()
+		streamID = &sid
+	}
+
+	// Insert into business registry
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO commodore.dvr_recordings (
+			id, tenant_id, user_id, stream_id, dvr_hash, internal_name,
+			created_at, updated_at
+		) VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, NOW(), NOW())
+	`, dvrID, tenantID, userID, streamID, dvrHash, internalName)
+
+	if err != nil {
+		s.logger.WithFields(logging.Fields{
+			"tenant_id":     tenantID,
+			"internal_name": internalName,
+			"error":         err,
+		}).Error("Failed to register DVR in business registry")
+		return nil, status.Errorf(codes.Internal, "failed to register DVR: %v", err)
+	}
+
+	s.logger.WithFields(logging.Fields{
+		"tenant_id":     tenantID,
+		"dvr_hash":      dvrHash,
+		"dvr_id":        dvrID,
+		"internal_name": internalName,
+	}).Info("Registered DVR in business registry")
+
+	return &pb.RegisterDVRResponse{
+		DvrHash: dvrHash,
+		DvrId:   dvrID,
+	}, nil
+}
+
+// ResolveClipHash resolves a clip hash to tenant context
+// Used for analytics enrichment and playback authorization
+func (s *CommodoreServer) ResolveClipHash(ctx context.Context, req *pb.ResolveClipHashRequest) (*pb.ResolveClipHashResponse, error) {
+	clipHash := req.GetClipHash()
+	if clipHash == "" {
+		return nil, status.Error(codes.InvalidArgument, "clip_hash is required")
+	}
+
+	var tenantID, userID, streamID, title, description, clipMode string
+	var startTime, duration int64
+	var internalName sql.NullString
+
+	err := s.db.QueryRowContext(ctx, `
+		SELECT c.tenant_id, c.user_id, c.stream_id, c.title, c.description,
+			   c.start_time, c.duration, c.clip_mode, s.internal_name
+		FROM commodore.clips c
+		LEFT JOIN commodore.streams s ON c.stream_id = s.id
+		WHERE c.clip_hash = $1
+	`, clipHash).Scan(&tenantID, &userID, &streamID, &title, &description,
+		&startTime, &duration, &clipMode, &internalName)
+
+	if err == sql.ErrNoRows {
+		return &pb.ResolveClipHashResponse{
+			Found: false,
+		}, nil
+	}
+
+	if err != nil {
+		s.logger.WithFields(logging.Fields{
+			"clip_hash": clipHash,
+			"error":     err,
+		}).Error("Database error resolving clip hash")
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	return &pb.ResolveClipHashResponse{
+		Found:        true,
+		TenantId:     tenantID,
+		UserId:       userID,
+		StreamId:     streamID,
+		InternalName: internalName.String,
+		Title:        title,
+		Description:  description,
+		StartTime:    startTime,
+		Duration:     duration,
+		ClipMode:     clipMode,
+	}, nil
+}
+
+// ResolveDVRHash resolves a DVR hash to tenant context
+// Used for analytics enrichment and playback authorization
+func (s *CommodoreServer) ResolveDVRHash(ctx context.Context, req *pb.ResolveDVRHashRequest) (*pb.ResolveDVRHashResponse, error) {
+	dvrHash := req.GetDvrHash()
+	if dvrHash == "" {
+		return nil, status.Error(codes.InvalidArgument, "dvr_hash is required")
+	}
+
+	var tenantID, userID, internalName string
+	var streamID sql.NullString
+
+	err := s.db.QueryRowContext(ctx, `
+		SELECT tenant_id, user_id, stream_id, internal_name
+		FROM commodore.dvr_recordings
+		WHERE dvr_hash = $1
+	`, dvrHash).Scan(&tenantID, &userID, &streamID, &internalName)
+
+	if err == sql.ErrNoRows {
+		return &pb.ResolveDVRHashResponse{
+			Found: false,
+		}, nil
+	}
+
+	if err != nil {
+		s.logger.WithFields(logging.Fields{
+			"dvr_hash": dvrHash,
+			"error":    err,
+		}).Error("Database error resolving DVR hash")
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	return &pb.ResolveDVRHashResponse{
+		Found:        true,
+		TenantId:     tenantID,
+		UserId:       userID,
+		StreamId:     streamID.String,
+		InternalName: internalName,
+	}, nil
+}
+
+// RegisterVod registers a new VOD asset in the business registry
+// Called by Foghorn during CreateVodUpload flow (mirrors DVR/clip pattern)
+func (s *CommodoreServer) RegisterVod(ctx context.Context, req *pb.RegisterVodRequest) (*pb.RegisterVodResponse, error) {
+	tenantID := req.GetTenantId()
+	userID := req.GetUserId()
+	filename := req.GetFilename()
+
+	if tenantID == "" || userID == "" || filename == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id, user_id, and filename are required")
+	}
+
+	// Generate VOD hash
+	vodHash := generateVodHash()
+	vodID := uuid.New().String()
+
+	// Resolve retention (default 90 days for VOD)
+	retentionUntil := time.Now().Add(90 * 24 * time.Hour)
+
+	// Insert into business registry
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO commodore.vod_assets (
+			id, tenant_id, user_id, vod_hash,
+			title, description, filename, content_type, size_bytes,
+			retention_until, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())
+	`, vodID, tenantID, userID, vodHash,
+		req.GetTitle(), req.GetDescription(), filename, req.GetContentType(), req.GetSizeBytes(),
+		retentionUntil)
+
+	if err != nil {
+		s.logger.WithFields(logging.Fields{
+			"tenant_id": tenantID,
+			"filename":  filename,
+			"error":     err,
+		}).Error("Failed to register VOD in business registry")
+		return nil, status.Errorf(codes.Internal, "failed to register VOD: %v", err)
+	}
+
+	s.logger.WithFields(logging.Fields{
+		"tenant_id": tenantID,
+		"vod_hash":  vodHash,
+		"vod_id":    vodID,
+		"filename":  filename,
+	}).Info("Registered VOD in business registry")
+
+	return &pb.RegisterVodResponse{
+		VodHash: vodHash,
+		VodId:   vodID,
+	}, nil
+}
+
+// ResolveVodHash resolves a VOD hash to tenant context
+// Used for analytics enrichment, playback authorization, and lifecycle operations
+func (s *CommodoreServer) ResolveVodHash(ctx context.Context, req *pb.ResolveVodHashRequest) (*pb.ResolveVodHashResponse, error) {
+	vodHash := req.GetVodHash()
+	if vodHash == "" {
+		return nil, status.Error(codes.InvalidArgument, "vod_hash is required")
+	}
+
+	var tenantID, userID, filename string
+	var title, description sql.NullString
+
+	err := s.db.QueryRowContext(ctx, `
+		SELECT tenant_id, user_id, filename, title, description
+		FROM commodore.vod_assets
+		WHERE vod_hash = $1
+	`, vodHash).Scan(&tenantID, &userID, &filename, &title, &description)
+
+	if err == sql.ErrNoRows {
+		return &pb.ResolveVodHashResponse{
+			Found: false,
+		}, nil
+	}
+
+	if err != nil {
+		s.logger.WithFields(logging.Fields{
+			"vod_hash": vodHash,
+			"error":    err,
+		}).Error("Database error resolving VOD hash")
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	return &pb.ResolveVodHashResponse{
+		Found:       true,
+		TenantId:    tenantID,
+		UserId:      userID,
+		Filename:    filename,
+		Title:       title.String,
+		Description: description.String,
+	}, nil
+}
+
+// ResolveIdentifier provides unified resolution across all Commodore registries
+// Lookup order: streams (internal_name), streams (playback_id), clips, DVR, VOD
+func (s *CommodoreServer) ResolveIdentifier(ctx context.Context, req *pb.ResolveIdentifierRequest) (*pb.ResolveIdentifierResponse, error) {
+	identifier := req.GetIdentifier()
+	if identifier == "" {
+		return nil, status.Error(codes.InvalidArgument, "identifier is required")
+	}
+
+	// 1. Try streams by internal_name (most common for live stream events)
+	var tenantID, userID string
+	var isRecordingEnabled bool
+	err := s.db.QueryRowContext(ctx, `
+		SELECT tenant_id, user_id, is_recording_enabled FROM commodore.streams WHERE internal_name = $1
+	`, identifier).Scan(&tenantID, &userID, &isRecordingEnabled)
+	if err == nil {
+		return &pb.ResolveIdentifierResponse{
+			Found:              true,
+			TenantId:           tenantID,
+			UserId:             userID,
+			InternalName:       identifier,
+			IdentifierType:     "stream",
+			IsRecordingEnabled: isRecordingEnabled,
+		}, nil
+	} else if err != sql.ErrNoRows {
+		s.logger.WithError(err).Error("Database error checking streams by internal_name")
+	}
+
+	// 2. Try streams by playback_id
+	var internalName string
+	err = s.db.QueryRowContext(ctx, `
+		SELECT tenant_id, user_id, internal_name, is_recording_enabled
+		FROM commodore.streams WHERE LOWER(playback_id) = LOWER($1)
+	`, identifier).Scan(&tenantID, &userID, &internalName, &isRecordingEnabled)
+	if err == nil {
+		return &pb.ResolveIdentifierResponse{
+			Found:              true,
+			TenantId:           tenantID,
+			UserId:             userID,
+			InternalName:       internalName,
+			IdentifierType:     "playback_id",
+			IsRecordingEnabled: isRecordingEnabled,
+		}, nil
+	} else if err != sql.ErrNoRows {
+		s.logger.WithError(err).Error("Database error checking streams by playback_id")
+	}
+
+	// 3. Try clips by clip_hash
+	var parentInternalName sql.NullString
+	err = s.db.QueryRowContext(ctx, `
+		SELECT c.tenant_id, c.user_id, s.internal_name
+		FROM commodore.clips c
+		LEFT JOIN commodore.streams s ON c.stream_id = s.id
+		WHERE c.clip_hash = $1
+	`, identifier).Scan(&tenantID, &userID, &parentInternalName)
+	if err == nil {
+		return &pb.ResolveIdentifierResponse{
+			Found:          true,
+			TenantId:       tenantID,
+			UserId:         userID,
+			InternalName:   parentInternalName.String,
+			IdentifierType: "clip",
+		}, nil
+	} else if err != sql.ErrNoRows {
+		s.logger.WithError(err).Error("Database error checking clips")
+	}
+
+	// 4. Try DVR by dvr_hash
+	err = s.db.QueryRowContext(ctx, `
+		SELECT tenant_id, user_id, internal_name FROM commodore.dvr_recordings WHERE dvr_hash = $1
+	`, identifier).Scan(&tenantID, &userID, &internalName)
+	if err == nil {
+		return &pb.ResolveIdentifierResponse{
+			Found:          true,
+			TenantId:       tenantID,
+			UserId:         userID,
+			InternalName:   internalName,
+			IdentifierType: "dvr",
+		}, nil
+	} else if err != sql.ErrNoRows {
+		s.logger.WithError(err).Error("Database error checking DVR")
+	}
+
+	// 5. Try VOD by vod_hash
+	err = s.db.QueryRowContext(ctx, `
+		SELECT tenant_id, user_id FROM commodore.vod_assets WHERE vod_hash = $1
+	`, identifier).Scan(&tenantID, &userID)
+	if err == nil {
+		return &pb.ResolveIdentifierResponse{
+			Found:          true,
+			TenantId:       tenantID,
+			UserId:         userID,
+			IdentifierType: "vod",
+		}, nil
+	} else if err != sql.ErrNoRows {
+		s.logger.WithError(err).Error("Database error checking VOD")
+	}
+
+	// Not found in any registry
+	return &pb.ResolveIdentifierResponse{
+		Found: false,
 	}, nil
 }
 
@@ -1508,7 +1905,7 @@ func (s *CommodoreServer) DeleteStream(ctx context.Context, req *pb.DeleteStream
 			s.logger.WithError(err).Warn("Failed to list clips for stream deletion cleanup")
 		} else if clipsResp != nil {
 			for _, clip := range clipsResp.Clips {
-				if _, delErr := s.foghornClient.DeleteClip(ctx, clip.ClipHash); delErr != nil {
+				if _, delErr := s.foghornClient.DeleteClip(ctx, clip.ClipHash, &tenantID); delErr != nil {
 					s.logger.WithError(delErr).WithField("clip_hash", clip.ClipHash).Warn("Failed to delete clip during stream cleanup")
 				}
 			}
@@ -2093,6 +2490,14 @@ func generateDVRHash() string {
 	return time.Now().Format("20060102150405") + generateSecureToken(4)
 }
 
+func generateClipHash() string {
+	return time.Now().Format("20060102150405") + generateSecureToken(8)
+}
+
+func generateVodHash() string {
+	return time.Now().Format("20060102150405") + generateSecureToken(8)
+}
+
 func generateStreamKey() string {
 	return "sk_" + generateSecureToken(16)
 }
@@ -2128,76 +2533,273 @@ func decodeCursorToOffset(cursor string) int32 {
 // CLIP SERVICE (Commodore → Foghorn proxy)
 // ============================================================================
 
-// CreateClip proxies clip creation to Foghorn
+// CreateClip registers clip in business registry and orchestrates creation via Foghorn
 func (s *CommodoreServer) CreateClip(ctx context.Context, req *pb.CreateClipRequest) (*pb.CreateClipResponse, error) {
 	if s.foghornClient == nil {
 		return nil, status.Error(codes.Unavailable, "Foghorn client not configured")
 	}
 
-	// Get tenant context from metadata
-	_, tenantID, err := extractUserContext(ctx)
+	// Get user and tenant context from metadata
+	userID, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	// Build Foghorn request using Foghorn's proto types
+	// Look up stream_id from internal_name
+	var streamID string
+	_ = s.db.QueryRowContext(ctx, `
+		SELECT id::text FROM commodore.streams WHERE internal_name = $1 AND tenant_id = $2
+	`, req.InternalName, tenantID).Scan(&streamID)
+
+	// Generate clip hash (Commodore is authoritative)
+	clipHash := generateClipHash()
+	clipID := uuid.New().String()
+
+	// Resolve timing for storage
+	var startTime, duration int64
+	if req.StartUnix != nil {
+		startTime = *req.StartUnix * 1000 // Convert to ms
+	}
+	if req.DurationSec != nil {
+		duration = *req.DurationSec * 1000 // Convert to ms
+	} else if req.StartUnix != nil && req.StopUnix != nil {
+		duration = (*req.StopUnix - *req.StartUnix) * 1000
+	}
+
+	// Resolve retention
+	var retentionUntil *time.Time
+	if req.ExpiresAt != nil {
+		t := time.Unix(*req.ExpiresAt, 0)
+		retentionUntil = &t
+	} else {
+		t := time.Now().Add(30 * 24 * time.Hour) // Default 30 days
+		retentionUntil = &t
+	}
+
+	// Store requested params as JSON for audit
+	requestedParams := map[string]interface{}{}
+	if req.StartUnix != nil {
+		requestedParams["start_unix"] = *req.StartUnix
+	}
+	if req.StopUnix != nil {
+		requestedParams["stop_unix"] = *req.StopUnix
+	}
+	if req.DurationSec != nil {
+		requestedParams["duration_sec"] = *req.DurationSec
+	}
+	paramsJSON, _ := json.Marshal(requestedParams)
+
+	// Register in commodore.clips (business registry)
+	_, err = s.db.ExecContext(ctx, `
+		INSERT INTO commodore.clips (
+			id, tenant_id, user_id, stream_id, clip_hash,
+			title, description, start_time, duration, clip_mode, requested_params,
+			retention_until, created_at, updated_at
+		) VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, NOW(), NOW())
+	`, clipID, tenantID, userID, streamID, clipHash,
+		req.Title, req.Description, startTime, duration, req.Mode.String(), string(paramsJSON),
+		retentionUntil)
+
+	if err != nil {
+		s.logger.WithFields(logging.Fields{
+			"tenant_id":     tenantID,
+			"internal_name": req.InternalName,
+			"error":         err,
+		}).Error("Failed to register clip in business registry")
+		return nil, status.Errorf(codes.Internal, "failed to register clip: %v", err)
+	}
+
+	s.logger.WithFields(logging.Fields{
+		"tenant_id":     tenantID,
+		"clip_hash":     clipHash,
+		"clip_id":       clipID,
+		"internal_name": req.InternalName,
+	}).Info("Registered clip in business registry")
+
+	// Build Foghorn request with pre-generated hash
 	foghornReq := &pb.CreateClipRequest{
 		TenantId:     tenantID,
 		InternalName: req.InternalName,
+		ClipHash:     &clipHash, // Pass the hash we generated
 	}
 	if req.Format != "" {
 		foghornReq.Format = req.Format
-	}
-	if req.Title != "" {
-		foghornReq.Title = req.Title
-	}
-	if req.Description != "" {
-		foghornReq.Description = req.Description
 	}
 	foghornReq.StartUnix = req.StartUnix
 	foghornReq.StopUnix = req.StopUnix
 	foghornReq.StartMs = req.StartMs
 	foghornReq.StopMs = req.StopMs
 	foghornReq.DurationSec = req.DurationSec
+	foghornReq.ExpiresAt = func() *int64 { t := retentionUntil.Unix(); return &t }()
 
-	// Call Foghorn
+	// Call Foghorn for artifact lifecycle management
 	resp, err := s.foghornClient.CreateClip(ctx, foghornReq)
 	if err != nil {
-		s.logger.WithError(err).Error("Failed to create clip via Foghorn")
-		return nil, status.Errorf(codes.Internal, "failed to create clip: %v", err)
+		s.logger.WithError(err).WithField("clip_hash", clipHash).Error("Failed to create clip artifact via Foghorn")
+		// Don't rollback business registry - Foghorn can retry later
+		return nil, status.Errorf(codes.Internal, "failed to create clip artifact: %v", err)
 	}
 
-	// Response types match, return directly
 	return resp, nil
 }
 
-// GetClips proxies clip listing to Foghorn
+// GetClips returns clips from Commodore business registry
+// Lifecycle data (status, size, storage) comes from Periscope via GraphQL field resolvers
 func (s *CommodoreServer) GetClips(ctx context.Context, req *pb.GetClipsRequest) (*pb.GetClipsResponse, error) {
-	if s.foghornClient == nil {
-		return nil, status.Error(codes.Unavailable, "Foghorn client not configured")
-	}
-
 	_, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	// Use tenant from context, internal_name from request
-	internalName := req.GetInternalName()
-	var internalNamePtr *string
-	if internalName != "" {
-		internalNamePtr = &internalName
-	}
-
-	// Call Foghorn with cursor pagination
-	foghornResp, err := s.foghornClient.GetClips(ctx, tenantID, internalNamePtr, req.GetPagination())
+	params, err := pagination.Parse(req.GetPagination())
 	if err != nil {
-		s.logger.WithError(err).Error("Failed to get clips from Foghorn")
-		return nil, status.Errorf(codes.Internal, "failed to get clips: %v", err)
+		return nil, status.Errorf(codes.InvalidArgument, "invalid pagination: %v", err)
 	}
 
-	// Response types match, return directly
-	return foghornResp, nil
+	// Build WHERE clause with optional stream filter
+	whereClause := "c.tenant_id = $1"
+	args := []interface{}{tenantID}
+	argIdx := 2
+
+	if internalName := req.GetInternalName(); internalName != "" {
+		whereClause += fmt.Sprintf(" AND st.internal_name = $%d", argIdx)
+		args = append(args, internalName)
+		argIdx++
+	}
+
+	// Get total count
+	var total int32
+	countQuery := fmt.Sprintf(`
+		SELECT COUNT(*) FROM commodore.clips c
+		LEFT JOIN commodore.streams st ON c.stream_id = st.id
+		WHERE %s`, whereClause)
+	if err := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	// Build keyset pagination query
+	builder := &pagination.KeysetBuilder{
+		TimestampColumn: "c.created_at",
+		IDColumn:        "c.clip_hash",
+	}
+
+	// Base query - join with streams to get internal_name (stream_name)
+	query := fmt.Sprintf(`
+		SELECT c.id, c.clip_hash, COALESCE(st.internal_name, ''), c.title, c.description,
+		       c.start_time, c.duration, c.clip_mode, c.requested_params,
+		       c.retention_until, c.created_at, c.updated_at
+		FROM commodore.clips c
+		LEFT JOIN commodore.streams st ON c.stream_id = st.id
+		WHERE %s`, whereClause)
+
+	// Add keyset condition if cursor provided
+	if condition, cursorArgs := builder.Condition(params, argIdx); condition != "" {
+		query += " AND " + condition
+		args = append(args, cursorArgs...)
+	}
+
+	// Add ORDER BY and LIMIT
+	query += " " + builder.OrderBy(params)
+	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	defer rows.Close()
+
+	var clips []*pb.ClipInfo
+	for rows.Next() {
+		var (
+			id, clipHash, streamName      string
+			title, description            sql.NullString
+			startTime, duration           int64
+			clipMode                      sql.NullString
+			requestedParams               sql.NullString
+			retentionUntil                sql.NullTime
+			createdAt, updatedAt          time.Time
+		)
+		if err := rows.Scan(&id, &clipHash, &streamName, &title, &description,
+			&startTime, &duration, &clipMode, &requestedParams,
+			&retentionUntil, &createdAt, &updatedAt); err != nil {
+			s.logger.WithError(err).Warn("Error scanning clip")
+			continue
+		}
+
+		clip := &pb.ClipInfo{
+			Id:         id,
+			ClipHash:   clipHash,
+			StreamName: streamName,
+			StartTime:  startTime / 1000, // Convert ms to seconds
+			Duration:   duration / 1000,  // Convert ms to seconds
+			Status:     "registry",       // Indicates business registry data, lifecycle from Foghorn
+			CreatedAt:  timestamppb.New(createdAt),
+			UpdatedAt:  timestamppb.New(updatedAt),
+		}
+		if title.Valid {
+			clip.Title = title.String
+		}
+		if description.Valid {
+			clip.Description = description.String
+		}
+		if clipMode.Valid {
+			clip.ClipMode = &clipMode.String
+		}
+		if requestedParams.Valid {
+			clip.RequestedParams = &requestedParams.String
+		}
+		if retentionUntil.Valid {
+			expiresAt := timestamppb.New(retentionUntil.Time)
+			clip.ExpiresAt = expiresAt
+		}
+
+		clips = append(clips, clip)
+	}
+
+	// Detect hasMore and trim results
+	hasMore := len(clips) > params.Limit
+	if hasMore {
+		clips = clips[:params.Limit]
+	}
+
+	// Reverse results if backward pagination
+	if params.Direction == pagination.Backward && len(clips) > 0 {
+		for i, j := 0, len(clips)-1; i < j; i, j = i+1, j-1 {
+			clips[i], clips[j] = clips[j], clips[i]
+		}
+	}
+
+	// Build cursors from results
+	var startCursor, endCursor string
+	if len(clips) > 0 {
+		first := clips[0]
+		last := clips[len(clips)-1]
+		startCursor = pagination.EncodeCursor(first.CreatedAt.AsTime(), first.ClipHash)
+		endCursor = pagination.EncodeCursor(last.CreatedAt.AsTime(), last.ClipHash)
+	}
+
+	// Build response
+	resp := &pb.GetClipsResponse{
+		Clips: clips,
+		Pagination: &pb.CursorPaginationResponse{
+			TotalCount: total,
+		},
+	}
+	if startCursor != "" {
+		resp.Pagination.StartCursor = &startCursor
+	}
+	if endCursor != "" {
+		resp.Pagination.EndCursor = &endCursor
+	}
+	if params.Direction == pagination.Forward {
+		resp.Pagination.HasNextPage = hasMore
+		resp.Pagination.HasPreviousPage = params.Cursor != nil
+	} else {
+		resp.Pagination.HasPreviousPage = hasMore
+		resp.Pagination.HasNextPage = params.Cursor != nil
+	}
+
+	return resp, nil
 }
 
 // GetClip proxies single clip fetch to Foghorn
@@ -2206,7 +2808,12 @@ func (s *CommodoreServer) GetClip(ctx context.Context, req *pb.GetClipRequest) (
 		return nil, status.Error(codes.Unavailable, "Foghorn client not configured")
 	}
 
-	resp, err := s.foghornClient.GetClip(ctx, req.GetClipHash())
+	_, tenantID, err := extractUserContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := s.foghornClient.GetClip(ctx, req.GetClipHash(), &tenantID)
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to get clip from Foghorn")
 		return nil, status.Errorf(codes.Internal, "failed to get clip: %v", err)
@@ -2221,7 +2828,12 @@ func (s *CommodoreServer) GetClipURLs(ctx context.Context, req *pb.GetClipURLsRe
 		return nil, status.Error(codes.Unavailable, "Foghorn client not configured")
 	}
 
-	resp, err := s.foghornClient.GetClipURLs(ctx, req.ClipHash)
+	_, tenantID, err := extractUserContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := s.foghornClient.GetClipURLs(ctx, req.ClipHash, &tenantID)
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to get clip URLs from Foghorn")
 		return nil, status.Errorf(codes.Internal, "failed to get clip URLs: %v", err)
@@ -2236,7 +2848,12 @@ func (s *CommodoreServer) DeleteClip(ctx context.Context, req *pb.DeleteClipRequ
 		return nil, status.Error(codes.Unavailable, "Foghorn client not configured")
 	}
 
-	resp, err := s.foghornClient.DeleteClip(ctx, req.ClipHash)
+	_, tenantID, err := extractUserContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := s.foghornClient.DeleteClip(ctx, req.ClipHash, &tenantID)
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to delete clip via Foghorn")
 		return nil, status.Errorf(codes.Internal, "failed to delete clip: %v", err)
@@ -2269,8 +2886,8 @@ func (s *CommodoreServer) StopDVR(ctx context.Context, req *pb.StopDVRRequest) (
 	return resp, nil
 }
 
-// ListDVRRequests proxies DVR listing to Foghorn
-func (s *CommodoreServer) ListDVRRequests(ctx context.Context, req *pb.ListDVRRecordingsRequest) (*pb.ListDVRRecordingsResponse, error) {
+// DeleteDVR proxies DVR deletion to Foghorn
+func (s *CommodoreServer) DeleteDVR(ctx context.Context, req *pb.DeleteDVRRequest) (*pb.DeleteDVRResponse, error) {
 	if s.foghornClient == nil {
 		return nil, status.Error(codes.Unavailable, "Foghorn client not configured")
 	}
@@ -2280,21 +2897,149 @@ func (s *CommodoreServer) ListDVRRequests(ctx context.Context, req *pb.ListDVRRe
 		return nil, err
 	}
 
-	internalName := req.GetInternalName()
-	var internalNamePtr *string
-	if internalName != "" {
-		internalNamePtr = &internalName
-	}
-
-	// Call Foghorn with cursor pagination
-	foghornResp, err := s.foghornClient.ListDVRRecordings(ctx, tenantID, internalNamePtr, req.GetPagination())
+	resp, err := s.foghornClient.DeleteDVR(ctx, req.DvrHash, &tenantID)
 	if err != nil {
-		s.logger.WithError(err).Error("Failed to list DVR recordings from Foghorn")
-		return nil, status.Errorf(codes.Internal, "failed to list DVR recordings: %v", err)
+		s.logger.WithError(err).Error("Failed to delete DVR via Foghorn")
+		return nil, status.Errorf(codes.Internal, "failed to delete DVR: %v", err)
 	}
 
-	// Response types match, return directly
-	return foghornResp, nil
+	return resp, nil
+}
+
+// ListDVRRequests returns DVR recordings from Commodore business registry
+// Lifecycle data (status, size, storage) comes from Periscope via GraphQL field resolvers
+func (s *CommodoreServer) ListDVRRequests(ctx context.Context, req *pb.ListDVRRecordingsRequest) (*pb.ListDVRRecordingsResponse, error) {
+	_, tenantID, err := extractUserContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	params, err := pagination.Parse(req.GetPagination())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid pagination: %v", err)
+	}
+
+	// Build WHERE clause with optional stream filter
+	whereClause := "d.tenant_id = $1"
+	args := []interface{}{tenantID}
+	argIdx := 2
+
+	if internalName := req.GetInternalName(); internalName != "" {
+		whereClause += fmt.Sprintf(" AND d.internal_name = $%d", argIdx)
+		args = append(args, internalName)
+		argIdx++
+	}
+
+	// Get total count
+	var total int32
+	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM commodore.dvr_recordings d WHERE %s", whereClause)
+	if err := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	// Build keyset pagination query
+	builder := &pagination.KeysetBuilder{
+		TimestampColumn: "d.created_at",
+		IDColumn:        "d.dvr_hash",
+	}
+
+	// Base query - join with streams to get title
+	query := fmt.Sprintf(`
+		SELECT d.id, d.dvr_hash, d.internal_name, COALESCE(st.title, d.internal_name),
+		       d.retention_until, d.created_at, d.updated_at
+		FROM commodore.dvr_recordings d
+		LEFT JOIN commodore.streams st ON d.stream_id = st.id
+		WHERE %s`, whereClause)
+
+	// Add keyset condition if cursor provided
+	if condition, cursorArgs := builder.Condition(params, argIdx); condition != "" {
+		query += " AND " + condition
+		args = append(args, cursorArgs...)
+	}
+
+	// Add ORDER BY and LIMIT
+	query += " " + builder.OrderBy(params)
+	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	defer rows.Close()
+
+	var recordings []*pb.DVRInfo
+	for rows.Next() {
+		var (
+			id, dvrHash, internalName, title string
+			retentionUntil                   sql.NullTime
+			createdAt, updatedAt             time.Time
+		)
+		if err := rows.Scan(&id, &dvrHash, &internalName, &title,
+			&retentionUntil, &createdAt, &updatedAt); err != nil {
+			s.logger.WithError(err).Warn("Error scanning DVR recording")
+			continue
+		}
+
+		recording := &pb.DVRInfo{
+			Id:           &id,
+			DvrHash:      dvrHash,
+			InternalName: internalName,
+			Title:        &title,
+			CreatedAt:    timestamppb.New(createdAt),
+			UpdatedAt:    timestamppb.New(updatedAt),
+		}
+		if retentionUntil.Valid {
+			expiresAt := timestamppb.New(retentionUntil.Time)
+			recording.ExpiresAt = expiresAt
+		}
+
+		recordings = append(recordings, recording)
+	}
+
+	// Detect hasMore and trim results
+	hasMore := len(recordings) > params.Limit
+	if hasMore {
+		recordings = recordings[:params.Limit]
+	}
+
+	// Reverse results if backward pagination
+	if params.Direction == pagination.Backward && len(recordings) > 0 {
+		for i, j := 0, len(recordings)-1; i < j; i, j = i+1, j-1 {
+			recordings[i], recordings[j] = recordings[j], recordings[i]
+		}
+	}
+
+	// Build cursors from results
+	var startCursor, endCursor string
+	if len(recordings) > 0 {
+		first := recordings[0]
+		last := recordings[len(recordings)-1]
+		startCursor = pagination.EncodeCursor(first.CreatedAt.AsTime(), first.DvrHash)
+		endCursor = pagination.EncodeCursor(last.CreatedAt.AsTime(), last.DvrHash)
+	}
+
+	// Build response
+	resp := &pb.ListDVRRecordingsResponse{
+		DvrRecordings: recordings,
+		Pagination: &pb.CursorPaginationResponse{
+			TotalCount: total,
+		},
+	}
+	if startCursor != "" {
+		resp.Pagination.StartCursor = &startCursor
+	}
+	if endCursor != "" {
+		resp.Pagination.EndCursor = &endCursor
+	}
+	if params.Direction == pagination.Forward {
+		resp.Pagination.HasNextPage = hasMore
+		resp.Pagination.HasPreviousPage = params.Cursor != nil
+	} else {
+		resp.Pagination.HasPreviousPage = hasMore
+		resp.Pagination.HasNextPage = params.Cursor != nil
+	}
+
+	return resp, nil
 }
 
 // GetDVRStatus proxies DVR status check to Foghorn
@@ -2317,6 +3062,7 @@ func (s *CommodoreServer) GetDVRStatus(ctx context.Context, req *pb.GetDVRStatus
 // ============================================================================
 
 // ResolveViewerEndpoint proxies viewer endpoint resolution to Foghorn
+// and enriches the response with stream metadata from Commodore's database
 func (s *CommodoreServer) ResolveViewerEndpoint(ctx context.Context, req *pb.ViewerEndpointRequest) (*pb.ViewerEndpointResponse, error) {
 	if s.foghornClient == nil {
 		return nil, status.Error(codes.Unavailable, "Foghorn client not configured")
@@ -2326,6 +3072,25 @@ func (s *CommodoreServer) ResolveViewerEndpoint(ctx context.Context, req *pb.Vie
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to resolve viewer endpoint from Foghorn")
 		return nil, status.Errorf(codes.Internal, "failed to resolve viewer endpoint: %v", err)
+	}
+
+	// Enrich metadata with stream info from Commodore's database
+	// For live streams, Foghorn doesn't have title/description - we do
+	if req.ContentType == "live" && resp.Metadata != nil {
+		var title, description sql.NullString
+		err := s.db.QueryRowContext(ctx, `
+			SELECT title, description FROM commodore.streams WHERE internal_name = $1
+		`, req.ContentId).Scan(&title, &description)
+
+		if err == nil {
+			if title.Valid && title.String != "" {
+				resp.Metadata.Title = &title.String
+			}
+			if description.Valid && description.String != "" {
+				resp.Metadata.Description = &description.String
+			}
+		}
+		// Silently ignore errors - enrichment is best-effort, don't fail the request
 	}
 
 	return resp, nil
@@ -2341,6 +3106,35 @@ func (s *CommodoreServer) GetStreamMeta(ctx context.Context, req *pb.StreamMetaR
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to get stream meta from Foghorn")
 		return nil, status.Errorf(codes.Internal, "failed to get stream meta: %v", err)
+	}
+
+	return resp, nil
+}
+
+// ResolveIngestEndpoint proxies ingest endpoint resolution to Foghorn
+// and enriches the response with stream metadata from Commodore's database
+func (s *CommodoreServer) ResolveIngestEndpoint(ctx context.Context, req *pb.IngestEndpointRequest) (*pb.IngestEndpointResponse, error) {
+	if s.foghornClient == nil {
+		return nil, status.Error(codes.Unavailable, "Foghorn client not configured")
+	}
+
+	resp, err := s.foghornClient.ResolveIngestEndpoint(ctx, req.StreamKey, req.ViewerIp)
+	if err != nil {
+		s.logger.WithError(err).Error("Failed to resolve ingest endpoint from Foghorn")
+		return nil, status.Errorf(codes.Internal, "failed to resolve ingest endpoint: %v", err)
+	}
+
+	// Enrich metadata with stream info from Commodore's database if we have internal name
+	if resp.Metadata != nil && resp.Metadata.StreamId != "" {
+		var title sql.NullString
+		err := s.db.QueryRowContext(ctx, `
+			SELECT title FROM commodore.streams WHERE internal_name = $1
+		`, resp.Metadata.StreamId).Scan(&title)
+
+		if err == nil && title.Valid && title.String != "" {
+			resp.Metadata.StreamId = title.String // Use title as display name if available
+		}
+		// Silently ignore errors - enrichment is best-effort
 	}
 
 	return resp, nil
@@ -2376,10 +3170,11 @@ func NewGRPCServer(cfg CommodoreServerConfig) *grpc.Server {
 	pb.RegisterStreamServiceServer(server, commodoreServer)
 	pb.RegisterStreamKeyServiceServer(server, commodoreServer)
 	pb.RegisterDeveloperServiceServer(server, commodoreServer)
-	// ClipService, DVRService, and ViewerService proxy to Foghorn via gRPC
+	// ClipService, DVRService, ViewerService, and VodService proxy to Foghorn via gRPC
 	pb.RegisterClipServiceServer(server, commodoreServer)
 	pb.RegisterDVRServiceServer(server, commodoreServer)
 	pb.RegisterViewerServiceServer(server, commodoreServer)
+	pb.RegisterVodServiceServer(server, commodoreServer)
 
 	// Register gRPC health checking service
 	hs := health.NewServer()
@@ -2514,4 +3309,384 @@ func generateRandomString(length int) string {
 		b[i] = charset[int(b[i])%len(charset)]
 	}
 	return string(b)
+}
+
+// ============================================================================
+// VOD SERVICE (Gateway → Commodore → Foghorn proxy)
+// User-initiated video uploads (distinct from clips/DVR which are stream-derived)
+// ============================================================================
+
+// CreateVodUpload registers VOD in business registry and initiates multipart upload via Foghorn
+func (s *CommodoreServer) CreateVodUpload(ctx context.Context, req *pb.CreateVodUploadRequest) (*pb.CreateVodUploadResponse, error) {
+	if s.foghornClient == nil {
+		return nil, status.Error(codes.Unavailable, "Foghorn client not configured")
+	}
+
+	// Get user and tenant context from metadata
+	userID, tenantID, err := extractUserContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	// Generate VOD hash (Commodore is authoritative)
+	vodHash := generateVodHash()
+	vodID := uuid.New().String()
+
+	// Resolve retention (default 90 days for VOD)
+	retentionUntil := time.Now().Add(90 * 24 * time.Hour)
+
+	// Register in commodore.vod_assets (business registry)
+	_, err = s.db.ExecContext(ctx, `
+		INSERT INTO commodore.vod_assets (
+			id, tenant_id, user_id, vod_hash,
+			title, description, filename, content_type, size_bytes,
+			retention_until, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())
+	`, vodID, tenantID, userID, vodHash,
+		req.GetTitle(), req.GetDescription(), req.Filename, req.GetContentType(), req.SizeBytes,
+		retentionUntil)
+
+	if err != nil {
+		s.logger.WithFields(logging.Fields{
+			"tenant_id": tenantID,
+			"filename":  req.Filename,
+			"error":     err,
+		}).Error("Failed to register VOD asset in business registry")
+		return nil, status.Errorf(codes.Internal, "failed to register VOD asset: %v", err)
+	}
+
+	s.logger.WithFields(logging.Fields{
+		"tenant_id": tenantID,
+		"vod_hash":  vodHash,
+		"vod_id":    vodID,
+		"filename":  req.Filename,
+	}).Info("Registered VOD asset in business registry")
+
+	// Build Foghorn request with pre-generated hash
+	foghornReq := &pb.CreateVodUploadRequest{
+		TenantId:    tenantID,
+		UserId:      userID,
+		Filename:    req.Filename,
+		SizeBytes:   req.SizeBytes,
+		ContentType: req.ContentType,
+		Title:       req.Title,
+		Description: req.Description,
+		VodHash:     &vodHash, // Pass the hash we generated
+	}
+
+	// Call Foghorn for S3 multipart upload setup
+	resp, err := s.foghornClient.CreateVodUpload(ctx, foghornReq)
+	if err != nil {
+		s.logger.WithError(err).WithField("vod_hash", vodHash).Error("Failed to create VOD upload via Foghorn")
+		// Don't rollback business registry - can be cleaned up later
+		return nil, status.Errorf(codes.Internal, "failed to initiate VOD upload: %v", err)
+	}
+
+	return resp, nil
+}
+
+// CompleteVodUpload finalizes multipart upload via Foghorn
+func (s *CommodoreServer) CompleteVodUpload(ctx context.Context, req *pb.CompleteVodUploadRequest) (*pb.CompleteVodUploadResponse, error) {
+	if s.foghornClient == nil {
+		return nil, status.Error(codes.Unavailable, "Foghorn client not configured")
+	}
+
+	// Get tenant context from metadata (for logging/verification)
+	_, tenantID, err := extractUserContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	// Forward to Foghorn (it manages S3 multipart completion and lifecycle state)
+	foghornReq := &pb.CompleteVodUploadRequest{
+		TenantId: tenantID,
+		UploadId: req.UploadId,
+		Parts:    req.Parts,
+	}
+
+	resp, err := s.foghornClient.CompleteVodUpload(ctx, foghornReq)
+	if err != nil {
+		s.logger.WithError(err).WithField("upload_id", req.UploadId).Error("Failed to complete VOD upload via Foghorn")
+		return nil, status.Errorf(codes.Internal, "failed to complete VOD upload: %v", err)
+	}
+
+	s.logger.WithFields(logging.Fields{
+		"tenant_id":     tenantID,
+		"upload_id":     req.UploadId,
+		"artifact_hash": resp.GetAsset().GetArtifactHash(),
+	}).Info("Completed VOD upload")
+
+	return resp, nil
+}
+
+// AbortVodUpload cancels multipart upload via Foghorn
+func (s *CommodoreServer) AbortVodUpload(ctx context.Context, req *pb.AbortVodUploadRequest) (*pb.AbortVodUploadResponse, error) {
+	if s.foghornClient == nil {
+		return nil, status.Error(codes.Unavailable, "Foghorn client not configured")
+	}
+
+	// Get tenant context from metadata
+	_, tenantID, err := extractUserContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	// Forward to Foghorn (it manages S3 multipart abort and lifecycle state)
+	resp, err := s.foghornClient.AbortVodUpload(ctx, tenantID, req.UploadId)
+	if err != nil {
+		s.logger.WithError(err).WithField("upload_id", req.UploadId).Error("Failed to abort VOD upload via Foghorn")
+		return nil, status.Errorf(codes.Internal, "failed to abort VOD upload: %v", err)
+	}
+
+	// TODO: Clean up orphaned business registry entry (or let retention job handle it)
+
+	s.logger.WithFields(logging.Fields{
+		"tenant_id": tenantID,
+		"upload_id": req.UploadId,
+	}).Info("Aborted VOD upload")
+
+	return resp, nil
+}
+
+// GetVodAsset returns VOD business metadata from Commodore registry
+// Lifecycle data (status, size, storage) comes from Periscope via Gateway's ArtifactLifecycleLoader
+func (s *CommodoreServer) GetVodAsset(ctx context.Context, req *pb.GetVodAssetRequest) (*pb.VodAssetInfo, error) {
+	// Get tenant context from metadata
+	_, tenantID, err := extractUserContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	// Query business metadata from Commodore registry ONLY - no Foghorn call
+	var (
+		id                       string
+		vodHash                  string
+		title, description       sql.NullString
+		filename                 string
+		contentType              sql.NullString
+		sizeBytes                sql.NullInt64
+		retentionUntil           sql.NullTime
+		createdAt, updatedAt     time.Time
+	)
+	err = s.db.QueryRowContext(ctx, `
+		SELECT id, vod_hash, title, description, filename, content_type,
+		       size_bytes, retention_until, created_at, updated_at
+		FROM commodore.vod_assets
+		WHERE vod_hash = $1 AND tenant_id = $2
+	`, req.ArtifactHash, tenantID).Scan(
+		&id, &vodHash, &title, &description, &filename, &contentType,
+		&sizeBytes, &retentionUntil, &createdAt, &updatedAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, status.Error(codes.NotFound, "VOD asset not found")
+		}
+		s.logger.WithError(err).WithField("artifact_hash", req.ArtifactHash).Error("Failed to get VOD asset")
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	// Build response with business metadata only
+	// Status/storageLocation will be enriched by Gateway via Periscope
+	asset := &pb.VodAssetInfo{
+		Id:           id,
+		ArtifactHash: vodHash,
+		Filename:     filename,
+		Status:       pb.VodStatus_VOD_STATUS_UPLOADING, // Default - Gateway enriches from Periscope
+		CreatedAt:    timestamppb.New(createdAt),
+		UpdatedAt:    timestamppb.New(updatedAt),
+	}
+	if title.Valid {
+		asset.Title = title.String
+	}
+	if description.Valid {
+		asset.Description = description.String
+	}
+	if sizeBytes.Valid {
+		size := sizeBytes.Int64
+		asset.SizeBytes = &size
+	}
+	if retentionUntil.Valid {
+		asset.ExpiresAt = timestamppb.New(retentionUntil.Time)
+	}
+
+	return asset, nil
+}
+
+// ListVodAssets returns VOD assets from Commodore business registry with pagination
+// Lifecycle data (status, size, storage) comes from Periscope via Gateway's ArtifactLifecycleLoader
+func (s *CommodoreServer) ListVodAssets(ctx context.Context, req *pb.ListVodAssetsRequest) (*pb.ListVodAssetsResponse, error) {
+	// Get tenant context from metadata
+	_, tenantID, err := extractUserContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	params, err := pagination.Parse(req.GetPagination())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid pagination: %v", err)
+	}
+
+	// Get total count
+	var total int32
+	countQuery := `SELECT COUNT(*) FROM commodore.vod_assets WHERE tenant_id = $1`
+	if err := s.db.QueryRowContext(ctx, countQuery, tenantID).Scan(&total); err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	// Build keyset pagination query
+	builder := &pagination.KeysetBuilder{
+		TimestampColumn: "created_at",
+		IDColumn:        "vod_hash",
+	}
+
+	// Base query
+	query := `
+		SELECT id, vod_hash, title, description, filename, content_type,
+		       size_bytes, retention_until, created_at, updated_at
+		FROM commodore.vod_assets
+		WHERE tenant_id = $1`
+	args := []interface{}{tenantID}
+	argIdx := 2
+
+	// Add keyset condition if cursor provided
+	if condition, cursorArgs := builder.Condition(params, argIdx); condition != "" {
+		query += " AND " + condition
+		args = append(args, cursorArgs...)
+	}
+
+	// Add ORDER BY and LIMIT
+	query += " " + builder.OrderBy(params)
+	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	defer rows.Close()
+
+	var assets []*pb.VodAssetInfo
+	for rows.Next() {
+		var (
+			id                       string
+			vodHash                  string
+			title, description       sql.NullString
+			filename                 string
+			contentType              sql.NullString
+			sizeBytes                sql.NullInt64
+			retentionUntil           sql.NullTime
+			createdAt, updatedAt     time.Time
+		)
+		if err := rows.Scan(&id, &vodHash, &title, &description, &filename, &contentType,
+			&sizeBytes, &retentionUntil, &createdAt, &updatedAt); err != nil {
+			s.logger.WithError(err).Warn("Error scanning VOD asset")
+			continue
+		}
+
+		// Build asset with business metadata only
+		// Status/storageLocation will be enriched by Gateway via Periscope
+		asset := &pb.VodAssetInfo{
+			Id:           id,
+			ArtifactHash: vodHash,
+			Filename:     filename,
+			Status:       pb.VodStatus_VOD_STATUS_UPLOADING, // Default - Gateway enriches from Periscope
+			CreatedAt:    timestamppb.New(createdAt),
+			UpdatedAt:    timestamppb.New(updatedAt),
+		}
+		if title.Valid {
+			asset.Title = title.String
+		}
+		if description.Valid {
+			asset.Description = description.String
+		}
+		if sizeBytes.Valid {
+			size := sizeBytes.Int64
+			asset.SizeBytes = &size
+		}
+		if retentionUntil.Valid {
+			asset.ExpiresAt = timestamppb.New(retentionUntil.Time)
+		}
+
+		assets = append(assets, asset)
+	}
+
+	// Detect hasMore and trim results
+	hasMore := len(assets) > params.Limit
+	if hasMore {
+		assets = assets[:params.Limit]
+	}
+
+	// Reverse results if backward pagination
+	if params.Direction == pagination.Backward && len(assets) > 0 {
+		for i, j := 0, len(assets)-1; i < j; i, j = i+1, j-1 {
+			assets[i], assets[j] = assets[j], assets[i]
+		}
+	}
+
+	// Build cursors from results
+	var startCursor, endCursor string
+	if len(assets) > 0 {
+		first := assets[0]
+		last := assets[len(assets)-1]
+		startCursor = pagination.EncodeCursor(first.CreatedAt.AsTime(), first.ArtifactHash)
+		endCursor = pagination.EncodeCursor(last.CreatedAt.AsTime(), last.ArtifactHash)
+	}
+
+	// Build response
+	resp := &pb.ListVodAssetsResponse{
+		Assets: assets,
+		Pagination: &pb.CursorPaginationResponse{
+			TotalCount: total,
+		},
+	}
+	if startCursor != "" {
+		resp.Pagination.StartCursor = &startCursor
+	}
+	if endCursor != "" {
+		resp.Pagination.EndCursor = &endCursor
+	}
+	if params.Direction == pagination.Forward {
+		resp.Pagination.HasNextPage = hasMore
+		resp.Pagination.HasPreviousPage = params.Cursor != nil
+	} else {
+		resp.Pagination.HasPreviousPage = hasMore
+		resp.Pagination.HasNextPage = params.Cursor != nil
+	}
+
+	return resp, nil
+}
+
+// DeleteVodAsset deletes a VOD asset via Foghorn
+func (s *CommodoreServer) DeleteVodAsset(ctx context.Context, req *pb.DeleteVodAssetRequest) (*pb.DeleteVodAssetResponse, error) {
+	if s.foghornClient == nil {
+		return nil, status.Error(codes.Unavailable, "Foghorn client not configured")
+	}
+
+	// Get tenant context from metadata
+	_, tenantID, err := extractUserContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	// Forward to Foghorn (it handles S3 deletion and lifecycle state)
+	resp, err := s.foghornClient.DeleteVodAsset(ctx, tenantID, req.ArtifactHash)
+	if err != nil {
+		s.logger.WithError(err).WithField("artifact_hash", req.ArtifactHash).Error("Failed to delete VOD asset via Foghorn")
+		return nil, status.Errorf(codes.Internal, "failed to delete VOD asset: %v", err)
+	}
+
+	// Delete from business registry
+	_, delErr := s.db.ExecContext(ctx, `
+		DELETE FROM commodore.vod_assets
+		WHERE vod_hash = $1 AND tenant_id = $2
+	`, req.ArtifactHash, tenantID)
+	if delErr != nil {
+		s.logger.WithError(delErr).WithField("artifact_hash", req.ArtifactHash).Warn("Failed to delete VOD from business registry (will be cleaned up by retention job)")
+	}
+
+	s.logger.WithFields(logging.Fields{
+		"tenant_id":     tenantID,
+		"artifact_hash": req.ArtifactHash,
+	}).Info("Deleted VOD asset")
+
+	return resp, nil
 }

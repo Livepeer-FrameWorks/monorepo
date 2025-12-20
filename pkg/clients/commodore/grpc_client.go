@@ -25,6 +25,7 @@ type GRPCClient struct {
 	clip      pb.ClipServiceClient
 	dvr       pb.DVRServiceClient
 	viewer    pb.ViewerServiceClient
+	vod       pb.VodServiceClient
 	logger    logging.Logger
 	cache     *cache.Cache
 }
@@ -103,6 +104,7 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 		clip:      pb.NewClipServiceClient(conn),
 		dvr:       pb.NewDVRServiceClient(conn),
 		viewer:    pb.NewViewerServiceClient(conn),
+		vod:       pb.NewVodServiceClient(conn),
 		logger:    config.Logger,
 		cache:     config.Cache,
 	}, nil
@@ -183,6 +185,144 @@ func (c *GRPCClient) ValidateAPIToken(ctx context.Context, token string) (*pb.Va
 // StartDVR initiates DVR recording for a stream (internal, called by Foghorn)
 func (c *GRPCClient) StartDVR(ctx context.Context, req *pb.StartDVRRequest) (*pb.StartDVRResponse, error) {
 	return c.internal.StartDVR(ctx, req)
+}
+
+// ============================================================================
+// CLIP/DVR REGISTRY (Foghorn → Commodore)
+// Business registry for clips and DVR recordings.
+// See: docs/architecture/CLIP_DVR_REGISTRY.md
+// ============================================================================
+
+// RegisterClip registers a new clip in the business registry
+// Called by Foghorn during the CreateClip flow
+func (c *GRPCClient) RegisterClip(ctx context.Context, req *pb.RegisterClipRequest) (*pb.RegisterClipResponse, error) {
+	return c.internal.RegisterClip(ctx, req)
+}
+
+// RegisterDVR registers a new DVR recording in the business registry
+// Called by Foghorn during the StartDVR flow
+func (c *GRPCClient) RegisterDVR(ctx context.Context, req *pb.RegisterDVRRequest) (*pb.RegisterDVRResponse, error) {
+	return c.internal.RegisterDVR(ctx, req)
+}
+
+// ResolveClipHash resolves a clip hash to tenant context
+// Used for analytics enrichment and playback authorization
+func (c *GRPCClient) ResolveClipHash(ctx context.Context, clipHash string) (*pb.ResolveClipHashResponse, error) {
+	// Use cache for context lookups (high frequency during playback/events)
+	if c.cache != nil {
+		cacheKey := "commodore:clip:" + clipHash
+		if v, ok, _ := c.cache.Get(ctx, cacheKey, func(ctx context.Context, _ string) (interface{}, bool, error) {
+			resp, err := c.internal.ResolveClipHash(ctx, &pb.ResolveClipHashRequest{
+				ClipHash: clipHash,
+			})
+			if err != nil || !resp.Found {
+				return nil, false, err
+			}
+			return resp, true, nil
+		}); ok {
+			return v.(*pb.ResolveClipHashResponse), nil
+		}
+	}
+
+	return c.internal.ResolveClipHash(ctx, &pb.ResolveClipHashRequest{
+		ClipHash: clipHash,
+	})
+}
+
+// ResolveDVRHash resolves a DVR hash to tenant context
+// Used for analytics enrichment and playback authorization
+func (c *GRPCClient) ResolveDVRHash(ctx context.Context, dvrHash string) (*pb.ResolveDVRHashResponse, error) {
+	// Use cache for context lookups (high frequency during playback/events)
+	if c.cache != nil {
+		cacheKey := "commodore:dvr:" + dvrHash
+		if v, ok, _ := c.cache.Get(ctx, cacheKey, func(ctx context.Context, _ string) (interface{}, bool, error) {
+			resp, err := c.internal.ResolveDVRHash(ctx, &pb.ResolveDVRHashRequest{
+				DvrHash: dvrHash,
+			})
+			if err != nil || !resp.Found {
+				return nil, false, err
+			}
+			return resp, true, nil
+		}); ok {
+			return v.(*pb.ResolveDVRHashResponse), nil
+		}
+	}
+
+	return c.internal.ResolveDVRHash(ctx, &pb.ResolveDVRHashRequest{
+		DvrHash: dvrHash,
+	})
+}
+
+// ResolveIdentifier provides unified resolution across all Commodore registries
+// Checks: streams (internal_name), streams (playback_id), clips, DVR, VOD
+// Used by Foghorn for analytics enrichment when local state cache misses
+func (c *GRPCClient) ResolveIdentifier(ctx context.Context, identifier string) (*pb.ResolveIdentifierResponse, error) {
+	// Use cache for context lookups (high frequency during playback/events)
+	if c.cache != nil {
+		cacheKey := "commodore:id:" + identifier
+		if v, ok, _ := c.cache.Get(ctx, cacheKey, func(ctx context.Context, _ string) (interface{}, bool, error) {
+			resp, err := c.internal.ResolveIdentifier(ctx, &pb.ResolveIdentifierRequest{
+				Identifier: identifier,
+			})
+			if err != nil || !resp.Found {
+				return nil, false, err
+			}
+			return resp, true, nil
+		}); ok {
+			return v.(*pb.ResolveIdentifierResponse), nil
+		}
+	}
+
+	return c.internal.ResolveIdentifier(ctx, &pb.ResolveIdentifierRequest{
+		Identifier: identifier,
+	})
+}
+
+// RegisterVod registers a new VOD asset in the business registry
+// Called by Foghorn during CreateVodUpload flow (mirrors DVR/clip pattern)
+func (c *GRPCClient) RegisterVod(ctx context.Context, tenantID, userID, filename string, title, description, contentType *string, sizeBytes *int64) (*pb.RegisterVodResponse, error) {
+	req := &pb.RegisterVodRequest{
+		TenantId: tenantID,
+		UserId:   userID,
+		Filename: filename,
+	}
+	if title != nil {
+		req.Title = title
+	}
+	if description != nil {
+		req.Description = description
+	}
+	if contentType != nil {
+		req.ContentType = contentType
+	}
+	if sizeBytes != nil {
+		req.SizeBytes = sizeBytes
+	}
+	return c.internal.RegisterVod(ctx, req)
+}
+
+// ResolveVodHash resolves a VOD hash to tenant context
+// Used for analytics enrichment, playback authorization, and lifecycle operations
+func (c *GRPCClient) ResolveVodHash(ctx context.Context, vodHash string) (*pb.ResolveVodHashResponse, error) {
+	// Use cache for context lookups (high frequency during playback/events)
+	if c.cache != nil {
+		cacheKey := "commodore:vod:" + vodHash
+		if v, ok, _ := c.cache.Get(ctx, cacheKey, func(ctx context.Context, _ string) (interface{}, bool, error) {
+			resp, err := c.internal.ResolveVodHash(ctx, &pb.ResolveVodHashRequest{
+				VodHash: vodHash,
+			})
+			if err != nil || !resp.Found {
+				return nil, false, err
+			}
+			return resp, true, nil
+		}); ok {
+			return v.(*pb.ResolveVodHashResponse), nil
+		}
+	}
+
+	return c.internal.ResolveVodHash(ctx, &pb.ResolveVodHashRequest{
+		VodHash: vodHash,
+	})
 }
 
 // ============================================================================
@@ -396,6 +536,14 @@ func (c *GRPCClient) StopDVR(ctx context.Context, dvrHash string) error {
 	return err
 }
 
+// DeleteDVR deletes a DVR recording
+func (c *GRPCClient) DeleteDVR(ctx context.Context, dvrHash string) error {
+	_, err := c.dvr.DeleteDVR(ctx, &pb.DeleteDVRRequest{
+		DvrHash: dvrHash,
+	})
+	return err
+}
+
 // ListDVRRequests lists DVR recordings with filters
 func (c *GRPCClient) ListDVRRequests(ctx context.Context, tenantID string, internalName *string, pagination *pb.CursorPaginationRequest) (*pb.ListDVRRecordingsResponse, error) {
 	req := &pb.ListDVRRecordingsRequest{
@@ -421,6 +569,12 @@ func (c *GRPCClient) GetDVRStatus(ctx context.Context, dvrHash string) (*pb.DVRI
 
 // ResolveViewerEndpoint resolves the best endpoint for a viewer
 func (c *GRPCClient) ResolveViewerEndpoint(ctx context.Context, contentType, contentID, viewerIP string) (*pb.ViewerEndpointResponse, error) {
+	if c == nil {
+		return nil, fmt.Errorf("CRITICAL: Commodore GRPCClient is nil")
+	}
+	if c.viewer == nil {
+		return nil, fmt.Errorf("CRITICAL: Commodore.viewer client is nil - gRPC connection failed or not initialized?")
+	}
 	req := &pb.ViewerEndpointRequest{
 		ContentType: contentType,
 		ContentId:   contentID,
@@ -447,4 +601,68 @@ func (c *GRPCClient) GetStreamMeta(ctx context.Context, internalName, contentTyp
 		req.TargetBaseUrl = &targetBaseURL
 	}
 	return c.viewer.GetStreamMeta(ctx, req)
+}
+
+// ResolveIngestEndpoint resolves the best ingest endpoint for StreamCrafter
+func (c *GRPCClient) ResolveIngestEndpoint(ctx context.Context, streamKey, viewerIP string) (*pb.IngestEndpointResponse, error) {
+	if c == nil {
+		return nil, fmt.Errorf("CRITICAL: Commodore GRPCClient is nil")
+	}
+	if c.viewer == nil {
+		return nil, fmt.Errorf("CRITICAL: Commodore.viewer client is nil - gRPC connection failed or not initialized?")
+	}
+	req := &pb.IngestEndpointRequest{
+		StreamKey: streamKey,
+	}
+	if viewerIP != "" {
+		req.ViewerIp = &viewerIP
+	}
+	return c.viewer.ResolveIngestEndpoint(ctx, req)
+}
+
+// ============================================================================
+// VOD OPERATIONS (Gateway → Commodore → Foghorn proxy)
+// User-initiated video uploads (distinct from clips/DVR which are stream-derived)
+// ============================================================================
+
+// CreateVodUpload initiates a multipart upload for a VOD asset
+func (c *GRPCClient) CreateVodUpload(ctx context.Context, req *pb.CreateVodUploadRequest) (*pb.CreateVodUploadResponse, error) {
+	return c.vod.CreateVodUpload(ctx, req)
+}
+
+// CompleteVodUpload finalizes a multipart upload after all parts are uploaded
+func (c *GRPCClient) CompleteVodUpload(ctx context.Context, req *pb.CompleteVodUploadRequest) (*pb.CompleteVodUploadResponse, error) {
+	return c.vod.CompleteVodUpload(ctx, req)
+}
+
+// AbortVodUpload cancels an in-progress multipart upload
+func (c *GRPCClient) AbortVodUpload(ctx context.Context, tenantID, uploadID string) (*pb.AbortVodUploadResponse, error) {
+	return c.vod.AbortVodUpload(ctx, &pb.AbortVodUploadRequest{
+		TenantId: tenantID,
+		UploadId: uploadID,
+	})
+}
+
+// GetVodAsset gets a single VOD asset by hash
+func (c *GRPCClient) GetVodAsset(ctx context.Context, tenantID, artifactHash string) (*pb.VodAssetInfo, error) {
+	return c.vod.GetVodAsset(ctx, &pb.GetVodAssetRequest{
+		TenantId:     tenantID,
+		ArtifactHash: artifactHash,
+	})
+}
+
+// ListVodAssets lists VOD assets with pagination
+func (c *GRPCClient) ListVodAssets(ctx context.Context, tenantID string, pagination *pb.CursorPaginationRequest) (*pb.ListVodAssetsResponse, error) {
+	return c.vod.ListVodAssets(ctx, &pb.ListVodAssetsRequest{
+		TenantId:   tenantID,
+		Pagination: pagination,
+	})
+}
+
+// DeleteVodAsset deletes a VOD asset
+func (c *GRPCClient) DeleteVodAsset(ctx context.Context, tenantID, artifactHash string) (*pb.DeleteVodAssetResponse, error) {
+	return c.vod.DeleteVodAsset(ctx, &pb.DeleteVodAssetRequest{
+		TenantId:     tenantID,
+		ArtifactHash: artifactHash,
+	})
 }

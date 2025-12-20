@@ -1,5 +1,8 @@
+# System health and resource utilization updates for all infrastructure nodes
+# Monitors CPU, memory, disk usage, and node status across the platform
 subscription SystemHealth {
   systemHealth {
+    nodeId
     node
     location
     status

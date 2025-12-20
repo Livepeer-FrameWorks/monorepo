@@ -1,0 +1,15 @@
+# Bootstrap tokens for cluster node provisioning (admin view)
+query GetBootstrapTokens($kind: String, $first: Int = 50, $after: String) {
+  bootstrapTokensConnection(kind: $kind, first: $first, after: $after) {
+    edges {
+      cursor
+      node {
+        ...BootstrapTokenFields
+      }
+    }
+    pageInfo {
+      ...PageInfoFields
+    }
+    totalCount
+  }
+}

@@ -5,7 +5,9 @@ import (
 	"frameworks/api_balancing/internal/control"
 	foghorngrpc "frameworks/api_balancing/internal/grpc"
 	"frameworks/api_balancing/internal/handlers"
+	"frameworks/api_balancing/internal/jobs"
 	"frameworks/api_balancing/internal/state"
+	"frameworks/api_balancing/internal/storage"
 	"frameworks/api_balancing/internal/triggers"
 	"frameworks/pkg/cache"
 	"frameworks/pkg/clients/commodore"
@@ -72,6 +74,15 @@ func main() {
 		NodeSelectionDuration: metricsCollector.NewHistogram("node_selection_duration_seconds", "Node selection latency", []string{}, nil),
 		LoadDistribution:      metricsCollector.NewGauge("load_distribution_ratio", "Load distribution ratio", []string{"node_id"}),
 	}
+
+	// Control-plane (HelmsmanControl) and data-plane (Decklog fan-out) observability
+	control.SetMetrics(&control.ControlMetrics{
+		MistTriggers: metricsCollector.NewCounter(
+			"control_mist_triggers_total",
+			"MistTrigger messages received/processed over the HelmsmanControl stream",
+			[]string{"trigger_type", "blocking", "status"},
+		),
+	})
 
 	// Wire state metrics hooks
 	stateWrites := metricsCollector.NewCounter("state_writes_total", "State write-through operations", []string{"entity", "op"})
@@ -211,7 +222,52 @@ func main() {
 		geoipCache = newCache(gttl, gswr, gneg, gmax)
 		logger.Info("GeoIP reader initialized successfully with cache")
 	} else {
-		logger.Debug("GeoIP disabled (no GEOIP_MMDB_PATH or failed to load)")
+		logger.Info("GeoIP disabled (no GEOIP_MMDB_PATH or failed to load)")
+	}
+
+	// S3 Cold Storage Client (optional - only if STORAGE_S3_BUCKET is configured)
+	// Credentials stay in Foghorn; edge nodes receive presigned URLs only
+	//
+	// IMPORTANT: We use interface types to avoid Go's typed nil pointer issue.
+	// A typed nil (*storage.S3Client)(nil) passed as an interface is NOT nil,
+	// but calling methods on it panics. Using interface type ensures true nil.
+	// We need separate interface variables because different consumers expect
+	// different interface types (foghorngrpc.S3ClientInterface vs jobs.S3Client).
+	var s3ForGRPC foghorngrpc.S3ClientInterface
+	var s3ForJobs jobs.S3Client
+	if s3Bucket := config.GetEnv("STORAGE_S3_BUCKET", ""); s3Bucket != "" {
+		s3Config := storage.S3Config{
+			Bucket:    s3Bucket,
+			Prefix:    config.GetEnv("STORAGE_S3_PREFIX", ""),
+			Region:    config.GetEnv("STORAGE_S3_REGION", "us-east-1"),
+			Endpoint:  config.GetEnv("STORAGE_S3_ENDPOINT", ""),
+			AccessKey: config.GetEnv("STORAGE_S3_ACCESS_KEY", ""),
+			SecretKey: config.GetEnv("STORAGE_S3_SECRET_KEY", ""),
+		}
+		client, err := storage.NewS3Client(s3Config, logger)
+		if err != nil {
+			logger.WithError(err).Error("Failed to initialize S3 client for cold storage")
+		} else {
+			// Only assign to interfaces if successfully created (avoids typed nil issue)
+			s3ForGRPC = client
+			s3ForJobs = client
+			control.SetS3Client(client)
+			control.SetDB(db)
+			logger.WithFields(logging.Fields{
+				"bucket": s3Bucket,
+				"prefix": s3Config.Prefix,
+			}).Info("S3 cold storage enabled")
+		}
+	} else {
+		logger.Info("S3 cold storage disabled (no STORAGE_S3_BUCKET configured)")
+	}
+
+	// Livepeer Gateway URL (optional - enables H.264 transcoding via Livepeer network)
+	if livepeerGatewayURL := config.GetEnv("LIVEPEER_GATEWAY_URL", ""); livepeerGatewayURL != "" {
+		control.SetLivepeerGatewayURL(livepeerGatewayURL)
+		logger.WithField("gateway_url", livepeerGatewayURL).Info("Livepeer Gateway enabled for H.264 transcoding")
+	} else {
+		logger.Info("Livepeer Gateway disabled (no LIVEPEER_GATEWAY_URL configured)")
 	}
 
 	// Initialize handlers with injected clients
@@ -219,15 +275,24 @@ func main() {
 
 	// Initialize trigger processor (Lifted from Handlers)
 	triggerProcessor := triggers.NewProcessor(logger, commodoreClient, decklogClient, lb, geoipReader)
+	triggerProcessor.SetMetrics(&triggers.ProcessorMetrics{
+		DecklogTriggerSends: metricsCollector.NewCounter(
+			"decklog_trigger_sends_total",
+			"Attempts and results when forwarding MistTriggers to Decklog",
+			[]string{"trigger_type", "status"},
+		),
+	})
 	if geoipReader != nil && geoipCache != nil {
 		triggerProcessor.SetGeoIPCache(geoipCache)
 	}
-	logger.Info("Initialized trigger processor with Commodore and Decklog clients")
+	triggerProcessor.SetQuartermasterClient(qmClient)
+	logger.Info("Initialized trigger processor with Commodore, Decklog and Quartermaster clients")
+	handlers.SetTriggerProcessor(triggerProcessor)
 
 	// Start Helmsman control gRPC server with injected dependencies
 	control.Init(logger, commodoreClient, triggerProcessor)
 
-	// Configure unified state policies and rehydrate from DB (nodes, DVR, clips)
+	// Configure unified state policies and rehydrate from DB (nodes, DVR, clips, artifacts)
 	state.DefaultManager().ConfigurePolicies(state.PoliciesConfig{
 		WritePolicies: map[state.EntityType]state.WritePolicy{
 			state.EntityClip: {Enabled: true, Mode: state.WriteThrough},
@@ -237,13 +302,17 @@ func main() {
 			state.EntityClip: {BootRehydrate: true, ReconcileInterval: 180 * time.Second},
 			state.EntityDVR:  {BootRehydrate: true, ReconcileInterval: 180 * time.Second},
 		},
-		ClipRepo: control.NewClipRepository(),
-		DVRRepo:  control.NewDVRRepository(),
-		NodeRepo: control.NewNodeRepository(),
+		ClipRepo:     control.NewClipRepository(),
+		DVRRepo:      control.NewDVRRepository(),
+		NodeRepo:     control.NewNodeRepository(),
+		ArtifactRepo: control.NewArtifactRepository(),
 	})
 
-	// Create Foghorn control plane gRPC server (for Commodore: clips, DVR, viewer resolution)
-	foghornServer := foghorngrpc.NewFoghornGRPCServer(db, logger, lb, geoipReader, decklogClient)
+	// Set artifact repository for control server handlers (dual-storage sync)
+	control.SetArtifactRepository(control.NewArtifactRepository())
+
+	// Create Foghorn control plane gRPC server (for Commodore: clips, DVR, viewer resolution, VOD uploads)
+	foghornServer := foghorngrpc.NewFoghornGRPCServer(db, logger, lb, geoipReader, decklogClient, s3ForGRPC)
 
 	// Wire DVR service to trigger processor for auto-start recordings on stream start
 	triggerProcessor.SetDVRService(foghornServer)
@@ -262,6 +331,37 @@ func main() {
 	// Start the hourly storage snapshot scheduler
 	go startStorageSnapshotScheduler(triggerProcessor, logger)
 
+	// Start retention job (marks expired assets as deleted)
+	retentionJob := jobs.NewRetentionJob(jobs.RetentionConfig{
+		DB:            db,
+		Logger:        logger,
+		Interval:      1 * time.Hour,
+		RetentionDays: 30, // Default 30 days
+	})
+	retentionJob.Start()
+	defer retentionJob.Stop()
+
+	// Start orphan reconciliation job (retries failed deletions)
+	orphanCleanupJob := jobs.NewOrphanCleanupJob(jobs.OrphanCleanupConfig{
+		DB:       db,
+		Logger:   logger,
+		Interval: 5 * time.Minute,
+		MaxAge:   30 * time.Minute,
+	})
+	orphanCleanupJob.Start()
+	defer orphanCleanupJob.Stop()
+
+	// Start purge job (hard-deletes old soft-deleted records)
+	purgeDeletedJob := jobs.NewPurgeDeletedJob(jobs.PurgeDeletedConfig{
+		DB:           db,
+		Logger:       logger,
+		Interval:     24 * time.Hour,
+		RetentionAge: 30 * 24 * time.Hour, // 30 days
+		S3Client:     s3ForJobs,
+	})
+	purgeDeletedJob.Start()
+	defer purgeDeletedJob.Stop()
+
 	// Setup router with unified monitoring (health/metrics only - all API routes now gRPC)
 	router := server.SetupServiceRouter(logger, "foghorn", healthChecker, metricsCollector)
 
@@ -270,6 +370,7 @@ func main() {
 
 	// Root page debug interface
 	router.GET("/dashboard", handlers.HandleRootPage)
+	router.GET("/debug/cache/stream-context", handlers.HandleStreamContextCache)
 
 	// Viewer playback routes - generic player redirects via edge.* domain
 	router.GET("/play/*path", handlers.HandleGenericViewerPlayback)

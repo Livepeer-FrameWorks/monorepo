@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/demo"
 	"frameworks/api_gateway/internal/middleware"
 	"frameworks/pkg/logging"
@@ -12,8 +13,8 @@ import (
 )
 
 // DoStreamUpdates handles real-time stream updates via WebSocket
-// Returns proto.StreamEvent directly (bound to GraphQL StreamEvent)
-func (r *Resolver) DoStreamUpdates(ctx context.Context, streamID *string) (<-chan *pb.StreamEvent, error) {
+// Returns model.StreamSubscriptionEvent with direct proto payloads
+func (r *Resolver) DoStreamUpdates(ctx context.Context, streamID *string) (<-chan *model.StreamSubscriptionEvent, error) {
 	if r.Metrics != nil {
 		r.Metrics.Operations.WithLabelValues("subscription_streams", "requested").Inc()
 		defer func() {
@@ -26,10 +27,10 @@ func (r *Resolver) DoStreamUpdates(ctx context.Context, streamID *string) (<-cha
 		if r.Metrics != nil {
 			r.Metrics.Operations.WithLabelValues("subscription_streams", "demo").Inc()
 		}
-		ch := make(chan *pb.StreamEvent, 10)
+		ch := make(chan *model.StreamSubscriptionEvent, 10)
 		go func() {
 			defer close(ch)
-			events := demo.GenerateStreamEvents()
+			events := demo.GenerateStreamSubscriptionEvents()
 			for _, event := range events {
 				select {
 				case ch <- event:

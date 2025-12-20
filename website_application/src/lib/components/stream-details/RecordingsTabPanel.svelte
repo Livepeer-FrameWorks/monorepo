@@ -70,6 +70,7 @@
       {#each recordings as recording (recording.dvrHash)}
         {@const urls = getRecordingUrls(recording.dvrHash)}
         {@const isExpanded = expandedRecording === recording.dvrHash}
+        {@const isPlayable = recording.status && !['deleted', 'failed', 'processing', 'requested', 'queued'].includes(recording.status.toLowerCase())}
         <div class="border-b border-[hsl(var(--tn-fg-gutter)/0.3)] last:border-0">
           <!-- Recording header -->
           <div class="p-4">
@@ -80,18 +81,24 @@
                     {recording.internalName || recording.dvrHash}
                   </h5>
                   <span
-                    class="text-xs bg-info/20 text-info px-2 py-1 rounded-full font-medium"
+                    class="text-xs px-2 py-1 rounded-full font-medium {
+                      recording.status?.toLowerCase() === 'deleted' ? 'bg-error/20 text-error' :
+                      recording.status?.toLowerCase() === 'failed' ? 'bg-error/20 text-error' :
+                      recording.status?.toLowerCase() === 'processing' ? 'bg-warning/20 text-warning' :
+                      recording.status?.toLowerCase() === 'completed' ? 'bg-success/20 text-success' :
+                      'bg-info/20 text-info'
+                    }"
                   >
                     {recording.status || "Ready"}
                   </span>
                 </div>
                 <p class="text-xs text-muted-foreground">
-                  Created: {recording.createdAt ? formatDate(recording.createdAt) : "N/A"} • Duration: {formatDuration((recording.durationSeconds || 0) * 1000)}
+                  Created: {recording.createdAt ? formatDate(recording.createdAt) : "N/A"} • Duration: {formatDuration(recording.durationSeconds || 0)}
                 </p>
               </div>
 
               <div class="flex items-center space-x-2">
-                {#if urls?.primary.hls}
+                {#if isPlayable && urls?.primary.hls}
                   <Button
                     variant="ghost"
                     size="sm"
@@ -112,26 +119,30 @@
                     <DownloadIcon class="w-4 h-4" />
                     Download
                   </Button>
+                {:else if !isPlayable}
+                  <span class="text-xs text-muted-foreground italic">Not available</span>
                 {/if}
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onclick={() => expandedRecording = isExpanded ? null : recording.dvrHash}
-                  class="border border-border/30"
-                  title={isExpanded ? "Collapse protocols" : "Show all protocols"}
-                >
-                  {#if isExpanded}
-                    <ChevronUpIcon class="w-4 h-4" />
-                  {:else}
-                    <ChevronDownIcon class="w-4 h-4" />
-                  {/if}
-                </Button>
+                {#if isPlayable}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onclick={() => expandedRecording = isExpanded ? null : recording.dvrHash}
+                    class="border border-border/30"
+                    title={isExpanded ? "Collapse protocols" : "Show all protocols"}
+                  >
+                    {#if isExpanded}
+                      <ChevronUpIcon class="w-4 h-4" />
+                    {:else}
+                      <ChevronDownIcon class="w-4 h-4" />
+                    {/if}
+                  </Button>
+                {/if}
               </div>
             </div>
           </div>
 
           <!-- Expanded protocol URLs -->
-          {#if isExpanded}
+          {#if isExpanded && isPlayable}
             <div class="px-4 pb-4 border-t border-[hsl(var(--tn-fg-gutter)/0.2)] bg-muted/5">
               <PlaybackProtocols
                 contentId={recording.dvrHash}

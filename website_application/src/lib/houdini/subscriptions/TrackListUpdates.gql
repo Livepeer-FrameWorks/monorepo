@@ -1,3 +1,5 @@
+# Live updates to stream media tracks and encoding parameters
+# Includes video/audio codec details, bitrates, resolution, and quality tier changes
 subscription TrackListUpdates($stream: String!) {
   trackListUpdates(stream: $stream) {
     streamName

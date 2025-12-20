@@ -1,0 +1,109 @@
+# Fetch stream session/analytics data including hourly aggregates, quality metrics, and viewer sessions
+# Used for analytics expansion and session details
+query GetStreamSessions(
+  $id: ID!
+  $timeRange: TimeRangeInput
+  $first: Int = 50
+) {
+  stream(id: $id) {
+    id
+
+    # Hourly connection aggregates (bandwidth, viewers per hour)
+    connectionHourlyConnection(timeRange: $timeRange, first: $first) {
+      edges {
+        cursor
+        node {
+          id
+          hour
+          internalName
+          totalBytes
+          uniqueViewers
+          totalSessions
+        }
+      }
+      pageInfo {
+        ...PageInfoFields
+      }
+      totalCount
+    }
+
+    # Daily quality distribution (resolution tiers, codecs)
+    qualityDailyConnection(timeRange: $timeRange, first: $first) {
+      edges {
+        cursor
+        node {
+          id
+          day
+          internalName
+          tier1080pMinutes
+          tier720pMinutes
+          tier480pMinutes
+          tierSdMinutes
+          primaryTier
+          codecH264Minutes
+          codecH265Minutes
+          avgBitrate
+          avgFps
+        }
+      }
+      pageInfo {
+        ...PageInfoFields
+      }
+      totalCount
+    }
+
+    # Individual viewer sessions (geo, quality, duration)
+    viewerSessionsConnection(timeRange: $timeRange, first: $first) {
+      edges {
+        cursor
+        node {
+          id
+          timestamp
+          internalName
+          nodeId
+          sessionId
+          connector
+          countryCode
+          city
+          latitude
+          longitude
+          durationSeconds
+          bytesUp
+          bytesDown
+          connectionQuality
+          bufferHealth
+          clientBucket {
+            h3Index
+            resolution
+          }
+        }
+      }
+      pageInfo {
+        ...PageInfoFields
+      }
+      totalCount
+    }
+
+    # Client/viewer quality metrics (5m aggregates)
+    clientMetricsConnection(timeRange: $timeRange, first: $first) {
+      edges {
+        cursor
+        node {
+          id
+          timestamp
+          internalName
+          nodeId
+          activeSessions
+          avgBandwidthIn
+          avgBandwidthOut
+          avgConnectionTime
+          packetLossRate
+        }
+      }
+      pageInfo {
+        ...PageInfoFields
+      }
+      totalCount
+    }
+  }
+}

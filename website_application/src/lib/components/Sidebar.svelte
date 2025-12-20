@@ -3,7 +3,7 @@
   import { goto } from "$app/navigation";
   import { base } from "$app/paths";
   import { navigationConfig, type NavigationItem } from "../navigation.js";
-  import { createEventDispatcher } from "svelte";
+  import { createEventDispatcher, untrack } from "svelte";
   import { getIconComponent } from "../iconUtils";
   import { sidebarStore } from "../stores/sidebar.svelte";
 
@@ -14,10 +14,6 @@
   let { collapsed = false }: Props = $props();
 
   const dispatch = createEventDispatcher();
-
-  // Track sections that were auto-expanded for the current route
-  // These should not be persisted, just displayed
-  let autoExpandedSections = $state<Set<string>>(new Set());
 
   // Track current child index for cycling when collapsed
   let sectionChildIndex: Record<string, number> = {};
@@ -57,30 +53,29 @@
     return Object.values(section.children).some((child) => child.active === true);
   }
 
-  // Compute which section contains the current path for auto-expansion
-  $effect(() => {
-    const newAutoExpanded = new Set<string>();
+  // Helper to check if a section should appear expanded
+  // Section is expanded if: user explicitly expanded it OR it contains the current route
+  function isSectionExpanded(sectionKey: string): boolean {
+    return sidebarStore.expandedSections.has(sectionKey);
+  }
 
-    // Find which section contains the current path
+  // Auto-expand the section containing the current page on navigation
+  $effect(() => {
     for (const [sectionKey, section] of Object.entries(navigationConfig)) {
       if (sectionKey !== "dashboard" && section.children) {
         for (const [_childKey, child] of Object.entries(section.children)) {
           if (safeResolve(child.href) === currentPath) {
-            newAutoExpanded.add(sectionKey);
+            // Expand the section in the store (non-persisted) so user can toggle it later
+            // Use untrack to prevent this effect from re-running if the store changes
+            untrack(() => {
+              sidebarStore.autoExpandSection(sectionKey);
+            });
             break;
           }
         }
       }
     }
-
-    autoExpandedSections = newAutoExpanded;
   });
-
-  // Helper to check if a section should appear expanded
-  // Section is expanded if: user explicitly expanded it OR it contains the current route
-  function isSectionExpanded(sectionKey: string): boolean {
-    return sidebarStore.expandedSections.has(sectionKey) || autoExpandedSections.has(sectionKey);
-  }
 
   function toggleSection(sectionKey: string) {
     if (collapsed) {

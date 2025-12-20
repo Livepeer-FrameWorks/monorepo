@@ -73,11 +73,11 @@
         <frameworks_quota>
             <interval>
                 <duration>3600</duration>
-                <queries>10000</queries>
-                <errors>100</errors>
-                <result_rows>100000000</result_rows>
-                <read_rows>1000000000</read_rows>
-                <execution_time>7200</execution_time>
+                <queries>0</queries>
+                <errors>0</errors>
+                <result_rows>0</result_rows>
+                <read_rows>0</read_rows>
+                <execution_time>0</execution_time>
             </interval>
         </frameworks_quota>
         

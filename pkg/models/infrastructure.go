@@ -32,9 +32,21 @@ type InfrastructureCluster struct {
 	CurrentBandwidthMbps int `json:"current_bandwidth_mbps" db:"current_bandwidth_mbps"`
 
 	// Health
-	IsActive     bool       `json:"is_active" db:"is_active"`
-	HealthStatus string     `json:"health_status" db:"health_status"`
-	LastSeen     *time.Time `json:"last_seen,omitempty" db:"last_seen"`
+	IsActive         bool       `json:"is_active" db:"is_active"`
+	IsDefaultCluster bool       `json:"is_default_cluster" db:"is_default_cluster"`
+	HealthStatus     string     `json:"health_status" db:"health_status"`
+	LastSeen         *time.Time `json:"last_seen,omitempty" db:"last_seen"`
+
+	// Marketplace fields
+	Visibility          string                 `json:"visibility" db:"visibility"`                       // public, unlisted, private
+	PricingModel        string                 `json:"pricing_model" db:"pricing_model"`                 // free_unmetered, metered, monthly, custom, tier_inherit
+	MonthlyPriceCents   int                    `json:"monthly_price_cents" db:"monthly_price_cents"`     // For monthly pricing
+	MeteredRateConfig   map[string]interface{} `json:"metered_rate_config,omitempty" db:"metered_rate_config"`
+	RequiredBillingTier *string                `json:"required_billing_tier,omitempty" db:"required_billing_tier"`
+	RequiresApproval    bool                   `json:"requires_approval" db:"requires_approval"`
+	ShortDescription    *string                `json:"short_description,omitempty" db:"short_description"`
+	LongDescription     *string                `json:"long_description,omitempty" db:"long_description"`
+	IsPlatformCluster   bool                   `json:"is_platform_cluster" db:"is_platform_cluster"`
 
 	CreatedAt time.Time `json:"created_at" db:"created_at"`
 	UpdatedAt time.Time `json:"updated_at" db:"updated_at"`
@@ -58,8 +70,8 @@ type InfrastructureNode struct {
 	CPUCores           *int                   `json:"cpu_cores,omitempty" db:"cpu_cores"`
 	MemoryGB           *int                   `json:"memory_gb,omitempty" db:"memory_gb"`
 	DiskGB             *int                   `json:"disk_gb,omitempty" db:"disk_gb"`
-	Status        string     `json:"status" db:"status"`
-	LastHeartbeat *time.Time `json:"last_heartbeat,omitempty" db:"last_heartbeat"`
+	Status             string                 `json:"status" db:"status"`
+	LastHeartbeat      *time.Time             `json:"last_heartbeat,omitempty" db:"last_heartbeat"`
 	Tags               map[string]interface{} `json:"tags,omitempty" db:"tags"`
 	Metadata           map[string]interface{} `json:"metadata,omitempty" db:"metadata"`
 	CreatedAt          time.Time              `json:"created_at" db:"created_at"`
@@ -126,4 +138,40 @@ type ServiceInstance struct {
 	MemoryUsageMB   *int       `json:"memory_usage_mb,omitempty" db:"memory_usage_mb"`
 	CreatedAt       time.Time  `json:"created_at" db:"created_at"`
 	UpdatedAt       time.Time  `json:"updated_at" db:"updated_at"`
+}
+
+// ClusterInvite represents an invitation for a tenant to join a cluster
+type ClusterInvite struct {
+	ID               string                 `json:"id" db:"id"`
+	ClusterID        string                 `json:"cluster_id" db:"cluster_id"`
+	InvitedTenantID  string                 `json:"invited_tenant_id" db:"invited_tenant_id"`
+	InviteToken      string                 `json:"invite_token" db:"invite_token"`
+	AccessLevel      string                 `json:"access_level" db:"access_level"`
+	ResourceLimits   map[string]interface{} `json:"resource_limits,omitempty" db:"resource_limits"`
+	Status           string                 `json:"status" db:"status"` // pending, accepted, expired, revoked
+	CreatedBy        string                 `json:"created_by" db:"created_by"`
+	CreatedAt        time.Time              `json:"created_at" db:"created_at"`
+	ExpiresAt        *time.Time             `json:"expires_at,omitempty" db:"expires_at"`
+	AcceptedAt       *time.Time             `json:"accepted_at,omitempty" db:"accepted_at"`
+	InvitedTenantName *string               `json:"invited_tenant_name,omitempty"` // Joined field
+}
+
+// ClusterSubscription represents a tenant's subscription to a cluster with status
+type ClusterSubscription struct {
+	ID                 string                 `json:"id" db:"id"`
+	TenantID           string                 `json:"tenant_id" db:"tenant_id"`
+	ClusterID          string                 `json:"cluster_id" db:"cluster_id"`
+	AccessLevel        string                 `json:"access_level" db:"access_level"`
+	SubscriptionStatus string                 `json:"subscription_status" db:"subscription_status"` // pending_approval, active, suspended, rejected
+	ResourceLimits     map[string]interface{} `json:"resource_limits,omitempty" db:"resource_limits"`
+	RequestedAt        *time.Time             `json:"requested_at,omitempty" db:"requested_at"`
+	ApprovedAt         *time.Time             `json:"approved_at,omitempty" db:"approved_at"`
+	ApprovedBy         *string                `json:"approved_by,omitempty" db:"approved_by"`
+	RejectionReason    *string                `json:"rejection_reason,omitempty" db:"rejection_reason"`
+	ExpiresAt          *time.Time             `json:"expires_at,omitempty" db:"expires_at"`
+	CreatedAt          time.Time              `json:"created_at" db:"created_at"`
+	UpdatedAt          time.Time              `json:"updated_at" db:"updated_at"`
+	// Joined fields
+	ClusterName *string `json:"cluster_name,omitempty"`
+	TenantName  *string `json:"tenant_name,omitempty"`
 }

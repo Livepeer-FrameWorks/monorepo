@@ -1,9 +1,24 @@
 -- Demo seed for Quartermaster and Purser
 
--- Ensure base cluster
-INSERT INTO quartermaster.infrastructure_clusters (cluster_id, cluster_name, cluster_type, base_url, max_concurrent_streams, max_concurrent_viewers, max_bandwidth_mbps)
-VALUES ('central-primary', 'Central Primary Cluster', 'central', 'demo.frameworks.network', 10000, 1000000, 100000)
-ON CONFLICT (cluster_id) DO NOTHING;
+-- Ensure base cluster (platform default with marketplace fields)
+INSERT INTO quartermaster.infrastructure_clusters (
+    cluster_id, cluster_name, cluster_type, base_url,
+    max_concurrent_streams, max_concurrent_viewers, max_bandwidth_mbps,
+    is_default_cluster, is_platform_cluster,
+    visibility, pricing_model, short_description
+)
+VALUES (
+    'central-primary', 'Central Primary Cluster', 'central', 'demo.frameworks.network',
+    10000, 1000000, 100000,
+    TRUE, TRUE,  -- Default cluster for auto-subscription, platform-operated
+    'public', 'free_unmetered', 'FrameWorks shared infrastructure for all users'
+)
+ON CONFLICT (cluster_id) DO UPDATE SET
+    is_default_cluster = TRUE,
+    is_platform_cluster = TRUE,
+    visibility = 'public',
+    pricing_model = 'free_unmetered',
+    short_description = COALESCE(EXCLUDED.short_description, quartermaster.infrastructure_clusters.short_description);
 
 -- Ensure service catalog minimal entry
 INSERT INTO quartermaster.services (service_id, name, plane, description, default_port, health_check_path, docker_image)
@@ -35,6 +50,24 @@ UPDATE commodore.users SET verified = TRUE WHERE email = 'demo@frameworks.dev' A
 INSERT INTO commodore.users (id, tenant_id, email, password_hash, first_name, last_name, role, permissions, is_active, verified)
 VALUES ('00000000-0000-0000-0000-000000000000', '00000000-0000-0000-0000-000000000001', 'service@internal', 'no-login', 'Service', 'Account', 'service', ARRAY['*'], TRUE, TRUE)
 ON CONFLICT (tenant_id, email) DO NOTHING;
+
+-- Demo API token for programmatic access testing
+-- Token value format: "fw_" + 64 hex chars (matching developer_tokens package format)
+INSERT INTO commodore.api_tokens (
+    id, tenant_id, user_id, token_value, token_name,
+    permissions, is_active, expires_at, last_used_at, created_at
+) VALUES (
+    'a0000000-0000-0000-0000-000000000001',
+    '00000000-0000-0000-0000-000000000001',
+    '550e8400-e29b-41d4-a716-446655440000',
+    'fw_demo0000000000000000000000000000000000000000000000000000000000',
+    'Demo API Token',
+    ARRAY['streams:read', 'streams:write', 'analytics:read'],
+    TRUE,
+    NOW() + INTERVAL '1 year',
+    NOW() - INTERVAL '1 hour',
+    NOW() - INTERVAL '7 days'
+) ON CONFLICT (token_value) DO NOTHING;
 
 -- Create demo stream with fixed internal_name to match ClickHouse seed data
 INSERT INTO commodore.streams (id, tenant_id, user_id, stream_key, playback_id, internal_name, title, description)
@@ -83,9 +116,23 @@ INSERT INTO quartermaster.infrastructure_nodes (
 -- Demo subscription in Purser
 INSERT INTO purser.tenant_subscriptions (tenant_id, tier_id, status, billing_email, started_at, next_billing_date)
 SELECT '00000000-0000-0000-0000-000000000001', bt.id, 'active', 'demo@frameworks.dev', NOW(), NOW() + INTERVAL '1 month'
-FROM purser.billing_tiers bt 
+FROM purser.billing_tiers bt
 WHERE bt.tier_name = 'developer'
   AND NOT EXISTS (SELECT 1 FROM purser.tenant_subscriptions WHERE tenant_id = '00000000-0000-0000-0000-000000000001');
+
+-- Cluster pricing for the platform cluster (free tier, no metering)
+INSERT INTO purser.cluster_pricing (
+    cluster_id, pricing_model,
+    is_platform_official, allow_free_tier, required_tier_level,
+    default_quotas
+) VALUES (
+    'central-primary', 'free_unmetered',
+    TRUE, TRUE, 0,  -- Platform cluster, available to free tier
+    '{"max_streams": 5, "max_viewers": 500, "max_bandwidth_mbps": 100, "retention_days": 7}'
+) ON CONFLICT (cluster_id) DO UPDATE SET
+    pricing_model = 'free_unmetered',
+    is_platform_official = TRUE,
+    allow_free_tier = TRUE;
 
 -- Grant access (subscription) to the central cluster for the demo tenant
 INSERT INTO quartermaster.tenant_cluster_access (
@@ -117,6 +164,31 @@ INSERT INTO quartermaster.node_fingerprints (
     fingerprint_machine_sha256 = EXCLUDED.fingerprint_machine_sha256,
     last_seen = NOW();
 
+-- Demo bootstrap token for node provisioning testing
+-- This token was used to provision edge-node-1
+INSERT INTO quartermaster.bootstrap_tokens (
+    id, token, kind, name,
+    tenant_id, cluster_id, expected_ip,
+    metadata, usage_limit, usage_count,
+    expires_at, used_at, created_by, created_at
+) VALUES (
+    'b0000000-0000-0000-0000-000000000001',
+    'demo_bootstrap_token_for_local_development_testing_only',
+    'edge_node',
+    'Demo Edge Node Bootstrap',
+    '00000000-0000-0000-0000-000000000001',  -- Demo tenant
+    'central-primary',                        -- Central cluster
+    '127.0.0.1',                              -- Expected localhost for dev
+    '{"purpose": "demo", "environment": "development"}',
+    10,    -- Max 10 uses
+    1,     -- Already used once for edge-node-1
+    NOW() + INTERVAL '30 days',
+    NOW() - INTERVAL '1 day',                 -- Used yesterday
+    '550e8400-e29b-41d4-a716-446655440000',  -- Created by demo user
+    NOW() - INTERVAL '2 days'
+) ON CONFLICT (token) DO UPDATE SET
+    expires_at = NOW() + INTERVAL '30 days';
+
 -- Demo usage records for billing page
 -- Current month usage (ongoing)
 -- NOTE: usage_details must include all fields expected by UsageSummary GraphQL type
@@ -133,7 +205,7 @@ VALUES
        "unique_countries": 7,
        "unique_cities": 23,
        "avg_buffer_health": 0.92,
-       "avg_bitrate": 4500000,
+       "avg_bitrate": 4500,
        "packet_loss_rate": 0.0012,
        "geo_breakdown": [
          {"country_code": "US", "viewer_count": 1511, "viewer_hours": 245.3, "percentage": 30.6, "egress_gb": 142.5},
@@ -159,6 +231,18 @@ VALUES
     -- Peak Viewers - current month
     ('00000000-0000-0000-0000-000000000001', 'central-primary', 'peak_viewers', 89,
      '{"stream_id": "demo_live_stream_001", "timestamp": "2023-10-15T14:30:00Z"}',
+     TO_CHAR(NOW(), 'YYYY-MM'), DATE_TRUNC('month', NOW()), NOW()),
+    -- Total Viewers - current month (REQUIRED for UsageSummary.totalViewers)
+    ('00000000-0000-0000-0000-000000000001', 'central-primary', 'total_viewers', 4936,
+     '{"sessions": 4936, "returning": 1247}',
+     TO_CHAR(NOW(), 'YYYY-MM'), DATE_TRUNC('month', NOW()), NOW()),
+    -- Viewer Hours - current month (REQUIRED for UsageSummary.viewerHours)
+    ('00000000-0000-0000-0000-000000000001', 'central-primary', 'viewer_hours', 6543,
+     '{"avg_session_minutes": 79.5}',
+     TO_CHAR(NOW(), 'YYYY-MM'), DATE_TRUNC('month', NOW()), NOW()),
+    -- Unique Viewers - current month (REQUIRED for UsageSummary.uniqueViewers)
+    ('00000000-0000-0000-0000-000000000001', 'central-primary', 'unique_viewers', 5000,
+     '{"by_country": {"US": 1500, "NL": 1000, "GB": 500, "DE": 500, "JP": 500, "other": 1000}}',
      TO_CHAR(NOW(), 'YYYY-MM'), DATE_TRUNC('month', NOW()), NOW())
 ON CONFLICT (tenant_id, cluster_id, usage_type, period_start, period_end) DO UPDATE SET
     usage_value = EXCLUDED.usage_value,
@@ -171,23 +255,19 @@ VALUES
      '{"stream_count": 8, "avg_duration_hours": 42.75}',
      TO_CHAR(NOW() - INTERVAL '1 month', 'YYYY-MM'),
      DATE_TRUNC('month', NOW() - INTERVAL '1 month'),
-     DATE_TRUNC('month', NOW()) - INTERVAL '1 second'),
-    ('00000000-0000-0000-0000-000000000001', 'central-primary', 'egress_gb', 1245.6,
+     	    DATE_TRUNC('month', NOW() - INTERVAL '1 month') - INTERVAL '1 second'),    ('00000000-0000-0000-0000-000000000001', 'central-primary', 'egress_gb', 1245.6,
      '{"viewer_sessions": 35000, "avg_quality": "1080p"}',
      TO_CHAR(NOW() - INTERVAL '1 month', 'YYYY-MM'),
      DATE_TRUNC('month', NOW() - INTERVAL '1 month'),
-     DATE_TRUNC('month', NOW()) - INTERVAL '1 second'),
-    ('00000000-0000-0000-0000-000000000001', 'central-primary', 'storage_gb', 72.5,
+     	    DATE_TRUNC('month', NOW() - INTERVAL '1 month') - INTERVAL '1 second'),    ('00000000-0000-0000-0000-000000000001', 'central-primary', 'storage_gb', 72.5,
      '{"dvr_gb": 38.1, "clips_gb": 10.2, "recordings_gb": 24.2}',
      TO_CHAR(NOW() - INTERVAL '1 month', 'YYYY-MM'),
      DATE_TRUNC('month', NOW() - INTERVAL '1 month'),
-     DATE_TRUNC('month', NOW()) - INTERVAL '1 second'),
-    ('00000000-0000-0000-0000-000000000001', 'central-primary', 'total_streams', 8,
+     	    DATE_TRUNC('month', NOW() - INTERVAL '1 month') - INTERVAL '1 second'),    ('00000000-0000-0000-0000-000000000001', 'central-primary', 'total_streams', 8,
      '{"live_streams": 5, "vod_streams": 3}',
      TO_CHAR(NOW() - INTERVAL '1 month', 'YYYY-MM'),
      DATE_TRUNC('month', NOW() - INTERVAL '1 month'),
-     DATE_TRUNC('month', NOW()) - INTERVAL '1 second'),
-    ('00000000-0000-0000-0000-000000000001', 'central-primary', 'peak_viewers', 145,
+     	    DATE_TRUNC('month', NOW() - INTERVAL '1 month') - INTERVAL '1 second'),    ('00000000-0000-0000-0000-000000000001', 'central-primary', 'peak_viewers', 145,
      '{"stream_id": "demo_live_stream_001", "timestamp": "2023-09-20T18:45:00Z"}',
      TO_CHAR(NOW() - INTERVAL '1 month', 'YYYY-MM'),
      DATE_TRUNC('month', NOW() - INTERVAL '1 month'),
@@ -229,98 +309,394 @@ ON CONFLICT (tenant_id, cluster_id, usage_type, period_start, period_end) DO UPD
     usage_details = EXCLUDED.usage_details;
 
 -- ============================================================================
--- FOGHORN: Demo Clips
+-- PURSER: Demo Billing Invoices (Historical Invoice Records)
 -- ============================================================================
--- Demo clip tied to demo stream - should match physical file in infrastructure/demo-recordings
+-- Invoice history for billing page display
+-- Note: status values are 'pending', 'paid', 'overdue', 'cancelled'
 
-INSERT INTO foghorn.clips (
-    id, tenant_id, stream_id, user_id, clip_hash,
-    stream_name, title, description,
-    start_time, duration, clip_mode, requested_params,
-    node_id, storage_path, size_bytes, status,
-    created_at, updated_at
-) VALUES (
-    'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
-    '00000000-0000-0000-0000-000000000001',  -- Demo Tenant
-    '00000000-0000-0000-0000-000000000002',  -- Demo Stream
-    '550e8400-e29b-41d4-a716-446655440000',  -- Demo User
-    'a1b2c3d4e5f6789012345678901234ab',      -- 32-char hex (must match filename)
-    'demo_live_stream_001',
-    'Demo Highlight Clip',
-    'A 10-second demo clip showcasing platform capabilities',
-    1702382400000,  -- Dec 12, 2023 12:00:00 UTC (ms)
-    10000,          -- 10 seconds (matches actual file)
+INSERT INTO purser.billing_invoices (
+    id, tenant_id, status, currency, amount,
+    due_date, paid_at,
+    base_amount, metered_amount, usage_details,
+    created_at
+) VALUES
+-- Current month (pending invoice)
+(
+    'fa000000-0000-0000-0000-000000000001',
+    '00000000-0000-0000-0000-000000000001',
+    'pending',
+    'EUR',
+    249.00,
+    DATE_TRUNC('month', NOW()) + INTERVAL '1 month' + INTERVAL '14 days',
+    NULL,
+    249.00,  -- Developer tier base
+    0.00,    -- No metered charges yet
+    '{"usage_data": {"viewer_hours": 4166.67, "average_storage_gb": 23.5, "gpu_hours": 8.2, "stream_hours": 127.5, "egress_gb": 456.78}, "tier_info": {"tier_name": "developer", "display_name": "Developer", "base_price": 249.0, "metering_enabled": true}}',
+    DATE_TRUNC('month', NOW())
+),
+-- Previous month (paid invoice)
+(
+    'fa000000-0000-0000-0000-000000000002',
+    '00000000-0000-0000-0000-000000000001',
+    'paid',
+    'EUR',
+    249.00,
+    DATE_TRUNC('month', NOW()) + INTERVAL '14 days',
+    DATE_TRUNC('month', NOW()) + INTERVAL '5 days',
+    249.00,
+    0.00,
+    '{"usage_data": {"viewer_hours": 7500.0, "average_storage_gb": 45.2, "gpu_hours": 15.5, "stream_hours": 342.0, "egress_gb": 1245.6}, "tier_info": {"tier_name": "developer", "display_name": "Developer", "base_price": 249.0, "metering_enabled": true}}',
+    DATE_TRUNC('month', NOW() - INTERVAL '1 month')
+),
+-- Two months ago (paid invoice)
+(
+    'fa000000-0000-0000-0000-000000000003',
+    '00000000-0000-0000-0000-000000000001',
+    'paid',
+    'EUR',
+    249.00,
+    DATE_TRUNC('month', NOW()) - INTERVAL '1 month' + INTERVAL '14 days',
+    DATE_TRUNC('month', NOW()) - INTERVAL '1 month' + INTERVAL '3 days',
+    249.00,
+    0.00,
+    '{"usage_data": {"viewer_hours": 5833.33, "average_storage_gb": 32.1, "gpu_hours": 12.0, "stream_hours": 215.25, "egress_gb": 890.2}, "tier_info": {"tier_name": "developer", "display_name": "Developer", "base_price": 249.0, "metering_enabled": true}}',
+    DATE_TRUNC('month', NOW() - INTERVAL '2 months')
+)
+ON CONFLICT (id) DO UPDATE SET
+    status = EXCLUDED.status,
+    paid_at = EXCLUDED.paid_at;
+
+-- ============================================================================
+-- COMMODORE: Demo Clips (Business Registry)
+-- ============================================================================
+-- Clip business metadata owned by control plane
+-- These correspond to foghorn.artifacts entries for lifecycle state
+
+INSERT INTO commodore.clips (
+    id, tenant_id, user_id, stream_id, clip_hash,
+    title, description,
+    start_time, duration, clip_mode,
+    retention_until, created_at, updated_at
+) VALUES
+-- Demo clip (ready) - matches foghorn.artifacts entry
+(
+    'c1000000-0000-0000-0000-000000000001',
+    '00000000-0000-0000-0000-000000000001',  -- Demo tenant
+    '550e8400-e29b-41d4-a716-446655440000',  -- Demo user
+    '00000000-0000-0000-0000-000000000002',  -- Demo stream
+    'a1b2c3d4e5f6789012345678901234ab',      -- Must match foghorn.artifacts
+    'Demo Highlight Reel',
+    'Amazing gameplay highlights from the demo stream',
+    1640995200000,  -- Unix timestamp (ms): Jan 1, 2022 00:00:00 UTC
+    600000,         -- Duration (ms): 10 minutes
     'absolute',
-    '{"start_unix": 1702382400, "duration_sec": 10}',
-    'edge-node-1',
-    '/var/lib/mistserver/recordings/clips/demo_live_stream_001/a1b2c3d4e5f6789012345678901234ab.mp4',
-    251904,         -- Actual file size: ~246KB
-    'ready',
+    NOW() + INTERVAL '7 days',   -- 7-day rolling retention for demo fixtures
     NOW() - INTERVAL '2 hours',
     NOW() - INTERVAL '2 hours'
-) ON CONFLICT (clip_hash) DO UPDATE SET
-    status = 'ready',
+),
+-- Demo clip (deleted) - matches foghorn.artifacts entry
+(
+    'c1000000-0000-0000-0000-000000000002',
+    '00000000-0000-0000-0000-000000000001',
+    '550e8400-e29b-41d4-a716-446655440000',
+    '00000000-0000-0000-0000-000000000002',
+    'b2c3d4e5f6789012345678901234bcde',      -- Must match foghorn.artifacts
+    'Old Demo Clip',
+    'This clip was deleted',
+    1641081600000,  -- Jan 2, 2022 00:00:00 UTC
+    300000,         -- 5 minutes
+    'absolute',
+    NOW() - INTERVAL '1 day',   -- Already expired (retention passed)
+    NOW() - INTERVAL '2 days',
+    NOW() - INTERVAL '1 day'
+)
+ON CONFLICT (clip_hash) DO UPDATE SET
+    title = EXCLUDED.title,
     updated_at = NOW();
 
 -- ============================================================================
--- FOGHORN: Demo DVR Recordings
+-- COMMODORE: Demo DVR Recordings (Business Registry)
 -- ============================================================================
--- Demo DVR request - should match HLS manifest in infrastructure/demo-recordings
+-- DVR recording business metadata owned by control plane
+-- These correspond to foghorn.artifacts entries for lifecycle state
 
-INSERT INTO foghorn.dvr_requests (
-    id, request_hash, tenant_id, stream_id, internal_name,
-    storage_node_id, storage_node_url,
-    status, started_at, ended_at, duration_seconds, size_bytes, manifest_path,
-    created_at, updated_at
-) VALUES (
-    'b1cdef12-3456-789a-bcde-f0123456789a',
-    'fedcba98765432109876543210fedcba',      -- 32-char hex (must match filename)
-    '00000000-0000-0000-0000-000000000001',  -- Demo Tenant
-    '00000000-0000-0000-0000-000000000002',  -- Demo Stream
+INSERT INTO commodore.dvr_recordings (
+    id, tenant_id, user_id, stream_id, dvr_hash,
+    internal_name,
+    retention_until, created_at, updated_at
+) VALUES
+-- Demo DVR recording (completed) - matches foghorn.artifacts entry
+(
+    'd1000000-0000-0000-0000-000000000001',
+    '00000000-0000-0000-0000-000000000001',  -- Demo tenant
+    '550e8400-e29b-41d4-a716-446655440000',  -- Demo user
+    '00000000-0000-0000-0000-000000000002',  -- Demo stream
+    'fedcba98765432109876543210fedcba',      -- Must match foghorn.artifacts
     'demo_live_stream_001',
-    'storage-demo-01',                        -- Demo storage node ID
-    'http://edge-node-1:4242',
-    'completed',
-    NOW() - INTERVAL '4 hours',
-    NOW() - INTERVAL '4 hours' + INTERVAL '18 seconds',  -- 18 seconds of HLS content
-    18,             -- 18 seconds (matches actual HLS duration)
-    513176,         -- Actual total size: ~501KB (2 segments + manifest)
-    '/var/lib/mistserver/recordings/dvr/demo_live_stream_001/fedcba98765432109876543210fedcba.m3u8',
+    NOW() + INTERVAL '7 days',   -- 7-day rolling retention for demo fixtures
     NOW() - INTERVAL '4 hours',
     NOW() - INTERVAL '4 hours'
-) ON CONFLICT (request_hash) DO UPDATE SET
-    status = 'completed',
+),
+-- Demo DVR recording (deleted) - matches foghorn.artifacts entry
+(
+    'd1000000-0000-0000-0000-000000000002',
+    '00000000-0000-0000-0000-000000000001',
+    '550e8400-e29b-41d4-a716-446655440000',
+    '00000000-0000-0000-0000-000000000002',
+    'gedcba98765432109876543210fedcbb',      -- Must match foghorn.artifacts
+    'demo_live_stream_001',
+    NOW() - INTERVAL '1 day',   -- Already expired (retention passed)
+    NOW() - INTERVAL '2 days',
+    NOW() - INTERVAL '1 day'
+)
+ON CONFLICT (dvr_hash) DO UPDATE SET
+    internal_name = EXCLUDED.internal_name,
     updated_at = NOW();
 
 -- ============================================================================
--- FOGHORN: Artifact Registry
+-- FOGHORN: Demo Artifacts (Unified Clip/DVR Lifecycle Table)
 -- ============================================================================
--- Register both demo artifacts so Helmsman/Foghorn can resolve them for VOD playback
+-- Demo artifacts for development and testing
+-- Note: Business metadata (tenant_id, title, description) is in Commodore
+-- Foghorn only stores lifecycle state here
+-- The artifact_hash values MUST match the clip_hash/dvr_hash in commodore.clips/dvr_recordings above
 
-INSERT INTO foghorn.artifact_registry (
-    id, node_id, clip_hash, stream_name, file_path, size_bytes, created_at, last_seen_at
+INSERT INTO foghorn.artifacts (
+    artifact_hash, artifact_type, internal_name, tenant_id,
+    status, size_bytes, manifest_path,
+    storage_location, sync_status, retention_until,
+    created_at, updated_at
 ) VALUES
--- Demo clip artifact
+-- Demo clip (ready)
 (
-    'c2def123-4567-89ab-cdef-012345678901',
-    'edge-node-1',
-    'a1b2c3d4e5f6789012345678901234ab',
+    'a1b2c3d4e5f6789012345678901234ab',      -- 32-char hex (must match filename)
+    'clip',
     'demo_live_stream_001',
+    '00000000-0000-0000-0000-000000000001',  -- Demo tenant (denormalized for fallback)
+    'ready',
+    140795,         -- Actual file size: ~137KB
     '/var/lib/mistserver/recordings/clips/demo_live_stream_001/a1b2c3d4e5f6789012345678901234ab.mp4',
-    251904,
+    'local',
+    'pending',
+    NOW() + INTERVAL '7 days',   -- 7-day rolling retention for demo fixtures
     NOW() - INTERVAL '2 hours',
-    NOW()
+    NOW() - INTERVAL '2 hours'
 ),
--- Demo DVR artifact (HLS manifest)
+-- Demo clip (deleted, for testing cleanup flows)
 (
-    'd3ef1234-5678-9abc-def0-123456789012',
-    'edge-node-1',
-    'fedcba98765432109876543210fedcba',
+    'b2c3d4e5f6789012345678901234bcde',      -- fake hash
+    'clip',
     'demo_live_stream_001',
+    '00000000-0000-0000-0000-000000000001',  -- Demo tenant
+    'deleted',
+    140795,
+    '/var/lib/mistserver/recordings/clips/demo_live_stream_001/b2c3d4e5f6789012345678901234bcde.mp4',
+    'local',
+    'pending',
+    NOW() - INTERVAL '1 day',    -- Already expired (past retention)
+    NOW() - INTERVAL '2 days',
+    NOW() - INTERVAL '1 day'
+),
+-- Demo DVR recording (completed)
+(
+    'fedcba98765432109876543210fedcba',      -- 32-char hex (must match filename)
+    'dvr',
+    'demo_live_stream_001',
+    '00000000-0000-0000-0000-000000000001',  -- Demo tenant
+    'completed',
+    513176,         -- Actual total size: ~501KB (2 segments + manifest)
+    '/var/lib/mistserver/recordings/dvr/demo_live_stream_001/fedcba98765432109876543210fedcba.m3u8',
+    'local',
+    'pending',
+    NOW() + INTERVAL '7 days',   -- 7-day rolling retention for demo fixtures
+    NOW() - INTERVAL '4 hours',
+    NOW() - INTERVAL '4 hours'
+),
+-- Demo DVR recording (deleted, for testing cleanup flows)
+(
+    'gedcba98765432109876543210fedcbb',
+    'dvr',
+    'demo_live_stream_001',
+    '00000000-0000-0000-0000-000000000001',  -- Demo tenant
+    'deleted',
+    1024000,
+    '/var/lib/mistserver/recordings/dvr/demo_live_stream_001/gedcba98765432109876543210fedcbb.m3u8',
+    'local',
+    'pending',
+    NOW() - INTERVAL '1 day',    -- Already expired (past retention)
+    NOW() - INTERVAL '2 days',
+    NOW() - INTERVAL '1 day'
+),
+-- Demo VOD asset (ready, warmed to edge)
+(
+    'c3d4e5f678901234567890123456abcd',      -- 32-char hex
+    'vod',
+    NULL,                                     -- No stream association
+    '00000000-0000-0000-0000-000000000001',  -- Demo tenant
+    'ready',
+    52428800,        -- 50MB
+    NULL,            -- No manifest for VOD (direct file playback)
+    's3',            -- Stored in S3
+    'synced',
+    NOW() + INTERVAL '30 days',   -- 30-day retention for VOD
+    NOW() - INTERVAL '1 day',
+    NOW() - INTERVAL '1 day'
+),
+-- Demo VOD asset (processing, just uploaded)
+(
+    'd4e5f6789012345678901234567abcde',
+    'vod',
+    NULL,
+    '00000000-0000-0000-0000-000000000001',  -- Demo tenant
+    'processing',
+    104857600,       -- 100MB
+    NULL,
+    's3',
+    'synced',
+    NOW() + INTERVAL '30 days',
+    NOW() - INTERVAL '30 minutes',
+    NOW() - INTERVAL '30 minutes'
+),
+-- Demo VOD asset (failed validation)
+(
+    'e5f678901234567890123456789abcdf',
+    'vod',
+    NULL,
+    '00000000-0000-0000-0000-000000000001',  -- Demo tenant
+    'failed',
+    15728640,        -- 15MB
+    NULL,
+    's3',
+    'synced',
+    NOW() - INTERVAL '1 day',    -- Already expired
+    NOW() - INTERVAL '2 days',
+    NOW() - INTERVAL '2 days'
+)
+ON CONFLICT (artifact_hash) DO UPDATE SET
+    status = EXCLUDED.status,
+    updated_at = NOW();
+
+-- ============================================================================
+-- FOGHORN: VOD Metadata (User-Uploaded Video Details)
+-- ============================================================================
+-- VOD-specific metadata like title, description, codecs, duration
+
+INSERT INTO foghorn.vod_metadata (
+    artifact_hash, filename, title, description, content_type,
+    s3_upload_id, s3_key,
+    duration_ms, resolution, video_codec, audio_codec, bitrate_kbps,
+    width, height, fps, audio_channels, audio_sample_rate,
+    created_at, updated_at
+) VALUES
+-- Demo VOD (ready) - Product demo video
+(
+    'c3d4e5f678901234567890123456abcd',
+    'product_demo_2024.mp4',
+    'Product Demo 2024',
+    'Annual product demonstration showcasing new streaming features',
+    'video/mp4',
+    NULL,            -- Upload completed
+    'vod/00000000-0000-0000-0000-000000000001/c3d4e5f678901234567890123456abcd/product_demo_2024.mp4',
+    180000,          -- 3 minutes
+    '1920x1080',
+    'h264',
+    'aac',
+    5000,            -- 5 Mbps
+    1920, 1080, 30.0, 2, 48000,
+    NOW() - INTERVAL '1 day',
+    NOW() - INTERVAL '1 day'
+),
+-- Demo VOD (processing) - Still being validated
+(
+    'd4e5f6789012345678901234567abcde',
+    'webinar_recording.mp4',
+    'Live Streaming Webinar',
+    'Educational webinar about low-latency streaming',
+    'video/mp4',
+    'abc123multipartupload',   -- Still has upload ID (not yet cleaned)
+    'vod/00000000-0000-0000-0000-000000000001/d4e5f6789012345678901234567abcde/webinar_recording.mp4',
+    NULL,            -- Not yet validated
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL, NULL, NULL, NULL, NULL,
+    NOW() - INTERVAL '30 minutes',
+    NOW() - INTERVAL '30 minutes'
+),
+-- Demo VOD (failed) - Invalid format
+(
+    'e5f678901234567890123456789abcdf',
+    'corrupted_file.avi',
+    'Failed Upload',
+    'This file failed validation due to unsupported format',
+    'video/x-msvideo',
+    NULL,
+    'vod/00000000-0000-0000-0000-000000000001/e5f678901234567890123456789abcdf/corrupted_file.avi',
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL, NULL, NULL, NULL, NULL,
+    NOW() - INTERVAL '2 days',
+    NOW() - INTERVAL '2 days'
+)
+ON CONFLICT (artifact_hash) DO UPDATE SET
+    title = EXCLUDED.title,
+    updated_at = NOW();
+
+-- ============================================================================
+-- FOGHORN: Artifact Nodes (Warm Storage Distribution)
+-- ============================================================================
+-- Register demo artifacts on nodes so Foghorn can resolve them for VOD playback
+
+INSERT INTO foghorn.artifact_nodes (
+    artifact_hash, node_id, file_path, size_bytes, last_seen_at, is_orphaned
+) VALUES
+-- Demo clip on edge-node-1
+(
+    'a1b2c3d4e5f6789012345678901234ab',
+    'edge-node-1',
+    '/var/lib/mistserver/recordings/clips/demo_live_stream_001/a1b2c3d4e5f6789012345678901234ab.mp4',
+    140795,
+    NOW(),
+    false
+),
+-- Demo DVR on edge-node-1
+(
+    'fedcba98765432109876543210fedcba',
+    'edge-node-1',
     '/var/lib/mistserver/recordings/dvr/demo_live_stream_001/fedcba98765432109876543210fedcba.m3u8',
     513176,
-    NOW() - INTERVAL '4 hours',
-    NOW()
+    NOW(),
+    false
+),
+-- Demo VOD on edge-node-1 (warmed from S3)
+(
+    'c3d4e5f678901234567890123456abcd',
+    'edge-node-1',
+    '/var/lib/mistserver/recordings/vod/c3d4e5f678901234567890123456abcd.mp4',
+    52428800,
+    NOW(),
+    false
 )
-ON CONFLICT (node_id, clip_hash) DO UPDATE SET
-    last_seen_at = NOW();
+ON CONFLICT (artifact_hash, node_id) DO UPDATE SET
+    last_seen_at = NOW(),
+    is_orphaned = false;
+
+-- ============================================================================
+-- PERISCOPE: Billing Cursors (Analytics Aggregation Checkpoints)
+-- ============================================================================
+-- Tracks last-processed timestamp for billing aggregation jobs
+-- Used by Periscope Query service to resume aggregation from checkpoints
+
+INSERT INTO periscope.billing_cursors (
+    tenant_id, last_processed_at, updated_at
+) VALUES (
+    '00000000-0000-0000-0000-000000000001',
+    NOW() - INTERVAL '1 hour',  -- Last processed 1 hour ago
+    NOW()
+) ON CONFLICT (tenant_id) DO UPDATE SET
+    last_processed_at = NOW() - INTERVAL '1 hour',
+    updated_at = NOW();

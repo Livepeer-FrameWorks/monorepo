@@ -197,6 +197,7 @@ type PurserServer struct {
 	pb.UnimplementedSubscriptionServiceServer
 	pb.UnimplementedInvoiceServiceServer
 	pb.UnimplementedPaymentServiceServer
+	pb.UnimplementedClusterPricingServiceServer
 	db      *sql.DB
 	logger  logging.Logger
 	metrics *ServerMetrics
@@ -1420,19 +1421,19 @@ func (s *PurserServer) GetBillingStatus(ctx context.Context, req *pb.GetBillingS
 	// Get pending invoices
 	pendingInvoices, err := s.getPendingInvoices(ctx, tenantID)
 	if err != nil {
-		s.logger.WithError(err).Debug("Failed to get pending invoices")
+		s.logger.WithError(err).Info("Failed to get pending invoices")
 	}
 
 	// Get recent payments
 	recentPayments, err := s.getRecentPayments(ctx, tenantID, 5)
 	if err != nil {
-		s.logger.WithError(err).Debug("Failed to get recent payments")
+		s.logger.WithError(err).Info("Failed to get recent payments")
 	}
 
 	// Get usage summary for current month
 	usageSummary, err := s.getCurrentMonthUsageSummary(ctx, tenantID)
 	if err != nil {
-		s.logger.WithError(err).Debug("Failed to get usage summary")
+		s.logger.WithError(err).Info("Failed to get usage summary")
 	}
 
 	// Calculate outstanding amount
@@ -1463,6 +1464,8 @@ func (s *PurserServer) GetBillingStatus(ctx context.Context, req *pb.GetBillingS
 
 // getSubscriptionAndTier fetches full subscription and tier details for a tenant
 func (s *PurserServer) getSubscriptionAndTier(ctx context.Context, tenantID string) (*pb.TenantSubscription, *pb.BillingTier, error) {
+	s.logger.WithField("tenant_id", tenantID).Info("getSubscriptionAndTier: querying subscription for tenant")
+
 	var subscription pb.TenantSubscription
 	var tier pb.BillingTier
 
@@ -1509,6 +1512,7 @@ func (s *PurserServer) getSubscriptionAndTier(ctx context.Context, tenantID stri
 		&tier.SortOrder, &tier.IsEnterprise, &tierCreatedAt, &tierUpdatedAt)
 
 	if err == sql.ErrNoRows {
+		s.logger.WithField("tenant_id", tenantID).Warn("getSubscriptionAndTier: NO SUBSCRIPTION FOUND - returning free tier fallback")
 		// Return default free tier
 		return &pb.TenantSubscription{
 				TenantId: tenantID,
@@ -1520,8 +1524,17 @@ func (s *PurserServer) getSubscriptionAndTier(ctx context.Context, tenantID stri
 			}, nil
 	}
 	if err != nil {
+		s.logger.WithError(err).WithField("tenant_id", tenantID).Error("getSubscriptionAndTier: query error")
 		return nil, nil, err
 	}
+
+	s.logger.WithFields(map[string]interface{}{
+		"tenant_id":    tenantID,
+		"tier_name":    tier.TierName,
+		"display_name": tier.DisplayName,
+		"base_price":   tier.BasePrice,
+		"status":       subscription.Status,
+	}).Info("getSubscriptionAndTier: FOUND subscription")
 
 	// Set subscription timestamps
 	subscription.StartedAt = timestamppb.New(subStartedAt)
@@ -1674,7 +1687,10 @@ func (s *PurserServer) getCurrentMonthUsageSummary(ctx context.Context, tenantID
 	periodEnd := periodStart.AddDate(0, 1, 0) // First of next month (exclusive)
 
 	var streamHours, viewerHours, egressGb, recordingGb, storageGb, peakBandwidthMbps float64
-	var totalStreams, totalViewers, peakViewers int32
+	var averageStorageGb, clipStorageAddedGb, clipStorageDeletedGb float64
+	var dvrStorageAddedGb, dvrStorageDeletedGb, vodStorageAddedGb, vodStorageDeletedGb float64
+	var totalStreams, totalViewers, peakViewers, clipsAdded, clipsDeleted int32
+	var dvrAdded, dvrDeleted, vodAdded, vodDeleted int32
 	var usageDetailsJSON []byte
 
 	// Query aggregated metrics + most recent usage_details JSONB (for geo breakdown etc.)
@@ -1689,7 +1705,23 @@ func (s *PurserServer) getCurrentMonthUsageSummary(ctx context.Context, tenantID
 				COALESCE(MAX(CASE WHEN usage_type = 'peak_bandwidth_mbps' THEN usage_value ELSE 0 END), 0) as peak_bandwidth_mbps,
 				COALESCE(SUM(CASE WHEN usage_type = 'total_streams' THEN usage_value ELSE 0 END), 0)::int as total_streams,
 				COALESCE(SUM(CASE WHEN usage_type = 'total_viewers' THEN usage_value ELSE 0 END), 0)::int as total_viewers,
-				COALESCE(MAX(CASE WHEN usage_type = 'peak_viewers' THEN usage_value ELSE 0 END), 0)::int as peak_viewers
+				COALESCE(MAX(CASE WHEN usage_type = 'peak_viewers' THEN usage_value ELSE 0 END), 0)::int as peak_viewers,
+				-- Storage lifecycle metrics
+				COALESCE(AVG(CASE WHEN usage_type = 'average_storage_gb' THEN usage_value END), 0) as average_storage_gb,
+				COALESCE(SUM(CASE WHEN usage_type = 'clips_added' THEN usage_value ELSE 0 END), 0)::int as clips_added,
+				COALESCE(SUM(CASE WHEN usage_type = 'clips_deleted' THEN usage_value ELSE 0 END), 0)::int as clips_deleted,
+				COALESCE(SUM(CASE WHEN usage_type = 'clip_storage_added_gb' THEN usage_value ELSE 0 END), 0) as clip_storage_added_gb,
+				COALESCE(SUM(CASE WHEN usage_type = 'clip_storage_deleted_gb' THEN usage_value ELSE 0 END), 0) as clip_storage_deleted_gb,
+				-- DVR lifecycle metrics
+				COALESCE(SUM(CASE WHEN usage_type = 'dvr_added' THEN usage_value ELSE 0 END), 0)::int as dvr_added,
+				COALESCE(SUM(CASE WHEN usage_type = 'dvr_deleted' THEN usage_value ELSE 0 END), 0)::int as dvr_deleted,
+				COALESCE(SUM(CASE WHEN usage_type = 'dvr_storage_added_gb' THEN usage_value ELSE 0 END), 0) as dvr_storage_added_gb,
+				COALESCE(SUM(CASE WHEN usage_type = 'dvr_storage_deleted_gb' THEN usage_value ELSE 0 END), 0) as dvr_storage_deleted_gb,
+				-- VOD lifecycle metrics
+				COALESCE(SUM(CASE WHEN usage_type = 'vod_added' THEN usage_value ELSE 0 END), 0)::int as vod_added,
+				COALESCE(SUM(CASE WHEN usage_type = 'vod_deleted' THEN usage_value ELSE 0 END), 0)::int as vod_deleted,
+				COALESCE(SUM(CASE WHEN usage_type = 'vod_storage_added_gb' THEN usage_value ELSE 0 END), 0) as vod_storage_added_gb,
+				COALESCE(SUM(CASE WHEN usage_type = 'vod_storage_deleted_gb' THEN usage_value ELSE 0 END), 0) as vod_storage_deleted_gb
 			FROM purser.usage_records
 			WHERE tenant_id = $1 AND period_start >= $2 AND period_end < $3
 		),
@@ -1708,6 +1740,9 @@ func (s *PurserServer) getCurrentMonthUsageSummary(ctx context.Context, tenantID
 	`, tenantID, periodStart, periodEnd).Scan(
 		&streamHours, &viewerHours, &egressGb, &recordingGb,
 		&storageGb, &peakBandwidthMbps, &totalStreams, &totalViewers, &peakViewers,
+		&averageStorageGb, &clipsAdded, &clipsDeleted, &clipStorageAddedGb, &clipStorageDeletedGb,
+		&dvrAdded, &dvrDeleted, &dvrStorageAddedGb, &dvrStorageDeletedGb,
+		&vodAdded, &vodDeleted, &vodStorageAddedGb, &vodStorageDeletedGb,
 		&usageDetailsJSON,
 	)
 
@@ -1723,9 +1758,20 @@ func (s *PurserServer) getCurrentMonthUsageSummary(ctx context.Context, tenantID
 		UniqueCountries int                      `json:"unique_countries"`
 		UniqueCities    int                      `json:"unique_cities"`
 		GeoBreakdown    []map[string]interface{} `json:"geo_breakdown"`
-		AvgBufferHealth float32                  `json:"avg_buffer_health"`
-		AvgBitrate      int                      `json:"avg_bitrate"`
-		PacketLossRate  float32                  `json:"packet_loss_rate"`
+		// Storage lifecycle metrics (fallback from usage_details if not in usage_records)
+		AverageStorageGb     float64 `json:"average_storage_gb"`
+		ClipsAdded           int     `json:"clips_added"`
+		ClipsDeleted         int     `json:"clips_deleted"`
+		ClipStorageAddedGb   float64 `json:"clip_storage_added_gb"`
+		ClipStorageDeletedGb float64 `json:"clip_storage_deleted_gb"`
+		DvrAdded             int     `json:"dvr_added"`
+		DvrDeleted           int     `json:"dvr_deleted"`
+		DvrStorageAddedGb    float64 `json:"dvr_storage_added_gb"`
+		DvrStorageDeletedGb  float64 `json:"dvr_storage_deleted_gb"`
+		VodAdded             int     `json:"vod_added"`
+		VodDeleted           int     `json:"vod_deleted"`
+		VodStorageAddedGb    float64 `json:"vod_storage_added_gb"`
+		VodStorageDeletedGb  float64 `json:"vod_storage_deleted_gb"`
 	}
 	if len(usageDetailsJSON) > 0 {
 		_ = json.Unmarshal(usageDetailsJSON, &details)
@@ -1753,6 +1799,28 @@ func (s *PurserServer) getCurrentMonthUsageSummary(ctx context.Context, tenantID
 		geoBreakdown = append(geoBreakdown, cm)
 	}
 
+	// Use SQL values, fall back to usage_details if SQL returns zero
+	finalAvgStorageGb := averageStorageGb
+	if finalAvgStorageGb == 0 {
+		finalAvgStorageGb = details.AverageStorageGb
+	}
+	finalClipsAdded := clipsAdded
+	if finalClipsAdded == 0 {
+		finalClipsAdded = int32(details.ClipsAdded)
+	}
+	finalClipsDeleted := clipsDeleted
+	if finalClipsDeleted == 0 {
+		finalClipsDeleted = int32(details.ClipsDeleted)
+	}
+	finalClipStorageAdded := clipStorageAddedGb
+	if finalClipStorageAdded == 0 {
+		finalClipStorageAdded = details.ClipStorageAddedGb
+	}
+	finalClipStorageDeleted := clipStorageDeletedGb
+	if finalClipStorageDeleted == 0 {
+		finalClipStorageDeleted = details.ClipStorageDeletedGb
+	}
+
 	return &pb.UsageSummary{
 		TenantId:          tenantID,
 		BillingMonth:      periodStart.Format("2006-01"), // For display/backwards compat
@@ -1772,9 +1840,22 @@ func (s *PurserServer) getCurrentMonthUsageSummary(ctx context.Context, tenantID
 		UniqueCountries:   int32(details.UniqueCountries),
 		UniqueCities:      int32(details.UniqueCities),
 		GeoBreakdown:      geoBreakdown,
-		AvgBufferHealth:   details.AvgBufferHealth,
-		AvgBitrate:        int32(details.AvgBitrate),
-		PacketLossRate:    details.PacketLossRate,
+		// Storage lifecycle metrics
+		AverageStorageGb:     finalAvgStorageGb,
+		ClipsAdded:           finalClipsAdded,
+		ClipsDeleted:         finalClipsDeleted,
+		ClipStorageAddedGb:   finalClipStorageAdded,
+		ClipStorageDeletedGb: finalClipStorageDeleted,
+		// DVR lifecycle metrics
+		DvrAdded:            dvrAdded,
+		DvrDeleted:          dvrDeleted,
+		DvrStorageAddedGb:   dvrStorageAddedGb,
+		DvrStorageDeletedGb: dvrStorageDeletedGb,
+		// VOD lifecycle metrics
+		VodAdded:            vodAdded,
+		VodDeleted:          vodDeleted,
+		VodStorageAddedGb:   vodStorageAddedGb,
+		VodStorageDeletedGb: vodStorageDeletedGb,
 	}, nil
 }
 
@@ -1888,6 +1969,561 @@ func (s *PurserServer) GetTenantUsage(ctx context.Context, req *pb.TenantUsageRe
 }
 
 // ============================================================================
+// CLUSTER PRICING SERVICE
+// ============================================================================
+
+// GetClusterPricing retrieves pricing configuration for a cluster
+func (s *PurserServer) GetClusterPricing(ctx context.Context, req *pb.GetClusterPricingRequest) (*pb.ClusterPricing, error) {
+	clusterID := req.GetClusterId()
+	if clusterID == "" {
+		return nil, status.Error(codes.InvalidArgument, "cluster_id required")
+	}
+
+	var pricing pb.ClusterPricing
+	var basePrice sql.NullFloat64
+	var currency sql.NullString
+	var stripeProductID, stripePriceIDMonthly, stripeMeterID sql.NullString
+	var meteredRatesJSON, defaultQuotasJSON []byte
+	var createdAt, updatedAt time.Time
+
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, cluster_id, pricing_model,
+		       stripe_product_id, stripe_price_id_monthly, stripe_meter_id,
+		       base_price, currency, metered_rates,
+		       required_tier_level, is_platform_official, allow_free_tier,
+		       default_quotas, created_at, updated_at
+		FROM purser.cluster_pricing
+		WHERE cluster_id = $1
+	`, clusterID).Scan(
+		&pricing.Id, &pricing.ClusterId, &pricing.PricingModel,
+		&stripeProductID, &stripePriceIDMonthly, &stripeMeterID,
+		&basePrice, &currency, &meteredRatesJSON,
+		&pricing.RequiredTierLevel, &pricing.IsPlatformOfficial, &pricing.AllowFreeTier,
+		&defaultQuotasJSON, &createdAt, &updatedAt,
+	)
+	if err == sql.ErrNoRows {
+		// Return default pricing for clusters without explicit config
+		return &pb.ClusterPricing{
+			ClusterId:          clusterID,
+			PricingModel:       "tier_inherit",
+			Currency:           "EUR",
+			RequiredTierLevel:  0,
+			IsPlatformOfficial: false,
+			AllowFreeTier:      false,
+		}, nil
+	}
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	// Map optional fields
+	if stripeProductID.Valid {
+		pricing.StripeProductId = &stripeProductID.String
+	}
+	if stripePriceIDMonthly.Valid {
+		pricing.StripePriceIdMonthly = &stripePriceIDMonthly.String
+	}
+	if stripeMeterID.Valid {
+		pricing.StripeMeterId = &stripeMeterID.String
+	}
+	if basePrice.Valid {
+		pricing.BasePrice = fmt.Sprintf("%.2f", basePrice.Float64)
+	}
+	if currency.Valid {
+		pricing.Currency = currency.String
+	} else {
+		pricing.Currency = "EUR"
+	}
+
+	// Parse JSONB fields
+	if len(meteredRatesJSON) > 0 {
+		pricing.MeteredRates, _ = structpb.NewStruct(jsonToMap(meteredRatesJSON))
+	}
+	if len(defaultQuotasJSON) > 0 {
+		pricing.DefaultQuotas, _ = structpb.NewStruct(jsonToMap(defaultQuotasJSON))
+	}
+
+	pricing.CreatedAt = timestamppb.New(createdAt)
+	pricing.UpdatedAt = timestamppb.New(updatedAt)
+
+	return &pricing, nil
+}
+
+// GetClustersPricingBatch retrieves pricing configuration for multiple clusters
+func (s *PurserServer) GetClustersPricingBatch(ctx context.Context, req *pb.GetClustersPricingBatchRequest) (*pb.GetClustersPricingBatchResponse, error) {
+	clusterIDs := req.GetClusterIds()
+	if len(clusterIDs) == 0 {
+		return &pb.GetClustersPricingBatchResponse{
+			Pricings: make(map[string]*pb.ClusterPricing),
+		}, nil
+	}
+
+	// Build placeholder string for IN clause
+	placeholders := make([]string, len(clusterIDs))
+	args := make([]interface{}, len(clusterIDs))
+	for i, id := range clusterIDs {
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
+		args[i] = id
+	}
+
+	query := fmt.Sprintf(`
+		SELECT id, cluster_id, pricing_model,
+		       stripe_product_id, stripe_price_id_monthly, stripe_meter_id,
+		       base_price, currency, metered_rates,
+		       required_tier_level, is_platform_official, allow_free_tier,
+		       default_quotas, created_at, updated_at
+		FROM purser.cluster_pricing
+		WHERE cluster_id IN (%s)
+	`, strings.Join(placeholders, ", "))
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	defer rows.Close()
+
+	result := make(map[string]*pb.ClusterPricing)
+
+	for rows.Next() {
+		var pricing pb.ClusterPricing
+		var basePrice sql.NullFloat64
+		var currency sql.NullString
+		var stripeProductID, stripePriceIDMonthly, stripeMeterID sql.NullString
+		var meteredRatesJSON, defaultQuotasJSON []byte
+		var createdAt, updatedAt time.Time
+
+		if err := rows.Scan(
+			&pricing.Id, &pricing.ClusterId, &pricing.PricingModel,
+			&stripeProductID, &stripePriceIDMonthly, &stripeMeterID,
+			&basePrice, &currency, &meteredRatesJSON,
+			&pricing.RequiredTierLevel, &pricing.IsPlatformOfficial, &pricing.AllowFreeTier,
+			&defaultQuotasJSON, &createdAt, &updatedAt,
+		); err != nil {
+			return nil, status.Errorf(codes.Internal, "scan error: %v", err)
+		}
+
+		// Map optional fields
+		if stripeProductID.Valid {
+			pricing.StripeProductId = &stripeProductID.String
+		}
+		if stripePriceIDMonthly.Valid {
+			pricing.StripePriceIdMonthly = &stripePriceIDMonthly.String
+		}
+		if stripeMeterID.Valid {
+			pricing.StripeMeterId = &stripeMeterID.String
+		}
+		if basePrice.Valid {
+			pricing.BasePrice = fmt.Sprintf("%.2f", basePrice.Float64)
+		}
+		if currency.Valid {
+			pricing.Currency = currency.String
+		} else {
+			pricing.Currency = "EUR"
+		}
+
+		// Parse JSONB fields
+		if len(meteredRatesJSON) > 0 {
+			pricing.MeteredRates, _ = structpb.NewStruct(jsonToMap(meteredRatesJSON))
+		}
+		if len(defaultQuotasJSON) > 0 {
+			pricing.DefaultQuotas, _ = structpb.NewStruct(jsonToMap(defaultQuotasJSON))
+		}
+
+		pricing.CreatedAt = timestamppb.New(createdAt)
+		pricing.UpdatedAt = timestamppb.New(updatedAt)
+
+		result[pricing.ClusterId] = &pricing
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, status.Errorf(codes.Internal, "rows error: %v", err)
+	}
+
+	// Fill in default pricing for clusters not found in DB
+	for _, clusterID := range clusterIDs {
+		if _, found := result[clusterID]; !found {
+			result[clusterID] = &pb.ClusterPricing{
+				ClusterId:          clusterID,
+				PricingModel:       "tier_inherit",
+				Currency:           "EUR",
+				RequiredTierLevel:  0,
+				IsPlatformOfficial: false,
+				AllowFreeTier:      false,
+			}
+		}
+	}
+
+	return &pb.GetClustersPricingBatchResponse{
+		Pricings: result,
+	}, nil
+}
+
+// SetClusterPricing creates or updates pricing configuration for a cluster
+func (s *PurserServer) SetClusterPricing(ctx context.Context, req *pb.SetClusterPricingRequest) (*pb.ClusterPricing, error) {
+	clusterID := req.GetClusterId()
+	if clusterID == "" {
+		return nil, status.Error(codes.InvalidArgument, "cluster_id required")
+	}
+
+	pricingModel := req.GetPricingModel()
+	if pricingModel == "" {
+		pricingModel = "tier_inherit"
+	}
+
+	// Validate pricing model
+	validModels := []string{"free_unmetered", "metered", "monthly", "tier_inherit", "custom"}
+	if !slices.Contains(validModels, pricingModel) {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid pricing_model: %s", pricingModel)
+	}
+
+	// Build upsert query
+	var basePrice sql.NullFloat64
+	if req.BasePrice != nil {
+		var f float64
+		if _, err := fmt.Sscanf(*req.BasePrice, "%f", &f); err == nil {
+			basePrice = sql.NullFloat64{Float64: f, Valid: true}
+		}
+	}
+
+	currency := "EUR"
+	if req.Currency != nil {
+		currency = *req.Currency
+	}
+
+	requiredTierLevel := int32(0)
+	if req.RequiredTierLevel != nil {
+		requiredTierLevel = *req.RequiredTierLevel
+	}
+
+	allowFreeTier := false
+	if req.AllowFreeTier != nil {
+		allowFreeTier = *req.AllowFreeTier
+	}
+
+	// Marshal JSONB fields
+	var meteredRatesBytes, defaultQuotasBytes []byte
+	if req.MeteredRates != nil {
+		meteredRatesBytes, _ = json.Marshal(req.MeteredRates.AsMap())
+	} else {
+		meteredRatesBytes = []byte("{}")
+	}
+	if req.DefaultQuotas != nil {
+		defaultQuotasBytes, _ = json.Marshal(req.DefaultQuotas.AsMap())
+	} else {
+		defaultQuotasBytes = []byte("{}")
+	}
+
+	// Upsert cluster pricing
+	var pricingID string
+	err := s.db.QueryRowContext(ctx, `
+		INSERT INTO purser.cluster_pricing (
+			cluster_id, pricing_model, base_price, currency,
+			required_tier_level, allow_free_tier, metered_rates, default_quotas,
+			stripe_product_id, stripe_price_id_monthly, stripe_meter_id,
+			updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
+		ON CONFLICT (cluster_id) DO UPDATE SET
+			pricing_model = EXCLUDED.pricing_model,
+			base_price = EXCLUDED.base_price,
+			currency = EXCLUDED.currency,
+			required_tier_level = EXCLUDED.required_tier_level,
+			allow_free_tier = EXCLUDED.allow_free_tier,
+			metered_rates = EXCLUDED.metered_rates,
+			default_quotas = EXCLUDED.default_quotas,
+			stripe_product_id = COALESCE(EXCLUDED.stripe_product_id, purser.cluster_pricing.stripe_product_id),
+			stripe_price_id_monthly = COALESCE(EXCLUDED.stripe_price_id_monthly, purser.cluster_pricing.stripe_price_id_monthly),
+			stripe_meter_id = COALESCE(EXCLUDED.stripe_meter_id, purser.cluster_pricing.stripe_meter_id),
+			updated_at = NOW()
+		RETURNING id
+	`, clusterID, pricingModel, basePrice, currency,
+		requiredTierLevel, allowFreeTier, meteredRatesBytes, defaultQuotasBytes,
+		req.StripeProductId, req.StripePriceIdMonthly, req.StripeMeterId,
+	).Scan(&pricingID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to set cluster pricing: %v", err)
+	}
+
+	// Return the updated pricing
+	return s.GetClusterPricing(ctx, &pb.GetClusterPricingRequest{ClusterId: clusterID})
+}
+
+// ListClusterPricings returns pricing configs for clusters owned by a tenant
+func (s *PurserServer) ListClusterPricings(ctx context.Context, req *pb.ListClusterPricingsRequest) (*pb.ListClusterPricingsResponse, error) {
+	ownerTenantID := req.GetOwnerTenantId()
+
+	// Build query - if no owner specified, list all (admin use case)
+	query := `
+		SELECT id, cluster_id, pricing_model,
+		       stripe_product_id, stripe_price_id_monthly, stripe_meter_id,
+		       base_price, currency, metered_rates,
+		       required_tier_level, is_platform_official, allow_free_tier,
+		       default_quotas, created_at, updated_at
+		FROM purser.cluster_pricing
+	`
+	var args []interface{}
+	if ownerTenantID != "" {
+		// Join with quartermaster to filter by owner
+		// Note: This requires cross-schema access which may need adjustment
+		query = `
+			SELECT p.id, p.cluster_id, p.pricing_model,
+			       p.stripe_product_id, p.stripe_price_id_monthly, p.stripe_meter_id,
+			       p.base_price, p.currency, p.metered_rates,
+			       p.required_tier_level, p.is_platform_official, p.allow_free_tier,
+			       p.default_quotas, p.created_at, p.updated_at
+			FROM purser.cluster_pricing p
+			JOIN quartermaster.infrastructure_clusters c ON p.cluster_id = c.cluster_id
+			WHERE c.owner_tenant_id = $1
+		`
+		args = append(args, ownerTenantID)
+	}
+
+	query += " ORDER BY created_at DESC"
+
+	// Apply pagination
+	limit := int32(50)
+	if req.GetPagination() != nil && req.GetPagination().GetFirst() > 0 {
+		limit = req.GetPagination().GetFirst()
+	}
+	query += fmt.Sprintf(" LIMIT %d", limit+1)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	defer rows.Close()
+
+	var pricings []*pb.ClusterPricing
+	for rows.Next() {
+		var pricing pb.ClusterPricing
+		var basePrice sql.NullFloat64
+		var currency sql.NullString
+		var stripeProductID, stripePriceIDMonthly, stripeMeterID sql.NullString
+		var meteredRatesJSON, defaultQuotasJSON []byte
+		var createdAt, updatedAt time.Time
+
+		if err := rows.Scan(
+			&pricing.Id, &pricing.ClusterId, &pricing.PricingModel,
+			&stripeProductID, &stripePriceIDMonthly, &stripeMeterID,
+			&basePrice, &currency, &meteredRatesJSON,
+			&pricing.RequiredTierLevel, &pricing.IsPlatformOfficial, &pricing.AllowFreeTier,
+			&defaultQuotasJSON, &createdAt, &updatedAt,
+		); err != nil {
+			continue
+		}
+
+		// Map optional fields
+		if stripeProductID.Valid {
+			pricing.StripeProductId = &stripeProductID.String
+		}
+		if stripePriceIDMonthly.Valid {
+			pricing.StripePriceIdMonthly = &stripePriceIDMonthly.String
+		}
+		if stripeMeterID.Valid {
+			pricing.StripeMeterId = &stripeMeterID.String
+		}
+		if basePrice.Valid {
+			pricing.BasePrice = fmt.Sprintf("%.2f", basePrice.Float64)
+		}
+		if currency.Valid {
+			pricing.Currency = currency.String
+		} else {
+			pricing.Currency = "EUR"
+		}
+
+		if len(meteredRatesJSON) > 0 {
+			pricing.MeteredRates, _ = structpb.NewStruct(jsonToMap(meteredRatesJSON))
+		}
+		if len(defaultQuotasJSON) > 0 {
+			pricing.DefaultQuotas, _ = structpb.NewStruct(jsonToMap(defaultQuotasJSON))
+		}
+
+		pricing.CreatedAt = timestamppb.New(createdAt)
+		pricing.UpdatedAt = timestamppb.New(updatedAt)
+
+		pricings = append(pricings, &pricing)
+	}
+
+	resp := &pb.ListClusterPricingsResponse{Pricings: pricings}
+	if int32(len(pricings)) > limit {
+		resp.Pricings = pricings[:limit]
+		resp.Pagination = &pb.CursorPaginationResponse{HasNextPage: true}
+	}
+
+	return resp, nil
+}
+
+// CheckClusterAccess verifies if a tenant can subscribe to a cluster
+func (s *PurserServer) CheckClusterAccess(ctx context.Context, req *pb.CheckClusterAccessRequest) (*pb.CheckClusterAccessResponse, error) {
+	tenantID := req.GetTenantId()
+	clusterID := req.GetClusterId()
+
+	if tenantID == "" || clusterID == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id and cluster_id required")
+	}
+
+	// Get tenant's billing tier level
+	var tenantTierLevel int32
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COALESCE(bt.tier_level, 0)
+		FROM quartermaster.tenants t
+		LEFT JOIN purser.tenant_subscriptions ts ON t.id = ts.tenant_id AND ts.status = 'active'
+		LEFT JOIN purser.billing_tiers bt ON ts.tier_id = bt.id
+		WHERE t.id = $1
+	`, tenantID).Scan(&tenantTierLevel)
+	if err == sql.ErrNoRows {
+		return nil, status.Error(codes.NotFound, "tenant not found")
+	}
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	// Get cluster pricing config
+	pricing, err := s.GetClusterPricing(ctx, &pb.GetClusterPricingRequest{ClusterId: clusterID})
+	if err != nil {
+		return nil, err
+	}
+
+	resp := &pb.CheckClusterAccessResponse{
+		TenantTierLevel:   tenantTierLevel,
+		RequiredTierLevel: pricing.RequiredTierLevel,
+		PricingModel:      pricing.PricingModel,
+	}
+
+	// Check tier requirement
+	if tenantTierLevel < pricing.RequiredTierLevel {
+		resp.Allowed = false
+		resp.DenialReason = fmt.Sprintf("requires tier level %d, you have %d", pricing.RequiredTierLevel, tenantTierLevel)
+		return resp, nil
+	}
+
+	// Check free tier access for platform clusters
+	if pricing.IsPlatformOfficial && !pricing.AllowFreeTier && tenantTierLevel == 0 {
+		resp.Allowed = false
+		resp.DenialReason = "this platform cluster requires a paid subscription"
+		return resp, nil
+	}
+
+	resp.Allowed = true
+
+	// Estimate cost for display
+	switch pricing.PricingModel {
+	case "free_unmetered":
+		resp.EstimatedCost = "Free"
+	case "monthly":
+		resp.EstimatedCost = fmt.Sprintf("%s %s/month", pricing.BasePrice, pricing.Currency)
+	case "metered":
+		resp.EstimatedCost = "Usage-based pricing"
+	case "tier_inherit":
+		resp.EstimatedCost = "Included in your plan"
+	case "custom":
+		resp.EstimatedCost = "Contact for pricing"
+	}
+
+	return resp, nil
+}
+
+// CreateClusterSubscription creates a subscription for a tenant to a cluster
+func (s *PurserServer) CreateClusterSubscription(ctx context.Context, req *pb.CreateClusterSubscriptionRequest) (*pb.ClusterSubscriptionResponse, error) {
+	tenantID := req.GetTenantId()
+	clusterID := req.GetClusterId()
+	inviteToken := req.GetInviteToken()
+
+	if tenantID == "" || clusterID == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id and cluster_id required")
+	}
+
+	// Check if tenant can access this cluster
+	accessResp, err := s.CheckClusterAccess(ctx, &pb.CheckClusterAccessRequest{
+		TenantId:  tenantID,
+		ClusterId: clusterID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if !accessResp.Allowed {
+		return nil, status.Errorf(codes.PermissionDenied, "access denied: %s", accessResp.DenialReason)
+	}
+
+	// Get cluster pricing to determine subscription type
+	pricing, err := s.GetClusterPricing(ctx, &pb.GetClusterPricingRequest{ClusterId: clusterID})
+	if err != nil {
+		return nil, err
+	}
+
+	// For free/tier_inherit clusters, create access immediately via Quartermaster
+	// For paid clusters, we'd create a Stripe subscription
+	resp := &pb.ClusterSubscriptionResponse{
+		ClusterId: clusterID,
+		TenantId:  tenantID,
+	}
+
+	switch pricing.PricingModel {
+	case "free_unmetered", "tier_inherit":
+		// Create tenant_cluster_access directly (via Quartermaster call would be cleaner)
+		// For now, we just return success - Gateway will call Quartermaster to create access
+		resp.Status = "active"
+
+	case "monthly":
+		// TODO: Create Stripe subscription
+		// For now, mark as pending
+		resp.Status = "pending_payment"
+		// resp.CheckoutUrl = would be Stripe checkout session URL
+
+	case "metered":
+		// Metered clusters can be activated immediately, billing happens on usage
+		resp.Status = "active"
+
+	case "custom":
+		// Custom requires approval
+		resp.Status = "pending_approval"
+	}
+
+	// Handle invite token if provided
+	if inviteToken != "" {
+		// Validate and consume invite token
+		// This would update quartermaster.cluster_invites
+		s.logger.Info("invite token provided", "token", inviteToken[:8]+"...", "cluster", clusterID)
+	}
+
+	return resp, nil
+}
+
+// CancelClusterSubscription cancels a tenant's subscription to a cluster
+func (s *PurserServer) CancelClusterSubscription(ctx context.Context, req *pb.CancelClusterSubscriptionRequest) (*emptypb.Empty, error) {
+	tenantID := req.GetTenantId()
+	clusterID := req.GetClusterId()
+
+	if tenantID == "" || clusterID == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id and cluster_id required")
+	}
+
+	// Get cluster pricing to check if there's a Stripe subscription to cancel
+	pricing, err := s.GetClusterPricing(ctx, &pb.GetClusterPricingRequest{ClusterId: clusterID})
+	if err != nil {
+		return nil, err
+	}
+
+	if pricing.PricingModel == "monthly" {
+		// TODO: Cancel Stripe subscription
+		s.logger.Info("cancelling paid cluster subscription", "tenant", tenantID, "cluster", clusterID)
+	}
+
+	// The actual tenant_cluster_access removal is handled by Quartermaster
+	// This service just handles the billing side
+
+	return &emptypb.Empty{}, nil
+}
+
+// jsonToMap is a helper to convert JSON bytes to map for structpb
+func jsonToMap(data []byte) map[string]interface{} {
+	var m map[string]interface{}
+	if err := json.Unmarshal(data, &m); err != nil {
+		return make(map[string]interface{})
+	}
+	return m
+}
+
+// ============================================================================
 // SERVER SETUP
 // ============================================================================
 
@@ -1926,6 +2562,7 @@ func NewGRPCServer(cfg GRPCServerConfig) *grpc.Server {
 	pb.RegisterSubscriptionServiceServer(server, purserServer)
 	pb.RegisterInvoiceServiceServer(server, purserServer)
 	pb.RegisterPaymentServiceServer(server, purserServer)
+	pb.RegisterClusterPricingServiceServer(server, purserServer)
 
 	// Register gRPC health checking service
 	hs := health.NewServer()
@@ -1943,7 +2580,7 @@ func unaryInterceptor(logger logging.Logger) grpc.UnaryServerInterceptor {
 			"method":   info.FullMethod,
 			"duration": time.Since(start),
 			"error":    err,
-		}).Debug("gRPC request processed")
+		}).Info("gRPC request processed")
 		return resp, err
 	}
 }

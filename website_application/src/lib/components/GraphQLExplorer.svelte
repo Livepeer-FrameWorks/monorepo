@@ -1,5 +1,6 @@
 <script lang="ts">
   import { explorerService, type Template, type TemplateGroups } from "$lib/graphql/services/explorer.js";
+  import { extractOperationType, extractDescription, extractVariableDefinitions, extractFragmentSpreads } from "$lib/graphql/services/gqlParser.js";
   import { toast } from "$lib/stores/toast.js";
   import ExplorerHeader from "$lib/components/explorer/ExplorerHeader.svelte";
   import QueryEditor from "$lib/components/explorer/QueryEditor.svelte";
@@ -41,21 +42,30 @@
   // Component state
   let query =
     $state(initialQuery ||
-    `query GetStreams {
-  streams {
-    id
-    name
-    description
-    streamKey
-    playbackId
-    record
-    createdAt
-    updatedAt
-    metrics {
-      status
-      isLive
-      currentViewers
+    `query GetStreamsConnection {
+  streamsConnection(first: 10) {
+    edges {
+      node {
+        id
+        name
+        description
+        streamKey
+        playbackId
+        record
+        createdAt
+        updatedAt
+        metrics {
+          status
+          isLive
+          currentViewers
+        }
+      }
     }
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+    totalCount
   }
 }`);
   let variables = $state("{}");
@@ -141,10 +151,8 @@
       }
     }
 
-    // Determine operation type
-    const operationType = query.trim().startsWith("mutation")
-      ? "mutation"
-      : "query";
+    // Determine operation type (handles comment-prefixed queries)
+    const operationType = extractOperationType(query);
 
     try {
       loading = true;
@@ -260,6 +268,13 @@
   // Reactive code examples
   let codeExamples = $derived(showCodeExamples ? generateCodeExamples() : {});
 
+  // Query help metadata for the Help popover
+  let queryHelp = $derived({
+    description: extractDescription(query),
+    variables: extractVariableDefinitions(query),
+    fragments: extractFragmentSpreads(query),
+  });
+
   // Handle library drawer state
   function openLibrary() {
     libraryOpen = true;
@@ -298,6 +313,7 @@
     hasHistory={queryHistory.length > 0}
     {demoMode}
     {loading}
+    {queryHelp}
     onOpenLibrary={openLibrary}
     onToggleQuery={() => {
       showQueryEditor = true;

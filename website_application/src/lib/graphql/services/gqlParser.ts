@@ -400,11 +400,70 @@ export function stripClientDirectives(query: string): string {
     result = result.replace(pattern, "");
   }
 
-  // Clean up any double spaces or trailing spaces on lines
-  result = result.replace(/  +/g, " ");
+  // Clean up trailing spaces on lines (safe)
   result = result.replace(/ +$/gm, "");
 
   return result;
+}
+
+/**
+ * Extract fragment spreads from a query (e.g., ...StreamCoreFields)
+ */
+export function extractFragmentSpreads(query: string): string[] {
+  const fragments: string[] = [];
+  const regex = /\.\.\.(\w+)/g;
+  let match;
+  while ((match = regex.exec(query)) !== null) {
+    if (!fragments.includes(match[1])) {
+      fragments.push(match[1]);
+    }
+  }
+  return fragments;
+}
+
+/**
+ * Get helpful description for common variable patterns
+ */
+export function getVariableHint(
+  name: string,
+  type: string,
+): string | undefined {
+  // Pagination variables
+  if (name === "first" && type.includes("Int")) {
+    return "Number of items per page";
+  }
+  if (name === "after" && type.includes("String")) {
+    return "Cursor from pageInfo.endCursor";
+  }
+  if (name === "last" && type.includes("Int")) {
+    return "Number of items from end";
+  }
+  if (name === "before" && type.includes("String")) {
+    return "Cursor from pageInfo.startCursor";
+  }
+
+  // Common ID patterns
+  if (name === "id" && type.includes("ID")) {
+    return "Unique identifier";
+  }
+  if (name.endsWith("Id") && type.includes("ID")) {
+    return `${name.replace(/Id$/, "")} identifier`;
+  }
+
+  // Time range
+  if (type.includes("TimeRangeInput")) {
+    return "{ start: ISO8601, end: ISO8601 }";
+  }
+
+  // Common filters
+  if (name === "stream" && type.includes("String")) {
+    return "Stream internal name filter";
+  }
+  if (name === "status") {
+    return "Filter by status";
+  }
+
+  return undefined;
 }
 
 /**

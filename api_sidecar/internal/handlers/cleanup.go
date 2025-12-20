@@ -359,6 +359,10 @@ func (cm *CleanupMonitor) cleanupClip(clip ClipCleanupInfo) error {
 		}
 	}
 
+	// Remove auxiliary files (.dtsh, .gop)
+	os.Remove(clip.FilePath + ".dtsh")
+	os.Remove(clip.FilePath + ".gop")
+
 	// Remove from artifact index
 	if prometheusMonitor != nil {
 		prometheusMonitor.mutex.Lock()

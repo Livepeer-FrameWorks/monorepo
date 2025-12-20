@@ -1,0 +1,5 @@
+fragment AllocationFields on AllocationDetails {
+  limit
+  unitPrice
+  unit
+}

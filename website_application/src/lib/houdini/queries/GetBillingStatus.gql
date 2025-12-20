@@ -1,14 +1,40 @@
+# Fetch complete billing status including current tier, subscription, and usage summary
 query GetBillingStatus {
   billingStatus {
+    billingStatus
     currency
+    nextBillingDate
+    trialEndsAt
+    outstandingAmount
     currentTier {
+      ...BillingTierFields
+    }
+    subscription {
       id
-      name
-      description
-      basePrice
-      currency
-      billingPeriod
-      features {
+      tenantId
+      tierId
+      status
+      billingEmail
+      startedAt
+      trialEndsAt
+      nextBillingDate
+      cancelledAt
+      customPricing {
+        basePrice
+        discountRate
+        overageRates {
+          bandwidth {
+            ...AllocationFields
+          }
+          storage {
+            ...AllocationFields
+          }
+          compute {
+            ...AllocationFields
+          }
+        }
+      }
+      customFeatures {
         recording
         analytics
         customBranding
@@ -16,73 +42,15 @@ query GetBillingStatus {
         supportLevel
         sla
       }
-      bandwidthAllocation {
-        limit
-        unitPrice
-        unit
+      customAllocations {
+        ...AllocationFields
       }
-      storageAllocation {
-        limit
-        unitPrice
-        unit
-      }
-      computeAllocation {
-        limit
-        unitPrice
-        unit
-      }
-      overageRates {
-        bandwidth {
-          limit
-          unitPrice
-          unit
-        }
-        storage {
-          limit
-          unitPrice
-          unit
-        }
-        compute {
-          limit
-          unitPrice
-          unit
-        }
-      }
-      supportLevel
-      slaLevel
-      meteringEnabled
-      isEnterprise
+      paymentMethod
+      createdAt
+      updatedAt
     }
-    nextBillingDate
-    trialEndsAt
-    outstandingAmount
-    billingStatus
     usageSummary {
-      billingMonth
-      period
-      streamHours
-      viewerHours
-      egressGb
-      recordingGb
-      storageGb
-      peakBandwidthMbps
-      totalStreams
-      totalViewers
-      peakViewers
-      maxViewers
-      avgViewers
-      uniqueCountries
-      uniqueCities
-      avgBufferHealth
-      avgBitrate
-      packetLossRate
-      geoBreakdown {
-        countryCode
-        viewerCount
-        viewerHours
-        percentage
-        egressGb
-      }
+      ...UsageSummaryFields
     }
   }
 }

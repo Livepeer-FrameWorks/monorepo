@@ -1,3 +1,4 @@
+# Fetch detailed invoice by ID including line items and payment status
 query GetInvoice($id: ID!) {
   invoice(id: $id) {
     id

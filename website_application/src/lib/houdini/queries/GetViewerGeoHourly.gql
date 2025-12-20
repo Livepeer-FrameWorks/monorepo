@@ -1,0 +1,30 @@
+# Hourly geographic viewer aggregates (from viewer_geo_hourly MV)
+query GetViewerGeoHourly(
+  $stream: String
+  $timeRange: TimeRangeInput
+  $first: Int = 100
+  $after: String
+) {
+  viewerGeoHourlyConnection(
+    stream: $stream
+    timeRange: $timeRange
+    first: $first
+    after: $after
+  ) {
+    edges {
+      cursor
+      node {
+        id
+        hour
+        countryCode
+        viewerCount
+        viewerHours
+        egressGb
+      }
+    }
+    pageInfo {
+      ...PageInfoFields
+    }
+    totalCount
+  }
+}

@@ -121,6 +121,7 @@ func main() {
 		pi, _ := strconv.Atoi(port)
 		advertiseHost := config.GetEnv("DECKLOG_HOST", "decklog")
 		healthEndpoint := "/health"
+		clusterID := config.GetEnv("CLUSTER_ID", "")
 		if _, err := qc.BootstrapService(ctx, &pb.BootstrapServiceRequest{
 			Type:           "decklog",
 			Version:        version.Version,
@@ -128,6 +129,7 @@ func main() {
 			Port:           int32(pi),
 			AdvertiseHost:  &advertiseHost,
 			HealthEndpoint: &healthEndpoint,
+			ClusterId:      func() *string { if clusterID != "" { return &clusterID }; return nil }(),
 		}); err != nil {
 			logger.WithError(err).Warn("Quartermaster bootstrap (decklog) failed")
 		} else {

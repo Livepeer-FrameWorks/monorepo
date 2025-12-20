@@ -18,6 +18,7 @@ import (
 	"frameworks/pkg/geoip"
 	"frameworks/pkg/logging"
 	"frameworks/pkg/middleware"
+	"frameworks/pkg/mist"
 	pb "frameworks/pkg/proto"
 
 	"google.golang.org/grpc"
@@ -50,6 +51,10 @@ var streamHealthHandler func(string, string, string, bool, map[string]interface{
 var clipHashResolver func(string) (string, string, error)
 var db *sql.DB
 var quartermasterClient *qmclient.GRPCClient
+var livepeerGatewayURL string // Set from main.go if LIVEPEER_GATEWAY_URL is configured
+
+// SetLivepeerGatewayURL sets the Livepeer Gateway URL for processing config
+func SetLivepeerGatewayURL(url string) { livepeerGatewayURL = url }
 
 // GetStreamSource returns the source node and base URL for a given internal_name if known
 func GetStreamSource(internalName string) (nodeID string, baseURL string, ok bool) {
@@ -78,12 +83,18 @@ type NodeOutputs struct {
 var clipProgressHandler func(*pb.ClipProgress)
 var clipDoneHandler func(*pb.ClipDone)
 var artifactDeletedHandler func(*pb.ArtifactDeleted)
+var dvrDeletedHandler func(dvrHash string, sizeBytes uint64, nodeID string)
 
 // SetClipHandlers registers callbacks for analytics emission
 func SetClipHandlers(onProgress func(*pb.ClipProgress), onDone func(*pb.ClipDone), onDeleted func(*pb.ArtifactDeleted)) {
 	clipProgressHandler = onProgress
 	clipDoneHandler = onDone
 	artifactDeletedHandler = onDeleted
+}
+
+// SetDVRDeletedHandler registers callback for DVR deletion analytics
+func SetDVRDeletedHandler(handler func(dvrHash string, sizeBytes uint64, nodeID string)) {
+	dvrDeletedHandler = handler
 }
 
 // NodeMetricsProcessor interface for handling node metrics (implemented by handlers)
@@ -273,6 +284,33 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 				seed.TenantId = tenantID
 			}
 			_ = SendConfigSeed(nodeID, seed)
+
+			// Forward hardware specs to Quartermaster if present
+			if quartermasterClient != nil && (x.Register.CpuCores != nil || x.Register.MemoryGb != nil || x.Register.DiskGb != nil) {
+				go func(reg *pb.Register, nid string) {
+					hwCtx, hwCancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer hwCancel()
+					err := quartermasterClient.UpdateNodeHardware(hwCtx, &pb.UpdateNodeHardwareRequest{
+						NodeId:   nid,
+						CpuCores: reg.CpuCores,
+						MemoryGb: reg.MemoryGb,
+						DiskGb:   reg.DiskGb,
+					})
+					if err != nil {
+						registry.log.WithFields(logging.Fields{
+							"node_id": nid,
+							"error":   err,
+						}).Warn("Failed to update node hardware specs in Quartermaster")
+					} else {
+						registry.log.WithFields(logging.Fields{
+							"node_id":   nid,
+							"cpu_cores": reg.GetCpuCores(),
+							"memory_gb": reg.GetMemoryGb(),
+							"disk_gb":   reg.GetDiskGb(),
+						}).Info("Updated node hardware specs in Quartermaster")
+					}
+				}(x.Register, canonicalNodeID)
+			}
 		case *pb.ControlMessage_ClipProgress:
 			if clipProgressHandler != nil {
 				go clipProgressHandler(x.ClipProgress)
@@ -312,7 +350,29 @@ func (s *Server) Connect(stream pb.HelmsmanControl_ConnectServer) error {
 			go processDVRReadyRequest(x.DvrReadyRequest, nodeID, stream, registry.log)
 		case *pb.ControlMessage_MistTrigger:
 			// Handle MistServer trigger forwarding from Helmsman
+			incMistTrigger(x.MistTrigger.GetTriggerType(), x.MistTrigger.GetBlocking(), "received")
 			go processMistTrigger(x.MistTrigger, nodeID, stream, registry.log)
+		case *pb.ControlMessage_FreezePermissionRequest:
+			// Handle freeze permission request from Helmsman (cold storage)
+			go processFreezePermissionRequest(x.FreezePermissionRequest, nodeID, stream, registry.log)
+		case *pb.ControlMessage_FreezeProgress:
+			// Handle freeze progress updates from Helmsman
+			go processFreezeProgress(x.FreezeProgress, nodeID, registry.log)
+		case *pb.ControlMessage_FreezeComplete:
+			// Handle freeze completion from Helmsman
+			go processFreezeComplete(x.FreezeComplete, nodeID, registry.log)
+		case *pb.ControlMessage_DefrostProgress:
+			// Handle defrost progress updates from Helmsman
+			go processDefrostProgress(x.DefrostProgress, nodeID, registry.log)
+		case *pb.ControlMessage_DefrostComplete:
+			// Handle defrost completion from Helmsman
+			go processDefrostComplete(x.DefrostComplete, nodeID, registry.log)
+		case *pb.ControlMessage_CanDeleteRequest:
+			// Handle can-delete check from Helmsman (dual-storage architecture)
+			go processCanDeleteRequest(x.CanDeleteRequest, nodeID, stream, registry.log)
+		case *pb.ControlMessage_SyncComplete:
+			// Handle sync completion from Helmsman (dual-storage architecture)
+			go processSyncComplete(x.SyncComplete, nodeID, registry.log)
 		}
 	}
 	if nodeID != "" {
@@ -369,17 +429,50 @@ func SendDVRStop(nodeID string, req *pb.DVRStopRequest) error {
 	return c.stream.Send(msg)
 }
 
+// SendClipDelete sends a ClipDeleteRequest to the given node to delete clip files
+func SendClipDelete(nodeID string, req *pb.ClipDeleteRequest) error {
+	registry.mu.RLock()
+	c := registry.conns[nodeID]
+	registry.mu.RUnlock()
+	if c == nil {
+		return ErrNotConnected
+	}
+	msg := &pb.ControlMessage{
+		Payload: &pb.ControlMessage_ClipDelete{ClipDelete: req},
+		SentAt:  timestamppb.Now(),
+	}
+	return c.stream.Send(msg)
+}
+
+// SendDVRDelete sends a DVRDeleteRequest to the given node to delete DVR recording files
+func SendDVRDelete(nodeID string, req *pb.DVRDeleteRequest) error {
+	registry.mu.RLock()
+	c := registry.conns[nodeID]
+	registry.mu.RUnlock()
+	if c == nil {
+		return ErrNotConnected
+	}
+	msg := &pb.ControlMessage{
+		Payload: &pb.ControlMessage_DvrDelete{DvrDelete: req},
+		SentAt:  timestamppb.Now(),
+	}
+	return c.stream.Send(msg)
+}
+
 // StopDVRByInternalName finds an active DVR for a stream and sends a stop to its storage node
 func StopDVRByInternalName(internalName string, logger logging.Logger) {
 	if db == nil || internalName == "" {
 		return
 	}
+	// Query foghorn.artifacts for active DVR, join with artifact_nodes for node_id
 	var dvrHash, storageNodeID string
 	err := db.QueryRow(`
-        SELECT request_hash, COALESCE(storage_node_id,'')
-        FROM foghorn.dvr_requests
-        WHERE internal_name = $1 AND status IN ('requested','starting','recording')
-        ORDER BY created_at DESC
+        SELECT a.artifact_hash, COALESCE(an.node_id,'')
+        FROM foghorn.artifacts a
+        LEFT JOIN foghorn.artifact_nodes an ON a.artifact_hash = an.artifact_hash
+        WHERE a.internal_name = $1 AND a.artifact_type = 'dvr'
+              AND a.status IN ('requested','starting','recording')
+        ORDER BY a.created_at DESC
         LIMIT 1`, internalName).Scan(&dvrHash, &storageNodeID)
 	if err != nil {
 		return
@@ -388,7 +481,7 @@ func StopDVRByInternalName(internalName string, logger logging.Logger) {
 		return
 	}
 	_ = SendDVRStop(storageNodeID, &pb.DVRStopRequest{DvrHash: dvrHash, RequestId: dvrHash})
-	_, _ = db.Exec(`UPDATE foghorn.dvr_requests SET status = 'stopping', updated_at = NOW() WHERE request_hash = $1`, dvrHash)
+	_, _ = db.Exec(`UPDATE foghorn.artifacts SET status = 'stopping', updated_at = NOW() WHERE artifact_hash = $1`, dvrHash)
 }
 
 // ServiceRegistrar is a function that registers additional gRPC services
@@ -478,8 +571,10 @@ func StartGRPCServer(cfg GRPCServerConfig) (*grpc.Server, error) {
 // processNodeUpdate converts gRPC NodeUpdate to validation.FoghornNodeUpdate and forwards to node service
 func processNodeUpdate(update *pb.NodeLifecycleUpdate, logger logging.Logger) {
 	// Update stream stats per stream
+	// Extract internal name to avoid duplicate state entries (e.g., "live+demo_stream" -> "demo_stream")
 	for streamName, streamData := range update.GetStreams() {
-		state.DefaultManager().UpdateNodeStats(streamName, update.GetNodeId(), int(streamData.GetTotal()), int(streamData.GetInputs()), int64(streamData.GetBytesUp()), int64(streamData.GetBytesDown()))
+		internalName := mist.ExtractInternalName(streamName)
+		state.DefaultManager().UpdateNodeStats(internalName, update.GetNodeId(), int(streamData.GetTotal()), int(streamData.GetInputs()), int64(streamData.GetBytesUp()), int64(streamData.GetBytesDown()), streamData.GetReplicated())
 	}
 
 	// Apply full node lifecycle with write-through
@@ -519,7 +614,7 @@ func handleClipProgress(progress *pb.ClipProgress, nodeID string, logger logging
 		"request_id": requestID,
 		"percent":    percent,
 		"message":    message,
-	}).Debug("Clip progress update")
+	}).Info("Clip progress update")
 
 	_ = state.DefaultManager().ApplyClipProgress(streamCtx(), requestID, percent, message, nodeID)
 }
@@ -560,21 +655,38 @@ func handleArtifactDeleted(deleted *pb.ArtifactDeleted, nodeID string, logger lo
 
 // processDVRStartRequest handles DVR start requests from ingest Helmsman
 func processDVRStartRequest(req *pb.DVRStartRequest, nodeID string, logger logging.Logger) {
-	// Generate DVR hash if not provided
+	// Get DVR hash - should be provided from Commodore registration
+	// If not provided, register with Commodore to get one
 	dvrHash := req.GetDvrHash()
 	if dvrHash == "" {
-		var err error
-		dvrHash, err = dvr.GenerateDVRHash()
-		if err != nil {
-			logger.WithError(err).Error("Failed to generate DVR hash")
-			return
+		if CommodoreClient != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			resp, err := CommodoreClient.RegisterDVR(ctx, &pb.RegisterDVRRequest{
+				TenantId:     req.GetTenantId(),
+				UserId:       req.GetUserId(),
+				StreamId:     "", // DVRStartRequest doesn't have stream_id; Commodore resolves via internal_name
+				InternalName: req.GetInternalName(),
+			})
+			if err != nil {
+				logger.WithError(err).Error("Failed to register DVR with Commodore")
+				return
+			}
+			dvrHash = resp.DvrHash
+		} else {
+			// Fallback: generate locally (legacy behavior, should not happen in production)
+			var err error
+			dvrHash, err = dvr.GenerateDVRHash()
+			if err != nil {
+				logger.WithError(err).Error("Failed to generate DVR hash")
+				return
+			}
 		}
 	}
 
 	logger.WithFields(logging.Fields{
 		"dvr_hash":      dvrHash,
 		"internal_name": req.GetInternalName(),
-		"tenant_id":     req.GetTenantId(),
 		"node_id":       nodeID,
 	}).Info("Processing DVR start request")
 
@@ -584,21 +696,24 @@ func processDVRStartRequest(req *pb.DVRStartRequest, nodeID string, logger loggi
 		"dvr_hash":   dvrHash,
 	})
 
-	// Store minimal state in database
+	// Store artifact lifecycle state in foghorn.artifacts with context for Decklog events
 	_, err := db.Exec(`
-		INSERT INTO foghorn.dvr_requests (
-			request_hash, tenant_id, internal_name, status, created_at
-		) VALUES ($1, $2, $3, 'requested', NOW())
-		ON CONFLICT (request_hash) DO UPDATE SET
+		INSERT INTO foghorn.artifacts (
+			artifact_hash, artifact_type, internal_name, tenant_id, user_id, status, request_id, format, created_at, updated_at
+		) VALUES ($1, 'dvr', $2, NULLIF($3,'')::uuid, NULLIF($4,'')::uuid, 'requested', $5, 'm3u8', NOW(), NOW())
+		ON CONFLICT (artifact_hash) DO UPDATE SET
 			status = 'requested',
+			tenant_id = COALESCE(foghorn.artifacts.tenant_id, EXCLUDED.tenant_id),
+			user_id = COALESCE(foghorn.artifacts.user_id, EXCLUDED.user_id),
+			format = COALESCE(foghorn.artifacts.format, EXCLUDED.format),
 			updated_at = NOW()`,
-		dvrHash, req.GetTenantId(), req.GetInternalName())
+		dvrHash, req.GetInternalName(), req.GetTenantId(), req.GetUserId(), dvrHash)
 
 	if err != nil {
 		logger.WithFields(logging.Fields{
 			"dvr_hash": dvrHash,
 			"error":    err,
-		}).Error("Failed to store DVR request")
+		}).Error("Failed to store DVR artifact")
 		return
 	}
 
@@ -610,15 +725,15 @@ func processDVRStartRequest(req *pb.DVRStartRequest, nodeID string, logger loggi
 			"error":    err,
 		}).Error("Failed to find storage node for DVR")
 
-		// Update request as failed
-		db.Exec(`UPDATE foghorn.dvr_requests SET status = 'failed', error_message = $1, updated_at = NOW() WHERE request_hash = $2`,
+		// Update artifact as failed
+		db.Exec(`UPDATE foghorn.artifacts SET status = 'failed', error_message = $1, updated_at = NOW() WHERE artifact_hash = $2`,
 			err.Error(), dvrHash)
 		return
 	}
 
 	// Construct source DTSC URL from ingest node outputs
-
 	sourceDTSCURL := BuildDTSCURI(nodeID, req.GetInternalName(), true, logger)
+
 	// Create enhanced DVR request for storage node
 	enhancedReq := &pb.DVRStartRequest{
 		DvrHash:       dvrHash,
@@ -630,18 +745,20 @@ func processDVRStartRequest(req *pb.DVRStartRequest, nodeID string, logger loggi
 		UserId:        req.GetUserId(),
 	}
 
-	// Update database with storage node info
+	// Store node assignment in foghorn.artifact_nodes
 	_, err = db.Exec(`
-		UPDATE foghorn.dvr_requests 
-		SET storage_node_id = $1, storage_node_url = $2, updated_at = NOW()
-		WHERE request_hash = $3`,
-		storageNodeID, storageNodeURL, dvrHash)
+		INSERT INTO foghorn.artifact_nodes (artifact_hash, node_id, base_url, cached_at)
+		VALUES ($1, $2, $3, NOW())
+		ON CONFLICT (artifact_hash, node_id) DO UPDATE SET
+			base_url = $3,
+			last_seen_at = NOW()`,
+		dvrHash, storageNodeID, storageNodeURL)
 
 	if err != nil {
 		logger.WithFields(logging.Fields{
 			"dvr_hash": dvrHash,
 			"error":    err,
-		}).Error("Failed to update DVR request with storage node info")
+		}).Error("Failed to store DVR node assignment")
 	}
 
 	// Forward enhanced request to storage node
@@ -652,8 +769,8 @@ func processDVRStartRequest(req *pb.DVRStartRequest, nodeID string, logger loggi
 			"error":           err,
 		}).Error("Failed to send DVR start to storage node")
 
-		// Update request as failed
-		db.Exec(`UPDATE foghorn.dvr_requests SET status = 'failed', error_message = $1, updated_at = NOW() WHERE request_hash = $2`,
+		// Update artifact as failed
+		db.Exec(`UPDATE foghorn.artifacts SET status = 'failed', error_message = $1, updated_at = NOW() WHERE artifact_hash = $2`,
 			err.Error(), dvrHash)
 		return
 	}
@@ -686,7 +803,7 @@ func processDVRProgress(progress *pb.DVRProgress, storageNodeID string, logger l
 		"segment_count": segmentCount,
 		"size_bytes":    sizeBytes,
 		"message":       message,
-	}).Debug("DVR progress update")
+	}).Info("DVR progress update")
 
 	_ = state.DefaultManager().ApplyDVRProgress(streamCtx(), dvrHash, status, uint64(sizeBytes), uint32(segmentCount), storageNodeID)
 }
@@ -709,11 +826,24 @@ func processDVRStopped(stopped *pb.DVRStopped, storageNodeID string, logger logg
 		"error":            errorMsg,
 	}).Info("DVR recording completed")
 
-	finalStatus := "failed"
-	if status == "success" {
+	// Map Helmsman status to DB status
+	var finalStatus string
+	switch status {
+	case "success":
 		finalStatus = "completed"
+	case "stopped":
+		finalStatus = "stopped"
+	case "deleted":
+		finalStatus = "deleted"
+	default:
+		finalStatus = "failed"
 	}
 	_ = state.DefaultManager().ApplyDVRStopped(streamCtx(), dvrHash, finalStatus, int64(durationSeconds), uint64(sizeBytes), manifestPath, errorMsg, storageNodeID)
+
+	// Emit analytics for deletion (after Helmsman confirmation)
+	if finalStatus == "deleted" && dvrDeletedHandler != nil {
+		go dvrDeletedHandler(dvrHash, uint64(sizeBytes), storageNodeID)
+	}
 }
 
 // findStorageNodeForDVR finds an available storage node with DVR capabilities for the given tenant
@@ -790,7 +920,7 @@ func findStorageNodeForDVR(tenantID string, logger logging.Logger) (string, stri
 		"node_id":   bestNode.NodeID,
 		"base_url":  bestNode.BaseURL,
 		"score":     bestScore,
-	}).Debug("Selected storage node for DVR")
+	}).Info("Selected storage node for DVR")
 
 	return bestNode.NodeID, bestNode.BaseURL, nil
 }
@@ -877,15 +1007,15 @@ func processDVRReadyRequest(req *pb.DVRReadyRequest, requestingNodeID string, st
 	logger.WithFields(logging.Fields{
 		"dvr_hash":           dvrHash,
 		"requesting_node_id": requestingNodeID,
-	}).Debug("Processing DVR readiness request")
+	}).Info("Processing DVR readiness request")
 
-	// Look up the DVR request in database to get stream info
-	var tenantID, internalName string
+	// Look up the DVR artifact in database to get stream info
+	var internalName string
 	err := db.QueryRow(`
-		SELECT tenant_id, internal_name 
-		FROM foghorn.dvr_requests 
-		WHERE request_hash = $1`,
-		dvrHash).Scan(&tenantID, &internalName)
+		SELECT internal_name
+		FROM foghorn.artifacts
+		WHERE artifact_hash = $1 AND artifact_type = 'dvr'`,
+		dvrHash).Scan(&internalName)
 
 	if err != nil {
 		logger.WithFields(logging.Fields{
@@ -910,7 +1040,7 @@ func processDVRReadyRequest(req *pb.DVRReadyRequest, requestingNodeID string, st
 		logger.WithFields(logging.Fields{
 			"dvr_hash":      dvrHash,
 			"internal_name": internalName,
-		}).Debug("Stream health not tracked yet")
+		}).Info("Stream health not tracked yet")
 
 		response := &pb.DVRReadyResponse{
 			DvrHash: dvrHash,
@@ -943,7 +1073,7 @@ func processDVRReadyRequest(req *pb.DVRReadyRequest, requestingNodeID string, st
 			"buffer_state":  streamState.BufferState,
 			"status":        streamState.Status,
 			"reason":        reason,
-		}).Debug("Stream not ready for DVR")
+		}).Info("Stream not ready for DVR")
 
 		response := &pb.DVRReadyResponse{
 			DvrHash: dvrHash,
@@ -963,28 +1093,14 @@ func processDVRReadyRequest(req *pb.DVRReadyRequest, requestingNodeID string, st
 		"dvr_source_uri": sourceURI,
 	})
 
-	// Get original config from database and potentially enhance it
-	var configBytes []byte
-	err = db.QueryRow(`
-		SELECT dr.request_hash, s.recording_config
-		FROM foghorn.dvr_requests dr
-		JOIN foghorn.streams s ON s.internal_name = dr.internal_name
-		WHERE dr.request_hash = $1`,
-		dvrHash).Scan(&dvrHash, &configBytes)
-
-	// Default config in case we can't get it from database
+	// Default DVR config - recording_config would come from Commodore stream settings
+	// TODO: Fetch config from Commodore.GetStreamConfig if needed
 	config := &pb.DVRConfig{
 		Enabled:         true,
 		RetentionDays:   30,
 		Format:          "ts",
 		SegmentDuration: 6,
 	}
-
-	// TODO: Parse configBytes and potentially mutate based on stream characteristics
-	// For example:
-	// - Adjust segment duration based on keyframe interval
-	// - Change format based on codec detection
-	// - Set bitrate limits based on stream quality
 
 	logger.WithFields(logging.Fields{
 		"dvr_hash":      dvrHash,
@@ -1002,11 +1118,11 @@ func processDVRReadyRequest(req *pb.DVRReadyRequest, requestingNodeID string, st
 	}
 	sendDVRReadyResponse(stream, response, logger)
 
-	// Update database status to indicate storage node is starting recording
+	// Update artifact status to indicate storage node is starting recording
 	_, err = db.Exec(`
-		UPDATE foghorn.dvr_requests 
+		UPDATE foghorn.artifacts
 		SET status = 'starting', started_at = NOW(), updated_at = NOW()
-		WHERE request_hash = $1`,
+		WHERE artifact_hash = $1`,
 		dvrHash)
 
 	if err != nil {
@@ -1037,19 +1153,19 @@ func getDTSCOutputURI(nodeID string, logger logging.Logger) string {
 	// Get node state from unified state manager
 	nodeState := state.DefaultManager().GetNodeState(nodeID)
 	if nodeState == nil {
-		logger.WithField("node_id", nodeID).Debug("Node state not found")
+		logger.WithField("node_id", nodeID).Info("Node state not found")
 		return ""
 	}
 
 	if nodeState.Outputs == nil {
-		logger.WithField("node_id", nodeID).Debug("No outputs found in node state")
+		logger.WithField("node_id", nodeID).Info("No outputs found in node state")
 		return ""
 	}
 
 	// Look for DTSC output in the outputs map
 	dtscOutput, exists := nodeState.Outputs["DTSC"]
 	if !exists {
-		logger.WithField("node_id", nodeID).Debug("No DTSC output found in node outputs")
+		logger.WithField("node_id", nodeID).Info("No DTSC output found in node outputs")
 		return ""
 	}
 
@@ -1059,7 +1175,7 @@ func getDTSCOutputURI(nodeID string, logger logging.Logger) string {
 		logger.WithFields(logging.Fields{
 			"node_id":     nodeID,
 			"dtsc_output": dtscOutput,
-		}).Debug("DTSC output is not a string")
+		}).Info("DTSC output is not a string")
 		return ""
 	}
 
@@ -1088,7 +1204,7 @@ func getDTSCOutputURI(nodeID string, logger logging.Logger) string {
 		"hostname":      hostname,
 		"dtsc_template": dtscTemplate,
 		"dtsc_uri":      baseDTSCURI,
-	}).Debug("Constructed DTSC base URI")
+	}).Info("Constructed DTSC base URI")
 
 	return baseDTSCURI
 }
@@ -1144,13 +1260,16 @@ func processMistTrigger(trigger *pb.MistTrigger, nodeID string, stream pb.Helmsm
 	blocking := trigger.GetBlocking()
 
 	logger.WithFields(logging.Fields{
-		"trigger_type": triggerType,
-		"request_id":   requestID,
-		"node_id":      nodeID,
-		"blocking":     blocking,
-	}).Debug("Processing typed MistServer trigger")
+		"trigger_type":   triggerType,
+		"request_id":     requestID,
+		"node_id":        nodeID,
+		"blocking":       blocking,
+		"payload_type":   fmt.Sprintf("%T", trigger.GetTriggerPayload()),
+		"payload_is_nil": trigger.GetTriggerPayload() == nil,
+	}).Info("Processing typed MistServer trigger - TRACE")
 
 	if mistTriggerProcessor == nil {
+		incMistTrigger(triggerType, blocking, "processor_missing")
 		logger.Error("MistTriggerProcessor not set, cannot process triggers")
 		if blocking {
 			// Send error response for blocking triggers
@@ -1167,6 +1286,7 @@ func processMistTrigger(trigger *pb.MistTrigger, nodeID string, stream pb.Helmsm
 	// Process the typed trigger directly through the handlers package
 	responseText, shouldAbort, err := mistTriggerProcessor.ProcessTypedTrigger(trigger)
 	if err != nil {
+		incMistTrigger(triggerType, blocking, "processed_error")
 		logger.WithFields(logging.Fields{
 			"trigger_type": triggerType,
 			"request_id":   requestID,
@@ -1185,12 +1305,18 @@ func processMistTrigger(trigger *pb.MistTrigger, nodeID string, stream pb.Helmsm
 		return
 	}
 
+	if shouldAbort {
+		incMistTrigger(triggerType, blocking, "processed_abort")
+	} else {
+		incMistTrigger(triggerType, blocking, "processed_ok")
+	}
+
 	// For non-blocking triggers, we're done
 	if !blocking {
 		logger.WithFields(logging.Fields{
 			"trigger_type": triggerType,
 			"request_id":   requestID,
-		}).Debug("Successfully processed non-blocking trigger")
+		}).Info("Successfully processed non-blocking trigger")
 		return
 	}
 
@@ -1208,7 +1334,7 @@ func processMistTrigger(trigger *pb.MistTrigger, nodeID string, stream pb.Helmsm
 		"request_id":   requestID,
 		"response":     responseText,
 		"abort":        shouldAbort,
-	}).Debug("Sent MistTrigger response")
+	}).Info("Sent MistTrigger response")
 }
 
 // sendMistTriggerResponse sends a MistTriggerResponse back to Helmsman
@@ -1265,12 +1391,21 @@ func composeConfigSeed(nodeID string, _ []string, peerAddr string) *pb.ConfigSee
 		},
 	}
 
+	// Processing configuration with Livepeer Gateway availability and codec support matrix
+	processingConfig := &pb.ProcessingConfig{
+		LivepeerGatewayAvailable: livepeerGatewayURL != "",
+		LivepeerGatewayUrl:       livepeerGatewayURL,
+		GatewayInputCodecs:       []string{"H264"},                       // Livepeer only supports H.264
+		LocalInputCodecs:         []string{"H264", "H265", "AV1", "VP9"}, // MistServer supports these locally
+	}
+
 	return &pb.ConfigSeed{
 		NodeId:       nodeID,
 		Latitude:     lat,
 		Longitude:    lon,
 		LocationName: loc,
 		Templates:    templates,
+		Processing:   processingConfig,
 	}
 }
 
@@ -1289,4 +1424,768 @@ func SendConfigSeed(nodeID string, seed *pb.ConfigSeed) error {
 		SentAt:  timestamppb.Now(),
 	}
 	return c.stream.Send(msg)
+}
+
+// ==================== Cold Storage (Freeze/Defrost) Handlers ====================
+
+// S3ClientInterface defines the interface for S3 operations (for dependency injection)
+type S3ClientInterface interface {
+	GeneratePresignedPUT(key string, expiry time.Duration) (string, error)
+	GeneratePresignedGET(key string, expiry time.Duration) (string, error)
+	ListPrefix(ctx context.Context, prefix string) ([]string, error)
+	BuildClipS3Key(tenantID, streamName, clipHash, format string) string
+	BuildDVRS3Key(tenantID, internalName, dvrHash string) string
+	BuildS3URL(key string) string
+}
+
+var s3Client S3ClientInterface
+
+// SetS3Client sets the S3 client for cold storage operations
+func SetS3Client(client S3ClientInterface) {
+	s3Client = client
+}
+
+// processFreezePermissionRequest handles freeze permission requests from Helmsman
+// Generates presigned URLs for secure S3 uploads without exposing credentials
+func processFreezePermissionRequest(req *pb.FreezePermissionRequest, nodeID string, stream pb.HelmsmanControl_ConnectServer, logger logging.Logger) {
+	requestID := req.GetRequestId()
+	assetType := req.GetAssetType()
+	assetHash := req.GetAssetHash()
+	localPath := req.GetLocalPath()
+	sizeBytes := req.GetSizeBytes()
+
+	logger.WithFields(logging.Fields{
+		"request_id": requestID,
+		"asset_type": assetType,
+		"asset_hash": assetHash,
+		"size_bytes": sizeBytes,
+		"node_id":    nodeID,
+	}).Info("Processing freeze permission request")
+
+	// Check if S3 client is configured
+	if s3Client == nil {
+		logger.Warn("S3 client not configured, rejecting freeze request")
+		sendFreezePermissionResponse(stream, &pb.FreezePermissionResponse{
+			RequestId: requestID,
+			AssetHash: assetHash,
+			Approved:  false,
+			Reason:    "s3_not_configured",
+		}, logger)
+		return
+	}
+
+	// Look up asset info from foghorn.artifacts for internal_name
+	var streamName string
+	err := db.QueryRow(`
+		SELECT internal_name
+		FROM foghorn.artifacts
+		WHERE artifact_hash = $1 AND artifact_type = $2`,
+		assetHash, assetType).Scan(&streamName)
+	if err != nil {
+		logger.WithFields(logging.Fields{
+			"asset_hash": assetHash,
+			"asset_type": assetType,
+			"error":      err,
+		}).Error("Asset not found in database")
+		sendFreezePermissionResponse(stream, &pb.FreezePermissionResponse{
+			RequestId: requestID,
+			AssetHash: assetHash,
+			Approved:  false,
+			Reason:    "asset_not_found",
+		}, logger)
+		return
+	}
+
+	// Get tenant_id from Commodore (business registry owner)
+	var tenantID string
+	if CommodoreClient != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if assetType == "clip" {
+			if resp, err := CommodoreClient.ResolveClipHash(ctx, assetHash); err == nil && resp.Found {
+				tenantID = resp.TenantId
+			}
+		} else if assetType == "dvr" {
+			if resp, err := CommodoreClient.ResolveDVRHash(ctx, assetHash); err == nil && resp.Found {
+				tenantID = resp.TenantId
+			}
+		}
+	}
+	if tenantID == "" {
+		logger.WithFields(logging.Fields{
+			"asset_hash": assetHash,
+			"asset_type": assetType,
+		}).Error("Could not resolve tenant for asset")
+		sendFreezePermissionResponse(stream, &pb.FreezePermissionResponse{
+			RequestId: requestID,
+			AssetHash: assetHash,
+			Approved:  false,
+			Reason:    "tenant_not_found",
+		}, logger)
+		return
+	}
+
+	// Generate presigned URLs
+	expiry := 30 * time.Minute
+	expirySeconds := int64(expiry.Seconds())
+
+	response := &pb.FreezePermissionResponse{
+		RequestId:        requestID,
+		AssetHash:        assetHash,
+		Approved:         true,
+		UrlExpirySeconds: expirySeconds,
+	}
+
+	if assetType == "clip" {
+		// Single file - extract format from path
+		format := "mp4"
+		if idx := strings.LastIndex(localPath, "."); idx != -1 {
+			format = localPath[idx+1:]
+		}
+		s3Key := s3Client.BuildClipS3Key(tenantID, streamName, assetHash, format)
+		presignedURL, err := s3Client.GeneratePresignedPUT(s3Key, expiry)
+		if err != nil {
+			logger.WithError(err).Error("Failed to generate presigned PUT URL for clip")
+			sendFreezePermissionResponse(stream, &pb.FreezePermissionResponse{
+				RequestId: requestID,
+				AssetHash: assetHash,
+				Approved:  false,
+				Reason:    "presign_failed",
+			}, logger)
+			return
+		}
+		response.PresignedPutUrl = presignedURL
+	} else if assetType == "dvr" {
+		// DVR directory - need presigned URLs for all segments
+		s3Prefix := s3Client.BuildDVRS3Key(tenantID, streamName, assetHash)
+		response.SegmentUrls = make(map[string]string)
+
+		// Iterate over filenames provided by Helmsman
+		for _, filename := range req.GetFilenames() {
+			// Construct full S3 key for this file (relative to DVR prefix)
+			// filename is relative, e.g., "segments/0_0.ts" or "hash.m3u8"
+			s3Key := s3Prefix + "/" + filename
+
+			url, err := s3Client.GeneratePresignedPUT(s3Key, expiry)
+			if err != nil {
+				logger.WithError(err).WithField("filename", filename).Error("Failed to generate presigned URL")
+				continue
+			}
+			response.SegmentUrls[filename] = url
+		}
+
+		logger.WithFields(logging.Fields{
+			"asset_hash": assetHash,
+			"s3_prefix":  s3Prefix,
+			"file_count": len(response.SegmentUrls),
+		}).Info("Generated presigned URLs for DVR freeze")
+	}
+
+	// Update artifact to mark as freezing
+	_, _ = db.Exec(`UPDATE foghorn.artifacts SET storage_location = 'freezing', updated_at = NOW() WHERE artifact_hash = $1`, assetHash)
+
+	sendFreezePermissionResponse(stream, response, logger)
+
+	logger.WithFields(logging.Fields{
+		"request_id": requestID,
+		"asset_hash": assetHash,
+		"asset_type": assetType,
+	}).Info("Freeze permission granted with presigned URLs")
+}
+
+// sendFreezePermissionResponse sends a FreezePermissionResponse back to Helmsman
+func sendFreezePermissionResponse(stream pb.HelmsmanControl_ConnectServer, response *pb.FreezePermissionResponse, logger logging.Logger) {
+	msg := &pb.ControlMessage{
+		SentAt:  timestamppb.Now(),
+		Payload: &pb.ControlMessage_FreezePermissionResponse{FreezePermissionResponse: response},
+	}
+
+	if err := stream.Send(msg); err != nil {
+		logger.WithFields(logging.Fields{
+			"request_id": response.RequestId,
+			"error":      err,
+		}).Error("Failed to send freeze permission response")
+	}
+}
+
+// processFreezeProgress handles freeze progress updates from Helmsman
+func processFreezeProgress(progress *pb.FreezeProgress, nodeID string, logger logging.Logger) {
+	logger.WithFields(logging.Fields{
+		"request_id":     progress.GetRequestId(),
+		"asset_hash":     progress.GetAssetHash(),
+		"percent":        progress.GetPercent(),
+		"bytes_uploaded": progress.GetBytesUploaded(),
+		"node_id":        nodeID,
+	}).Info("Freeze progress update")
+}
+
+// processFreezeComplete handles freeze completion from Helmsman
+func processFreezeComplete(complete *pb.FreezeComplete, nodeID string, logger logging.Logger) {
+	requestID := complete.GetRequestId()
+	assetHash := complete.GetAssetHash()
+	status := complete.GetStatus()
+	s3URL := complete.GetS3Url()
+	sizeBytes := complete.GetSizeBytes()
+	errorMsg := complete.GetError()
+
+	logger.WithFields(logging.Fields{
+		"request_id": requestID,
+		"asset_hash": assetHash,
+		"status":     status,
+		"s3_url":     s3URL,
+		"size_bytes": sizeBytes,
+		"error":      errorMsg,
+		"node_id":    nodeID,
+	}).Info("Freeze operation completed")
+
+	if status == "success" {
+		// Update artifact storage location in database
+		_, _ = db.Exec(`
+			UPDATE foghorn.artifacts
+			SET storage_location = 's3', s3_url = $1, frozen_at = NOW(), updated_at = NOW()
+			WHERE artifact_hash = $2`,
+			s3URL, assetHash)
+	} else {
+		// Revert storage location on failure
+		_, _ = db.Exec(`UPDATE foghorn.artifacts SET storage_location = 'local', updated_at = NOW() WHERE artifact_hash = $1`, assetHash)
+	}
+}
+
+// processDefrostProgress handles defrost progress updates from Helmsman
+func processDefrostProgress(progress *pb.DefrostProgress, nodeID string, logger logging.Logger) {
+	logger.WithFields(logging.Fields{
+		"request_id":          progress.GetRequestId(),
+		"asset_hash":          progress.GetAssetHash(),
+		"percent":             progress.GetPercent(),
+		"bytes_downloaded":    progress.GetBytesDownloaded(),
+		"segments_downloaded": progress.GetSegmentsDownloaded(),
+		"total_segments":      progress.GetTotalSegments(),
+		"message":             progress.GetMessage(),
+		"node_id":             nodeID,
+	}).Info("Defrost progress update")
+}
+
+// processDefrostComplete handles defrost completion from Helmsman
+func processDefrostComplete(complete *pb.DefrostComplete, nodeID string, logger logging.Logger) {
+	requestID := complete.GetRequestId()
+	assetHash := complete.GetAssetHash()
+	status := complete.GetStatus()
+	localPath := complete.GetLocalPath()
+	sizeBytes := complete.GetSizeBytes()
+	errorMsg := complete.GetError()
+
+	logger.WithFields(logging.Fields{
+		"request_id": requestID,
+		"asset_hash": assetHash,
+		"status":     status,
+		"local_path": localPath,
+		"size_bytes": sizeBytes,
+		"error":      errorMsg,
+		"node_id":    nodeID,
+	}).Info("Defrost operation completed")
+
+	if status == "success" {
+		// Update storage location back to local in database
+		_, _ = db.Exec(`
+			UPDATE foghorn.artifacts
+			SET storage_location = 'local', updated_at = NOW()
+			WHERE artifact_hash = $1`,
+			assetHash)
+	}
+
+	// Notify any waiting defrost requests
+	notifyDefrostComplete(assetHash, status == "success", localPath)
+}
+
+// SendDefrostRequest sends a DefrostRequest to the given node with presigned URLs
+func SendDefrostRequest(nodeID string, req *pb.DefrostRequest) error {
+	registry.mu.RLock()
+	c := registry.conns[nodeID]
+	registry.mu.RUnlock()
+	if c == nil {
+		return ErrNotConnected
+	}
+	msg := &pb.ControlMessage{
+		Payload: &pb.ControlMessage_DefrostRequest{DefrostRequest: req},
+		SentAt:  timestamppb.Now(),
+	}
+	return c.stream.Send(msg)
+}
+
+// SendDtshSyncRequest sends a DtshSyncRequest to the given node to upload just the .dtsh file
+func SendDtshSyncRequest(nodeID string, req *pb.DtshSyncRequest) error {
+	registry.mu.RLock()
+	c := registry.conns[nodeID]
+	registry.mu.RUnlock()
+	if c == nil {
+		return ErrNotConnected
+	}
+	msg := &pb.ControlMessage{
+		Payload: &pb.ControlMessage_DtshSyncRequest{DtshSyncRequest: req},
+		SentAt:  timestamppb.Now(),
+	}
+	return c.stream.Send(msg)
+}
+
+// TriggerDtshSync is called when .dtsh appeared after the main asset was already synced
+// It generates presigned URLs and sends DtshSyncRequest to the node
+func TriggerDtshSync(nodeID, assetHash, assetType, filePath string) {
+	if s3Client == nil || db == nil {
+		return
+	}
+
+	logger := registry.log.WithFields(logging.Fields{
+		"node_id":    nodeID,
+		"asset_hash": assetHash,
+		"asset_type": assetType,
+	})
+
+	// Look up stream info from foghorn.artifacts
+	var streamName string
+	err := db.QueryRow(`
+		SELECT internal_name
+		FROM foghorn.artifacts
+		WHERE artifact_hash = $1`,
+		assetHash).Scan(&streamName)
+	if err != nil {
+		logger.WithError(err).Error("Failed to lookup asset for dtsh sync")
+		return
+	}
+
+	// Get tenant_id from Commodore (business registry owner)
+	var tenantID string
+	if CommodoreClient != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if assetType == "clip" {
+			if resp, err := CommodoreClient.ResolveClipHash(ctx, assetHash); err == nil && resp.Found {
+				tenantID = resp.TenantId
+			}
+		} else if assetType == "dvr" {
+			if resp, err := CommodoreClient.ResolveDVRHash(ctx, assetHash); err == nil && resp.Found {
+				tenantID = resp.TenantId
+			}
+		}
+	}
+	if tenantID == "" {
+		logger.Error("Could not resolve tenant for dtsh sync")
+		return
+	}
+
+	expiry := 30 * time.Minute
+	expirySeconds := int64(expiry.Seconds())
+	requestID := fmt.Sprintf("dtsh-%s-%d", assetHash, time.Now().UnixNano())
+
+	req := &pb.DtshSyncRequest{
+		RequestId:        requestID,
+		AssetType:        assetType,
+		AssetHash:        assetHash,
+		LocalPath:        filePath,
+		UrlExpirySeconds: expirySeconds,
+	}
+
+	if assetType == "clip" {
+		// For clips: single .dtsh file next to the main file
+		format := "mp4"
+		if idx := strings.LastIndex(filePath, "."); idx != -1 {
+			format = filePath[idx+1:]
+		}
+		s3Key := s3Client.BuildClipS3Key(tenantID, streamName, assetHash, format) + ".dtsh"
+		presignedURL, err := s3Client.GeneratePresignedPUT(s3Key, expiry)
+		if err != nil {
+			logger.WithError(err).Error("Failed to generate presigned URL for clip .dtsh")
+			return
+		}
+		req.PresignedPutUrl = presignedURL
+	} else if assetType == "dvr" {
+		// For DVR: may have multiple .dtsh files in the directory
+		// We'll provide a map of presigned URLs for common .dtsh file patterns
+		s3Prefix := s3Client.BuildDVRS3Key(tenantID, streamName, assetHash)
+		req.DtshUrls = make(map[string]string)
+
+		// Generate presigned URLs for common .dtsh file patterns
+		// The main one is assetHash.m3u8.dtsh
+		dtshNames := []string{
+			assetHash + ".m3u8.dtsh",
+			assetHash + ".dtsh",
+		}
+		for _, dtshName := range dtshNames {
+			s3Key := s3Prefix + "/" + dtshName
+			url, err := s3Client.GeneratePresignedPUT(s3Key, expiry)
+			if err != nil {
+				logger.WithError(err).WithField("dtsh_name", dtshName).Warn("Failed to generate presigned URL for DVR .dtsh")
+				continue
+			}
+			req.DtshUrls[dtshName] = url
+		}
+
+		if len(req.DtshUrls) == 0 {
+			logger.Error("Failed to generate any presigned URLs for DVR .dtsh files")
+			return
+		}
+	}
+
+	if err := SendDtshSyncRequest(nodeID, req); err != nil {
+		logger.WithError(err).Error("Failed to send DtshSyncRequest")
+		return
+	}
+
+	logger.Info("Sent DtshSyncRequest for incremental .dtsh sync")
+}
+
+// DefrostWaiter tracks waiters for defrost completion
+type DefrostWaiter struct {
+	done chan struct{}
+	ok   bool
+	path string
+}
+
+var (
+	defrostWaiters   = make(map[string][]*DefrostWaiter)
+	defrostWaitersMu sync.Mutex
+)
+
+// WaitForDefrost waits for a defrost operation to complete
+func WaitForDefrost(assetHash string, timeout time.Duration) (string, bool) {
+	waiter := &DefrostWaiter{done: make(chan struct{})}
+
+	defrostWaitersMu.Lock()
+	defrostWaiters[assetHash] = append(defrostWaiters[assetHash], waiter)
+	defrostWaitersMu.Unlock()
+
+	select {
+	case <-waiter.done:
+		return waiter.path, waiter.ok
+	case <-time.After(timeout):
+		// Remove waiter on timeout
+		defrostWaitersMu.Lock()
+		waiters := defrostWaiters[assetHash]
+		for i, w := range waiters {
+			if w == waiter {
+				defrostWaiters[assetHash] = append(waiters[:i], waiters[i+1:]...)
+				break
+			}
+		}
+		defrostWaitersMu.Unlock()
+		return "", false
+	}
+}
+
+// notifyDefrostComplete notifies all waiters that defrost is complete
+func notifyDefrostComplete(assetHash string, ok bool, path string) {
+	defrostWaitersMu.Lock()
+	waiters := defrostWaiters[assetHash]
+	delete(defrostWaiters, assetHash)
+	defrostWaitersMu.Unlock()
+
+	for _, w := range waiters {
+		w.ok = ok
+		w.path = path
+		close(w.done)
+	}
+}
+
+// RequestDefrost initiates a defrost operation for a frozen asset
+// Returns the local path once defrost is complete, or error on failure/timeout
+func RequestDefrost(ctx context.Context, assetType, assetHash, nodeID string, timeout time.Duration, logger logging.Logger) (string, error) {
+	if s3Client == nil {
+		return "", fmt.Errorf("s3 client not configured")
+	}
+
+	// Look up asset info from foghorn.artifacts
+	var streamName, storageLocation string
+	err := db.QueryRow(`
+		SELECT internal_name, COALESCE(storage_location, 'local')
+		FROM foghorn.artifacts
+		WHERE artifact_hash = $1 AND artifact_type = $2`,
+		assetHash, assetType).Scan(&streamName, &storageLocation)
+	if err != nil {
+		return "", fmt.Errorf("asset not found: %w", err)
+	}
+
+	// Get tenant_id from Commodore (business registry owner)
+	var tenantID string
+	if CommodoreClient != nil {
+		if assetType == "clip" {
+			if resp, err := CommodoreClient.ResolveClipHash(ctx, assetHash); err == nil && resp.Found {
+				tenantID = resp.TenantId
+			}
+		} else if assetType == "dvr" {
+			if resp, err := CommodoreClient.ResolveDVRHash(ctx, assetHash); err == nil && resp.Found {
+				tenantID = resp.TenantId
+			}
+		}
+	}
+	if tenantID == "" {
+		return "", fmt.Errorf("could not resolve tenant for asset")
+	}
+
+	// Check if already local
+	if storageLocation == "local" {
+		return "", nil // Already local, no defrost needed
+	}
+
+	// Check if already defrosting
+	if storageLocation == "defrosting" {
+		// Wait for existing defrost to complete
+		path, ok := WaitForDefrost(assetHash, timeout)
+		if !ok {
+			return "", fmt.Errorf("defrost timeout")
+		}
+		return path, nil
+	}
+
+	// Mark as defrosting
+	_, _ = db.Exec(`UPDATE foghorn.artifacts SET storage_location = 'defrosting', updated_at = NOW() WHERE artifact_hash = $1`, assetHash)
+
+	// Generate presigned GET URLs
+	expiry := 30 * time.Minute
+	requestID := fmt.Sprintf("defrost-%s-%d", assetHash, time.Now().UnixNano())
+
+	req := &pb.DefrostRequest{
+		RequestId:        requestID,
+		AssetType:        assetType,
+		AssetHash:        assetHash,
+		TenantId:         tenantID,
+		InternalName:     streamName,
+		TimeoutSeconds:   int32(timeout.Seconds()),
+		UrlExpirySeconds: int64(expiry.Seconds()),
+	}
+
+	if assetType == "clip" {
+		// Single file defrost
+		format := "mp4" // Default format
+		s3Key := s3Client.BuildClipS3Key(tenantID, streamName, assetHash, format)
+		presignedURL, err := s3Client.GeneratePresignedGET(s3Key, expiry)
+		if err != nil {
+			return "", fmt.Errorf("failed to generate presigned GET URL: %w", err)
+		}
+		req.PresignedGetUrl = presignedURL
+		req.LocalPath = fmt.Sprintf("/data/clips/%s/%s.%s", streamName, assetHash, format)
+	} else {
+		// DVR defrost - get segment list from S3 and generate URLs
+		s3Prefix := s3Client.BuildDVRS3Key(tenantID, streamName, assetHash)
+		segments, err := s3Client.ListPrefix(ctx, s3Prefix)
+		if err != nil {
+			return "", fmt.Errorf("failed to list DVR segments: %w", err)
+		}
+
+		req.SegmentUrls = make(map[string]string)
+		req.Streaming = true
+
+		for _, segKey := range segments {
+			presignedURL, err := s3Client.GeneratePresignedGET(segKey, expiry)
+			if err != nil {
+				logger.WithError(err).WithField("segment", segKey).Warn("Failed to generate presigned URL for segment")
+				continue
+			}
+			// Extract segment name from key
+			segName := segKey
+			if idx := strings.LastIndex(segKey, "/"); idx != -1 {
+				segName = segKey[idx+1:]
+			}
+			req.SegmentUrls[segName] = presignedURL
+		}
+
+		req.LocalPath = fmt.Sprintf("/data/dvr/%s/%s", streamName, assetHash)
+	}
+
+	// Send defrost request to node
+	if err := SendDefrostRequest(nodeID, req); err != nil {
+		// Revert storage location
+		_, _ = db.Exec(`UPDATE foghorn.artifacts SET storage_location = 's3', updated_at = NOW() WHERE artifact_hash = $1`, assetHash)
+		return "", fmt.Errorf("failed to send defrost request: %w", err)
+	}
+
+	// Wait for defrost to complete
+	path, ok := WaitForDefrost(assetHash, timeout)
+	if !ok {
+		return "", fmt.Errorf("defrost timeout")
+	}
+
+	return path, nil
+}
+
+// ==================== Dual-Storage (Sync/CanDelete) Handlers ====================
+
+// artifactRepo provides database access for dual-storage sync tracking
+var artifactRepo state.ArtifactRepository
+
+// SetArtifactRepository sets the artifact repository for sync tracking
+func SetArtifactRepository(repo state.ArtifactRepository) {
+	artifactRepo = repo
+}
+
+// processCanDeleteRequest handles can-delete checks from Helmsman
+// Before deleting a local asset copy, Helmsman asks Foghorn if it's safe
+func processCanDeleteRequest(req *pb.CanDeleteRequest, nodeID string, stream pb.HelmsmanControl_ConnectServer, logger logging.Logger) {
+	assetHash := req.GetAssetHash()
+	requestingNodeID := req.GetNodeId()
+	if requestingNodeID == "" {
+		requestingNodeID = nodeID
+	}
+
+	logger.WithFields(logging.Fields{
+		"asset_hash": assetHash,
+		"node_id":    requestingNodeID,
+	}).Info("Processing can-delete request")
+
+	response := &pb.CanDeleteResponse{
+		AssetHash:    assetHash,
+		SafeToDelete: false,
+		Reason:       "unknown",
+	}
+
+	if artifactRepo == nil {
+		logger.Warn("Artifact repository not configured, rejecting delete")
+		response.Reason = "not_configured"
+		sendCanDeleteResponse(stream, response, logger)
+		return
+	}
+
+	// Check if artifact is synced to S3
+	synced, err := artifactRepo.IsSynced(context.Background(), assetHash)
+	if err != nil {
+		logger.WithError(err).WithField("asset_hash", assetHash).Error("Failed to check sync status")
+		response.Reason = "db_error"
+		sendCanDeleteResponse(stream, response, logger)
+		return
+	}
+
+	if synced {
+		response.SafeToDelete = true
+		response.Reason = "synced"
+
+		// Calculate warm duration (how long asset was cached before eviction)
+		cachedAt, err := artifactRepo.GetCachedAt(context.Background(), assetHash)
+		if err == nil && cachedAt > 0 {
+			warmDurationMs := time.Now().UnixMilli() - cachedAt
+			response.WarmDurationMs = warmDurationMs
+			logger.WithFields(logging.Fields{
+				"asset_hash":       assetHash,
+				"warm_duration_ms": warmDurationMs,
+			}).Info("Asset synced to S3, safe to delete local copy")
+		} else {
+			logger.WithField("asset_hash", assetHash).Info("Asset synced to S3, safe to delete local copy (no cached_at)")
+		}
+	} else {
+		// Check if sync is in progress
+		info, err := artifactRepo.GetArtifactSyncInfo(context.Background(), assetHash)
+		if err != nil {
+			response.Reason = "db_error"
+		} else if info == nil {
+			response.Reason = "not_found"
+		} else if info.SyncStatus == "in_progress" {
+			response.Reason = "sync_pending"
+		} else if info.SyncStatus == "failed" {
+			response.Reason = "sync_failed"
+		} else {
+			response.Reason = "not_synced"
+		}
+		logger.WithFields(logging.Fields{
+			"asset_hash": assetHash,
+			"reason":     response.Reason,
+		}).Info("Asset not safe to delete")
+	}
+
+	sendCanDeleteResponse(stream, response, logger)
+}
+
+// sendCanDeleteResponse sends a CanDeleteResponse back to Helmsman
+func sendCanDeleteResponse(stream pb.HelmsmanControl_ConnectServer, response *pb.CanDeleteResponse, logger logging.Logger) {
+	msg := &pb.ControlMessage{
+		SentAt:  timestamppb.Now(),
+		Payload: &pb.ControlMessage_CanDeleteResponse{CanDeleteResponse: response},
+	}
+
+	if err := stream.Send(msg); err != nil {
+		logger.WithFields(logging.Fields{
+			"asset_hash": response.AssetHash,
+			"error":      err,
+		}).Error("Failed to send can-delete response")
+	}
+}
+
+// processSyncComplete handles sync completion from Helmsman
+// After Helmsman uploads an asset to S3 (without deleting local), it notifies Foghorn
+func processSyncComplete(complete *pb.SyncComplete, nodeID string, logger logging.Logger) {
+	requestID := complete.GetRequestId()
+	assetHash := complete.GetAssetHash()
+	status := complete.GetStatus()
+	s3URL := complete.GetS3Url()
+	sizeBytes := complete.GetSizeBytes()
+	errorMsg := complete.GetError()
+	reportingNodeID := complete.GetNodeId()
+	if reportingNodeID == "" {
+		reportingNodeID = nodeID
+	}
+
+	logger.WithFields(logging.Fields{
+		"request_id": requestID,
+		"asset_hash": assetHash,
+		"status":     status,
+		"s3_url":     s3URL,
+		"size_bytes": sizeBytes,
+		"error":      errorMsg,
+		"node_id":    reportingNodeID,
+	}).Info("Sync operation completed")
+
+	if artifactRepo == nil {
+		logger.Warn("Artifact repository not configured, cannot update sync status")
+		return
+	}
+
+	ctx := context.Background()
+
+	dtshIncluded := complete.GetDtshIncluded()
+
+	if status == "success" {
+		// Update artifact registry with sync status and S3 URL
+		if err := artifactRepo.SetSyncStatus(ctx, assetHash, "synced", s3URL); err != nil {
+			logger.WithError(err).Error("Failed to update sync status in artifact registry")
+		}
+
+		// Add this node to cached_nodes (it has a local copy)
+		if err := artifactRepo.AddCachedNode(ctx, assetHash, reportingNodeID); err != nil {
+			logger.WithError(err).Error("Failed to add cached node")
+		}
+
+		// Update foghorn.artifacts with sync status
+		_, _ = db.Exec(`
+			UPDATE foghorn.artifacts
+			SET sync_status = 'synced', s3_url = $1, dtsh_synced = $2, updated_at = NOW()
+			WHERE artifact_hash = $3`,
+			s3URL, dtshIncluded, assetHash)
+
+		// Add node to artifact_nodes if not already there
+		_, _ = db.Exec(`
+			INSERT INTO foghorn.artifact_nodes (artifact_hash, node_id, last_seen_at)
+			VALUES ($1, $2, NOW())
+			ON CONFLICT (artifact_hash, node_id) DO UPDATE SET last_seen_at = NOW()`,
+			assetHash, reportingNodeID)
+
+		logger.WithFields(logging.Fields{
+			"asset_hash":    assetHash,
+			"s3_url":        s3URL,
+			"node_id":       reportingNodeID,
+			"dtsh_included": dtshIncluded,
+		}).Info("Asset synced to S3, local copy retained")
+	} else {
+		// Sync failed
+		if err := artifactRepo.SetSyncStatus(ctx, assetHash, "failed", ""); err != nil {
+			logger.WithError(err).Error("Failed to update sync status to failed")
+		}
+
+		// Update error in foghorn.artifacts
+		_, _ = db.Exec(`
+			UPDATE foghorn.artifacts
+			SET sync_status = 'failed', sync_error = $1, last_sync_attempt = NOW(), updated_at = NOW()
+			WHERE artifact_hash = $2`,
+			errorMsg, assetHash)
+
+		logger.WithFields(logging.Fields{
+			"asset_hash": assetHash,
+			"error":      errorMsg,
+		}).Warn("Asset sync to S3 failed")
+	}
 }

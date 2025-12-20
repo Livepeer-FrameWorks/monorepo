@@ -1,11 +1,15 @@
 <script lang="ts">
   import { Card, CardContent } from "$lib/components/ui/card";
   import { Badge } from "$lib/components/ui/badge";
-  import { GetClustersStore } from "$houdini";
 
-  // Derive cluster type from Houdini store
-  const clustersStore = new GetClustersStore();
-  type ClusterData = NonNullable<NonNullable<typeof $clustersStore.data>["clusters"]>[number];
+  // Minimal interface for cluster data that works with multiple query types
+  interface ClusterData {
+    readonly id: string;
+    readonly clusterId: string;
+    readonly clusterName: string;
+    readonly healthStatus: string;
+    readonly createdAt: string | null;
+  }
 
   interface Props {
     cluster: ClusterData;
@@ -30,7 +34,6 @@
       </Badge>
     </div>
     <div class="space-y-1 text-sm text-muted-foreground">
-      <p>Nodes: {cluster.nodes?.length || 0}</p>
       <p>Created: {cluster.createdAt ? new Date(cluster.createdAt).toLocaleDateString() : 'N/A'}</p>
     </div>
   </CardContent>

@@ -33,10 +33,10 @@ FrameWorks uses MistServer for transcoding and delivery, which supports nearly e
 
 The URLs follow a unified pattern through Foghorn's `/play/` path:
 ```
-HLS:    %EDGE_URL%/play/{content-id}/hls/index.m3u8
-DASH:   %EDGE_URL%/play/{content-id}/cmaf/index.mpd
-WebRTC: %EDGE_URL%/play/{content-id}/webrtc
-MP4:    %EDGE_URL%/play/{content-id}.mp4
+HLS:    %PLAY_URL%/play/{content-id}/hls/index.m3u8
+DASH:   %PLAY_URL%/play/{content-id}/cmaf/index.mpd
+WebRTC: %PLAY_URL%/play/{content-id}/webrtc
+MP4:    %PLAY_URL%/play/{content-id}.mp4
 ```
 
 **Common URL paths:**
@@ -70,14 +70,54 @@ The FrameWorks Player is a React component that wraps multiple open-source playb
 - **Telemetry reporting** — Batched playback metrics (stalls, quality score, dropped frames) sent to your analytics endpoint with `sendBeacon()` for reliable page-unload reporting
 - **Lazy-loaded transports** — Heavy player bundles are loaded on-demand, keeping initial bundle size small
 
+### Controls & Shortcuts
+
+The player supports keyboard and gesture shortcuts once the player is focused (click/tap once to focus).
+
+**Keyboard**
+| Shortcut | Action | Notes |
+|---|---|---|
+| Space | Play/Pause | Hold = 2× speed (when seekable) |
+| K | Play/Pause | YouTube-style |
+| J / ← | Skip back 10s | Disabled on live-only |
+| L / → | Skip forward 10s | Disabled on live-only |
+| ↑ / ↓ | Volume ±10% | — |
+| M | Mute/Unmute | — |
+| F | Fullscreen toggle | — |
+| C | Captions toggle | — |
+| 0–9 | Seek to 0–90% | Disabled on live-only |
+| , / . | Prev/Next frame (paused) | WebCodecs = true step; others = buffered-only |
+
+**Mouse / Touch**
+| Gesture | Action | Notes |
+|---|---|---|
+| Double‑click | Fullscreen toggle | Desktop |
+| Double‑tap (left/right) | Skip ±10s | Touch only, disabled on live-only |
+| Click/Tap & Hold | 2× speed | Disabled on live-only |
+
+**Constraints**
+- **Live-only** streams disable seeking/skip/2× hold and frame-step.
+- **Live with DVR buffer** enables the same shortcuts as VOD.
+- Frame stepping only moves within **already buffered** ranges (no network seek). WebCodecs supports true frame stepping when paused.
+
 ### Installation
 
 ```bash
-npm install @livepeer-frameworks/player
+# React
+npm install @livepeer-frameworks/player-react
+
+# Svelte 5
+npm install @livepeer-frameworks/player-svelte
+
+# Vanilla JS / Other frameworks
+npm install @livepeer-frameworks/player-core
 ```
 
 ```tsx
-import '@livepeer-frameworks/player/player.css';
+// Import CSS from your wrapper package
+import '@livepeer-frameworks/player-react/player.css';  // React
+import '@livepeer-frameworks/player-svelte/player.css'; // Svelte
+import '@livepeer-frameworks/player-core/player.css';   // Vanilla
 ```
 
 ### Using the Player Component
@@ -85,7 +125,7 @@ import '@livepeer-frameworks/player/player.css';
 The simplest way to embed a stream is by passing your Playback ID. The player will automatically resolve the best available edge node.
 
 ```tsx
-import { Player } from '@livepeer-frameworks/player';
+import { Player } from '@livepeer-frameworks/player-react';
 
 function LiveStream() {
   return (
@@ -103,6 +143,28 @@ function LiveStream() {
 ```
 
 The player queries the Gateway to resolve the best edge node for your viewer's location.
+
+### Direct Endpoint Override (Advanced)
+
+If you already have resolved endpoints (e.g. from your own backend) or want to force a specific MistServer node, you can bypass the Gateway by passing `endpoints` directly:
+
+```tsx
+<Player
+  contentType="live"
+  contentId="<YOUR_PLAYBACK_ID>"
+  endpoints={{
+    // Direct MistServer base URL
+    http: "%EDGE_URL%",
+    ws: "%EDGE_URL%"
+  }}
+  options={{
+    autoplay: true,
+    muted: true,
+  }}
+/>
+```
+
+When `endpoints` is provided, the `gatewayUrl` is ignored and the player connects directly to the specified node.
 
 ### For DVR and Clips
 
@@ -161,6 +223,127 @@ Track player lifecycle for UI feedback:
 />
 ```
 
+### Vanilla JS / Non-React Usage
+
+For Svelte, Vue, Angular, or plain JavaScript, use the `FrameWorksPlayer` class instead of the React component:
+
+```ts
+import { FrameWorksPlayer } from '@livepeer-frameworks/player-core';
+import '@livepeer-frameworks/player-core/player.css';
+
+const player = new FrameWorksPlayer('#player-container', {
+  contentId: '<YOUR_PLAYBACK_ID>',
+  contentType: 'live',
+  gatewayUrl: '%API_URL%',
+  autoplay: true,
+  muted: true,
+  onStateChange: (state) => console.log('State:', state),
+  onReady: (videoElement) => console.log('Ready!'),
+});
+
+// Control playback
+player.play();
+player.pause();
+player.seek(30);        // Seek to 30 seconds
+player.setVolume(0.5);  // 50% volume
+player.jumpToLive();    // Jump to live edge
+
+// Cleanup when done
+player.destroy();
+```
+
+### Direct Endpoint Override (Vanilla)
+
+```ts
+const player = new FrameWorksPlayer('#player-container', {
+  contentId: '<YOUR_PLAYBACK_ID>',
+  contentType: 'live',
+  // Skip Gateway resolution and connect directly
+  endpoints: {
+    http: "%EDGE_URL%",
+    ws: "%EDGE_URL%"
+  },
+  autoplay: true,
+});
+```
+
+#### Svelte Example
+
+```svelte
+<script lang="ts">
+  import { onMount, onDestroy } from 'svelte';
+  import type { FrameWorksPlayer as FrameWorksPlayerType } from '@livepeer-frameworks/player';
+
+  let container: HTMLDivElement;
+  let player: FrameWorksPlayerType | null = null;
+
+  onMount(async () => {
+    const { FrameWorksPlayer } = await import('@livepeer-frameworks/player');
+
+    player = new FrameWorksPlayer(container, {
+      contentId: 'my-stream',
+      contentType: 'live',
+      gatewayUrl: '%API_URL%',
+      autoplay: true,
+      muted: true,
+    });
+  });
+
+  onDestroy(() => player?.destroy());
+</script>
+
+<div bind:this={container} style="width: 100%; height: 500px;"></div>
+```
+
+#### Vue Example
+
+```vue
+<template>
+  <div ref="playerContainer" style="width: 100%; height: 500px;"></div>
+</template>
+
+<script setup lang="ts">
+import { ref, onMounted, onUnmounted } from 'vue';
+import type { FrameWorksPlayer as FrameWorksPlayerType } from '@livepeer-frameworks/player-core';
+
+const playerContainer = ref<HTMLDivElement>();
+let player: FrameWorksPlayerType | null = null;
+
+onMounted(async () => {
+  const { FrameWorksPlayer } = await import('@livepeer-frameworks/player-core');
+  await import('@livepeer-frameworks/player-core/player.css');
+
+  if (playerContainer.value) {
+    player = new FrameWorksPlayer(playerContainer.value, {
+      contentId: 'my-stream',
+      contentType: 'live',
+      gatewayUrl: '%API_URL%',
+      autoplay: true,
+      muted: true,
+    });
+  }
+});
+
+onUnmounted(() => player?.destroy());
+</script>
+```
+
+#### Available Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `contentId` | string | required | Playback ID, DVR hash, or clip hash |
+| `contentType` | `'live'` \| `'dvr'` \| `'clip'` | required | Content type |
+| `gatewayUrl` | string | - | Gateway GraphQL endpoint |
+| `authToken` | string | - | Bearer token for private streams |
+| `autoplay` | boolean | `true` | Auto-start playback |
+| `muted` | boolean | `true` | Start muted |
+| `controls` | boolean | `true` | Show player controls |
+| `poster` | string | - | Poster/thumbnail image |
+| `onStateChange` | function | - | State change callback |
+| `onReady` | function | - | Ready callback (receives video element) |
+| `onError` | function | - | Error callback |
+
 ## Using Other Players
 
 ### Using hls.js Directly
@@ -211,17 +394,17 @@ These URLs work directly with any player (VLC, ffmpeg, native `<video>` tags):
 
 ```bash
 # HLS - redirects to nearest edge node
-https://play.example.com/play/{view-key}/hls
-https://play.example.com/play/{view-key}.m3u8
-https://play.example.com/play/{view-key}/index.m3u8
+%PLAY_URL%/play/{view-key}/hls
+%PLAY_URL%/play/{view-key}.m3u8
+%PLAY_URL%/play/{view-key}/index.m3u8
 
 # WebRTC (WHEP)
-https://play.example.com/play/{view-key}/webrtc
-https://play.example.com/play/{view-key}.webrtc
+%PLAY_URL%/play/{view-key}/webrtc
+%PLAY_URL%/play/{view-key}.webrtc
 
 # DASH
-https://play.example.com/play/{view-key}/dash
-https://play.example.com/play/{view-key}.mpd
+%PLAY_URL%/play/{view-key}/dash
+%PLAY_URL%/play/{view-key}.mpd
 ```
 
 The server returns an **HTTP 307 redirect** to the actual edge node URL, so your player follows the redirect automatically.
@@ -229,13 +412,13 @@ The server returns an **HTTP 307 redirect** to the actual edge node URL, so your
 **Examples:**
 ```bash
 # Play in VLC
-vlc https://play.example.com/play/abc123def.m3u8
+vlc %PLAY_URL%/play/abc123def.m3u8
 
 # Embed in HTML (Safari, iOS)
-<video src="https://play.example.com/play/abc123def.m3u8" controls></video>
+<video src="%PLAY_URL%/play/abc123def.m3u8" controls></video>
 
 # Record with ffmpeg
-ffmpeg -i https://play.example.com/play/abc123def/hls -c copy output.mp4
+ffmpeg -i %PLAY_URL%/play/abc123def/hls -c copy output.mp4
 ```
 
 ### JSON Response (for Custom Players)
@@ -243,7 +426,7 @@ ffmpeg -i https://play.example.com/play/abc123def/hls -c copy output.mp4
 If you need all available protocols and fallback nodes, request the full JSON response:
 
 ```bash
-curl https://play.example.com/play/{view-key}
+curl %PLAY_URL%/play/{view-key}
 ```
 
 Returns:
@@ -251,12 +434,12 @@ Returns:
 {
   "primary": {
     "node_id": "edge-7",
-    "base_url": "https://edge-7.example.com",
+    "base_url": "%EDGE_URL%",
     "protocol": "hls",
     "outputs": {
-      "HLS": {"url": "https://edge-7.example.com/hls/stream-id/index.m3u8"},
-      "DASH": {"url": "https://edge-7.example.com/cmaf/stream-id/index.mpd"},
-      "WebRTC": {"url": "https://edge-7.example.com/webrtc/stream-id"}
+      "HLS": {"url": "%EDGE_URL%/hls/stream-id/index.m3u8"},
+      "DASH": {"url": "%EDGE_URL%/cmaf/stream-id/index.mpd"},
+      "WebRTC": {"url": "%EDGE_URL%/webrtc/stream-id"}
     }
   },
   "fallbacks": [...]

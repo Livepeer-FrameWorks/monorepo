@@ -19,6 +19,7 @@ type GRPCClient struct {
 	clip    pb.ClipControlServiceClient
 	dvr     pb.DVRControlServiceClient
 	viewer  pb.ViewerControlServiceClient
+	vod     pb.VodControlServiceClient
 	logger  logging.Logger
 	timeout time.Duration
 }
@@ -90,6 +91,7 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 		clip:    pb.NewClipControlServiceClient(conn),
 		dvr:     pb.NewDVRControlServiceClient(conn),
 		viewer:  pb.NewViewerControlServiceClient(conn),
+		vod:     pb.NewVodControlServiceClient(conn),
 		logger:  config.Logger,
 		timeout: config.Timeout,
 	}, nil
@@ -128,33 +130,45 @@ func (c *GRPCClient) GetClips(ctx context.Context, tenantID string, internalName
 }
 
 // GetClip returns a specific clip by hash
-func (c *GRPCClient) GetClip(ctx context.Context, clipHash string) (*pb.ClipInfo, error) {
+func (c *GRPCClient) GetClip(ctx context.Context, clipHash string, tenantID *string) (*pb.ClipInfo, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
-	return c.clip.GetClip(ctx, &pb.GetClipRequest{
+	req := &pb.GetClipRequest{
 		ClipHash: clipHash,
-	})
+	}
+	if tenantID != nil {
+		req.TenantId = *tenantID
+	}
+	return c.clip.GetClip(ctx, req)
 }
 
 // GetClipURLs returns viewing URLs for a clip
-func (c *GRPCClient) GetClipURLs(ctx context.Context, clipHash string) (*pb.ClipViewingURLs, error) {
+func (c *GRPCClient) GetClipURLs(ctx context.Context, clipHash string, tenantID *string) (*pb.ClipViewingURLs, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
-	return c.clip.GetClipURLs(ctx, &pb.GetClipURLsRequest{
+	req := &pb.GetClipURLsRequest{
 		ClipHash: clipHash,
-	})
+	}
+	if tenantID != nil {
+		req.TenantId = *tenantID
+	}
+	return c.clip.GetClipURLs(ctx, req)
 }
 
 // DeleteClip deletes a clip
-func (c *GRPCClient) DeleteClip(ctx context.Context, clipHash string) (*pb.DeleteClipResponse, error) {
+func (c *GRPCClient) DeleteClip(ctx context.Context, clipHash string, tenantID *string) (*pb.DeleteClipResponse, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
-	return c.clip.DeleteClip(ctx, &pb.DeleteClipRequest{
+	req := &pb.DeleteClipRequest{
 		ClipHash: clipHash,
-	})
+	}
+	if tenantID != nil {
+		req.TenantId = *tenantID
+	}
+	return c.clip.DeleteClip(ctx, req)
 }
 
 // =============================================================================
@@ -181,6 +195,20 @@ func (c *GRPCClient) StopDVR(ctx context.Context, dvrHash string, tenantID *stri
 		req.TenantId = *tenantID
 	}
 	return c.dvr.StopDVR(ctx, req)
+}
+
+// DeleteDVR deletes a DVR recording and its files
+func (c *GRPCClient) DeleteDVR(ctx context.Context, dvrHash string, tenantID *string) (*pb.DeleteDVRResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+
+	req := &pb.DeleteDVRRequest{
+		DvrHash: dvrHash,
+	}
+	if tenantID != nil {
+		req.TenantId = *tenantID
+	}
+	return c.dvr.DeleteDVR(ctx, req)
 }
 
 // GetDVRStatus returns status of a DVR recording
@@ -227,4 +255,79 @@ func (c *GRPCClient) GetStreamMeta(ctx context.Context, req *pb.StreamMetaReques
 	defer cancel()
 
 	return c.viewer.GetStreamMeta(ctx, req)
+}
+
+// ResolveIngestEndpoint resolves the best ingest endpoint(s) for StreamCrafter
+func (c *GRPCClient) ResolveIngestEndpoint(ctx context.Context, streamKey string, viewerIP *string) (*pb.IngestEndpointResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+
+	return c.viewer.ResolveIngestEndpoint(ctx, &pb.IngestEndpointRequest{
+		StreamKey: streamKey,
+		ViewerIp:  viewerIP,
+	})
+}
+
+// =============================================================================
+// VOD OPERATIONS
+// =============================================================================
+
+// CreateVodUpload initiates a multipart upload and returns presigned URLs
+func (c *GRPCClient) CreateVodUpload(ctx context.Context, req *pb.CreateVodUploadRequest) (*pb.CreateVodUploadResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+
+	return c.vod.CreateVodUpload(ctx, req)
+}
+
+// CompleteVodUpload finalizes a multipart upload after all parts are uploaded
+func (c *GRPCClient) CompleteVodUpload(ctx context.Context, req *pb.CompleteVodUploadRequest) (*pb.CompleteVodUploadResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+
+	return c.vod.CompleteVodUpload(ctx, req)
+}
+
+// AbortVodUpload cancels an in-progress multipart upload
+func (c *GRPCClient) AbortVodUpload(ctx context.Context, tenantID, uploadID string) (*pb.AbortVodUploadResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+
+	return c.vod.AbortVodUpload(ctx, &pb.AbortVodUploadRequest{
+		TenantId: tenantID,
+		UploadId: uploadID,
+	})
+}
+
+// GetVodAsset returns a single VOD asset by hash
+func (c *GRPCClient) GetVodAsset(ctx context.Context, tenantID, artifactHash string) (*pb.VodAssetInfo, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+
+	return c.vod.GetVodAsset(ctx, &pb.GetVodAssetRequest{
+		TenantId:     tenantID,
+		ArtifactHash: artifactHash,
+	})
+}
+
+// ListVodAssets returns paginated list of VOD assets for a tenant
+func (c *GRPCClient) ListVodAssets(ctx context.Context, tenantID string, pagination *pb.CursorPaginationRequest) (*pb.ListVodAssetsResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+
+	return c.vod.ListVodAssets(ctx, &pb.ListVodAssetsRequest{
+		TenantId:   tenantID,
+		Pagination: pagination,
+	})
+}
+
+// DeleteVodAsset deletes a VOD asset
+func (c *GRPCClient) DeleteVodAsset(ctx context.Context, tenantID, artifactHash string) (*pb.DeleteVodAssetResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+
+	return c.vod.DeleteVodAsset(ctx, &pb.DeleteVodAssetRequest{
+		TenantId:     tenantID,
+		ArtifactHash: artifactHash,
+	})
 }

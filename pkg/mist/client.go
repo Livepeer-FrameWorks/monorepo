@@ -90,7 +90,25 @@ func (c *Client) makeAPIRequest(command map[string]interface{}) (map[string]inte
 		}
 	}
 
-	return c.callAPI(command)
+	result, err := c.callAPI(command)
+	if err != nil {
+		return nil, err
+	}
+
+	// Check if MistServer returned an auth challenge (session expired)
+	if authInfo, ok := result["authorize"].(map[string]interface{}); ok {
+		if status, ok := authInfo["status"].(string); ok && status == "CHALL" {
+			c.Logger.Debug("MistServer session expired, re-authenticating")
+			c.authenticated = false
+			if err := c.authenticate(); err != nil {
+				return nil, fmt.Errorf("re-authentication failed: %w", err)
+			}
+			// Retry the original request
+			return c.callAPI(command)
+		}
+	}
+
+	return result, nil
 }
 
 // callAPI performs a single API call without triggering authenticate()
@@ -511,8 +529,14 @@ func (c *Client) GetActiveStreams() (map[string]interface{}, error) {
 func (c *Client) GetClients() (map[string]interface{}, error) {
 	command := map[string]interface{}{
 		"clients": map[string]interface{}{
-			// Omit fields to receive all available; rely on returned "fields" array for mapping
 			"time": -5,
+			// Explicitly request fields including packet stats (pktcount, pktlost, pktretransmit)
+			// MistServer only returns these when explicitly requested
+			"fields": []string{
+				"stream", "protocol", "host", "conntime", "position",
+				"down", "up", "downbps", "upbps", "sessid",
+				"pktcount", "pktlost", "pktretransmit",
+			},
 		},
 	}
 

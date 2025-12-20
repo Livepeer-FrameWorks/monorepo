@@ -1,0 +1,52 @@
+{
+  "name": "@livepeer-frameworks/streamcrafter-svelte",
+  "version": "0.0.1",
+  "type": "module",
+  "description": "Svelte 5 stores for StreamCrafter browser streaming",
+  "svelte": "./dist/index.js",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "src"
+  ],
+  "exports": {
+    ".": {
+      "svelte": "./dist/index.js",
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./streamcrafter.css": "./src/streamcrafter.css"
+  },
+  "scripts": {
+    "build": "svelte-package -i src -o dist",
+    "build:watch": "svelte-package -i src -o dist --watch",
+    "type-check": "svelte-check"
+  },
+  "dependencies": {
+    "@livepeer-frameworks/streamcrafter-core": "workspace:*"
+  },
+  "peerDependencies": {
+    "svelte": "^5.0.0"
+  },
+  "devDependencies": {
+    "@sveltejs/package": "^2.3.7",
+    "@sveltejs/vite-plugin-svelte": "^4.0.0",
+    "svelte": "^5.33.5",
+    "svelte-check": "^4.0.0",
+    "typescript": "^5.9.2",
+    "vite": "^5.4.0"
+  },
+  "keywords": [
+    "svelte",
+    "svelte5",
+    "streaming",
+    "webcodecs",
+    "whip",
+    "webrtc",
+    "ingest"
+  ],
+  "author": "Livepeer FrameWorks",
+  "license": "Unlicense"
+}

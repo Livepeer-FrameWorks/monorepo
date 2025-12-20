@@ -345,6 +345,7 @@ func computeViteVariables(env map[string]string) error {
 	// 3. STREAMING - Pass through raw base.env values, let apps construct protocol-specific URLs
 	// Apps parse these to derive hostname and construct rtmp://, srt://, https:// URLs as needed
 	env["VITE_STREAMING_INGEST_URL"] = valueOrDefault(env, "STREAMING_INGEST_URL", "http://localhost:8080")
+	env["VITE_STREAMING_PLAY_URL"] = valueOrDefault(env, "STREAMING_PLAY_URL", "http://localhost:18008")
 	env["VITE_STREAMING_EDGE_URL"] = valueOrDefault(env, "STREAMING_EDGE_URL", "http://localhost:8080")
 
 	// Streaming ports for protocols that need explicit ports (SRT, RTMP)

@@ -8,11 +8,231 @@ import (
 	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/demo"
 	"frameworks/api_gateway/internal/middleware"
+	"frameworks/pkg/pagination"
 	pb "frameworks/pkg/proto"
 
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+// ============================================================================
+// CONNECTION RESOLVERS (Relay-style pagination)
+// ============================================================================
+
+// DoGetInvoicesConnection returns a Relay-style connection for invoices
+func (r *Resolver) DoGetInvoicesConnection(ctx context.Context, first *int, after *string, last *int, before *string) (*model.InvoicesConnection, error) {
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Demo mode: returning synthetic invoices connection")
+		invoices := demo.GenerateInvoices()
+		return r.buildInvoicesConnection(invoices, first, after), nil
+	}
+
+	var tenantID string
+	if v, ok := ctx.Value("tenant_id").(string); ok {
+		tenantID = v
+	}
+	if tenantID == "" {
+		return nil, fmt.Errorf("tenant context required")
+	}
+
+	// Build pagination request
+	paginationReq := buildBillingPaginationRequest(first, after, last, before)
+
+	r.Logger.WithField("tenant_id", tenantID).Info("Fetching invoices connection from Purser")
+
+	resp, err := r.Clients.Purser.ListInvoices(ctx, tenantID, nil, paginationReq)
+	if err != nil {
+		r.Logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to load invoices")
+		return nil, fmt.Errorf("failed to load invoices: %w", err)
+	}
+
+	// Build edges with keyset cursors
+	edges := make([]*model.InvoiceEdge, len(resp.Invoices))
+	for i, invoice := range resp.Invoices {
+		cursor := pagination.EncodeCursor(invoice.CreatedAt.AsTime(), invoice.Id)
+		edges[i] = &model.InvoiceEdge{
+			Cursor: cursor,
+			Node:   invoice,
+		}
+	}
+
+	// Build page info from response pagination
+	pageInfo := &model.PageInfo{
+		HasPreviousPage: after != nil && *after != "",
+		HasNextPage:     resp.Pagination.GetHasNextPage(),
+	}
+	if len(edges) > 0 {
+		pageInfo.StartCursor = &edges[0].Cursor
+		pageInfo.EndCursor = &edges[len(edges)-1].Cursor
+	}
+
+	return &model.InvoicesConnection{
+		Edges:      edges,
+		PageInfo:   pageInfo,
+		TotalCount: int(resp.Pagination.GetTotalCount()),
+	}, nil
+}
+
+// DoGetUsageRecordsConnection returns a Relay-style connection for usage records
+func (r *Resolver) DoGetUsageRecordsConnection(ctx context.Context, timeRange *model.TimeRangeInput, first *int, after *string, last *int, before *string) (*model.UsageRecordsConnection, error) {
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Demo mode: returning synthetic usage records connection")
+		records := demo.GenerateUsageRecords()
+		return r.buildUsageRecordsConnection(records, first, after), nil
+	}
+
+	var tenantID string
+	if v, ok := ctx.Value("tenant_id").(string); ok {
+		tenantID = v
+	}
+	if tenantID == "" {
+		return nil, fmt.Errorf("tenant context required")
+	}
+
+	// Determine billing month from time range
+	var billingMonth string
+	if timeRange != nil {
+		billingMonth = timeRange.Start.Format("2006-01")
+	} else {
+		billingMonth = time.Now().Format("2006-01")
+	}
+
+	// Build pagination request
+	paginationReq := buildBillingPaginationRequest(first, after, last, before)
+
+	r.Logger.WithField("tenant_id", tenantID).Info("Fetching usage records connection from Purser")
+
+	resp, err := r.Clients.Purser.GetUsageRecords(ctx, tenantID, "", "", billingMonth, paginationReq)
+	if err != nil {
+		r.Logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to load usage records")
+		return nil, fmt.Errorf("failed to load usage records: %w", err)
+	}
+
+	// Build edges with keyset cursors
+	edges := make([]*model.UsageRecordEdge, len(resp.UsageRecords))
+	for i, record := range resp.UsageRecords {
+		cursor := pagination.EncodeCursor(record.CreatedAt.AsTime(), record.Id)
+		edges[i] = &model.UsageRecordEdge{
+			Cursor: cursor,
+			Node:   record,
+		}
+	}
+
+	// Build page info from response pagination
+	pageInfo := &model.PageInfo{
+		HasPreviousPage: after != nil && *after != "",
+		HasNextPage:     resp.Pagination.GetHasNextPage(),
+	}
+	if len(edges) > 0 {
+		pageInfo.StartCursor = &edges[0].Cursor
+		pageInfo.EndCursor = &edges[len(edges)-1].Cursor
+	}
+
+	return &model.UsageRecordsConnection{
+		Edges:      edges,
+		PageInfo:   pageInfo,
+		TotalCount: int(resp.Pagination.GetTotalCount()),
+	}, nil
+}
+
+// buildBillingPaginationRequest creates a proto pagination request from GraphQL params
+func buildBillingPaginationRequest(first *int, after *string, last *int, before *string) *pb.CursorPaginationRequest {
+	req := &pb.CursorPaginationRequest{}
+
+	if first != nil {
+		limit := pagination.ClampLimit(*first)
+		req.First = int32(limit)
+	} else if last == nil {
+		req.First = int32(pagination.DefaultLimit)
+	}
+
+	if after != nil && *after != "" {
+		req.After = after
+	}
+
+	if last != nil {
+		limit := pagination.ClampLimit(*last)
+		req.Last = int32(limit)
+	}
+
+	if before != nil && *before != "" {
+		req.Before = before
+	}
+
+	return req
+}
+
+// buildInvoicesConnection is a helper for demo mode
+func (r *Resolver) buildInvoicesConnection(invoices []*pb.Invoice, first *int, after *string) *model.InvoicesConnection {
+	limit := pagination.DefaultLimit
+	if first != nil {
+		limit = pagination.ClampLimit(*first)
+	}
+
+	if len(invoices) > limit {
+		invoices = invoices[:limit]
+	}
+
+	edges := make([]*model.InvoiceEdge, len(invoices))
+	for i, invoice := range invoices {
+		cursor := pagination.EncodeCursor(invoice.CreatedAt.AsTime(), invoice.Id)
+		edges[i] = &model.InvoiceEdge{
+			Cursor: cursor,
+			Node:   invoice,
+		}
+	}
+
+	pageInfo := &model.PageInfo{
+		HasPreviousPage: after != nil && *after != "",
+		HasNextPage:     false,
+	}
+	if len(edges) > 0 {
+		pageInfo.StartCursor = &edges[0].Cursor
+		pageInfo.EndCursor = &edges[len(edges)-1].Cursor
+	}
+
+	return &model.InvoicesConnection{
+		Edges:      edges,
+		PageInfo:   pageInfo,
+		TotalCount: len(invoices),
+	}
+}
+
+// buildUsageRecordsConnection is a helper for demo mode
+func (r *Resolver) buildUsageRecordsConnection(records []*pb.UsageRecord, first *int, after *string) *model.UsageRecordsConnection {
+	limit := pagination.DefaultLimit
+	if first != nil {
+		limit = pagination.ClampLimit(*first)
+	}
+
+	if len(records) > limit {
+		records = records[:limit]
+	}
+
+	edges := make([]*model.UsageRecordEdge, len(records))
+	for i, record := range records {
+		cursor := pagination.EncodeCursor(record.CreatedAt.AsTime(), record.Id)
+		edges[i] = &model.UsageRecordEdge{
+			Cursor: cursor,
+			Node:   record,
+		}
+	}
+
+	pageInfo := &model.PageInfo{
+		HasPreviousPage: after != nil && *after != "",
+		HasNextPage:     false,
+	}
+	if len(edges) > 0 {
+		pageInfo.StartCursor = &edges[0].Cursor
+		pageInfo.EndCursor = &edges[len(edges)-1].Cursor
+	}
+
+	return &model.UsageRecordsConnection{
+		Edges:      edges,
+		PageInfo:   pageInfo,
+		TotalCount: len(records),
+	}
+}
 
 // DoGetBillingTiers returns available billing tiers
 func (r *Resolver) DoGetBillingTiers(ctx context.Context) ([]*pb.BillingTier, error) {
@@ -44,8 +264,11 @@ func (r *Resolver) DoGetInvoices(ctx context.Context) ([]*pb.Invoice, error) {
 		return demo.GenerateInvoices(), nil
 	}
 
-	tenantID, ok := ctx.Value("tenant_id").(string)
-	if !ok {
+	var tenantID string
+	if v, ok := ctx.Value("tenant_id").(string); ok {
+		tenantID = v
+	}
+	if tenantID == "" {
 		return nil, fmt.Errorf("tenant context required")
 	}
 
@@ -67,8 +290,11 @@ func (r *Resolver) DoGetInvoices(ctx context.Context) ([]*pb.Invoice, error) {
 
 // DoGetInvoice returns a specific invoice by ID
 func (r *Resolver) DoGetInvoice(ctx context.Context, id string) (*pb.Invoice, error) {
-	tenantID, ok := ctx.Value("tenant_id").(string)
-	if !ok {
+	var tenantID string
+	if v, ok := ctx.Value("tenant_id").(string); ok {
+		tenantID = v
+	}
+	if tenantID == "" {
 		return nil, fmt.Errorf("tenant context required")
 	}
 
@@ -95,8 +321,11 @@ func (r *Resolver) DoGetBillingStatus(ctx context.Context) (*pb.BillingStatusRes
 		return demo.GenerateBillingStatus(), nil
 	}
 
-	tenantID, ok := ctx.Value("tenant_id").(string)
-	if !ok {
+	var tenantID string
+	if v, ok := ctx.Value("tenant_id").(string); ok {
+		tenantID = v
+	}
+	if tenantID == "" {
 		return nil, fmt.Errorf("tenant context required")
 	}
 
@@ -149,8 +378,11 @@ func (r *Resolver) DoGetTenantUsage(ctx context.Context, timeRange *model.TimeRa
 		}, nil
 	}
 
-	tenantID, ok := ctx.Value("tenant_id").(string)
-	if !ok {
+	var tenantID string
+	if v, ok := ctx.Value("tenant_id").(string); ok {
+		tenantID = v
+	}
+	if tenantID == "" {
 		return nil, fmt.Errorf("tenant context required")
 	}
 
@@ -208,8 +440,11 @@ func (r *Resolver) DoGetUsageRecords(ctx context.Context, timeRange *model.TimeR
 		return demo.GenerateUsageRecords(), nil
 	}
 
-	tenantID, ok := ctx.Value("tenant_id").(string)
-	if !ok {
+	var tenantID string
+	if v, ok := ctx.Value("tenant_id").(string); ok {
+		tenantID = v
+	}
+	if tenantID == "" {
 		return nil, fmt.Errorf("tenant context required")
 	}
 
@@ -292,8 +527,11 @@ func (r *Resolver) DoCreatePayment(ctx context.Context, input model.CreatePaymen
 		}, nil
 	}
 
-	tenantID, ok := ctx.Value("tenant_id").(string)
-	if !ok {
+	var tenantID string
+	if v, ok := ctx.Value("tenant_id").(string); ok {
+		tenantID = v
+	}
+	if tenantID == "" {
 		return nil, fmt.Errorf("tenant context required")
 	}
 

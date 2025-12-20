@@ -1,3 +1,5 @@
+# Fetch paginated service instances with filtering by cluster, node, and status
+# Returns running service instances with health and process details
 query GetServiceInstancesConnection(
   $clusterId: String
   $nodeId: String

@@ -38,6 +38,17 @@ const gqlModules = import.meta.glob("/src/lib/houdini/**/*.gql", {
 // Cache for loaded templates
 let cachedTemplates: TemplateGroups | null = null;
 
+// Cache for fragment definitions (name -> raw content)
+let fragmentDefinitions: Map<string, string> = new Map();
+
+// Clear cache on HMR to pick up changes
+if (import.meta.hot) {
+  import.meta.hot.accept(() => {
+    cachedTemplates = null;
+    fragmentDefinitions.clear();
+  });
+}
+
 /**
  * Load all .gql templates from the Houdini directory
  * Results are cached after first load
@@ -98,6 +109,34 @@ export async function loadAllTemplates(): Promise<TemplateGroups> {
     }
   }
 
+  // Build fragment definitions map for resolving spreads
+  fragmentDefinitions.clear();
+  for (const fragment of groups.fragments) {
+    // Extract fragment name - handle leading whitespace/comments
+    const nameMatch = fragment.query.match(/fragment\s+(\w+)/);
+    if (nameMatch) {
+      fragmentDefinitions.set(nameMatch[1], fragment.query.trim());
+    }
+  }
+
+  if (import.meta.env.DEV) {
+    console.log(
+      `[templateLoader] Loaded ${groups.fragments.length} fragments, ${fragmentDefinitions.size} parsed:`,
+      [...fragmentDefinitions.keys()],
+    );
+  }
+
+  // Resolve fragment spreads in queries and mutations
+  for (const query of groups.queries) {
+    query.query = resolveFragmentSpreads(query.query);
+  }
+  for (const mutation of groups.mutations) {
+    mutation.query = resolveFragmentSpreads(mutation.query);
+  }
+  for (const subscription of groups.subscriptions) {
+    subscription.query = resolveFragmentSpreads(subscription.query);
+  }
+
   // Sort each group alphabetically by name
   groups.queries.sort((a, b) => a.name.localeCompare(b.name));
   groups.mutations.sort((a, b) => a.name.localeCompare(b.name));
@@ -106,6 +145,52 @@ export async function loadAllTemplates(): Promise<TemplateGroups> {
 
   cachedTemplates = groups;
   return groups;
+}
+
+/**
+ * Resolve all fragment spreads in a query by appending their definitions
+ * Handles nested fragments (fragments that spread other fragments)
+ */
+function resolveFragmentSpreads(query: string): string {
+  // Find all fragment spreads: ...FragmentName (but not on __typename lines)
+  const spreadPattern = /\.\.\.(\w+)(?!\s*on\s)/g;
+  const spreads = [...query.matchAll(spreadPattern)];
+
+  if (spreads.length === 0) {
+    return query;
+  }
+
+  // Collect all required fragments (including nested)
+  const required = new Set<string>();
+  const toProcess = spreads.map((m) => m[1]);
+
+  while (toProcess.length > 0) {
+    const name = toProcess.pop()!;
+    if (required.has(name)) continue;
+
+    const definition = fragmentDefinitions.get(name);
+    if (definition) {
+      required.add(name);
+      // Check for nested fragment spreads in this definition
+      const nested = [...definition.matchAll(spreadPattern)];
+      for (const match of nested) {
+        if (!required.has(match[1])) {
+          toProcess.push(match[1]);
+        }
+      }
+    }
+  }
+
+  // Append all required fragment definitions
+  let result = query;
+  for (const name of required) {
+    const def = fragmentDefinitions.get(name);
+    if (def) {
+      result += "\n\n" + def;
+    }
+  }
+
+  return result;
 }
 
 /**
@@ -198,4 +283,5 @@ export async function getTemplatesByType(
  */
 export function clearTemplateCache(): void {
   cachedTemplates = null;
+  fragmentDefinitions.clear();
 }

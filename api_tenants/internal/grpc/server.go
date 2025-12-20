@@ -291,10 +291,10 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *pb.Get
 				// For now, we'll just log a warning if limits are configured.
 				if currentTenantStreams >= int(maxStreams) {
 					s.logger.WithFields(logging.Fields{
-						"tenant_id":        tenantID,
-						"cluster_id":       primaryClusterID,
-						"max_streams":      maxStreams,
-						"current_streams":  currentTenantStreams,
+						"tenant_id":       tenantID,
+						"cluster_id":      primaryClusterID,
+						"max_streams":     maxStreams,
+						"current_streams": currentTenantStreams,
 					}).Warn("Tenant approaching stream limit")
 				}
 			}
@@ -304,9 +304,9 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *pb.Get
 				// If tenant has bandwidth limit and would exceed it, warn
 				// Full enforcement would require tracking per-tenant bandwidth usage
 				s.logger.WithFields(logging.Fields{
-					"tenant_id":         tenantID,
-					"max_bandwidth":     maxBandwidth,
-					"estimated_mbps":    estimatedMbps,
+					"tenant_id":      tenantID,
+					"max_bandwidth":  maxBandwidth,
+					"estimated_mbps": estimatedMbps,
 				}).Debug("Tenant has bandwidth limit configured")
 			}
 		}
@@ -322,8 +322,10 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 		return nil, status.Error(codes.InvalidArgument, "type required")
 	}
 
-	// 1. Resolve cluster from token or fallback
+	// 1. Resolve cluster from token, request, or fallback (single cluster only)
 	var clusterID string
+	var tokenBoundClusterID string
+
 	token := req.GetToken()
 	if token != "" {
 		var kind string
@@ -332,7 +334,7 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 			SELECT kind, COALESCE(cluster_id, ''), expires_at
 			FROM quartermaster.bootstrap_tokens
 			WHERE token = $1 AND used_at IS NULL
-		`, token).Scan(&kind, &clusterID, &expiresAt)
+		`, token).Scan(&kind, &tokenBoundClusterID, &expiresAt)
 		if err == sql.ErrNoRows || kind != "service" || time.Now().After(expiresAt) {
 			return nil, status.Error(codes.Unauthenticated, "invalid bootstrap token")
 		}
@@ -344,15 +346,58 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 		`, token)
 	}
 
-	// Fallback: pick any active cluster
-	if clusterID == "" {
+	// Priority: token-bound cluster > request cluster_id > single active cluster fallback
+	requestClusterID := req.GetClusterId()
+
+	if tokenBoundClusterID != "" {
+		// Token is bound to a cluster - use it (and validate request match if provided)
+		if requestClusterID != "" && requestClusterID != tokenBoundClusterID {
+			return nil, status.Errorf(codes.InvalidArgument, "request cluster_id '%s' does not match token-bound cluster '%s'", requestClusterID, tokenBoundClusterID)
+		}
+		clusterID = tokenBoundClusterID
+	} else if requestClusterID != "" {
+		// No token-bound cluster, but request provides cluster_id - validate it exists and is active
+		var isActive bool
 		err := s.db.QueryRowContext(ctx, `
-			SELECT cluster_id FROM quartermaster.infrastructure_clusters
-			WHERE is_active = true ORDER BY cluster_name LIMIT 1
-		`).Scan(&clusterID)
-		if err != nil || clusterID == "" {
+			SELECT is_active FROM quartermaster.infrastructure_clusters WHERE cluster_id = $1
+		`, requestClusterID).Scan(&isActive)
+		if err == sql.ErrNoRows {
+			return nil, status.Errorf(codes.NotFound, "cluster '%s' not found", requestClusterID)
+		}
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "database error: %v", err)
+		}
+		if !isActive {
+			return nil, status.Errorf(codes.FailedPrecondition, "cluster '%s' is not active", requestClusterID)
+		}
+		clusterID = requestClusterID
+	} else {
+		// No token-bound cluster and no request cluster_id
+		// Fallback: only allow if exactly 1 active cluster exists (dev convenience)
+		var activeClusters []string
+		rows, err := s.db.QueryContext(ctx, `
+			SELECT cluster_id FROM quartermaster.infrastructure_clusters WHERE is_active = true
+		`)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "database error: %v", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var cid string
+			if err := rows.Scan(&cid); err != nil {
+				return nil, status.Errorf(codes.Internal, "database error: %v", err)
+			}
+			activeClusters = append(activeClusters, cid)
+		}
+		if len(activeClusters) == 0 {
 			return nil, status.Error(codes.Unavailable, "no active cluster available")
 		}
+		if len(activeClusters) > 1 {
+			return nil, status.Errorf(codes.InvalidArgument, "cluster_id required: multiple active clusters exist (%d)", len(activeClusters))
+		}
+		// Exactly 1 active cluster - use it (dev/single-cluster convenience)
+		clusterID = activeClusters[0]
+		s.logger.WithField("cluster_id", clusterID).Debug("Auto-selected single active cluster for bootstrap")
 	}
 
 	// 2. Get or create service record by name (service_id = name for simplicity)
@@ -450,11 +495,21 @@ func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *pb.Boot
 		  )
 	`, serviceID, clusterID, instanceID, advHost, proto, port)
 
-	return &pb.BootstrapServiceResponse{
+	// 7. Look up cluster owner tenant for dual-tenant attribution
+	var ownerTenantID sql.NullString
+	_ = s.db.QueryRowContext(ctx, `
+		SELECT owner_tenant_id FROM quartermaster.infrastructure_clusters WHERE cluster_id = $1
+	`, clusterID).Scan(&ownerTenantID)
+
+	resp := &pb.BootstrapServiceResponse{
 		ServiceId:  serviceID,
 		InstanceId: instanceID,
 		ClusterId:  clusterID,
-	}, nil
+	}
+	if ownerTenantID.Valid && ownerTenantID.String != "" {
+		resp.OwnerTenantId = &ownerTenantID.String
+	}
+	return resp, nil
 }
 
 // GetNodeOwner returns the owner tenant for a node
@@ -1301,12 +1356,13 @@ func (s *QuartermasterServer) ListClusters(ctx context.Context, req *pb.ListClus
 	}
 
 	// Build main query with keyset pagination
+	// NOTE: Column order must match scanCluster() exactly!
 	query := fmt.Sprintf(`
 		SELECT c.id, c.cluster_id, c.cluster_name, c.cluster_type, c.owner_tenant_id, c.deployment_model,
 		       c.base_url, c.database_url, c.periscope_url, c.kafka_brokers,
 		       c.max_concurrent_streams, c.max_concurrent_viewers, c.max_bandwidth_mbps,
 		       c.current_stream_count, c.current_viewer_count, c.current_bandwidth_mbps,
-		       c.health_status, c.is_active, c.created_at, c.updated_at, c.is_default_cluster
+		       c.health_status, c.is_active, c.is_default_cluster, c.created_at, c.updated_at
 		FROM quartermaster.infrastructure_clusters c
 		%s %s
 		%s
@@ -1705,7 +1761,9 @@ func (s *QuartermasterServer) UnsubscribeFromCluster(ctx context.Context, req *p
 // ListMySubscriptions lists clusters the tenant is subscribed to
 func (s *QuartermasterServer) ListMySubscriptions(ctx context.Context, req *pb.ListMySubscriptionsRequest) (*pb.ListClustersResponse, error) {
 	tenantID := middleware.GetTenantID(ctx)
+	s.logger.WithField("tenant_id", tenantID).Info("ListMySubscriptions: called")
 	if tenantID == "" {
+		s.logger.Warn("ListMySubscriptions: tenant_id is empty - rejecting")
 		return nil, status.Error(codes.Unauthenticated, "tenant_id required")
 	}
 
@@ -1733,8 +1791,13 @@ func (s *QuartermasterServer) ListMySubscriptions(ctx context.Context, req *pb.L
 	var total int32
 	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM quartermaster.infrastructure_clusters c %s`, baseWhere)
 	if err := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+		s.logger.WithError(err).WithField("tenant_id", tenantID).Error("ListMySubscriptions: count query failed")
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
+	s.logger.WithFields(map[string]interface{}{
+		"tenant_id":   tenantID,
+		"total_count": total,
+	}).Info("ListMySubscriptions: found subscribed clusters")
 
 	// Add keyset condition
 	where := baseWhere
@@ -1743,12 +1806,13 @@ func (s *QuartermasterServer) ListMySubscriptions(ctx context.Context, req *pb.L
 		args = append(args, cursorArgs...)
 	}
 
+	// NOTE: Column order must match scanCluster() exactly!
 	query := fmt.Sprintf(`
 		SELECT c.id, c.cluster_id, c.cluster_name, c.cluster_type, c.owner_tenant_id, c.deployment_model,
 		       c.base_url, c.database_url, c.periscope_url, c.kafka_brokers,
 		       c.max_concurrent_streams, c.max_concurrent_viewers, c.max_bandwidth_mbps,
 		       c.current_stream_count, c.current_viewer_count, c.current_bandwidth_mbps,
-		       c.health_status, c.is_active, c.created_at, c.updated_at, c.is_default_cluster
+		       c.health_status, c.is_active, c.is_default_cluster, c.created_at, c.updated_at
 		FROM quartermaster.infrastructure_clusters c
 		%s
 		%s
@@ -1793,7 +1857,7 @@ func (s *QuartermasterServer) ListMySubscriptions(ctx context.Context, req *pb.L
 	}
 
 	return &pb.ListClustersResponse{
-		Clusters: clusters,
+		Clusters:   clusters,
 		Pagination: pagination.BuildResponse(resultsLen, params.Limit, params.Direction, int32(len(clusters)), startCursor, endCursor),
 	}, nil
 }
@@ -1811,6 +1875,65 @@ func (s *QuartermasterServer) GetNode(ctx context.Context, req *pb.GetNodeReques
 	}
 
 	return &pb.NodeResponse{Node: node}, nil
+}
+
+// GetNodeByLogicalName resolves a node by its logical name (node_id string like "edge-node-1")
+// Used by Foghorn to get the database UUID for subscription enrichment
+func (s *QuartermasterServer) GetNodeByLogicalName(ctx context.Context, req *pb.GetNodeByLogicalNameRequest) (*pb.NodeResponse, error) {
+	nodeID := req.GetNodeId()
+	if nodeID == "" {
+		return nil, status.Error(codes.InvalidArgument, "node_id required")
+	}
+
+	node, err := s.queryNode(ctx, nodeID)
+	if err != nil {
+		return nil, err
+	}
+
+	return &pb.NodeResponse{Node: node}, nil
+}
+
+// UpdateNodeHardware updates the hardware specs for a node (detected at startup by Helmsman)
+// Called by Foghorn when processing Register message with hardware info
+func (s *QuartermasterServer) UpdateNodeHardware(ctx context.Context, req *pb.UpdateNodeHardwareRequest) (*emptypb.Empty, error) {
+	nodeID := req.GetNodeId()
+	if nodeID == "" {
+		return nil, status.Error(codes.InvalidArgument, "node_id required")
+	}
+
+	// Update hardware specs and last_heartbeat timestamp
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE quartermaster.infrastructure_nodes
+		SET cpu_cores = COALESCE($2, cpu_cores),
+		    memory_gb = COALESCE($3, memory_gb),
+		    disk_gb = COALESCE($4, disk_gb),
+		    last_heartbeat = NOW(),
+		    updated_at = NOW()
+		WHERE node_id = $1`,
+		nodeID, req.CpuCores, req.MemoryGb, req.DiskGb)
+	if err != nil {
+		s.logger.WithFields(logging.Fields{
+			"node_id": nodeID,
+			"error":   err,
+		}).Error("Failed to update node hardware specs")
+		return nil, status.Errorf(codes.Internal, "failed to update hardware specs: %v", err)
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		// Node not found - this is OK, it might not be enrolled yet
+		s.logger.WithField("node_id", nodeID).Debug("Node not found for hardware update (may not be enrolled yet)")
+		return &emptypb.Empty{}, nil
+	}
+
+	s.logger.WithFields(logging.Fields{
+		"node_id":   nodeID,
+		"cpu_cores": req.GetCpuCores(),
+		"memory_gb": req.GetMemoryGb(),
+		"disk_gb":   req.GetDiskGb(),
+	}).Debug("Updated node hardware specs")
+
+	return &emptypb.Empty{}, nil
 }
 
 // ListNodes returns nodes with optional filters
@@ -2234,9 +2357,22 @@ func (s *QuartermasterServer) BootstrapEdgeNode(ctx context.Context, req *pb.Boo
 		return nil, status.Error(codes.InvalidArgument, "token missing tenant_id")
 	}
 
-	// Cluster fallback: if no cluster specified, pick any active cluster
-	resolvedClusterID := clusterID.String
+	// Cluster enforcement: if token has a cluster_id binding, validate against target
+	targetClusterID := req.GetTargetClusterId()
+	tokenClusterID := clusterID.String
+
+	if tokenClusterID != "" && targetClusterID != "" && tokenClusterID != targetClusterID {
+		return nil, status.Errorf(codes.PermissionDenied,
+			"token is bound to cluster %s, cannot use for cluster %s", tokenClusterID, targetClusterID)
+	}
+
+	// Cluster resolution priority: token binding > request target > fallback
+	resolvedClusterID := tokenClusterID
 	if resolvedClusterID == "" {
+		resolvedClusterID = targetClusterID
+	}
+	if resolvedClusterID == "" {
+		// Fallback: pick any active cluster
 		err = s.db.QueryRowContext(ctx, `
 			SELECT cluster_id FROM quartermaster.infrastructure_clusters
 			WHERE is_active = true
@@ -3216,12 +3352,15 @@ func scanNode(rows *sql.Rows) (*pb.InfrastructureNode, error) {
 }
 
 func (s *QuartermasterServer) queryCluster(ctx context.Context, clusterID string) (*pb.InfrastructureCluster, error) {
+	// Note: pricing_model, monthly_price_cents, required_billing_tier now in Purser
+	// Column order must match the Scan() call below!
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, cluster_id, cluster_name, cluster_type, owner_tenant_id, deployment_model,
 		       base_url, database_url, periscope_url, kafka_brokers,
 		       max_concurrent_streams, max_concurrent_viewers, max_bandwidth_mbps,
 		       current_stream_count, current_viewer_count, current_bandwidth_mbps,
-		       health_status, is_active, created_at, updated_at, is_default_cluster
+		       health_status, is_active, is_default_cluster, created_at, updated_at,
+		       visibility, requires_approval, short_description, long_description, is_platform_cluster
 		FROM quartermaster.infrastructure_clusters
 		WHERE cluster_id = $1
 	`, clusterID)
@@ -3230,6 +3369,10 @@ func (s *QuartermasterServer) queryCluster(ctx context.Context, clusterID string
 	var ownerTenantID, databaseURL, periscopeURL sql.NullString
 	var kafkaBrokers []string
 	var createdAt, updatedAt time.Time
+	// Marketplace fields (pricing now in Purser)
+	var visibility string
+	var shortDescription, longDescription sql.NullString
+	var requiresApproval, isPlatformCluster bool
 
 	err := row.Scan(
 		&cluster.Id, &cluster.ClusterId, &cluster.ClusterName, &cluster.ClusterType,
@@ -3238,6 +3381,7 @@ func (s *QuartermasterServer) queryCluster(ctx context.Context, clusterID string
 		&cluster.MaxBandwidthMbps, &cluster.CurrentStreamCount, &cluster.CurrentViewerCount,
 		&cluster.CurrentBandwidthMbps, &cluster.HealthStatus, &cluster.IsActive, &cluster.IsDefaultCluster,
 		&createdAt, &updatedAt,
+		&visibility, &requiresApproval, &shortDescription, &longDescription, &isPlatformCluster,
 	)
 	if err == sql.ErrNoRows {
 		return nil, status.Error(codes.NotFound, "cluster not found")
@@ -3259,7 +3403,80 @@ func (s *QuartermasterServer) queryCluster(ctx context.Context, clusterID string
 	cluster.CreatedAt = timestamppb.New(createdAt)
 	cluster.UpdatedAt = timestamppb.New(updatedAt)
 
+	// Set marketplace fields (pricing now in Purser)
+	cluster.Visibility = visibilityStringToProto(visibility)
+	cluster.RequiresApproval = requiresApproval
+	if shortDescription.Valid {
+		cluster.ShortDescription = &shortDescription.String
+	}
+	if longDescription.Valid {
+		cluster.LongDescription = &longDescription.String
+	}
+	cluster.IsPlatformCluster = isPlatformCluster
+
 	return &cluster, nil
+}
+
+// visibilityStringToProto converts DB string to proto enum
+func visibilityStringToProto(s string) pb.ClusterVisibility {
+	switch s {
+	case "public":
+		return pb.ClusterVisibility_CLUSTER_VISIBILITY_PUBLIC
+	case "unlisted":
+		return pb.ClusterVisibility_CLUSTER_VISIBILITY_UNLISTED
+	case "private":
+		return pb.ClusterVisibility_CLUSTER_VISIBILITY_PRIVATE
+	default:
+		return pb.ClusterVisibility_CLUSTER_VISIBILITY_PRIVATE
+	}
+}
+
+// visibilityProtoToString converts proto enum to DB string
+func visibilityProtoToString(v pb.ClusterVisibility) string {
+	switch v {
+	case pb.ClusterVisibility_CLUSTER_VISIBILITY_PUBLIC:
+		return "public"
+	case pb.ClusterVisibility_CLUSTER_VISIBILITY_UNLISTED:
+		return "unlisted"
+	case pb.ClusterVisibility_CLUSTER_VISIBILITY_PRIVATE:
+		return "private"
+	default:
+		return "private"
+	}
+}
+
+// Note: Pricing model helpers moved to Purser service
+
+// subscriptionStatusStringToProto converts DB string to proto enum
+func subscriptionStatusStringToProto(s string) pb.ClusterSubscriptionStatus {
+	switch s {
+	case "pending_approval":
+		return pb.ClusterSubscriptionStatus_SUBSCRIPTION_STATUS_PENDING_APPROVAL
+	case "active":
+		return pb.ClusterSubscriptionStatus_SUBSCRIPTION_STATUS_ACTIVE
+	case "suspended":
+		return pb.ClusterSubscriptionStatus_SUBSCRIPTION_STATUS_SUSPENDED
+	case "rejected":
+		return pb.ClusterSubscriptionStatus_SUBSCRIPTION_STATUS_REJECTED
+	default:
+		return pb.ClusterSubscriptionStatus_SUBSCRIPTION_STATUS_UNSPECIFIED
+	}
+}
+
+// subscriptionStatusProtoToString converts proto enum to DB string
+func subscriptionStatusProtoToString(s pb.ClusterSubscriptionStatus) string {
+	switch s {
+	case pb.ClusterSubscriptionStatus_SUBSCRIPTION_STATUS_PENDING_APPROVAL:
+		return "pending_approval"
+	case pb.ClusterSubscriptionStatus_SUBSCRIPTION_STATUS_ACTIVE:
+		return "active"
+	case pb.ClusterSubscriptionStatus_SUBSCRIPTION_STATUS_SUSPENDED:
+		return "suspended"
+	case pb.ClusterSubscriptionStatus_SUBSCRIPTION_STATUS_REJECTED:
+		return "rejected"
+	default:
+		return "active"
+	}
 }
 
 func (s *QuartermasterServer) queryNode(ctx context.Context, nodeID string) (*pb.InfrastructureNode, error) {
@@ -3338,6 +3555,1111 @@ func generateSecureToken(n int) string {
 	b := make([]byte, n)
 	rand.Read(b)
 	return hex.EncodeToString(b)
+}
+
+// ============================================================================
+// CLUSTER MARKETPLACE RPCs
+// ============================================================================
+
+// ListMarketplaceClusters returns clusters visible to the requesting tenant
+func (s *QuartermasterServer) ListMarketplaceClusters(ctx context.Context, req *pb.ListMarketplaceClustersRequest) (*pb.ListMarketplaceClustersResponse, error) {
+	tenantID := req.GetTenantId()
+	if tenantID == "" {
+		tenantID = middleware.GetTenantID(ctx)
+	}
+	if tenantID == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	}
+
+	// Build query with visibility filtering
+	// Public clusters visible to all, unlisted visible to subscribers, private only to owner
+	// Note: Pricing fields are fetched from Purser, not Quartermaster
+	query := `
+		SELECT c.cluster_id, c.cluster_name, c.short_description, c.visibility, c.requires_approval,
+		       c.max_concurrent_streams, c.max_concurrent_viewers, c.is_platform_cluster,
+		       c.current_stream_count, c.max_concurrent_streams,
+		       t.name as owner_name,
+		       COALESCE(a.subscription_status, '') as subscription_status,
+		       CASE WHEN a.id IS NOT NULL AND a.is_active THEN true ELSE false END as is_subscribed
+		FROM quartermaster.infrastructure_clusters c
+		LEFT JOIN quartermaster.tenants t ON c.owner_tenant_id = t.id
+		LEFT JOIN quartermaster.tenant_cluster_access a ON c.cluster_id = a.cluster_id AND a.tenant_id = $1
+		WHERE c.is_active = true
+		  AND (
+		      c.visibility = 'public'
+		      OR c.owner_tenant_id = $1
+		      OR (c.visibility = 'unlisted' AND a.id IS NOT NULL)
+		      OR (c.visibility = 'private' AND a.id IS NOT NULL)
+		  )
+	`
+
+	args := []interface{}{tenantID}
+
+	query += " ORDER BY c.is_platform_cluster DESC, c.cluster_name ASC"
+
+	// Apply pagination
+	var limit int32 = 50
+	if req.GetPagination() != nil && req.GetPagination().GetFirst() > 0 {
+		limit = req.GetPagination().GetFirst()
+	}
+	query += fmt.Sprintf(" LIMIT %d", limit+1) // +1 to check if there's more
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	defer rows.Close()
+
+	var clusters []*pb.MarketplaceClusterEntry
+	for rows.Next() {
+		var entry pb.MarketplaceClusterEntry
+		var visibility string
+		var ownerName, shortDesc, subscriptionStatus sql.NullString
+		var currentStreams, maxStreams int32
+
+		if err := rows.Scan(
+			&entry.ClusterId, &entry.ClusterName, &shortDesc, &visibility, &entry.RequiresApproval,
+			&entry.MaxConcurrentStreams, &entry.MaxConcurrentViewers, &entry.IsPlatformCluster,
+			&currentStreams, &maxStreams,
+			&ownerName, &subscriptionStatus, &entry.IsSubscribed,
+		); err != nil {
+			continue
+		}
+
+		entry.Visibility = visibilityStringToProto(visibility)
+		if shortDesc.Valid {
+			entry.ShortDescription = &shortDesc.String
+		}
+		if ownerName.Valid {
+			entry.OwnerName = &ownerName.String
+		}
+		if subscriptionStatus.Valid && subscriptionStatus.String != "" {
+			entry.SubscriptionStatus = subscriptionStatusStringToProto(subscriptionStatus.String)
+		}
+
+		// Calculate utilization percentage
+		if maxStreams > 0 {
+			utilization := float64(currentStreams) / float64(maxStreams) * 100
+			entry.CurrentUtilization = &utilization
+		}
+
+		clusters = append(clusters, &entry)
+	}
+
+	// Build response with pagination info
+	resp := &pb.ListMarketplaceClustersResponse{
+		Clusters: clusters,
+	}
+
+	// Check if there are more results
+	if int32(len(clusters)) > limit {
+		resp.Clusters = clusters[:limit]
+		resp.Pagination = &pb.CursorPaginationResponse{
+			HasNextPage: true,
+		}
+	}
+
+	return resp, nil
+}
+
+// GetMarketplaceCluster returns a single marketplace cluster entry
+func (s *QuartermasterServer) GetMarketplaceCluster(ctx context.Context, req *pb.GetMarketplaceClusterRequest) (*pb.MarketplaceClusterEntry, error) {
+	clusterID := req.GetClusterId()
+	if clusterID == "" {
+		return nil, status.Error(codes.InvalidArgument, "cluster_id required")
+	}
+
+	tenantID := req.GetTenantId()
+	if tenantID == "" {
+		tenantID = middleware.GetTenantID(ctx)
+	}
+
+	// Note: Pricing fields are fetched from Purser, not Quartermaster
+	row := s.db.QueryRowContext(ctx, `
+		SELECT c.cluster_id, c.cluster_name, c.short_description, c.visibility, c.requires_approval,
+		       c.max_concurrent_streams, c.max_concurrent_viewers, c.is_platform_cluster,
+		       c.current_stream_count, c.max_concurrent_streams,
+		       t.name as owner_name,
+		       COALESCE(a.subscription_status, '') as subscription_status,
+		       CASE WHEN a.id IS NOT NULL AND a.is_active THEN true ELSE false END as is_subscribed
+		FROM quartermaster.infrastructure_clusters c
+		LEFT JOIN quartermaster.tenants t ON c.owner_tenant_id = t.id
+		LEFT JOIN quartermaster.tenant_cluster_access a ON c.cluster_id = a.cluster_id AND a.tenant_id = $2
+		WHERE c.cluster_id = $1 AND c.is_active = true
+	`, clusterID, tenantID)
+
+	var entry pb.MarketplaceClusterEntry
+	var visibility string
+	var ownerName, shortDesc, subscriptionStatus sql.NullString
+	var currentStreams, maxStreams int32
+
+	err := row.Scan(
+		&entry.ClusterId, &entry.ClusterName, &shortDesc, &visibility, &entry.RequiresApproval,
+		&entry.MaxConcurrentStreams, &entry.MaxConcurrentViewers, &entry.IsPlatformCluster,
+		&currentStreams, &maxStreams,
+		&ownerName, &subscriptionStatus, &entry.IsSubscribed,
+	)
+	if err == sql.ErrNoRows {
+		return nil, status.Error(codes.NotFound, "cluster not found")
+	}
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	entry.Visibility = visibilityStringToProto(visibility)
+	if shortDesc.Valid {
+		entry.ShortDescription = &shortDesc.String
+	}
+	if ownerName.Valid {
+		entry.OwnerName = &ownerName.String
+	}
+	if subscriptionStatus.Valid && subscriptionStatus.String != "" {
+		entry.SubscriptionStatus = subscriptionStatusStringToProto(subscriptionStatus.String)
+	}
+	if maxStreams > 0 {
+		utilization := float64(currentStreams) / float64(maxStreams) * 100
+		entry.CurrentUtilization = &utilization
+	}
+
+	return &entry, nil
+}
+
+// UpdateClusterMarketplace updates marketplace settings for a cluster (owner only)
+func (s *QuartermasterServer) UpdateClusterMarketplace(ctx context.Context, req *pb.UpdateClusterMarketplaceRequest) (*pb.ClusterResponse, error) {
+	clusterID := req.GetClusterId()
+	if clusterID == "" {
+		return nil, status.Error(codes.InvalidArgument, "cluster_id required")
+	}
+
+	tenantID := req.GetTenantId()
+	if tenantID == "" {
+		tenantID = middleware.GetTenantID(ctx)
+	}
+	if tenantID == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	}
+
+	// Verify ownership
+	var ownerTenantID sql.NullString
+	var isProvider bool
+	err := s.db.QueryRowContext(ctx, `
+		SELECT c.owner_tenant_id, COALESCE(t.is_provider, false) as is_provider
+		FROM quartermaster.infrastructure_clusters c
+		LEFT JOIN quartermaster.tenants t ON t.id = $2
+		WHERE c.cluster_id = $1
+	`, clusterID, tenantID).Scan(&ownerTenantID, &isProvider)
+	if err == sql.ErrNoRows {
+		return nil, status.Error(codes.NotFound, "cluster not found")
+	}
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	// Only owner can update marketplace settings (unless admin/provider with platform cluster)
+	if !ownerTenantID.Valid || ownerTenantID.String != tenantID {
+		return nil, status.Error(codes.PermissionDenied, "only cluster owner can update marketplace settings")
+	}
+
+	// Build update query
+	var updates []string
+	var args []interface{}
+	argIdx := 1
+
+	if req.Visibility != nil {
+		// Non-providers can only set private visibility
+		if !isProvider && *req.Visibility != pb.ClusterVisibility_CLUSTER_VISIBILITY_PRIVATE {
+			return nil, status.Error(codes.PermissionDenied, "only providers can set public/unlisted visibility")
+		}
+		updates = append(updates, fmt.Sprintf("visibility = $%d", argIdx))
+		args = append(args, visibilityProtoToString(*req.Visibility))
+		argIdx++
+	}
+	// Note: Pricing fields are managed via Purser, not Quartermaster
+	if req.RequiresApproval != nil {
+		updates = append(updates, fmt.Sprintf("requires_approval = $%d", argIdx))
+		args = append(args, *req.RequiresApproval)
+		argIdx++
+	}
+	if req.ShortDescription != nil {
+		updates = append(updates, fmt.Sprintf("short_description = NULLIF($%d, '')", argIdx))
+		args = append(args, *req.ShortDescription)
+		argIdx++
+	}
+	if req.LongDescription != nil {
+		updates = append(updates, fmt.Sprintf("long_description = NULLIF($%d, '')", argIdx))
+		args = append(args, *req.LongDescription)
+		argIdx++
+	}
+
+	if len(updates) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "no fields to update")
+	}
+
+	updates = append(updates, "updated_at = NOW()")
+	query := fmt.Sprintf("UPDATE quartermaster.infrastructure_clusters SET %s WHERE cluster_id = $%d",
+		strings.Join(updates, ", "), argIdx)
+	args = append(args, clusterID)
+
+	_, err = s.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to update cluster: %v", err)
+	}
+
+	cluster, err := s.queryCluster(ctx, clusterID)
+	if err != nil {
+		return nil, err
+	}
+
+	return &pb.ClusterResponse{Cluster: cluster}, nil
+}
+
+// CreatePrivateCluster creates a private cluster for self-hosted edge
+func (s *QuartermasterServer) CreatePrivateCluster(ctx context.Context, req *pb.CreatePrivateClusterRequest) (*pb.CreatePrivateClusterResponse, error) {
+	tenantID := req.GetTenantId()
+	if tenantID == "" {
+		tenantID = middleware.GetTenantID(ctx)
+	}
+	if tenantID == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	}
+
+	clusterName := req.GetClusterName()
+	if clusterName == "" {
+		return nil, status.Error(codes.InvalidArgument, "cluster_name required")
+	}
+
+	// Check tenant's cluster ownership limit
+	var maxOwnedClusters, currentOwnedClusters int
+	var isProvider bool
+	err := s.db.QueryRowContext(ctx, `
+		SELECT max_owned_clusters, is_provider,
+		       (SELECT COUNT(*) FROM quartermaster.infrastructure_clusters WHERE owner_tenant_id = $1)
+		FROM quartermaster.tenants WHERE id = $1
+	`, tenantID).Scan(&maxOwnedClusters, &isProvider, &currentOwnedClusters)
+	if err == sql.ErrNoRows {
+		return nil, status.Error(codes.NotFound, "tenant not found")
+	}
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	// Non-providers are limited to max_owned_clusters (default 1)
+	if !isProvider && currentOwnedClusters >= maxOwnedClusters {
+		return nil, status.Errorf(codes.ResourceExhausted, "tenant has reached maximum owned clusters limit (%d)", maxOwnedClusters)
+	}
+
+	// Generate cluster ID from name (sanitized)
+	clusterID := strings.ToLower(strings.ReplaceAll(clusterName, " ", "-"))
+	clusterID = fmt.Sprintf("%s-%s", clusterID, generateSecureToken(4))
+
+	id := uuid.New().String()
+	now := time.Now()
+
+	// Create the cluster with private visibility
+	_, err = s.db.ExecContext(ctx, `
+		INSERT INTO quartermaster.infrastructure_clusters (
+			id, cluster_id, cluster_name, cluster_type, deployment_model,
+			owner_tenant_id, base_url,
+			max_concurrent_streams, max_concurrent_viewers, max_bandwidth_mbps,
+			visibility, pricing_model, short_description,
+			health_status, is_active, created_at, updated_at
+		) VALUES (
+			$1, $2, $3, 'edge', 'self-hosted',
+			$4, '',
+			100, 10000, 1000,
+			'private', 'free_unmetered', $5,
+			'unknown', true, $6, $6
+		)
+	`, id, clusterID, clusterName, tenantID, req.ShortDescription, now)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to create cluster: %v", err)
+	}
+
+	// Auto-subscribe the owner
+	_, err = s.db.ExecContext(ctx, `
+		INSERT INTO quartermaster.tenant_cluster_access (
+			tenant_id, cluster_id, access_level, subscription_status, is_active, created_at, updated_at
+		) VALUES ($1, $2, 'owner', 'active', true, NOW(), NOW())
+	`, tenantID, clusterID)
+	if err != nil {
+		s.logger.WithFields(logging.Fields{
+			"tenant_id":  tenantID,
+			"cluster_id": clusterID,
+			"error":      err,
+		}).Error("Failed to auto-subscribe owner to cluster")
+	}
+
+	// Create a bootstrap token for edge node registration
+	tokenID := uuid.New().String()
+	token := generateSecureToken(32)
+	expiresAt := now.Add(30 * 24 * time.Hour) // 30 days
+
+	_, err = s.db.ExecContext(ctx, `
+		INSERT INTO quartermaster.bootstrap_tokens (
+			id, token, kind, name, tenant_id, cluster_id, expires_at, created_by, created_at
+		) VALUES ($1, $2, 'edge_node', $3, $4, $5, $6, $4, NOW())
+	`, tokenID, token, fmt.Sprintf("Bootstrap token for %s", clusterName), tenantID, clusterID, expiresAt)
+	if err != nil {
+		s.logger.WithFields(logging.Fields{
+			"tenant_id":  tenantID,
+			"cluster_id": clusterID,
+			"error":      err,
+		}).Error("Failed to create bootstrap token for new cluster")
+	}
+
+	cluster, err := s.queryCluster(ctx, clusterID)
+	if err != nil {
+		return nil, err
+	}
+
+	return &pb.CreatePrivateClusterResponse{
+		Cluster: cluster,
+		BootstrapToken: &pb.BootstrapToken{
+			Id:        tokenID,
+			Token:     token,
+			Kind:      "edge_node",
+			Name:      fmt.Sprintf("Bootstrap token for %s", clusterName),
+			TenantId:  &tenantID,
+			ClusterId: &clusterID,
+			ExpiresAt: timestamppb.New(expiresAt),
+			CreatedAt: timestamppb.New(now),
+		},
+	}, nil
+}
+
+// CreateClusterInvite creates an invite for a tenant to join a cluster
+func (s *QuartermasterServer) CreateClusterInvite(ctx context.Context, req *pb.CreateClusterInviteRequest) (*pb.ClusterInvite, error) {
+	clusterID := req.GetClusterId()
+	ownerTenantID := req.GetOwnerTenantId()
+	invitedTenantID := req.GetInvitedTenantId()
+
+	if clusterID == "" || ownerTenantID == "" || invitedTenantID == "" {
+		return nil, status.Error(codes.InvalidArgument, "cluster_id, owner_tenant_id, and invited_tenant_id required")
+	}
+
+	// Verify ownership and get cluster name
+	var dbOwnerID sql.NullString
+	var clusterName string
+	err := s.db.QueryRowContext(ctx,
+		"SELECT owner_tenant_id, cluster_name FROM quartermaster.infrastructure_clusters WHERE cluster_id = $1",
+		clusterID).Scan(&dbOwnerID, &clusterName)
+	if err == sql.ErrNoRows {
+		return nil, status.Error(codes.NotFound, "cluster not found")
+	}
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	if !dbOwnerID.Valid || dbOwnerID.String != ownerTenantID {
+		return nil, status.Error(codes.PermissionDenied, "only cluster owner can create invites")
+	}
+
+	// Verify invited tenant exists
+	var invitedTenantName string
+	err = s.db.QueryRowContext(ctx,
+		"SELECT name FROM quartermaster.tenants WHERE id = $1",
+		invitedTenantID).Scan(&invitedTenantName)
+	if err == sql.ErrNoRows {
+		return nil, status.Error(codes.NotFound, "invited tenant not found")
+	}
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	// Check for existing invite
+	var existingID string
+	err = s.db.QueryRowContext(ctx, `
+		SELECT id FROM quartermaster.cluster_invites
+		WHERE cluster_id = $1 AND invited_tenant_id = $2 AND status = 'pending'
+	`, clusterID, invitedTenantID).Scan(&existingID)
+	if err == nil {
+		return nil, status.Error(codes.AlreadyExists, "pending invite already exists for this tenant")
+	}
+	if err != sql.ErrNoRows {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	id := uuid.New().String()
+	token := generateSecureToken(32)
+	now := time.Now()
+
+	accessLevel := req.GetAccessLevel()
+	if accessLevel == "" {
+		accessLevel = "subscriber"
+	}
+
+	expiresInDays := req.GetExpiresInDays()
+	if expiresInDays <= 0 {
+		expiresInDays = 30
+	}
+	expiresAt := now.Add(time.Duration(expiresInDays) * 24 * time.Hour)
+
+	// Serialize resource limits
+	var resourceLimitsJSON []byte
+	if req.GetResourceLimits() != nil {
+		resourceLimitsJSON, _ = json.Marshal(req.GetResourceLimits().AsMap())
+	}
+
+	_, err = s.db.ExecContext(ctx, `
+		INSERT INTO quartermaster.cluster_invites (
+			id, cluster_id, invited_tenant_id, invite_token, access_level,
+			resource_limits, status, created_by, created_at, expires_at
+		) VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, $8, $9)
+	`, id, clusterID, invitedTenantID, token, accessLevel,
+		resourceLimitsJSON, ownerTenantID, now, expiresAt)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to create invite: %v", err)
+	}
+
+	return &pb.ClusterInvite{
+		Id:                id,
+		ClusterId:         clusterID,
+		InvitedTenantId:   invitedTenantID,
+		InviteToken:       token,
+		AccessLevel:       accessLevel,
+		ResourceLimits:    req.GetResourceLimits(),
+		Status:            "pending",
+		CreatedBy:         ownerTenantID,
+		CreatedAt:         timestamppb.New(now),
+		ExpiresAt:         timestamppb.New(expiresAt),
+		InvitedTenantName: &invitedTenantName,
+		ClusterName:       &clusterName,
+	}, nil
+}
+
+// RevokeClusterInvite revokes a pending cluster invite
+func (s *QuartermasterServer) RevokeClusterInvite(ctx context.Context, req *pb.RevokeClusterInviteRequest) (*emptypb.Empty, error) {
+	inviteID := req.GetInviteId()
+	ownerTenantID := req.GetOwnerTenantId()
+
+	if inviteID == "" || ownerTenantID == "" {
+		return nil, status.Error(codes.InvalidArgument, "invite_id and owner_tenant_id required")
+	}
+
+	// Verify invite exists and owner is correct
+	var clusterID string
+	var dbOwnerID sql.NullString
+	err := s.db.QueryRowContext(ctx, `
+		SELECT i.cluster_id, c.owner_tenant_id
+		FROM quartermaster.cluster_invites i
+		JOIN quartermaster.infrastructure_clusters c ON i.cluster_id = c.cluster_id
+		WHERE i.id = $1
+	`, inviteID).Scan(&clusterID, &dbOwnerID)
+	if err == sql.ErrNoRows {
+		return nil, status.Error(codes.NotFound, "invite not found")
+	}
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	if !dbOwnerID.Valid || dbOwnerID.String != ownerTenantID {
+		return nil, status.Error(codes.PermissionDenied, "only cluster owner can revoke invites")
+	}
+
+	_, err = s.db.ExecContext(ctx, `
+		UPDATE quartermaster.cluster_invites SET status = 'revoked' WHERE id = $1
+	`, inviteID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to revoke invite: %v", err)
+	}
+
+	return &emptypb.Empty{}, nil
+}
+
+// ListClusterInvites lists invites for a cluster (owner only)
+func (s *QuartermasterServer) ListClusterInvites(ctx context.Context, req *pb.ListClusterInvitesRequest) (*pb.ListClusterInvitesResponse, error) {
+	clusterID := req.GetClusterId()
+	ownerTenantID := req.GetOwnerTenantId()
+
+	if clusterID == "" || ownerTenantID == "" {
+		return nil, status.Error(codes.InvalidArgument, "cluster_id and owner_tenant_id required")
+	}
+
+	// Verify ownership
+	var dbOwnerID sql.NullString
+	err := s.db.QueryRowContext(ctx,
+		"SELECT owner_tenant_id FROM quartermaster.infrastructure_clusters WHERE cluster_id = $1",
+		clusterID).Scan(&dbOwnerID)
+	if err == sql.ErrNoRows {
+		return nil, status.Error(codes.NotFound, "cluster not found")
+	}
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	if !dbOwnerID.Valid || dbOwnerID.String != ownerTenantID {
+		return nil, status.Error(codes.PermissionDenied, "only cluster owner can list invites")
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT i.id, i.cluster_id, i.invited_tenant_id, i.invite_token, i.access_level,
+		       i.resource_limits, i.status, i.created_by, i.created_at, i.expires_at, i.accepted_at,
+		       t.name as invited_tenant_name, c.cluster_name
+		FROM quartermaster.cluster_invites i
+		LEFT JOIN quartermaster.tenants t ON i.invited_tenant_id = t.id
+		LEFT JOIN quartermaster.infrastructure_clusters c ON i.cluster_id = c.cluster_id
+		WHERE i.cluster_id = $1
+		ORDER BY i.created_at DESC
+	`, clusterID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	defer rows.Close()
+
+	var invites []*pb.ClusterInvite
+	for rows.Next() {
+		var invite pb.ClusterInvite
+		var resourceLimits sql.NullString
+		var createdAt time.Time
+		var expiresAt, acceptedAt sql.NullTime
+		var invitedTenantName, clusterName sql.NullString
+
+		if err := rows.Scan(
+			&invite.Id, &invite.ClusterId, &invite.InvitedTenantId, &invite.InviteToken,
+			&invite.AccessLevel, &resourceLimits, &invite.Status, &invite.CreatedBy,
+			&createdAt, &expiresAt, &acceptedAt, &invitedTenantName, &clusterName,
+		); err != nil {
+			continue
+		}
+
+		invite.CreatedAt = timestamppb.New(createdAt)
+		if expiresAt.Valid {
+			invite.ExpiresAt = timestamppb.New(expiresAt.Time)
+		}
+		if acceptedAt.Valid {
+			invite.AcceptedAt = timestamppb.New(acceptedAt.Time)
+		}
+		if invitedTenantName.Valid {
+			invite.InvitedTenantName = &invitedTenantName.String
+		}
+		if clusterName.Valid {
+			invite.ClusterName = &clusterName.String
+		}
+		if resourceLimits.Valid {
+			var limitsMap map[string]interface{}
+			if json.Unmarshal([]byte(resourceLimits.String), &limitsMap) == nil {
+				invite.ResourceLimits = mapToStruct(limitsMap)
+			}
+		}
+
+		invites = append(invites, &invite)
+	}
+
+	return &pb.ListClusterInvitesResponse{Invites: invites}, nil
+}
+
+// ListMyClusterInvites lists invites received by a tenant
+func (s *QuartermasterServer) ListMyClusterInvites(ctx context.Context, req *pb.ListMyClusterInvitesRequest) (*pb.ListClusterInvitesResponse, error) {
+	tenantID := req.GetTenantId()
+	if tenantID == "" {
+		tenantID = middleware.GetTenantID(ctx)
+	}
+	if tenantID == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT i.id, i.cluster_id, i.invited_tenant_id, i.invite_token, i.access_level,
+		       i.resource_limits, i.status, i.created_by, i.created_at, i.expires_at, i.accepted_at,
+		       c.cluster_name
+		FROM quartermaster.cluster_invites i
+		JOIN quartermaster.infrastructure_clusters c ON i.cluster_id = c.cluster_id
+		WHERE i.invited_tenant_id = $1 AND i.status = 'pending'
+		  AND (i.expires_at IS NULL OR i.expires_at > NOW())
+		ORDER BY i.created_at DESC
+	`, tenantID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	defer rows.Close()
+
+	var invites []*pb.ClusterInvite
+	for rows.Next() {
+		var invite pb.ClusterInvite
+		var resourceLimits sql.NullString
+		var createdAt time.Time
+		var expiresAt, acceptedAt sql.NullTime
+		var clusterName string
+
+		if err := rows.Scan(
+			&invite.Id, &invite.ClusterId, &invite.InvitedTenantId, &invite.InviteToken,
+			&invite.AccessLevel, &resourceLimits, &invite.Status, &invite.CreatedBy,
+			&createdAt, &expiresAt, &acceptedAt, &clusterName,
+		); err != nil {
+			continue
+		}
+
+		invite.CreatedAt = timestamppb.New(createdAt)
+		if expiresAt.Valid {
+			invite.ExpiresAt = timestamppb.New(expiresAt.Time)
+		}
+		if acceptedAt.Valid {
+			invite.AcceptedAt = timestamppb.New(acceptedAt.Time)
+		}
+		if clusterName != "" {
+			invite.ClusterName = &clusterName
+		}
+		if resourceLimits.Valid {
+			var limitsMap map[string]interface{}
+			if json.Unmarshal([]byte(resourceLimits.String), &limitsMap) == nil {
+				invite.ResourceLimits = mapToStruct(limitsMap)
+			}
+		}
+
+		invites = append(invites, &invite)
+	}
+
+	return &pb.ListClusterInvitesResponse{Invites: invites}, nil
+}
+
+// RequestClusterSubscription requests access to a cluster
+func (s *QuartermasterServer) RequestClusterSubscription(ctx context.Context, req *pb.RequestClusterSubscriptionRequest) (*pb.ClusterSubscription, error) {
+	tenantID := req.GetTenantId()
+	if tenantID == "" {
+		tenantID = middleware.GetTenantID(ctx)
+	}
+	if tenantID == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	}
+
+	clusterID := req.GetClusterId()
+	if clusterID == "" {
+		return nil, status.Error(codes.InvalidArgument, "cluster_id required")
+	}
+
+	// Get cluster info
+	var visibility, pricingModel string
+	var requiresApproval bool
+	var ownerTenantID sql.NullString
+	err := s.db.QueryRowContext(ctx, `
+		SELECT visibility, pricing_model, requires_approval, owner_tenant_id
+		FROM quartermaster.infrastructure_clusters
+		WHERE cluster_id = $1 AND is_active = true
+	`, clusterID).Scan(&visibility, &pricingModel, &requiresApproval, &ownerTenantID)
+	if err == sql.ErrNoRows {
+		return nil, status.Error(codes.NotFound, "cluster not found")
+	}
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	// Check visibility rules
+	inviteToken := req.InviteToken
+
+	switch visibility {
+	case "private":
+		// Private clusters require an invite
+		if inviteToken == nil || *inviteToken == "" {
+			return nil, status.Error(codes.PermissionDenied, "private cluster requires invite token")
+		}
+	case "unlisted":
+		// Unlisted clusters require an invite
+		if inviteToken == nil || *inviteToken == "" {
+			return nil, status.Error(codes.PermissionDenied, "unlisted cluster requires invite token")
+		}
+	case "public":
+		// Public clusters are open (invite optional for resource limits)
+	}
+
+	// Validate invite token if provided
+	var inviteAccessLevel string
+	var inviteResourceLimits sql.NullString
+	if inviteToken != nil && *inviteToken != "" {
+		var inviteID, inviteClusterID, inviteTenantID string
+		err := s.db.QueryRowContext(ctx, `
+			SELECT id, cluster_id, invited_tenant_id, access_level, resource_limits
+			FROM quartermaster.cluster_invites
+			WHERE invite_token = $1 AND status = 'pending'
+			  AND (expires_at IS NULL OR expires_at > NOW())
+		`, *inviteToken).Scan(&inviteID, &inviteClusterID, &inviteTenantID, &inviteAccessLevel, &inviteResourceLimits)
+		if err == sql.ErrNoRows {
+			return nil, status.Error(codes.NotFound, "invalid or expired invite token")
+		}
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "database error: %v", err)
+		}
+		if inviteClusterID != clusterID {
+			return nil, status.Error(codes.InvalidArgument, "invite token is for a different cluster")
+		}
+		if inviteTenantID != tenantID {
+			return nil, status.Error(codes.PermissionDenied, "invite token is for a different tenant")
+		}
+
+		// Mark invite as accepted
+		_, err = s.db.ExecContext(ctx, `
+			UPDATE quartermaster.cluster_invites SET status = 'accepted', accepted_at = NOW()
+			WHERE id = $1
+		`, inviteID)
+		if err != nil {
+			s.logger.WithFields(logging.Fields{
+				"invite_id": inviteID,
+				"error":     err,
+			}).Error("Failed to mark invite as accepted")
+		}
+	}
+
+	// Determine subscription status
+	subscriptionStatus := "active"
+	if requiresApproval && (inviteToken == nil || *inviteToken == "") {
+		subscriptionStatus = "pending_approval"
+	}
+
+	// Set access level
+	accessLevel := "subscriber"
+	if inviteAccessLevel != "" {
+		accessLevel = inviteAccessLevel
+	}
+
+	now := time.Now()
+	id := uuid.New().String()
+
+	// Create or update subscription
+	_, err = s.db.ExecContext(ctx, `
+		INSERT INTO quartermaster.tenant_cluster_access (
+			id, tenant_id, cluster_id, access_level, subscription_status,
+			resource_limits, requested_at, is_active, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, true, $7, $7)
+		ON CONFLICT (tenant_id, cluster_id) DO UPDATE SET
+			access_level = EXCLUDED.access_level,
+			subscription_status = EXCLUDED.subscription_status,
+			resource_limits = COALESCE(EXCLUDED.resource_limits, quartermaster.tenant_cluster_access.resource_limits),
+			requested_at = COALESCE(quartermaster.tenant_cluster_access.requested_at, EXCLUDED.requested_at),
+			is_active = true,
+			updated_at = NOW()
+		RETURNING id
+	`, id, tenantID, clusterID, accessLevel, subscriptionStatus,
+		inviteResourceLimits, now)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to create subscription: %v", err)
+	}
+
+	// Fetch the created subscription
+	return s.getClusterSubscription(ctx, tenantID, clusterID)
+}
+
+// AcceptClusterInvite accepts a cluster invite using the token
+func (s *QuartermasterServer) AcceptClusterInvite(ctx context.Context, req *pb.AcceptClusterInviteRequest) (*pb.ClusterSubscription, error) {
+	tenantID := req.GetTenantId()
+	if tenantID == "" {
+		tenantID = middleware.GetTenantID(ctx)
+	}
+	if tenantID == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	}
+
+	inviteToken := req.GetInviteToken()
+	if inviteToken == "" {
+		return nil, status.Error(codes.InvalidArgument, "invite_token required")
+	}
+
+	// Look up the invite
+	var inviteID, clusterID, invitedTenantID, accessLevel string
+	var resourceLimits sql.NullString
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, cluster_id, invited_tenant_id, access_level, resource_limits
+		FROM quartermaster.cluster_invites
+		WHERE invite_token = $1 AND status = 'pending'
+		  AND (expires_at IS NULL OR expires_at > NOW())
+	`, inviteToken).Scan(&inviteID, &clusterID, &invitedTenantID, &accessLevel, &resourceLimits)
+	if err == sql.ErrNoRows {
+		return nil, status.Error(codes.NotFound, "invalid or expired invite token")
+	}
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	if invitedTenantID != tenantID {
+		return nil, status.Error(codes.PermissionDenied, "invite is for a different tenant")
+	}
+
+	// Mark invite as accepted
+	_, err = s.db.ExecContext(ctx, `
+		UPDATE quartermaster.cluster_invites SET status = 'accepted', accepted_at = NOW()
+		WHERE id = $1
+	`, inviteID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to accept invite: %v", err)
+	}
+
+	now := time.Now()
+	id := uuid.New().String()
+
+	// Create subscription (active since it's via invite)
+	_, err = s.db.ExecContext(ctx, `
+		INSERT INTO quartermaster.tenant_cluster_access (
+			id, tenant_id, cluster_id, access_level, subscription_status,
+			resource_limits, approved_at, is_active, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, 'active', $5, $6, true, $6, $6)
+		ON CONFLICT (tenant_id, cluster_id) DO UPDATE SET
+			access_level = EXCLUDED.access_level,
+			subscription_status = 'active',
+			resource_limits = COALESCE(EXCLUDED.resource_limits, quartermaster.tenant_cluster_access.resource_limits),
+			approved_at = NOW(),
+			is_active = true,
+			updated_at = NOW()
+	`, id, tenantID, clusterID, accessLevel, resourceLimits, now)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to create subscription: %v", err)
+	}
+
+	return s.getClusterSubscription(ctx, tenantID, clusterID)
+}
+
+// ListPendingSubscriptions lists pending subscription requests for a cluster
+func (s *QuartermasterServer) ListPendingSubscriptions(ctx context.Context, req *pb.ListPendingSubscriptionsRequest) (*pb.ListPendingSubscriptionsResponse, error) {
+	clusterID := req.GetClusterId()
+	ownerTenantID := req.GetOwnerTenantId()
+
+	if clusterID == "" || ownerTenantID == "" {
+		return nil, status.Error(codes.InvalidArgument, "cluster_id and owner_tenant_id required")
+	}
+
+	// Verify ownership
+	var dbOwnerID sql.NullString
+	err := s.db.QueryRowContext(ctx,
+		"SELECT owner_tenant_id FROM quartermaster.infrastructure_clusters WHERE cluster_id = $1",
+		clusterID).Scan(&dbOwnerID)
+	if err == sql.ErrNoRows {
+		return nil, status.Error(codes.NotFound, "cluster not found")
+	}
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	if !dbOwnerID.Valid || dbOwnerID.String != ownerTenantID {
+		return nil, status.Error(codes.PermissionDenied, "only cluster owner can view pending subscriptions")
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT a.id, a.tenant_id, a.cluster_id, a.access_level, a.subscription_status,
+		       a.resource_limits, a.requested_at, a.approved_at, a.approved_by,
+		       a.rejection_reason, a.expires_at, a.created_at, a.updated_at,
+		       c.cluster_name, t.name as tenant_name
+		FROM quartermaster.tenant_cluster_access a
+		JOIN quartermaster.infrastructure_clusters c ON a.cluster_id = c.cluster_id
+		JOIN quartermaster.tenants t ON a.tenant_id = t.id
+		WHERE a.cluster_id = $1 AND a.subscription_status = 'pending_approval'
+		ORDER BY a.requested_at ASC
+	`, clusterID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	defer rows.Close()
+
+	var subscriptions []*pb.ClusterSubscription
+	for rows.Next() {
+		sub, err := scanClusterSubscription(rows)
+		if err != nil {
+			continue
+		}
+		subscriptions = append(subscriptions, sub)
+	}
+
+	return &pb.ListPendingSubscriptionsResponse{Subscriptions: subscriptions}, nil
+}
+
+// ApproveClusterSubscription approves a pending subscription
+func (s *QuartermasterServer) ApproveClusterSubscription(ctx context.Context, req *pb.ApproveClusterSubscriptionRequest) (*pb.ClusterSubscription, error) {
+	subscriptionID := req.GetSubscriptionId()
+	ownerTenantID := req.GetOwnerTenantId()
+
+	if subscriptionID == "" || ownerTenantID == "" {
+		return nil, status.Error(codes.InvalidArgument, "subscription_id and owner_tenant_id required")
+	}
+
+	// Get subscription and verify ownership
+	var tenantID, clusterID string
+	var dbOwnerID sql.NullString
+	err := s.db.QueryRowContext(ctx, `
+		SELECT a.tenant_id, a.cluster_id, c.owner_tenant_id
+		FROM quartermaster.tenant_cluster_access a
+		JOIN quartermaster.infrastructure_clusters c ON a.cluster_id = c.cluster_id
+		WHERE a.id = $1
+	`, subscriptionID).Scan(&tenantID, &clusterID, &dbOwnerID)
+	if err == sql.ErrNoRows {
+		return nil, status.Error(codes.NotFound, "subscription not found")
+	}
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	if !dbOwnerID.Valid || dbOwnerID.String != ownerTenantID {
+		return nil, status.Error(codes.PermissionDenied, "only cluster owner can approve subscriptions")
+	}
+
+	_, err = s.db.ExecContext(ctx, `
+		UPDATE quartermaster.tenant_cluster_access
+		SET subscription_status = 'active', approved_at = NOW(), approved_by = $2, updated_at = NOW()
+		WHERE id = $1
+	`, subscriptionID, ownerTenantID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to approve subscription: %v", err)
+	}
+
+	return s.getClusterSubscription(ctx, tenantID, clusterID)
+}
+
+// RejectClusterSubscription rejects a pending subscription
+func (s *QuartermasterServer) RejectClusterSubscription(ctx context.Context, req *pb.RejectClusterSubscriptionRequest) (*pb.ClusterSubscription, error) {
+	subscriptionID := req.GetSubscriptionId()
+	ownerTenantID := req.GetOwnerTenantId()
+
+	if subscriptionID == "" || ownerTenantID == "" {
+		return nil, status.Error(codes.InvalidArgument, "subscription_id and owner_tenant_id required")
+	}
+
+	// Get subscription and verify ownership
+	var tenantID, clusterID string
+	var dbOwnerID sql.NullString
+	err := s.db.QueryRowContext(ctx, `
+		SELECT a.tenant_id, a.cluster_id, c.owner_tenant_id
+		FROM quartermaster.tenant_cluster_access a
+		JOIN quartermaster.infrastructure_clusters c ON a.cluster_id = c.cluster_id
+		WHERE a.id = $1
+	`, subscriptionID).Scan(&tenantID, &clusterID, &dbOwnerID)
+	if err == sql.ErrNoRows {
+		return nil, status.Error(codes.NotFound, "subscription not found")
+	}
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	if !dbOwnerID.Valid || dbOwnerID.String != ownerTenantID {
+		return nil, status.Error(codes.PermissionDenied, "only cluster owner can reject subscriptions")
+	}
+
+	reason := req.Reason
+	_, err = s.db.ExecContext(ctx, `
+		UPDATE quartermaster.tenant_cluster_access
+		SET subscription_status = 'rejected', rejection_reason = $2, is_active = false, updated_at = NOW()
+		WHERE id = $1
+	`, subscriptionID, reason)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to reject subscription: %v", err)
+	}
+
+	return s.getClusterSubscription(ctx, tenantID, clusterID)
+}
+
+// getClusterSubscription is a helper to fetch a subscription by tenant and cluster
+func (s *QuartermasterServer) getClusterSubscription(ctx context.Context, tenantID, clusterID string) (*pb.ClusterSubscription, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT a.id, a.tenant_id, a.cluster_id, a.access_level, a.subscription_status,
+		       a.resource_limits, a.requested_at, a.approved_at, a.approved_by,
+		       a.rejection_reason, a.expires_at, a.created_at, a.updated_at,
+		       c.cluster_name, t.name as tenant_name
+		FROM quartermaster.tenant_cluster_access a
+		JOIN quartermaster.infrastructure_clusters c ON a.cluster_id = c.cluster_id
+		JOIN quartermaster.tenants t ON a.tenant_id = t.id
+		WHERE a.tenant_id = $1 AND a.cluster_id = $2
+	`, tenantID, clusterID)
+
+	return scanClusterSubscriptionRow(row)
+}
+
+// scanClusterSubscription scans a ClusterSubscription from rows
+func scanClusterSubscription(rows *sql.Rows) (*pb.ClusterSubscription, error) {
+	var sub pb.ClusterSubscription
+	var resourceLimits sql.NullString
+	var requestedAt, approvedAt, expiresAt sql.NullTime
+	var approvedBy, rejectionReason, clusterName, tenantName sql.NullString
+	var createdAt, updatedAt time.Time
+	var subscriptionStatus string
+
+	err := rows.Scan(
+		&sub.Id, &sub.TenantId, &sub.ClusterId, &sub.AccessLevel, &subscriptionStatus,
+		&resourceLimits, &requestedAt, &approvedAt, &approvedBy,
+		&rejectionReason, &expiresAt, &createdAt, &updatedAt,
+		&clusterName, &tenantName,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	sub.SubscriptionStatus = subscriptionStatusStringToProto(subscriptionStatus)
+	sub.CreatedAt = timestamppb.New(createdAt)
+	sub.UpdatedAt = timestamppb.New(updatedAt)
+
+	if requestedAt.Valid {
+		sub.RequestedAt = timestamppb.New(requestedAt.Time)
+	}
+	if approvedAt.Valid {
+		sub.ApprovedAt = timestamppb.New(approvedAt.Time)
+	}
+	if approvedBy.Valid {
+		sub.ApprovedBy = &approvedBy.String
+	}
+	if rejectionReason.Valid {
+		sub.RejectionReason = &rejectionReason.String
+	}
+	if expiresAt.Valid {
+		sub.ExpiresAt = timestamppb.New(expiresAt.Time)
+	}
+	if clusterName.Valid {
+		sub.ClusterName = &clusterName.String
+	}
+	if tenantName.Valid {
+		sub.TenantName = &tenantName.String
+	}
+	if resourceLimits.Valid {
+		var limitsMap map[string]interface{}
+		if json.Unmarshal([]byte(resourceLimits.String), &limitsMap) == nil {
+			sub.ResourceLimits = mapToStruct(limitsMap)
+		}
+	}
+
+	return &sub, nil
+}
+
+// scanClusterSubscriptionRow scans a ClusterSubscription from a single row
+func scanClusterSubscriptionRow(row *sql.Row) (*pb.ClusterSubscription, error) {
+	var sub pb.ClusterSubscription
+	var resourceLimits sql.NullString
+	var requestedAt, approvedAt, expiresAt sql.NullTime
+	var approvedBy, rejectionReason, clusterName, tenantName sql.NullString
+	var createdAt, updatedAt time.Time
+	var subscriptionStatus string
+
+	err := row.Scan(
+		&sub.Id, &sub.TenantId, &sub.ClusterId, &sub.AccessLevel, &subscriptionStatus,
+		&resourceLimits, &requestedAt, &approvedAt, &approvedBy,
+		&rejectionReason, &expiresAt, &createdAt, &updatedAt,
+		&clusterName, &tenantName,
+	)
+	if err == sql.ErrNoRows {
+		return nil, status.Error(codes.NotFound, "subscription not found")
+	}
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+
+	sub.SubscriptionStatus = subscriptionStatusStringToProto(subscriptionStatus)
+	sub.CreatedAt = timestamppb.New(createdAt)
+	sub.UpdatedAt = timestamppb.New(updatedAt)
+
+	if requestedAt.Valid {
+		sub.RequestedAt = timestamppb.New(requestedAt.Time)
+	}
+	if approvedAt.Valid {
+		sub.ApprovedAt = timestamppb.New(approvedAt.Time)
+	}
+	if approvedBy.Valid {
+		sub.ApprovedBy = &approvedBy.String
+	}
+	if rejectionReason.Valid {
+		sub.RejectionReason = &rejectionReason.String
+	}
+	if expiresAt.Valid {
+		sub.ExpiresAt = timestamppb.New(expiresAt.Time)
+	}
+	if clusterName.Valid {
+		sub.ClusterName = &clusterName.String
+	}
+	if tenantName.Valid {
+		sub.TenantName = &tenantName.String
+	}
+	if resourceLimits.Valid {
+		var limitsMap map[string]interface{}
+		if json.Unmarshal([]byte(resourceLimits.String), &limitsMap) == nil {
+			sub.ResourceLimits = mapToStruct(limitsMap)
+		}
+	}
+
+	return &sub, nil
 }
 
 // GRPCServerConfig contains configuration for creating a Quartermaster gRPC server

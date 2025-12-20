@@ -124,6 +124,7 @@ func main() {
 		defer cancel()
 		healthEndpoint := "/health"
 		advertiseHost := config.GetEnv("PERISCOPE_INGEST_HOST", "periscope-ingest")
+		clusterID := config.GetEnv("CLUSTER_ID", "")
 		if _, err := qc.BootstrapService(ctx, &pb.BootstrapServiceRequest{
 			Type:           "periscope_ingest",
 			Version:        version.Version,
@@ -131,6 +132,7 @@ func main() {
 			HealthEndpoint: &healthEndpoint,
 			Port:           18005,
 			AdvertiseHost:  &advertiseHost,
+			ClusterId:      func() *string { if clusterID != "" { return &clusterID }; return nil }(),
 		}); err != nil {
 			logger.WithError(err).Warn("Quartermaster bootstrap (periscope_ingest) failed")
 		} else {

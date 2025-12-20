@@ -1,3 +1,4 @@
+# Fetch all available billing tiers with pricing, features, and resource allocations
 query GetBillingTiers {
   billingTiers {
     id

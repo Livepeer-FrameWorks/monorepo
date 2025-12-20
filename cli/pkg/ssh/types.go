@@ -11,7 +11,7 @@ type ConnectionConfig struct {
 	Port               int
 	User               string
 	KeyPath            string
-	Password           string        // Optional, prefer key-based auth
+	Password           string // Optional, prefer key-based auth
 	Timeout            time.Duration
 	InsecureSkipVerify bool   // Skip host key verification (DANGEROUS - dev only)
 	KnownHostsPath     string // Path to known_hosts file (default: ~/.frameworks/known_hosts)

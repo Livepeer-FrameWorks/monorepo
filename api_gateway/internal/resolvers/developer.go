@@ -154,10 +154,11 @@ func (r *Resolver) DoGetDeveloperTokensConnection(ctx context.Context, first *in
 
 	paginatedTokens := tokens[start:end]
 
-	// Build edges (Node is *pb.APITokenInfo per gqlgen binding)
+	// Build edges with keyset cursors (Node is *pb.APITokenInfo per gqlgen binding)
 	edges := make([]*model.DeveloperTokenEdge, len(paginatedTokens))
 	for i, token := range paginatedTokens {
-		cursor := pagination.EncodeIndexCursor(start + i)
+		// Use keyset cursor (timestamp + ID) for stable pagination
+		cursor := pagination.EncodeCursor(token.CreatedAt.AsTime(), token.Id)
 		edges[i] = &model.DeveloperTokenEdge{
 			Cursor: cursor,
 			Node:   token,
@@ -171,10 +172,8 @@ func (r *Resolver) DoGetDeveloperTokensConnection(ctx context.Context, first *in
 		HasNextPage:     hasMore,
 	}
 	if len(edges) > 0 {
-		firstCursor := pagination.EncodeIndexCursor(start)
-		lastCursor := pagination.EncodeIndexCursor(end - 1)
-		pageInfo.StartCursor = &firstCursor
-		pageInfo.EndCursor = &lastCursor
+		pageInfo.StartCursor = &edges[0].Cursor
+		pageInfo.EndCursor = &edges[len(edges)-1].Cursor
 	}
 
 	return &model.DeveloperTokensConnection{

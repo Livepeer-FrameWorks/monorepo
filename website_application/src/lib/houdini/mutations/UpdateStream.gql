@@ -1,26 +1,11 @@
+# Update stream settings and configuration
 mutation UpdateStream($id: ID!, $input: UpdateStreamInput!) {
   updateStream(id: $id, input: $input) {
     __typename
     ... on Stream {
-      id
-      name
-      description
-      streamKey
-      playbackId
-      record
-      createdAt
-      updatedAt
+      ...StreamCoreFields
       metrics {
-        status
-        isLive
-        currentViewers
-        peakViewers
-        totalViews
-        startedAt
-        endedAt
-        duration
-        lastEventAt
-        lastEventType
+        ...StreamMetricsFields
       }
     }
     ... on ValidationError {

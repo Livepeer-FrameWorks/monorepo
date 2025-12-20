@@ -72,6 +72,31 @@ service UsageService {
   rpc CheckUserLimit(CheckUserLimitRequest) returns (CheckUserLimitResponse);
 }
 
+// ClusterPricingService handles per-cluster pricing configuration
+// Source of truth for cluster billing - Quartermaster has display-only copy
+service ClusterPricingService {
+  // Get pricing config for a cluster
+  rpc GetClusterPricing(GetClusterPricingRequest) returns (ClusterPricing);
+
+  // Get pricing configs for multiple clusters (batch)
+  rpc GetClustersPricingBatch(GetClustersPricingBatchRequest) returns (GetClustersPricingBatchResponse);
+
+  // Set/update pricing config for a cluster (owner/admin only)
+  rpc SetClusterPricing(SetClusterPricingRequest) returns (ClusterPricing);
+
+  // List pricing configs for clusters owned by a tenant
+  rpc ListClusterPricings(ListClusterPricingsRequest) returns (ListClusterPricingsResponse);
+
+  // Check if tenant can subscribe to cluster (tier check)
+  rpc CheckClusterAccess(CheckClusterAccessRequest) returns (CheckClusterAccessResponse);
+
+  // Create a cluster subscription (handles Stripe if paid)
+  rpc CreateClusterSubscription(CreateClusterSubscriptionRequest) returns (ClusterSubscriptionResponse);
+
+  // Cancel a cluster subscription
+  rpc CancelClusterSubscription(CancelClusterSubscriptionRequest) returns (google.protobuf.Empty);
+}
+
 // ============================================================================
 // BILLING TIER MESSAGES
 // ============================================================================
@@ -406,7 +431,32 @@ message UsageSummary {
   double peak_bandwidth_mbps = 7;
   string billing_month = 8;
   google.protobuf.Timestamp timestamp = 9;
-  double transcoding_minutes = 29;      // Placeholder - returns 0 until Livepeer metering enabled
+
+  // Processing/transcoding usage (from Livepeer Gateway and local AV processing)
+  double livepeer_seconds = 40;           // Total Livepeer Gateway transcode seconds
+  int32 livepeer_segment_count = 41;      // Number of segments transcoded via Livepeer
+  int32 livepeer_unique_streams = 42;     // Unique streams using Livepeer
+  double native_av_seconds = 43;          // Total local audio/video transcode seconds
+  int32 native_av_segment_count = 44;     // Number of segments processed locally
+  int32 native_av_unique_streams = 45;    // Unique streams using local AV processing
+
+  // Per-codec breakdown: Livepeer (external gateway)
+  double livepeer_h264_seconds = 50;
+  double livepeer_vp9_seconds = 51;
+  double livepeer_av1_seconds = 52;
+  double livepeer_hevc_seconds = 53;
+
+  // Per-codec breakdown: Native AV (local processing)
+  double native_av_h264_seconds = 54;
+  double native_av_vp9_seconds = 55;
+  double native_av_av1_seconds = 56;
+  double native_av_hevc_seconds = 57;
+  double native_av_aac_seconds = 58;
+  double native_av_opus_seconds = 59;
+
+  // Track type aggregates (for billing: audio is free)
+  double audio_seconds = 60;
+  double video_seconds = 61;
 
   // Storage and clip lifecycle metrics
   double storage_gb = 10;
@@ -415,6 +465,14 @@ message UsageSummary {
   int32 clips_deleted = 13;
   double clip_storage_added_gb = 14;
   double clip_storage_deleted_gb = 15;
+  int32 dvr_added = 30;
+  int32 dvr_deleted = 31;
+  double dvr_storage_added_gb = 32;
+  double dvr_storage_deleted_gb = 33;
+  int32 vod_added = 34;
+  int32 vod_deleted = 35;
+  double vod_storage_added_gb = 36;
+  double vod_storage_deleted_gb = 37;
 
   // Stream and viewer metrics
   int32 total_streams = 16;
@@ -429,9 +487,6 @@ message UsageSummary {
   int32 unique_countries = 23;
   int32 unique_cities = 24;
   repeated CountryMetrics geo_breakdown = 25;  // Rich geo breakdown with viewers, hours, percentage
-  float avg_buffer_health = 26;
-  int32 avg_bitrate = 27;
-  float packet_loss_rate = 28;
 }
 
 // Matches pkg/api/purser/types.go:UsageIngestResponse (lines 104-108)
@@ -510,4 +565,113 @@ message TenantUsageResponse {
   map<string, double> costs = 4;        // json:"costs" (resource_type -> cost)
   double total_cost = 5;                // json:"total_cost"
   string currency = 6;                  // json:"currency"
+}
+
+// ============================================================================
+// CLUSTER PRICING MESSAGES
+// Source of truth for cluster billing configuration
+// ============================================================================
+
+// ClusterPricing represents pricing configuration for a cluster
+// Maps to purser.cluster_pricing table
+message ClusterPricing {
+  string id = 1;                        // UUID
+  string cluster_id = 2;                // Cluster identifier (from Quartermaster)
+
+  // Pricing model: free_unmetered, metered, monthly, tier_inherit, custom
+  string pricing_model = 3;
+
+  // Stripe integration
+  optional string stripe_product_id = 4;      // Stripe Product ID
+  optional string stripe_price_id_monthly = 5; // Stripe Price ID for monthly
+  optional string stripe_meter_id = 6;         // Stripe Billing Meter ID
+
+  // Pricing details
+  string base_price = 7;                // Decimal as string (e.g., "29.99")
+  string currency = 8;                  // ISO 4217 (e.g., "EUR")
+  google.protobuf.Struct metered_rates = 9; // Metered rate overrides
+
+  // Access control
+  int32 required_tier_level = 10;       // 0=free, 1=supporter, 2=developer, etc.
+  bool is_platform_official = 11;       // Platform-operated cluster
+  bool allow_free_tier = 12;            // Allow free tier subscribers
+
+  // Quotas
+  google.protobuf.Struct default_quotas = 13; // Default resource quotas
+
+  // Timestamps
+  google.protobuf.Timestamp created_at = 14;
+  google.protobuf.Timestamp updated_at = 15;
+}
+
+message GetClusterPricingRequest {
+  string cluster_id = 1;
+}
+
+message GetClustersPricingBatchRequest {
+  repeated string cluster_ids = 1;
+}
+
+message GetClustersPricingBatchResponse {
+  map<string, ClusterPricing> pricings = 1;  // keyed by cluster_id
+}
+
+message SetClusterPricingRequest {
+  string cluster_id = 1;
+  string pricing_model = 2;             // free_unmetered, metered, monthly, tier_inherit, custom
+  optional string base_price = 3;       // For monthly pricing
+  optional string currency = 4;
+  optional int32 required_tier_level = 5;
+  optional bool allow_free_tier = 6;
+  google.protobuf.Struct metered_rates = 7;
+  google.protobuf.Struct default_quotas = 8;
+
+  // Stripe IDs (admin only - normally auto-created)
+  optional string stripe_product_id = 9;
+  optional string stripe_price_id_monthly = 10;
+  optional string stripe_meter_id = 11;
+}
+
+message ListClusterPricingsRequest {
+  string owner_tenant_id = 1;           // Filter by cluster owner
+  common.CursorPaginationRequest pagination = 2;
+}
+
+message ListClusterPricingsResponse {
+  repeated ClusterPricing pricings = 1;
+  common.CursorPaginationResponse pagination = 2;
+}
+
+message CheckClusterAccessRequest {
+  string tenant_id = 1;                 // Subscribing tenant
+  string cluster_id = 2;                // Target cluster
+}
+
+message CheckClusterAccessResponse {
+  bool allowed = 1;                     // Can subscribe
+  string denial_reason = 2;             // If not allowed, why
+  int32 tenant_tier_level = 3;          // Tenant's current tier
+  int32 required_tier_level = 4;        // Cluster's required tier
+  string pricing_model = 5;             // Cluster's pricing model
+  string estimated_cost = 6;            // Estimated cost (for display)
+}
+
+message CreateClusterSubscriptionRequest {
+  string tenant_id = 1;                 // Subscribing tenant
+  string cluster_id = 2;                // Target cluster
+  optional string invite_token = 3;     // For unlisted/private clusters
+}
+
+message ClusterSubscriptionResponse {
+  string subscription_id = 1;           // Internal subscription ID
+  string cluster_id = 2;
+  string tenant_id = 3;
+  string status = 4;                    // active, pending_payment, etc.
+  optional string stripe_subscription_id = 5; // For paid clusters
+  optional string checkout_url = 6;     // Redirect for Stripe checkout
+}
+
+message CancelClusterSubscriptionRequest {
+  string tenant_id = 1;
+  string cluster_id = 2;
 }

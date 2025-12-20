@@ -2,6 +2,8 @@ package demo
 
 import (
 	"fmt"
+	"math"
+	"math/rand"
 	"time"
 
 	"frameworks/api_gateway/graph/model"
@@ -17,52 +19,72 @@ func GenerateStreams() []*pb.Stream {
 
 	return []*pb.Stream{
 		{
-			InternalName: "demo_live_stream_001",
-			Title:        "Live: FrameWorks Demo Stream",
-			Description:  "Demonstrating live streaming capabilities",
-			StreamKey:    "sk_demo_live_a1b2c3d4e5f6",
-			PlaybackId:   "pb_demo_live_x7y8z9",
-			IsLive:       true,
-			Status:       "live",
-			IsRecording:  true,
-			CreatedAt:    timestamppb.New(now.Add(-2 * time.Hour)),
-			UpdatedAt:    timestamppb.New(now.Add(-5 * time.Minute)),
+			InternalName:   "demo_live_stream_001",
+			Title:          "Live: FrameWorks Demo Stream",
+			Description:    "Demonstrating live streaming capabilities",
+			StreamKey:      "sk_demo_live_a1b2c3d4e5f6",
+			PlaybackId:     "pb_demo_live_x7y8z9",
+			IsLive:         true,
+			Status:         "live",
+			IsRecording:    true,
+			CurrentViewers: 47,
+			PeakViewers:    89,
+			TotalViews:     1247,
+			Duration:       7200, // 2 hours in seconds
+			StartedAt:      timestamppb.New(now.Add(-2 * time.Hour)),
+			CreatedAt:      timestamppb.New(now.Add(-24 * time.Hour)),
+			UpdatedAt:      timestamppb.New(now.Add(-5 * time.Minute)),
 		},
 		{
-			InternalName: "demo_offline_stream_002",
-			Title:        "Gaming Stream Setup",
-			Description:  "Getting ready for tonight's gaming session",
-			StreamKey:    "sk_demo_offline_f6g7h8i9j0k1",
-			PlaybackId:   "pb_demo_offline_m3n4o5",
-			IsLive:       false,
-			Status:       "offline",
-			IsRecording:  false,
-			CreatedAt:    timestamppb.New(now.Add(-24 * time.Hour)),
-			UpdatedAt:    timestamppb.New(now.Add(-1 * time.Hour)),
+			InternalName:   "demo_offline_stream_002",
+			Title:          "Gaming Stream Setup",
+			Description:    "Getting ready for tonight's gaming session",
+			StreamKey:      "sk_demo_offline_f6g7h8i9j0k1",
+			PlaybackId:     "pb_demo_offline_m3n4o5",
+			IsLive:         false,
+			Status:         "offline",
+			IsRecording:    false,
+			CurrentViewers: 0,
+			PeakViewers:    0,
+			TotalViews:     0,
+			Duration:       0,
+			CreatedAt:      timestamppb.New(now.Add(-24 * time.Hour)),
+			UpdatedAt:      timestamppb.New(now.Add(-1 * time.Hour)),
 		},
 		{
-			InternalName: "demo_recording_stream_003",
-			Title:        "Product Demo Recording",
-			Description:  "Recording a product demo for the marketing team",
-			StreamKey:    "sk_demo_rec_l2m3n4o5p6q7",
-			PlaybackId:   "pb_demo_rec_r8s9t0",
-			IsLive:       true,
-			Status:       "recording",
-			IsRecording:  true,
-			CreatedAt:    timestamppb.New(now.Add(-6 * time.Hour)),
-			UpdatedAt:    timestamppb.New(now.Add(-10 * time.Minute)),
+			InternalName:   "demo_recording_stream_003",
+			Title:          "Product Demo Recording",
+			Description:    "Recording a product demo for the marketing team",
+			StreamKey:      "sk_demo_rec_l2m3n4o5p6q7",
+			PlaybackId:     "pb_demo_rec_r8s9t0",
+			IsLive:         true,
+			Status:         "recording",
+			IsRecording:    true,
+			CurrentViewers: 3,
+			PeakViewers:    5,
+			TotalViews:     12,
+			Duration:       3600, // 1 hour in seconds
+			StartedAt:      timestamppb.New(now.Add(-1 * time.Hour)),
+			CreatedAt:      timestamppb.New(now.Add(-6 * time.Hour)),
+			UpdatedAt:      timestamppb.New(now.Add(-10 * time.Minute)),
 		},
 		{
-			InternalName: "demo_ended_stream_004",
-			Title:        "Weekly Team Standup",
-			Description:  "Our weekly development team standup meeting",
-			StreamKey:    "sk_demo_ended_u1v2w3x4y5z6",
-			PlaybackId:   "pb_demo_ended_a7b8c9",
-			IsLive:       false,
-			Status:       "ended",
-			IsRecording:  false,
-			CreatedAt:    timestamppb.New(now.Add(-48 * time.Hour)),
-			UpdatedAt:    timestamppb.New(now.Add(-36 * time.Hour)),
+			InternalName:   "demo_ended_stream_004",
+			Title:          "Weekly Team Standup",
+			Description:    "Our weekly development team standup meeting",
+			StreamKey:      "sk_demo_ended_u1v2w3x4y5z6",
+			PlaybackId:     "pb_demo_ended_a7b8c9",
+			IsLive:         false,
+			Status:         "ended",
+			IsRecording:    false,
+			CurrentViewers: 0,
+			PeakViewers:    28,
+			TotalViews:     45,
+			Duration:       1800, // 30 minutes in seconds
+			StartedAt:      timestamppb.New(now.Add(-48 * time.Hour)),
+			EndedAt:        timestamppb.New(now.Add(-47*time.Hour - 30*time.Minute)),
+			CreatedAt:      timestamppb.New(now.Add(-48 * time.Hour)),
+			UpdatedAt:      timestamppb.New(now.Add(-36 * time.Hour)),
 		},
 	}
 }
@@ -76,7 +98,7 @@ func GenerateStreamAnalytics(streamID string) *pb.StreamAnalytics {
 
 	return &pb.StreamAnalytics{
 		Id:                   "demo_analytics_" + streamID,
-		TenantId:             "demo_tenant_frameworks",
+		TenantId:             "00000000-0000-0000-0000-000000000001",
 		StreamId:             streamID,
 		InternalName:         streamID,
 		SessionStartTime:     timestamppb.New(startTime),
@@ -108,7 +130,7 @@ func GenerateStreamAnalytics(streamID string) *pb.StreamAnalytics {
 		Status:               stringPtr("live"),
 		LastUpdated:          timestamppb.New(now),
 		CreatedAt:            timestamppb.New(startTime),
-		CurrentBufferState: stringPtr("FULL"),
+		CurrentBufferState:   stringPtr("FULL"),
 		CurrentCodec:         stringPtr("H264"),
 		CurrentFps:           float32Ptr(30.0),
 		CurrentResolution:    stringPtr("1920x1080"),
@@ -119,10 +141,9 @@ func GenerateStreamAnalytics(streamID string) *pb.StreamAnalytics {
 		UniqueCities:         28,
 		AvgBufferHealth:      0.95,
 		AvgBitrate:           2450,
-		AvgConnectionQuality: 0.98,
 		PacketLossRate:       0.0005,
-		TotalViews:           1247,  // Total view count (session starts)
-		UniqueViewers:        342,   // Unique viewer count (distinct sessions)
+		TotalViews:           1247, // Total view count (session starts)
+		UniqueViewers:        342,  // Unique viewer count (distinct sessions)
 	}
 }
 
@@ -143,7 +164,7 @@ func GenerateViewerMetrics() []*pb.ViewerSession {
 			SessionId:         "demo_session_" + string(rune('a'+i)),
 			Timestamp:         timestamppb.New(now.Add(-time.Duration(19-i) * 5 * time.Minute)),
 			InternalName:      "demo_live_stream_001",
-			TenantId:          "demo_tenant_frameworks",
+			TenantId:          "00000000-0000-0000-0000-000000000001",
 			NodeId:            "node_demo_us_west_01",
 			ConnectionAddr:    "192.168.1." + string(rune('1'+i)),
 			Connector:         "webrtc",
@@ -236,38 +257,70 @@ func GenerateBillingTiers() []*pb.BillingTier {
 func GenerateInvoices() []*pb.Invoice {
 	now := time.Now()
 
-	// Build usage details for first invoice
+	// Build usage details for first invoice (within allocation, metered overage)
 	usageDetails1, _ := structpb.NewStruct(map[string]interface{}{
-		"Streaming hours": map[string]interface{}{
-			"quantity":   42.5,
-			"unit_price": 0.50,
-			"unit":       "hours",
+		"usage_data": map[string]interface{}{
+			"viewer_hours":       708.33, // 42,500 delivered minutes / 60
+			"average_storage_gb": 15.2,
+			"gpu_hours":          5.0,
+			"stream_hours":       42.5,
+			"egress_gb":          125.0,
+			// Per-codec processing (matches ClickHouse columns)
+			"livepeer_h264_seconds":  2400.0,
+			"livepeer_vp9_seconds":   500.0,
+			"livepeer_av1_seconds":   245.7,
+			"livepeer_hevc_seconds":  100.0,
+			"native_av_h264_seconds": 1200.0,
+			"native_av_vp9_seconds":  300.0,
+			"native_av_av1_seconds":  120.5,
+			"native_av_hevc_seconds": 0.0,
+			"native_av_aac_seconds":  150.0, // Audio is FREE
+			"native_av_opus_seconds": 50.0,  // Audio is FREE
+			"audio_seconds":          200.0,
+			"video_seconds":          1620.5,
 		},
-		"Storage GB": map[string]interface{}{
-			"quantity":   15.2,
-			"unit_price": 0.25,
-			"unit":       "GB",
+		"tier_info": map[string]interface{}{
+			"tier_name":        "professional",
+			"display_name":     "Professional",
+			"base_price":       19.99,
+			"metering_enabled": true,
 		},
 	})
 
 	// Build usage details for second invoice
 	usageDetails2, _ := structpb.NewStruct(map[string]interface{}{
-		"Streaming hours": map[string]interface{}{
-			"quantity":   35.0,
-			"unit_price": 0.50,
-			"unit":       "hours",
+		"usage_data": map[string]interface{}{
+			"viewer_hours":       583.33, // 35,000 delivered minutes / 60
+			"average_storage_gb": 19.0,
+			"gpu_hours":          3.5,
+			"stream_hours":       35.0,
+			"egress_gb":          98.0,
+			// Per-codec processing
+			"livepeer_h264_seconds":  1800.0,
+			"livepeer_vp9_seconds":   350.0,
+			"livepeer_av1_seconds":   180.0,
+			"livepeer_hevc_seconds":  75.0,
+			"native_av_h264_seconds": 900.0,
+			"native_av_vp9_seconds":  200.0,
+			"native_av_av1_seconds":  85.0,
+			"native_av_hevc_seconds": 0.0,
+			"native_av_aac_seconds":  120.0,
+			"native_av_opus_seconds": 40.0,
+			"audio_seconds":          160.0,
+			"video_seconds":          1185.0,
 		},
-		"Storage GB": map[string]interface{}{
-			"quantity":   19.0,
-			"unit_price": 0.25,
-			"unit":       "GB",
+		"tier_info": map[string]interface{}{
+			"tier_name":        "professional",
+			"display_name":     "Professional",
+			"base_price":       19.99,
+			"metering_enabled": true,
 		},
 	})
 
 	return []*pb.Invoice{
 		{
 			Id:            "inv_demo_current_001",
-			TenantId:      "demo_tenant_frameworks",
+			TenantId:      "00000000-0000-0000-0000-000000000001",
 			Amount:        29.99,
 			BaseAmount:    19.99,
 			MeteredAmount: 10.00,
@@ -280,7 +333,7 @@ func GenerateInvoices() []*pb.Invoice {
 		},
 		{
 			Id:            "inv_demo_previous_002",
-			TenantId:      "demo_tenant_frameworks",
+			TenantId:      "00000000-0000-0000-0000-000000000001",
 			Amount:        24.50,
 			BaseAmount:    19.99,
 			MeteredAmount: 4.51,
@@ -304,10 +357,10 @@ func GenerateBillingStatus() *pb.BillingStatusResponse {
 	customLimit := float64(100000)
 
 	return &pb.BillingStatusResponse{
-		TenantId: "demo_tenant_frameworks",
+		TenantId: "00000000-0000-0000-0000-000000000001",
 		Subscription: &pb.TenantSubscription{
 			Id:              "sub_demo_123",
-			TenantId:        "demo_tenant_frameworks",
+			TenantId:        "00000000-0000-0000-0000-000000000001",
 			TierId:          "tier_professional",
 			Status:          "active",
 			BillingEmail:    "demo@frameworks.example",
@@ -335,46 +388,122 @@ func GenerateBillingStatus() *pb.BillingStatusResponse {
 			},
 		},
 		Tier: &pb.BillingTier{
-			Id:          "tier_professional",
-			TierName:    "professional",
-			DisplayName: "Professional",
-			Description: "For growing businesses",
-			BasePrice:   99.00,
-			Currency:    "USD",
+			Id:            "tier_professional",
+			TierName:      "professional",
+			DisplayName:   "Professional",
+			Description:   "For growing businesses with advanced streaming needs",
+			BasePrice:     99.00,
+			Currency:      "USD",
+			BillingPeriod: "month",
+			BandwidthAllocation: &pb.AllocationDetails{
+				Limit:     float64Ptr(1000), // 1TB included
+				UnitPrice: 0.08,
+				Unit:      "GB",
+			},
+			StorageAllocation: &pb.AllocationDetails{
+				Limit:     float64Ptr(100), // 100GB included
+				UnitPrice: 0.10,
+				Unit:      "GB",
+			},
+			ComputeAllocation: &pb.AllocationDetails{
+				Limit:     float64Ptr(500), // 500 compute hours included
+				UnitPrice: 0.05,
+				Unit:      "hours",
+			},
+			Features: &pb.BillingFeatures{
+				Recording:      true,
+				Analytics:      true,
+				CustomBranding: true,
+				ApiAccess:      true,
+				SupportLevel:   "priority",
+				Sla:            true,
+			},
+			SupportLevel:    "priority",
+			SlaLevel:        "99.9%",
+			MeteringEnabled: true,
+			OverageRates: &pb.OverageRates{
+				Bandwidth: &pb.AllocationDetails{
+					UnitPrice: 0.10,
+					Unit:      "GB",
+				},
+				Storage: &pb.AllocationDetails{
+					UnitPrice: 0.12,
+					Unit:      "GB",
+				},
+				Compute: &pb.AllocationDetails{
+					UnitPrice: 0.06,
+					Unit:      "hours",
+				},
+			},
+			IsActive:     true,
+			SortOrder:    2, // Professional tier in the middle
+			IsEnterprise: false,
+			CreatedAt:    timestamppb.New(now.Add(-90 * 24 * time.Hour)),
+			UpdatedAt:    timestamppb.New(now.Add(-7 * 24 * time.Hour)),
 		},
 		BillingStatus:     "active",
 		NextBillingDate:   timestamppb.New(nextBilling),
 		OutstandingAmount: 0.00,
 		Currency:          "USD",
 		PendingInvoices:   []*pb.Invoice{}, // Empty slice
-		RecentPayments:    []*pb.Payment{},    // Empty slice
+		RecentPayments:    []*pb.Payment{}, // Empty slice
 		UsageSummary: &pb.UsageSummary{
-			BillingMonth:       now.Format("2006-01"),
-			Period:             "1d",
-			Timestamp:          timestamppb.Now(),
-			StreamHours:        42.5,
-			EgressGb:           25.4,
-			RecordingGb:        8.2,
-			PeakBandwidthMbps:  156.8,
-			TranscodingMinutes: 0, // Placeholder until Livepeer metering
-			StorageGb:          12.5,
-			AverageStorageGb:   11.8,
-			ClipsAdded:         3,
-			ClipsDeleted:       1,
-			ClipStorageAddedGb: 0.5,
+			BillingMonth:          now.Format("2006-01"),
+			Period:                "1d",
+			Timestamp:             timestamppb.Now(),
+			StreamHours:           42.5,
+			EgressGb:              25.4,
+			RecordingGb:           8.2,
+			PeakBandwidthMbps:     156.8,
+			// Processing/transcoding usage (totals)
+			LivepeerSeconds:       3245.7, // ~54 minutes of Livepeer transcode
+			LivepeerSegmentCount:  542,
+			LivepeerUniqueStreams: 3,
+			NativeAvSeconds:       1820.5, // ~30 minutes of local AV processing
+			NativeAvSegmentCount:  364,
+			NativeAvUniqueStreams: 5,
+			// Per-codec breakdown: Livepeer (external gateway)
+			LivepeerH264Seconds: 2400.0, // H264 is most common
+			LivepeerVp9Seconds:  500.0,
+			LivepeerAv1Seconds:  245.7,
+			LivepeerHevcSeconds: 100.0,
+			// Per-codec breakdown: Native AV (local processing)
+			NativeAvH264Seconds: 1200.0,
+			NativeAvVp9Seconds:  300.0,
+			NativeAvAv1Seconds:  120.5,
+			NativeAvHevcSeconds: 0.0,
+			NativeAvAacSeconds:  150.0, // Audio is FREE but tracked
+			NativeAvOpusSeconds: 50.0,  // Audio is FREE but tracked
+			// Track type aggregates
+			AudioSeconds: 200.0,  // Total audio (aac + opus)
+			VideoSeconds: 1620.5, // Total video (h264+vp9+av1+hevc)
+			StorageGb:             12.5,
+			AverageStorageGb:      11.8,
+			// Clip storage lifecycle
+			ClipsAdded:           3,
+			ClipsDeleted:         1,
+			ClipStorageAddedGb:   0.5,
 			ClipStorageDeletedGb: 0.2,
-			TotalStreams:       8,
-			TotalViewers:       1847,
-			ViewerHours:        156.3,
-			PeakViewers:        342,
-			MaxViewers:         342,
-			UniqueUsers:        1203,
-			AvgViewers:         145.5,
-			UniqueCountries:    12,
-			UniqueCities:       58,
-			AvgBufferHealth:    0.94,
-			AvgBitrate:         3250,
-			PacketLossRate:     0.0008,
+			// DVR storage lifecycle
+			DvrAdded:             2,
+			DvrDeleted:           0,
+			DvrStorageAddedGb:    1.2,
+			DvrStorageDeletedGb:  0.0,
+			// VOD storage lifecycle
+			VodAdded:             1,
+			VodDeleted:           0,
+			VodStorageAddedGb:    2.5,
+			VodStorageDeletedGb:  0.0,
+			// Viewer metrics
+			TotalStreams:         8,
+			TotalViewers:         1847,
+			ViewerHours:          156.3,
+			PeakViewers:          342,
+			MaxViewers:           342,
+			UniqueUsers:          1203,
+			AvgViewers:           145.5,
+			UniqueCountries:      12,
+			UniqueCities:         58,
 			GeoBreakdown: []*pb.CountryMetrics{
 				{CountryCode: "US", ViewerCount: 245, ViewerHours: 82.5, Percentage: 52.3, EgressGb: 13.2},
 				{CountryCode: "GB", ViewerCount: 78, ViewerHours: 28.1, Percentage: 16.6, EgressGb: 4.2},
@@ -387,8 +516,7 @@ func GenerateBillingStatus() *pb.BillingStatusResponse {
 }
 
 // GenerateUsageRecords creates demo usage records
-// Usage types must match what frontend expects: stream_hours, egress_gb, recording_gb,
-// peak_bandwidth_mbps, total_streams, peak_viewers
+// Usage types must match what frontend expects and what Purser stores
 func GenerateUsageRecords() []*pb.UsageRecord {
 	now := time.Now()
 
@@ -398,12 +526,28 @@ func GenerateUsageRecords() []*pb.UsageRecord {
 		value     float64
 		unit      string
 	}{
+		// Core streaming metrics
 		{"stream_hours", 25, "hours"},
 		{"egress_gb", 1628, "GB"},
 		{"recording_gb", 37.25, "GB"},
 		{"peak_bandwidth_mbps", 850.5, "Mbps"},
 		{"total_streams", 1, "streams"},
 		{"peak_viewers", 342, "viewers"},
+		// Per-codec processing: Livepeer (external gateway)
+		{"livepeer_h264_seconds", 2400.0, "seconds"},
+		{"livepeer_vp9_seconds", 500.0, "seconds"},
+		{"livepeer_av1_seconds", 245.7, "seconds"},
+		{"livepeer_hevc_seconds", 100.0, "seconds"},
+		// Per-codec processing: Native AV (local)
+		{"native_av_h264_seconds", 1200.0, "seconds"},
+		{"native_av_vp9_seconds", 300.0, "seconds"},
+		{"native_av_av1_seconds", 120.5, "seconds"},
+		{"native_av_hevc_seconds", 0.0, "seconds"},
+		{"native_av_aac_seconds", 150.0, "seconds"},  // Audio is FREE
+		{"native_av_opus_seconds", 50.0, "seconds"},  // Audio is FREE
+		// Track type aggregates
+		{"audio_seconds", 200.0, "seconds"},
+		{"video_seconds", 1620.5, "seconds"},
 	}
 
 	records := make([]*pb.UsageRecord, len(usageData))
@@ -420,7 +564,7 @@ func GenerateUsageRecords() []*pb.UsageRecord {
 
 		records[i] = &pb.UsageRecord{
 			Id:           "usage_demo_" + now.Format("20060102") + "_" + data.usageType,
-			TenantId:     "demo_tenant_frameworks",
+			TenantId:     "00000000-0000-0000-0000-000000000001",
 			ClusterId:    "cluster_demo_us_west",
 			ClusterName:  stringPtr("US West Demo Cluster"),
 			UsageType:    data.usageType,
@@ -473,8 +617,8 @@ func GenerateDeveloperTokens() []*pb.APITokenInfo {
 func GenerateTenant() *pb.Tenant {
 	now := time.Now()
 	return &pb.Tenant{
-		Id:                     "demo_tenant_frameworks",
-		Name:                   "FrameWorks Demo Organization",
+		Id:                    "00000000-0000-0000-0000-000000000001",
+		Name:                  "FrameWorks Demo Organization",
 		Subdomain:             stringPtr("demo"),
 		PrimaryColor:          "#3B82F6", // Blue
 		SecondaryColor:        "#1F2937", // Dark gray
@@ -482,9 +626,9 @@ func GenerateTenant() *pb.Tenant {
 		DeploymentModel:       "multi-region",
 		PrimaryDeploymentTier: "edge",
 		PrimaryClusterId:      stringPtr("cluster_demo_us_west"),
-		IsActive:               true,
-		CreatedAt:              timestamppb.New(now.Add(-180 * 24 * time.Hour)),
-		UpdatedAt:              timestamppb.New(now.Add(-1 * 24 * time.Hour)),
+		IsActive:              true,
+		CreatedAt:             timestamppb.New(now.Add(-180 * 24 * time.Hour)),
+		UpdatedAt:             timestamppb.New(now.Add(-1 * 24 * time.Hour)),
 	}
 }
 
@@ -493,30 +637,66 @@ func GeneratePlatformOverview() *pb.GetPlatformOverviewResponse {
 	now := time.Now()
 
 	return &pb.GetPlatformOverviewResponse{
-		TenantId:              "demo_tenant_frameworks",
-		TotalUsers:            156,
-		ActiveUsers:           120,
-		TotalStreams:          42,
-		ActiveStreams:         7,
+		TenantId:      "00000000-0000-0000-0000-000000000001",
+		TotalStreams:  42,
+		ActiveStreams: 7,
 		TotalViewers:          1247,
 		AverageViewers:        54.2,
 		PeakBandwidth:         850.5,
 		GeneratedAt:           timestamppb.New(now),
-		StreamHours:           284.5,   // ~12 days of streaming
-		EgressGb:              1247.8,  // ~1.2 TB egress
-		PeakViewers:           342,     // Unique viewers (legacy field)
-		TotalUploadBytes:      52428800000,  // ~50 GB uploaded
+		StreamHours:           284.5,         // ~12 days of streaming
+		EgressGb:              1247.8,        // ~1.2 TB egress
+		PeakViewers:           342,           // Unique viewers (legacy field)
+		TotalUploadBytes:      52428800000,   // ~50 GB uploaded
 		TotalDownloadBytes:    1340000000000, // ~1.2 TB downloaded
-		ViewerHours:           4892.5,  // Total accumulated watch time
-		DeliveredMinutes:      293550,  // viewerHours * 60
-		UniqueViewers:         342,     // Distinct viewer sessions
-		IngestHours:           284.5,   // Same as StreamHours (alias)
-		PeakConcurrentViewers: 89,      // Max concurrent viewers at any instant
-		TotalViews:            8734,    // Total view sessions started
+		ViewerHours:           4892.5,        // Total accumulated watch time
+		DeliveredMinutes:      293550,        // viewerHours * 60
+		UniqueViewers:         342,           // Distinct viewer sessions
+		IngestHours:           284.5,         // Same as StreamHours (alias)
+		PeakConcurrentViewers: 89,            // Max concurrent viewers at any instant
+		TotalViews:            8734,          // Total view sessions started
 	}
 }
 
-// GenerateStreamEvents creates demo stream events for subscription
+// GenerateStreamSubscriptionEvents creates demo stream subscription events
+// Returns model.StreamSubscriptionEvent with direct proto payloads
+func GenerateStreamSubscriptionEvents() []*model.StreamSubscriptionEvent {
+	now := time.Now()
+	return []*model.StreamSubscriptionEvent{
+		{
+			EventType: "EVENT_TYPE_STREAM_LIFECYCLE_UPDATE",
+			Timestamp: now,
+			LifecycleUpdate: &pb.StreamLifecycleUpdate{
+				NodeId:          "node_demo_us_west_01",
+				InternalName:    "demo_live_stream_001",
+				Status:          "live",
+				BufferState:     stringPtr("FULL"),
+				UploadedBytes:   uint64Ptr(125000000),
+				DownloadedBytes: uint64Ptr(450000000),
+				TotalViewers:    uint32Ptr(47),
+				TotalInputs:     uint32Ptr(1),
+				ViewerSeconds:   uint64Ptr(2820),
+			},
+		},
+		{
+			EventType: "EVENT_TYPE_STREAM_LIFECYCLE_UPDATE",
+			Timestamp: now.Add(30 * time.Second),
+			LifecycleUpdate: &pb.StreamLifecycleUpdate{
+				NodeId:          "node_demo_us_west_01",
+				InternalName:    "demo_live_stream_001",
+				Status:          "live",
+				BufferState:     stringPtr("FULL"),
+				UploadedBytes:   uint64Ptr(187500000),
+				DownloadedBytes: uint64Ptr(675000000),
+				TotalViewers:    uint32Ptr(52),
+				TotalInputs:     uint32Ptr(1),
+				ViewerSeconds:   uint64Ptr(4230),
+			},
+		},
+	}
+}
+
+// GenerateStreamEvents creates demo stream events for the old StreamEvent type (used by connections/pagination)
 func GenerateStreamEvents() []*pb.StreamEvent {
 	return []*pb.StreamEvent{
 		{
@@ -692,136 +872,167 @@ func GenerateSystemHealthEvents() []*pb.NodeLifecycleUpdate {
 // GenerateStreamHealthMetrics creates demo stream health metrics
 func GenerateStreamHealthMetrics() []*pb.StreamHealthMetric {
 	now := time.Now()
+	metrics := make([]*pb.StreamHealthMetric, 0, 50)
 
-	videoBitrate := int32(2500)
+	// Base values
 	videoWidth := int32(1920)
 	videoHeight := int32(1080)
-	videoFPS := 30.0
 	videoResolution := "1920x1080"
-	audioBitrate := int32(128)
 	audioChannels := int32(2)
 	audioSampleRate := int32(48000)
-	tracks := []*pb.StreamTrack{
-		{
-			TrackName:   "video_main",
-			TrackType:   "video",
-			Codec:       "H264",
-			BitrateKbps: &videoBitrate,
-			Width:       &videoWidth,
-			Height:      &videoHeight,
-			Fps:         float64Ptr(videoFPS),
-			Resolution:  stringPtr(videoResolution),
-		},
-		{
-			TrackName:   "audio_main",
-			TrackType:   "audio",
-			Codec:       "AAC",
-			BitrateKbps: &audioBitrate,
-			Channels:    &audioChannels,
-			SampleRate:  &audioSampleRate,
-		},
-	}
-
-	degradedBitrate := int32(2200)
-	tracksDegraded := []*pb.StreamTrack{
-		{
-			TrackName:   "video_main",
-			TrackType:   "video",
-			Codec:       "H264",
-			BitrateKbps: &degradedBitrate,
-			Width:       &videoWidth,
-			Height:      &videoHeight,
-			Fps:         float64Ptr(29.8),
-			Resolution:  stringPtr(videoResolution),
-		},
-		{
-			TrackName:   "audio_main",
-			TrackType:   "audio",
-			Codec:       "AAC",
-			BitrateKbps: &audioBitrate,
-			Channels:    &audioChannels,
-			SampleRate:  &audioSampleRate,
-		},
-	}
-
-	packetLoss1 := 0.08
-	packetLoss2 := 0.32
+	audioBitrate := int32(128)
 	qualityTierFull := "1080p30"
 
-	return []*pb.StreamHealthMetric{
-		{
-			Timestamp:              timestamppb.New(now.Add(-5 * time.Minute)),
+	// Generate 50 points over last 4 hours (approx every 5 mins)
+	for i := 49; i >= 0; i-- {
+		ts := now.Add(-time.Duration(i*5) * time.Minute)
+		
+		// Simulate some variation
+		// Sine wave for bitrate: 2.5Mbps +/- 0.5Mbps
+		variation := math.Sin(float64(i) * 0.2)
+		bitrateVal := 2500 + int32(variation*500)
+		
+		// Occasional drops (simulated network issues)
+		bufferHealth := 0.98
+		bufferState := "FULL"
+		packetLoss := 0.001
+		fps := 30.0
+		
+		if i%15 == 0 { // Every 15th point is a "bad" moment
+			bitrateVal = 1200
+			bufferHealth = 0.45
+			bufferState = "RECOVER"
+			packetLoss = 0.05
+			fps = 24.5
+		} else if i%7 == 0 { // Every 7th point is "warning"
+			bufferHealth = 0.75
+			bufferState = "DRY"
+			fps = 28.0
+		}
+
+		videoBitrate := bitrateVal
+		
+		tracks := []*pb.StreamTrack{
+			{
+				TrackName:   "video_main",
+				TrackType:   "video",
+				Codec:       "H264",
+				BitrateKbps: &videoBitrate,
+				Width:       &videoWidth,
+				Height:      &videoHeight,
+				Fps:         float64Ptr(fps),
+				Resolution:  stringPtr(videoResolution),
+			},
+			{
+				TrackName:   "audio_main",
+				TrackType:   "audio",
+				Codec:       "AAC",
+				BitrateKbps: &audioBitrate,
+				Channels:    &audioChannels,
+				SampleRate:  &audioSampleRate,
+			},
+		}
+
+		metric := &pb.StreamHealthMetric{
+			Timestamp:              timestamppb.New(ts),
 			InternalName:           "demo_live_stream_001",
-			TenantId:               "demo_tenant_frameworks",
+			TenantId:               "00000000-0000-0000-0000-000000000001",
 			NodeId:                 "node_demo_us_west_01",
-			Bitrate:                2500000,
-			Fps:                    30,
+			Bitrate:                bitrateVal, // kbps (consistent with ClickHouse schema)
+			Fps:                    float32(fps),
 			GopSize:                60,
 			Width:                  1920,
 			Height:                 1080,
-			BufferHealth:           0.98,
-			BufferState:            "FULL",
-			PacketsSent:            15420,
-			PacketsLost:            12,
+			BufferHealth:           float32(bufferHealth),
+			BufferState:            bufferState,
+			PacketsSent:            15000,
+			PacketsLost:            int64(15000 * packetLoss),
 			Codec:                  "H264",
 			Tracks:                 tracks,
 			PrimaryAudioChannels:   &audioChannels,
 			PrimaryAudioSampleRate: &audioSampleRate,
 			PrimaryAudioCodec:      stringPtr("AAC"),
 			PrimaryAudioBitrate:    &audioBitrate,
-			PacketLossPercentage:   float64Ptr(packetLoss1),
+			PacketLossPercentage:   float64Ptr(packetLoss),
 			QualityTier:            &qualityTierFull,
+		}
+		
+		if bufferState != "FULL" {
+			metric.IssuesDescription = stringPtr("temporary network congestion")
+		}
+
+		metrics = append(metrics, metric)
+	}
+
+	return metrics
+}
+
+// GenerateRebufferingEvents creates demo rebuffering events
+func GenerateRebufferingEvents() []*pb.RebufferingEvent {
+	now := time.Now()
+	return []*pb.RebufferingEvent{
+		{
+			Id:            "rebuf_demo_001",
+			Timestamp:     timestamppb.New(now.Add(-8 * time.Minute)),
+			InternalName:  "demo_live_stream_001",
+			NodeId:        "node_demo_us_west_01",
+			BufferState:   "DRY",
+			PrevState:     "FULL",
+			RebufferStart: timestamppb.New(now.Add(-8 * time.Minute)),
+			RebufferEnd:   timestamppb.New(now.Add(-6 * time.Minute)),
 		},
 		{
-			Timestamp:              timestamppb.New(now.Add(-2 * time.Minute)),
-			InternalName:           "demo_live_stream_001",
-			TenantId:               "demo_tenant_frameworks",
-			NodeId:                 "node_demo_us_west_01",
-			Bitrate:                2400000,
-			Fps:                    29,
-			GopSize:                64,
-			Width:                  1920,
-			Height:                 1080,
-			BufferHealth:           0.72,
-			BufferState:            "DRY",
-			PacketsSent:            15890,
-			PacketsLost:            45,
-			Codec:                  "H264",
-			Tracks:                 tracksDegraded,
-			PrimaryAudioChannels:   &audioChannels,
-			PrimaryAudioSampleRate: &audioSampleRate,
-			PrimaryAudioCodec:      stringPtr("AAC"),
-			PrimaryAudioBitrate:    &audioBitrate,
-			PacketLossPercentage:   float64Ptr(packetLoss2),
-			QualityTier:            &qualityTierFull,
-			IssuesDescription:      stringPtr("elevated packet loss on edge node"),
+			Id:            "rebuf_demo_002",
+			Timestamp:     timestamppb.New(now.Add(-6 * time.Minute)),
+			InternalName:  "demo_live_stream_001",
+			NodeId:        "node_demo_us_west_01",
+			BufferState:   "RECOVERING",
+			PrevState:     "DRY",
+			RebufferStart: timestamppb.New(now.Add(-8 * time.Minute)),
+			RebufferEnd:   timestamppb.New(now.Add(-6 * time.Minute)),
 		},
 	}
 }
 
-// GenerateRebufferingEvents creates demo rebuffering events
-func GenerateRebufferingEvents() []*model.RebufferingEvent {
+// GenerateViewerTimeSeries creates demo viewer count time series data for charts
+func GenerateViewerTimeSeries() []*pb.ViewerCountBucket {
 	now := time.Now()
-	return []*model.RebufferingEvent{
-		{
-			Timestamp:     now.Add(-8 * time.Minute),
-			Stream:        "demo_live_stream_001",
-			NodeID:        "node_demo_us_west_01",
-			BufferState:   model.BufferStateDry,
-			PreviousState: model.BufferStateFull,
-			RebufferStart: true,
-			RebufferEnd:   false,
-		},
-		{
-			Timestamp:     now.Add(-6 * time.Minute),
-			Stream:        "demo_live_stream_001",
-			NodeID:        "node_demo_us_west_01",
-			BufferState:   model.BufferStateRecover,
-			PreviousState: model.BufferStateDry,
-			RebufferStart: false,
-			RebufferEnd:   true,
-		},
+	// Generate 288 data points (24 hours * 12 per hour) at 5-minute intervals
+	totalPoints := 288
+	buckets := make([]*pb.ViewerCountBucket, 0, totalPoints)
+
+	baseViewers := 150.0
+	
+	for i := totalPoints - 1; i >= 0; i-- {
+		ts := now.Add(-time.Duration(i*5) * time.Minute)
+		
+		// Create a daily curve using sine wave (peaking around evening)
+		// i goes from 287 down to 0 (representing -24h to now)
+		// Map i to 0-2PI for sine wave
+		
+		hourOffset := float64(i) / 12.0 // Hours ago
+		
+		// Daily cycle: peak at -4h (evening), low at -16h (early morning)
+		dailyCycle := math.Sin((hourOffset - 4.0) * math.Pi / 12.0) 
+		
+		// Add some noise
+		noise := (float64(i%7) / 10.0) - 0.3
+		
+		viewers := baseViewers + (dailyCycle * 80.0) + (noise * 20.0)
+		
+		// Ensure non-negative
+		if viewers < 5 {
+			viewers = 5
+		}
+		
+		buckets = append(buckets, &pb.ViewerCountBucket{
+			Timestamp:    timestamppb.New(ts),
+			ViewerCount:  int32(viewers),
+			InternalName: "demo_live_stream_001",
+		})
 	}
+
+	return buckets
 }
 
 // GenerateViewerGeographics creates realistic demo viewer geographic data
@@ -833,7 +1044,7 @@ func GenerateViewerGeographics() []*pb.ConnectionEvent {
 		{
 			EventId:        "evt_demo_1",
 			Timestamp:      timestamppb.New(now.Add(-30 * time.Minute)),
-			TenantId:       "demo_tenant_frameworks",
+			TenantId:       "00000000-0000-0000-0000-000000000001",
 			InternalName:   "demo_live_stream_001",
 			SessionId:      "sess_demo_1",
 			ConnectionAddr: "192.168.1.100",
@@ -849,7 +1060,7 @@ func GenerateViewerGeographics() []*pb.ConnectionEvent {
 		{
 			EventId:                "evt_demo_1_disconnect",
 			Timestamp:              timestamppb.New(now.Add(-5 * time.Minute)),
-			TenantId:               "demo_tenant_frameworks",
+			TenantId:               "00000000-0000-0000-0000-000000000001",
 			InternalName:           "demo_live_stream_001",
 			SessionId:              "sess_demo_1",
 			ConnectionAddr:         "192.168.1.100",
@@ -860,17 +1071,17 @@ func GenerateViewerGeographics() []*pb.ConnectionEvent {
 			Latitude:               37.7749,
 			Longitude:              -122.4194,
 			EventType:              "disconnect",
-			SessionDurationSeconds: 1500, // 25 minutes
+			SessionDurationSeconds: 1500,      // 25 minutes
 			BytesTransferred:       256000000, // ~256 MB
 		},
 		// Connect event
 		{
 			EventId:        "evt_demo_2",
 			Timestamp:      timestamppb.New(now.Add(-25 * time.Minute)),
-			TenantId:       "demo_tenant_frameworks",
+			TenantId:       "00000000-0000-0000-0000-000000000001",
 			InternalName:   "demo_live_stream_001",
 			SessionId:      "sess_demo_2",
-			ConnectionAddr:         "203.0.113.45",
+			ConnectionAddr: "203.0.113.45",
 			Connector:      "DASH",
 			NodeId:         "node_demo_eu_west_01",
 			CountryCode:    "GB",
@@ -883,7 +1094,7 @@ func GenerateViewerGeographics() []*pb.ConnectionEvent {
 		{
 			EventId:                "evt_demo_2_disconnect",
 			Timestamp:              timestamppb.New(now.Add(-2 * time.Minute)),
-			TenantId:               "demo_tenant_frameworks",
+			TenantId:               "00000000-0000-0000-0000-000000000001",
 			InternalName:           "demo_live_stream_001",
 			SessionId:              "sess_demo_2",
 			ConnectionAddr:         "203.0.113.45",
@@ -894,14 +1105,14 @@ func GenerateViewerGeographics() []*pb.ConnectionEvent {
 			Latitude:               51.5074,
 			Longitude:              -0.1278,
 			EventType:              "disconnect",
-			SessionDurationSeconds: 1380, // 23 minutes
+			SessionDurationSeconds: 1380,      // 23 minutes
 			BytesTransferred:       189000000, // ~189 MB
 		},
 		// Connect event - still connected
 		{
 			EventId:        "evt_demo_3",
 			Timestamp:      timestamppb.New(now.Add(-20 * time.Minute)),
-			TenantId:       "demo_tenant_frameworks",
+			TenantId:       "00000000-0000-0000-0000-000000000001",
 			InternalName:   "demo_live_stream_001",
 			SessionId:      "sess_demo_3",
 			ConnectionAddr: "198.51.100.78",
@@ -917,7 +1128,7 @@ func GenerateViewerGeographics() []*pb.ConnectionEvent {
 		{
 			EventId:                "evt_demo_4_disconnect",
 			Timestamp:              timestamppb.New(now.Add(-10 * time.Minute)),
-			TenantId:               "demo_tenant_frameworks",
+			TenantId:               "00000000-0000-0000-0000-000000000001",
 			InternalName:           "demo_live_stream_001",
 			SessionId:              "sess_demo_4",
 			ConnectionAddr:         "45.33.32.156",
@@ -928,7 +1139,7 @@ func GenerateViewerGeographics() []*pb.ConnectionEvent {
 			Latitude:               52.5200,
 			Longitude:              13.4050,
 			EventType:              "disconnect",
-			SessionDurationSeconds: 45, // 45 seconds (short session)
+			SessionDurationSeconds: 45,      // 45 seconds (short session)
 			BytesTransferred:       5200000, // ~5 MB
 		},
 	}
@@ -1015,8 +1226,8 @@ func GenerateGeographicDistribution() *model.GeographicDistribution {
 	}
 }
 
-// GenerateLoadBalancingMetrics creates realistic demo load balancing metrics data
-func GenerateLoadBalancingMetrics() []*pb.RoutingEvent {
+// GenerateRoutingEvents creates realistic demo routing event data
+func GenerateRoutingEvents() []*pb.RoutingEvent {
 	now := time.Now()
 
 	str := func(s string) *string { return &s }
@@ -1025,13 +1236,17 @@ func GenerateLoadBalancingMetrics() []*pb.RoutingEvent {
 
 	// H3 index examples at resolution 5 (~25km hexagons)
 	// These are valid H3 indexes for the given lat/lng coordinates
-	sfClientBucket := &pb.GeoBucket{H3Index: 0x85283473fffffff, Resolution: 5}   // San Francisco area
-	sfNodeBucket := &pb.GeoBucket{H3Index: 0x85283477fffffff, Resolution: 5}     // Palo Alto area
-londonClientBucket := &pb.GeoBucket{H3Index: 0x85194ad7fffffff, Resolution: 5} // London area
-londonNodeBucket := &pb.GeoBucket{H3Index: 0x85194ad3fffffff, Resolution: 5}   // London node
-tokyoClientBucket := &pb.GeoBucket{H3Index: 0x8529a927fffffff, Resolution: 5}  // Tokyo area
-tokyoNodeBucket := &pb.GeoBucket{H3Index: 0x8529a923fffffff, Resolution: 5}    // Tokyo node
-nyClientBucket := &pb.GeoBucket{H3Index: 0x85282607fffffff, Resolution: 5}     // New York area
+	sfClientBucket := &pb.GeoBucket{H3Index: 0x85283473fffffff, Resolution: 5}     // San Francisco area
+	sfNodeBucket := &pb.GeoBucket{H3Index: 0x85283477fffffff, Resolution: 5}       // Palo Alto area
+	londonClientBucket := &pb.GeoBucket{H3Index: 0x85194ad7fffffff, Resolution: 5} // London area
+	londonNodeBucket := &pb.GeoBucket{H3Index: 0x85194ad3fffffff, Resolution: 5}   // London node
+	tokyoClientBucket := &pb.GeoBucket{H3Index: 0x8529a927fffffff, Resolution: 5}  // Tokyo area
+	tokyoNodeBucket := &pb.GeoBucket{H3Index: 0x8529a923fffffff, Resolution: 5}    // Tokyo node
+	nyClientBucket := &pb.GeoBucket{H3Index: 0x85282607fffffff, Resolution: 5}     // New York area
+
+	// Demo cluster and tenant IDs for dual-tenant attribution
+	demoClusterID := str("central-primary")
+	demoStreamTenantID := str("00000000-0000-0000-0000-000000000001")
 
 	return []*pb.RoutingEvent{
 		// US West routing events - multiple to same node for realistic counts
@@ -1056,6 +1271,8 @@ nyClientBucket := &pb.GeoBucket{H3Index: 0x85282607fffffff, Resolution: 5}     /
 			LatencyMs:       12.5,
 			ClientBucket:    sfClientBucket,
 			NodeBucket:      sfNodeBucket,
+			StreamTenantId:  demoStreamTenantID,
+			ClusterId:       demoClusterID,
 		},
 		{
 			Id:              "demo_routing_002",
@@ -1074,6 +1291,8 @@ nyClientBucket := &pb.GeoBucket{H3Index: 0x85282607fffffff, Resolution: 5}     /
 			RoutingDistance: f64(48.1),
 			EventType:       str("load_balancing"),
 			Source:          str("foghorn"),
+			StreamTenantId:  demoStreamTenantID,
+			ClusterId:       demoClusterID,
 			CandidatesCount: 3,
 			LatencyMs:       11.2,
 			ClientBucket:    sfClientBucket,
@@ -1254,11 +1473,11 @@ func GenerateViewerEndpointResponse(contentType, contentID string) *pb.ViewerEnd
 	now := time.Now()
 	durationSeconds := int32(0)
 	metadata := &pb.PlaybackMetadata{
-		Status:      "live",
-		IsLive:      true,
-		Viewers:     132,
-		BufferState: "FULL",
-		TenantId:      "demo_tenant_frameworks",
+		Status:        "live",
+		IsLive:        true,
+		Viewers:       132,
+		BufferState:   "FULL",
+		TenantId:      "00000000-0000-0000-0000-000000000001",
 		ContentId:     contentID,
 		ContentType:   contentType,
 		ProtocolHints: []string{"WHEP", "HLS", "HTTP"},
@@ -1299,13 +1518,70 @@ func GenerateViewerEndpointResponse(contentType, contentID string) *pb.ViewerEnd
 	}
 }
 
-// ============================================================================ 
+// GenerateIngestEndpointResponse creates demo ingest endpoint data for StreamCrafter
+func GenerateIngestEndpointResponse(streamKey string) *pb.IngestEndpointResponse {
+	if streamKey == "" {
+		streamKey = "demo_stream_key_001"
+	}
+
+	// Demo internal stream name (derived from stream key in real impl)
+	internalName := "demo_live_stream_001"
+
+	// Primary WHIP ingest URL
+	whipURL := "https://ingest.demo.frameworks.video/webrtc/" + internalName
+	rtmpURL := "rtmp://ingest.demo.frameworks.video:1935/live/" + internalName
+	srtURL := "srt://ingest.demo.frameworks.video:9000?streamid=" + internalName
+	region := "US West"
+	loadScore := 0.25
+
+	primary := &pb.IngestEndpoint{
+		NodeId:    "node_demo_us_west_01",
+		BaseUrl:   "https://ingest.demo.frameworks.video",
+		WhipUrl:   &whipURL,
+		RtmpUrl:   &rtmpURL,
+		SrtUrl:    &srtURL,
+		Region:    &region,
+		LoadScore: &loadScore,
+	}
+
+	// Fallback endpoint
+	fallbackWhipURL := "https://ingest.eu.demo.frameworks.video/webrtc/" + internalName
+	fallbackRtmpURL := "rtmp://ingest.eu.demo.frameworks.video:1935/live/" + internalName
+	fallbackSrtURL := "srt://ingest.eu.demo.frameworks.video:9000?streamid=" + internalName
+	fallbackRegion := "EU West"
+	fallbackLoadScore := 0.42
+
+	fallback := &pb.IngestEndpoint{
+		NodeId:    "node_demo_eu_west_01",
+		BaseUrl:   "https://ingest.eu.demo.frameworks.video",
+		WhipUrl:   &fallbackWhipURL,
+		RtmpUrl:   &fallbackRtmpURL,
+		SrtUrl:    &fallbackSrtURL,
+		Region:    &fallbackRegion,
+		LoadScore: &fallbackLoadScore,
+	}
+
+	metadata := &pb.IngestMetadata{
+		StreamId:         internalName,
+		StreamKey:        streamKey,
+		TenantId:         "00000000-0000-0000-0000-000000000001",
+		RecordingEnabled: true,
+	}
+
+	return &pb.IngestEndpointResponse{
+		Primary:   primary,
+		Fallbacks: []*pb.IngestEndpoint{fallback},
+		Metadata:  metadata,
+	}
+}
+
+// ============================================================================
 // Connection-style Demo Generators (for Relay pagination)
-// ============================================================================ 
+// ============================================================================
 
 // GenerateRoutingEventsConnection creates demo routing events with pagination
 func GenerateRoutingEventsConnection() *model.RoutingEventsConnection {
-	events := GenerateLoadBalancingMetrics()
+	events := GenerateRoutingEvents()
 	edges := make([]*model.RoutingEventEdge, len(events))
 	for i, event := range events {
 		cursor := event.Id
@@ -1407,11 +1683,11 @@ func GenerateNodeMetricsConnection() *model.NodeMetricsConnection {
 			CpuUsage:           65.2,
 			RamMax:             16000000000,
 			RamCurrent:         12500000000,
-			BandwidthIn:        125000000,  // cumulative bytes
-			BandwidthOut:       250000000,  // cumulative bytes
-			UpSpeed:            15000000,   // 15 MB/s (bytes/sec)
-			DownSpeed:          30000000,   // 30 MB/s (bytes/sec)
-			ConnectionsCurrent: 42,         // current viewer connections
+			BandwidthIn:        125000000, // cumulative bytes
+			BandwidthOut:       250000000, // cumulative bytes
+			UpSpeed:            15000000,  // 15 MB/s (bytes/sec)
+			DownSpeed:          30000000,  // 30 MB/s (bytes/sec)
+			ConnectionsCurrent: 42,        // current viewer connections
 			IsHealthy:          true,
 			Latitude:           37.7749,
 			Longitude:          -122.4194,
@@ -1423,11 +1699,11 @@ func GenerateNodeMetricsConnection() *model.NodeMetricsConnection {
 			CpuUsage:           58.7,
 			RamMax:             16000000000,
 			RamCurrent:         11800000000,
-			BandwidthIn:        118000000,  // cumulative bytes
-			BandwidthOut:       235000000,  // cumulative bytes
-			UpSpeed:            12000000,   // 12 MB/s (bytes/sec)
-			DownSpeed:          25000000,   // 25 MB/s (bytes/sec)
-			ConnectionsCurrent: 38,         // current viewer connections
+			BandwidthIn:        118000000, // cumulative bytes
+			BandwidthOut:       235000000, // cumulative bytes
+			UpSpeed:            12000000,  // 12 MB/s (bytes/sec)
+			DownSpeed:          25000000,  // 25 MB/s (bytes/sec)
+			ConnectionsCurrent: 38,        // current viewer connections
 			IsHealthy:          true,
 			Latitude:           37.7749,
 			Longitude:          -122.4194,
@@ -1439,11 +1715,11 @@ func GenerateNodeMetricsConnection() *model.NodeMetricsConnection {
 			CpuUsage:           72.1,
 			RamMax:             16000000000,
 			RamCurrent:         13200000000,
-			BandwidthIn:        100000000,  // cumulative bytes
-			BandwidthOut:       200000000,  // cumulative bytes
-			UpSpeed:            10000000,   // 10 MB/s (bytes/sec)
-			DownSpeed:          20000000,   // 20 MB/s (bytes/sec)
-			ConnectionsCurrent: 55,         // current viewer connections
+			BandwidthIn:        100000000, // cumulative bytes
+			BandwidthOut:       200000000, // cumulative bytes
+			UpSpeed:            10000000,  // 10 MB/s (bytes/sec)
+			DownSpeed:          20000000,  // 20 MB/s (bytes/sec)
+			ConnectionsCurrent: 55,        // current viewer connections
 			IsHealthy:          true,
 			Latitude:           51.5074,
 			Longitude:          -0.1278,
@@ -1636,7 +1912,7 @@ func GenerateArtifactState(requestID string) *pb.ArtifactState {
 	// Return a realistic artifact based on the request ID
 	return &pb.ArtifactState{
 		RequestId:       requestID,
-		TenantId:        "demo_tenant_frameworks",
+		TenantId:        "00000000-0000-0000-0000-000000000001",
 		InternalName:    "demo_live_stream_001",
 		ContentType:     "clip",
 		Stage:           "completed",
@@ -1658,7 +1934,7 @@ func GenerateArtifactStatesConnection() *model.ArtifactStatesConnection {
 	artifacts := []*pb.ArtifactState{
 		{
 			RequestId:       "artifact_demo_001",
-			TenantId:        "demo_tenant_frameworks",
+			TenantId:        "00000000-0000-0000-0000-000000000001",
 			InternalName:    "demo_live_stream_001",
 			ContentType:     "clip",
 			Stage:           "completed",
@@ -1673,7 +1949,7 @@ func GenerateArtifactStatesConnection() *model.ArtifactStatesConnection {
 		},
 		{
 			RequestId:       "artifact_demo_002",
-			TenantId:        "demo_tenant_frameworks",
+			TenantId:        "00000000-0000-0000-0000-000000000001",
 			InternalName:    "demo_live_stream_001",
 			ContentType:     "dvr",
 			Stage:           "processing",
@@ -1684,7 +1960,7 @@ func GenerateArtifactStatesConnection() *model.ArtifactStatesConnection {
 		},
 		{
 			RequestId:       "artifact_demo_003",
-			TenantId:        "demo_tenant_frameworks",
+			TenantId:        "00000000-0000-0000-0000-000000000001",
 			InternalName:    "demo_live_stream_001",
 			ContentType:     "clip",
 			Stage:           "processing",
@@ -1718,7 +1994,7 @@ func GenerateStreamConnectionHourlyConnection() *model.StreamConnectionHourlyCon
 		{
 			Id:            "sch_demo_001",
 			Hour:          timestamppb.New(now.Truncate(time.Hour)),
-			TenantId:      "demo_tenant_frameworks",
+			TenantId:      "00000000-0000-0000-0000-000000000001",
 			InternalName:  "demo_live_stream_001",
 			TotalBytes:    45000000000,
 			UniqueViewers: 189,
@@ -1727,7 +2003,7 @@ func GenerateStreamConnectionHourlyConnection() *model.StreamConnectionHourlyCon
 		{
 			Id:            "sch_demo_002",
 			Hour:          timestamppb.New(now.Add(-1 * time.Hour).Truncate(time.Hour)),
-			TenantId:      "demo_tenant_frameworks",
+			TenantId:      "00000000-0000-0000-0000-000000000001",
 			InternalName:  "demo_live_stream_001",
 			TotalBytes:    58000000000,
 			UniqueViewers: 234,
@@ -1736,7 +2012,7 @@ func GenerateStreamConnectionHourlyConnection() *model.StreamConnectionHourlyCon
 		{
 			Id:            "sch_demo_003",
 			Hour:          timestamppb.New(now.Add(-2 * time.Hour).Truncate(time.Hour)),
-			TenantId:      "demo_tenant_frameworks",
+			TenantId:      "00000000-0000-0000-0000-000000000001",
 			InternalName:  "demo_live_stream_001",
 			TotalBytes:    32000000000,
 			UniqueViewers: 156,
@@ -1767,7 +2043,7 @@ func GenerateClientMetrics5mConnection() *model.ClientMetrics5mConnection {
 		{
 			Id:                   "cm5_demo_001",
 			Timestamp:            timestamppb.New(now.Truncate(5 * time.Minute)),
-			TenantId:             "demo_tenant_frameworks",
+			TenantId:             "00000000-0000-0000-0000-000000000001",
 			InternalName:         "demo_live_stream_001",
 			NodeId:               "node_demo_us_west_01",
 			ActiveSessions:       45,
@@ -1775,12 +2051,11 @@ func GenerateClientMetrics5mConnection() *model.ClientMetrics5mConnection {
 			AvgBandwidthOut:      5400000000,
 			AvgConnectionTime:    1847.5,
 			PacketLossRate:       float32Ptr(0.02),
-			AvgConnectionQuality: float32Ptr(0.95),
 		},
 		{
 			Id:                   "cm5_demo_002",
 			Timestamp:            timestamppb.New(now.Add(-5 * time.Minute).Truncate(5 * time.Minute)),
-			TenantId:             "demo_tenant_frameworks",
+			TenantId:             "00000000-0000-0000-0000-000000000001",
 			InternalName:         "demo_live_stream_001",
 			NodeId:               "node_demo_us_west_01",
 			ActiveSessions:       52,
@@ -1788,12 +2063,11 @@ func GenerateClientMetrics5mConnection() *model.ClientMetrics5mConnection {
 			AvgBandwidthOut:      6200000000,
 			AvgConnectionTime:    2156.3,
 			PacketLossRate:       float32Ptr(0.03),
-			AvgConnectionQuality: float32Ptr(0.91),
 		},
 		{
 			Id:                   "cm5_demo_003",
 			Timestamp:            timestamppb.New(now.Add(-10 * time.Minute).Truncate(5 * time.Minute)),
-			TenantId:             "demo_tenant_frameworks",
+			TenantId:             "00000000-0000-0000-0000-000000000001",
 			InternalName:         "demo_live_stream_001",
 			NodeId:               "node_demo_us_west_01",
 			ActiveSessions:       41,
@@ -1801,7 +2075,6 @@ func GenerateClientMetrics5mConnection() *model.ClientMetrics5mConnection {
 			AvgBandwidthOut:      4900000000,
 			AvgConnectionTime:    1523.8,
 			PacketLossRate:       float32Ptr(0.01),
-			AvgConnectionQuality: float32Ptr(0.97),
 		},
 	}
 
@@ -1828,7 +2101,7 @@ func GenerateQualityTierDailyConnection() *model.QualityTierDailyConnection {
 		{
 			Id:                "qtd_demo_001",
 			Day:               timestamppb.New(now.Truncate(24 * time.Hour)),
-			TenantId:          "demo_tenant_frameworks",
+			TenantId:          "00000000-0000-0000-0000-000000000001",
 			InternalName:      "demo_live_stream_001",
 			Tier_1080PMinutes: 245,
 			Tier_720PMinutes:  120,
@@ -1843,7 +2116,7 @@ func GenerateQualityTierDailyConnection() *model.QualityTierDailyConnection {
 		{
 			Id:                "qtd_demo_002",
 			Day:               timestamppb.New(now.Add(-24 * time.Hour).Truncate(24 * time.Hour)),
-			TenantId:          "demo_tenant_frameworks",
+			TenantId:          "00000000-0000-0000-0000-000000000001",
 			InternalName:      "demo_live_stream_001",
 			Tier_1080PMinutes: 312,
 			Tier_720PMinutes:  98,
@@ -1858,7 +2131,7 @@ func GenerateQualityTierDailyConnection() *model.QualityTierDailyConnection {
 		{
 			Id:                "qtd_demo_003",
 			Day:               timestamppb.New(now.Add(-48 * time.Hour).Truncate(24 * time.Hour)),
-			TenantId:          "demo_tenant_frameworks",
+			TenantId:          "00000000-0000-0000-0000-000000000001",
 			InternalName:      "demo_live_stream_001",
 			Tier_1080PMinutes: 189,
 			Tier_720PMinutes:  156,
@@ -1893,37 +2166,46 @@ func GenerateStorageUsageConnection() *model.StorageUsageConnection {
 
 	records := []*pb.StorageUsageRecord{
 		{
-			Id:             "su_demo_001",
-			Timestamp:      timestamppb.New(now.Add(-1 * time.Hour)),
-			TenantId:       "demo_tenant_frameworks",
-			NodeId:         "node_demo_us_west_01",
-			TotalBytes:     45500000000, // 45.5 GB
-			FileCount:      156,
-			DvrBytes:       25000000000, // 25 GB
-			ClipBytes:      8500000000,  // 8.5 GB
-			RecordingBytes: 12000000000, // 12 GB
+			Id:              "su_demo_001",
+			Timestamp:       timestamppb.New(now.Add(-1 * time.Hour)),
+			TenantId:        "00000000-0000-0000-0000-000000000001",
+			NodeId:          "node_demo_us_west_01",
+			TotalBytes:      45500000000, // 45.5 GB
+			FileCount:       156,
+			DvrBytes:        25000000000, // 25 GB
+			ClipBytes:       8500000000,  // 8.5 GB
+			VodBytes:        12000000000, // 12 GB
+			FrozenDvrBytes:  5000000000,  // 5 GB in S3
+			FrozenClipBytes: 2000000000,  // 2 GB in S3
+			FrozenVodBytes:  3000000000,  // 3 GB in S3
 		},
 		{
-			Id:             "su_demo_002",
-			Timestamp:      timestamppb.New(now.Add(-2 * time.Hour)),
-			TenantId:       "demo_tenant_frameworks",
-			NodeId:         "node_demo_us_west_01",
-			TotalBytes:     43700000000,
-			FileCount:      152,
-			DvrBytes:       24000000000,
-			ClipBytes:      8200000000,
-			RecordingBytes: 11500000000,
+			Id:              "su_demo_002",
+			Timestamp:       timestamppb.New(now.Add(-2 * time.Hour)),
+			TenantId:        "00000000-0000-0000-0000-000000000001",
+			NodeId:          "node_demo_us_west_01",
+			TotalBytes:      43700000000,
+			FileCount:       152,
+			DvrBytes:        24000000000,
+			ClipBytes:       8200000000,
+			VodBytes:        11500000000,
+			FrozenDvrBytes:  4800000000,
+			FrozenClipBytes: 1900000000,
+			FrozenVodBytes:  2800000000,
 		},
 		{
-			Id:             "su_demo_003",
-			Timestamp:      timestamppb.New(now.Add(-3 * time.Hour)),
-			TenantId:       "demo_tenant_frameworks",
-			NodeId:         "node_demo_us_west_01",
-			TotalBytes:     41800000000,
-			FileCount:      148,
-			DvrBytes:       23000000000,
-			ClipBytes:      7800000000,
-			RecordingBytes: 11000000000,
+			Id:              "su_demo_003",
+			Timestamp:       timestamppb.New(now.Add(-3 * time.Hour)),
+			TenantId:        "00000000-0000-0000-0000-000000000001",
+			NodeId:          "node_demo_us_west_01",
+			TotalBytes:      41800000000,
+			FileCount:       148,
+			DvrBytes:        23000000000,
+			ClipBytes:       7800000000,
+			VodBytes:        11000000000,
+			FrozenDvrBytes:  4600000000,
+			FrozenClipBytes: 1800000000,
+			FrozenVodBytes:  2600000000,
 		},
 	}
 
@@ -1939,6 +2221,229 @@ func GenerateStorageUsageConnection() *model.StorageUsageConnection {
 		Edges:      edges,
 		PageInfo:   &model.PageInfo{HasNextPage: false, HasPreviousPage: false},
 		TotalCount: len(records),
+	}
+}
+
+// GenerateStorageEventsConnection creates demo storage lifecycle events
+func GenerateStorageEventsConnection(internalName *string) *model.StorageEventsConnection {
+	now := time.Now()
+
+	// Filter by stream name if provided
+	streamFilter := "demo_live_stream_001"
+	if internalName != nil && *internalName != "" {
+		streamFilter = *internalName
+	}
+
+	events := []*pb.StorageEvent{
+		{
+			Id:           "se_demo_001",
+			Timestamp:    timestamppb.New(now.Add(-30 * time.Minute)),
+			TenantId:     "00000000-0000-0000-0000-000000000001",
+			InternalName: streamFilter,
+			AssetHash:    "clip_hash_demo_001",
+			Action:       "frozen",
+			AssetType:    "clip",
+			SizeBytes:    15000000, // 15 MB
+			S3Url:        stringPtr("s3://demo-bucket/clips/clip_hash_demo_001.mp4"),
+			LocalPath:    stringPtr("/mnt/storage/clips/clip_hash_demo_001.mp4"),
+			NodeId:       "node_demo_us_west_01",
+			DurationMs:   int64Ptr(2450), // 2.45 seconds
+		},
+		{
+			Id:           "se_demo_002",
+			Timestamp:    timestamppb.New(now.Add(-32 * time.Minute)),
+			TenantId:     "00000000-0000-0000-0000-000000000001",
+			InternalName: streamFilter,
+			AssetHash:    "clip_hash_demo_001",
+			Action:       "freeze_started",
+			AssetType:    "clip",
+			SizeBytes:    15000000,
+			LocalPath:    stringPtr("/mnt/storage/clips/clip_hash_demo_001.mp4"),
+			NodeId:       "node_demo_us_west_01",
+		},
+		{
+			Id:           "se_demo_003",
+			Timestamp:    timestamppb.New(now.Add(-1 * time.Hour)),
+			TenantId:     "00000000-0000-0000-0000-000000000001",
+			InternalName: streamFilter,
+			AssetHash:    "dvr_hash_demo_001",
+			Action:       "defrosted",
+			AssetType:    "dvr",
+			SizeBytes:    250000000, // 250 MB
+			S3Url:        stringPtr("s3://demo-bucket/dvr/dvr_hash_demo_001.ts"),
+			LocalPath:    stringPtr("/mnt/storage/dvr/dvr_hash_demo_001.ts"),
+			NodeId:       "node_demo_us_west_01",
+			DurationMs:   int64Ptr(8750),  // 8.75 seconds
+			WarmDurationMs: int64Ptr(350), // 0.35 seconds
+		},
+		{
+			Id:           "se_demo_004",
+			Timestamp:    timestamppb.New(now.Add(-1*time.Hour - 5*time.Minute)),
+			TenantId:     "00000000-0000-0000-0000-000000000001",
+			InternalName: streamFilter,
+			AssetHash:    "dvr_hash_demo_001",
+			Action:       "defrost_started",
+			AssetType:    "dvr",
+			SizeBytes:    250000000,
+			S3Url:        stringPtr("s3://demo-bucket/dvr/dvr_hash_demo_001.ts"),
+			NodeId:       "node_demo_us_west_01",
+		},
+		{
+			Id:           "se_demo_005",
+			Timestamp:    timestamppb.New(now.Add(-24 * time.Hour)),
+			TenantId:     "00000000-0000-0000-0000-000000000001",
+			InternalName: streamFilter,
+			AssetHash:    "dvr_hash_demo_001",
+			Action:       "frozen",
+			AssetType:    "dvr",
+			SizeBytes:    250000000,
+			S3Url:        stringPtr("s3://demo-bucket/dvr/dvr_hash_demo_001.ts"),
+			LocalPath:    stringPtr("/mnt/storage/dvr/dvr_hash_demo_001.ts"),
+			NodeId:       "node_demo_us_west_01",
+			DurationMs:   int64Ptr(12500), // 12.5 seconds
+		},
+	}
+
+	edges := make([]*model.StorageEventEdge, len(events))
+	for i, event := range events {
+		edges[i] = &model.StorageEventEdge{
+			Cursor: event.Id,
+			Node:   event,
+		}
+	}
+
+	return &model.StorageEventsConnection{
+		Edges:      edges,
+		PageInfo:   &model.PageInfo{HasNextPage: false, HasPreviousPage: false},
+		TotalCount: len(events),
+	}
+}
+
+// GenerateViewerSessionsConnection creates demo viewer sessions with pagination.
+// These represent individual viewer session data from ClickHouse viewer_sessions table.
+func GenerateViewerSessionsConnection(streamFilter *string) *model.ViewerSessionsConnection {
+	now := time.Now()
+
+	stream := "demo_live_stream_001"
+	if streamFilter != nil && *streamFilter != "" {
+		stream = *streamFilter
+	}
+
+	sessions := []*pb.ViewerSession{
+		{
+			SessionId:         "sess_demo_viewer_001",
+			Timestamp:         timestamppb.New(now.Add(-30 * time.Minute)),
+			InternalName:      stream,
+			TenantId:          "00000000-0000-0000-0000-000000000001",
+			NodeId:            "node_demo_us_west_01",
+			ConnectionAddr:    "", // Redacted for privacy
+			Connector:         "HLS",
+			CountryCode:       "US",
+			City:              "San Francisco",
+			Latitude:          37.7749,
+			Longitude:         -122.4194,
+			DurationSeconds:   1800, // 30 minutes
+			BytesUp:           512000,
+			BytesDown:         256000000, // 256 MB downloaded
+			ViewerCount:       1,
+			ConnectionType:    "HLS",
+			ConnectionQuality: 0.95,
+			BufferHealth:      0.98,
+		},
+		{
+			SessionId:         "sess_demo_viewer_002",
+			Timestamp:         timestamppb.New(now.Add(-45 * time.Minute)),
+			InternalName:      stream,
+			TenantId:          "00000000-0000-0000-0000-000000000001",
+			NodeId:            "node_demo_eu_west_01",
+			ConnectionAddr:    "", // Redacted for privacy
+			Connector:         "DASH",
+			CountryCode:       "GB",
+			City:              "London",
+			Latitude:          51.5074,
+			Longitude:         -0.1278,
+			DurationSeconds:   2700, // 45 minutes
+			BytesUp:           768000,
+			BytesDown:         384000000, // 384 MB downloaded
+			ViewerCount:       1,
+			ConnectionType:    "DASH",
+			ConnectionQuality: 0.92,
+			BufferHealth:      0.96,
+		},
+		{
+			SessionId:         "sess_demo_viewer_003",
+			Timestamp:         timestamppb.New(now.Add(-15 * time.Minute)),
+			InternalName:      stream,
+			TenantId:          "00000000-0000-0000-0000-000000000001",
+			NodeId:            "node_demo_us_west_01",
+			ConnectionAddr:    "", // Redacted for privacy
+			Connector:         "WebRTC",
+			CountryCode:       "CA",
+			City:              "Toronto",
+			Latitude:          43.6532,
+			Longitude:         -79.3832,
+			DurationSeconds:   900, // 15 minutes (still watching)
+			BytesUp:           256000,
+			BytesDown:         128000000, // 128 MB downloaded
+			ViewerCount:       1,
+			ConnectionType:    "WebRTC",
+			ConnectionQuality: 0.97,
+			BufferHealth:      0.99,
+		},
+		{
+			SessionId:         "sess_demo_viewer_004",
+			Timestamp:         timestamppb.New(now.Add(-60 * time.Minute)),
+			InternalName:      stream,
+			TenantId:          "00000000-0000-0000-0000-000000000001",
+			NodeId:            "node_demo_apac_01",
+			ConnectionAddr:    "", // Redacted for privacy
+			Connector:         "HLS",
+			CountryCode:       "JP",
+			City:              "Tokyo",
+			Latitude:          35.6762,
+			Longitude:         139.6503,
+			DurationSeconds:   3600, // 60 minutes
+			BytesUp:           1024000,
+			BytesDown:         512000000, // 512 MB downloaded
+			ViewerCount:       1,
+			ConnectionType:    "HLS",
+			ConnectionQuality: 0.88,
+			BufferHealth:      0.94,
+		},
+		{
+			SessionId:         "sess_demo_viewer_005",
+			Timestamp:         timestamppb.New(now.Add(-10 * time.Minute)),
+			InternalName:      stream,
+			TenantId:          "00000000-0000-0000-0000-000000000001",
+			NodeId:            "node_demo_us_west_01",
+			ConnectionAddr:    "", // Redacted for privacy
+			Connector:         "RTMP",
+			CountryCode:       "US",
+			City:              "Los Angeles",
+			Latitude:          34.0522,
+			Longitude:         -118.2437,
+			DurationSeconds:   600, // 10 minutes
+			BytesUp:           128000,
+			BytesDown:         64000000, // 64 MB downloaded
+			ViewerCount:       1,
+			ConnectionType:    "RTMP",
+			ConnectionQuality: 0.91,
+			BufferHealth:      0.93,
+		},
+	}
+
+	edges := make([]*model.ViewerSessionEdge, len(sessions))
+	for i, session := range sessions {
+		edges[i] = &model.ViewerSessionEdge{
+			Cursor: session.SessionId,
+			Node:   session,
+		}
+	}
+
+	return &model.ViewerSessionsConnection{
+		Edges:      edges,
+		PageInfo:   &model.PageInfo{HasNextPage: false, HasPreviousPage: false},
+		TotalCount: len(sessions),
 	}
 }
 
@@ -2156,7 +2661,7 @@ func GenerateUsers() []*pb.User {
 	return []*pb.User{
 		{
 			Id:          "user_demo_admin",
-			TenantId:    "demo_tenant_frameworks",
+			TenantId:    "00000000-0000-0000-0000-000000000001",
 			Email:       "admin@demo.frameworks.video",
 			FirstName:   "Admin",
 			LastName:    "User",
@@ -2170,7 +2675,7 @@ func GenerateUsers() []*pb.User {
 		},
 		{
 			Id:          "user_demo_viewer",
-			TenantId:    "demo_tenant_frameworks",
+			TenantId:    "00000000-0000-0000-0000-000000000001",
 			Email:       "viewer@demo.frameworks.video",
 			FirstName:   "Viewer",
 			LastName:    "User",
@@ -2190,34 +2695,34 @@ func GenerateServices() []*pb.Service {
 	now := time.Now()
 	return []*pb.Service{
 		{
-			Id:           "svc_def_mist",
-			ServiceId:    "service_mist",
-			Name:         "MistServer",
-			Plane:        "data",
-			Description:  stringPtr("MistServer media server instance"),
-			DefaultPort:  int32Ptr(4242),
+			Id:              "svc_def_mist",
+			ServiceId:       "service_mist",
+			Name:            "MistServer",
+			Plane:           "data",
+			Description:     stringPtr("MistServer media server instance"),
+			DefaultPort:     int32Ptr(4242),
 			HealthCheckPath: stringPtr("/health"),
-			DockerImage:  stringPtr("mistserver/mistserver:latest"),
-			Version:      stringPtr("3.3"),
-			IsActive:     true,
-			CreatedAt:    timestamppb.New(now.Add(-100 * 24 * time.Hour)),
-			Type:         "media_server",
-			Protocol:     "http",
+			DockerImage:     stringPtr("mistserver/mistserver:latest"),
+			Version:         stringPtr("3.3"),
+			IsActive:        true,
+			CreatedAt:       timestamppb.New(now.Add(-100 * 24 * time.Hour)),
+			Type:            "media_server",
+			Protocol:        "http",
 		},
 		{
-			Id:           "svc_def_foghorn",
-			ServiceId:    "service_foghorn",
-			Name:         "Foghorn",
-			Plane:        "control",
-			Description:  stringPtr("Load balancing and orchestration service"),
-			DefaultPort:  int32Ptr(8080),
+			Id:              "svc_def_foghorn",
+			ServiceId:       "service_foghorn",
+			Name:            "Foghorn",
+			Plane:           "control",
+			Description:     stringPtr("Load balancing and orchestration service"),
+			DefaultPort:     int32Ptr(8080),
 			HealthCheckPath: stringPtr("/healthz"),
-			DockerImage:  stringPtr("frameworks/foghorn:latest"),
-			Version:      stringPtr("1.2.0"),
-			IsActive:     true,
-			CreatedAt:    timestamppb.New(now.Add(-100 * 24 * time.Hour)),
-			Type:         "orchestrator",
-			Protocol:     "grpc",
+			DockerImage:     stringPtr("frameworks/foghorn:latest"),
+			Version:         stringPtr("1.2.0"),
+			IsActive:        true,
+			CreatedAt:       timestamppb.New(now.Add(-100 * 24 * time.Hour)),
+			Type:            "orchestrator",
+			Protocol:        "grpc",
 		},
 	}
 }
@@ -2231,7 +2736,7 @@ func GenerateBootstrapTokens() []*pb.BootstrapToken {
 			Name:       "Edge Node Token",
 			Token:      "boot_edge_xyz123",
 			Kind:       "edge_node",
-			TenantId:   stringPtr("demo_tenant_frameworks"),
+			TenantId:   stringPtr("00000000-0000-0000-0000-000000000001"),
 			UsageLimit: int32Ptr(10),
 			UsageCount: 2,
 			ExpiresAt:  timestamppb.New(now.Add(24 * time.Hour)),
@@ -2298,6 +2803,866 @@ func GenerateClips() []*pb.ClipInfo {
 			UpdatedAt:   timestamppb.New(now.Add(-45 * time.Minute)),
 			ClipMode:    stringPtr("absolute"),
 		},
+	}
+}
+
+// ============================================================================
+// CLUSTER MARKETPLACE DEMO DATA
+// ============================================================================
+
+// GenerateMarketplaceClusters returns demo marketplace cluster entries
+func GenerateMarketplaceClusters() []*pb.MarketplaceClusterEntry {
+	return []*pb.MarketplaceClusterEntry{
+		{
+			ClusterId:         "cluster_demo_platform",
+			ClusterName:       "FrameWorks Platform (Free)",
+			ShortDescription:  stringPtr("Free tier platform cluster for all users"),
+			Visibility:        pb.ClusterVisibility_CLUSTER_VISIBILITY_PUBLIC,
+			PricingModel:      pb.ClusterPricingModel_CLUSTER_PRICING_FREE_UNMETERED,
+			OwnerName:         stringPtr("FrameWorks"),
+			IsSubscribed:      true,
+			IsPlatformCluster: true,
+		},
+		{
+			ClusterId:         "cluster_demo_us_west",
+			ClusterName:       "US West CDN (Oregon)",
+			ShortDescription:  stringPtr("Low-latency US West Coast edge delivery"),
+			Visibility:        pb.ClusterVisibility_CLUSTER_VISIBILITY_PUBLIC,
+			PricingModel:      pb.ClusterPricingModel_CLUSTER_PRICING_METERED,
+			MonthlyPriceCents: 0,
+			OwnerName:         stringPtr("FrameWorks"),
+			IsSubscribed:      false,
+			IsPlatformCluster: true,
+		},
+		{
+			ClusterId:         "cluster_demo_eu_west",
+			ClusterName:       "EU West CDN (Ireland)",
+			ShortDescription:  stringPtr("GDPR-compliant European edge delivery"),
+			Visibility:        pb.ClusterVisibility_CLUSTER_VISIBILITY_PUBLIC,
+			PricingModel:      pb.ClusterPricingModel_CLUSTER_PRICING_METERED,
+			MonthlyPriceCents: 0,
+			OwnerName:         stringPtr("FrameWorks"),
+			IsSubscribed:      false,
+			IsPlatformCluster: true,
+		},
+		{
+			ClusterId:         "cluster_demo_enterprise",
+			ClusterName:       "Enterprise Private Cloud",
+			ShortDescription:  stringPtr("Dedicated infrastructure for enterprise clients"),
+			Visibility:        pb.ClusterVisibility_CLUSTER_VISIBILITY_UNLISTED,
+			PricingModel:      pb.ClusterPricingModel_CLUSTER_PRICING_MONTHLY,
+			MonthlyPriceCents: 99900, // $999/month
+			OwnerName:         stringPtr("ACME Corp"),
+			IsSubscribed:      false,
+			IsPlatformCluster: false,
+		},
+	}
+}
+
+// GenerateMySubscriptions returns clusters the demo tenant is subscribed to
+// This represents the "My Subscriptions" list showing clusters the user has access to
+func GenerateMySubscriptions() []*pb.InfrastructureCluster {
+	now := time.Now()
+	return []*pb.InfrastructureCluster{
+		{
+			Id:                    "cluster_demo_platform",
+			ClusterId:             "central-primary",
+			ClusterName:           "Central Primary Cluster",
+			ClusterType:           "origin",
+			DeploymentModel:       "managed",
+			BaseUrl:               "https://api.demo.frameworks.dev",
+			MaxConcurrentStreams:  100,
+			MaxConcurrentViewers:  10000,
+			MaxBandwidthMbps:      10000,
+			CurrentStreamCount:    5,
+			CurrentViewerCount:    150,
+			CurrentBandwidthMbps:  500,
+			HealthStatus:          "healthy",
+			IsActive:              true,
+			IsDefaultCluster:      true,
+			CreatedAt:             timestamppb.New(now.Add(-30 * 24 * time.Hour)),
+			UpdatedAt:             timestamppb.New(now.Add(-1 * time.Hour)),
+		},
+	}
+}
+
+// GenerateClusterInvites returns demo cluster invites (for cluster owners)
+func GenerateClusterInvites() []*pb.ClusterInvite {
+	now := time.Now()
+	return []*pb.ClusterInvite{
+		{
+			Id:               "invite_demo_001",
+			ClusterId:        "cluster_demo_enterprise",
+			InvitedTenantId:  "tenant_demo_partner",
+			InviteToken:      "inv_tok_demo_abc123",
+			AccessLevel:      "subscriber",
+			Status:           "pending",
+			InvitedTenantName: stringPtr("Partner Inc"),
+			CreatedAt:        timestamppb.New(now.Add(-24 * time.Hour)),
+			ExpiresAt:        timestamppb.New(now.Add(6 * 24 * time.Hour)),
+		},
+	}
+}
+
+// GenerateMyClusterInvites returns demo pending invites for the current tenant
+func GenerateMyClusterInvites() []*pb.ClusterInvite {
+	now := time.Now()
+	return []*pb.ClusterInvite{
+		{
+			Id:                "invite_demo_002",
+			ClusterId:         "cluster_demo_premium",
+			InvitedTenantId:   "tenant_demo_frameworks",
+			InviteToken:       "inv_tok_demo_xyz789",
+			AccessLevel:       "subscriber",
+			Status:            "pending",
+			InvitedTenantName: stringPtr("Demo User"),
+			CreatedAt:         timestamppb.New(now.Add(-2 * time.Hour)),
+			ExpiresAt:         timestamppb.New(now.Add(28 * 24 * time.Hour)),
+		},
+	}
+}
+
+// GeneratePendingSubscriptions returns demo pending subscription requests
+func GeneratePendingSubscriptions() []*pb.ClusterSubscription {
+	now := time.Now()
+	return []*pb.ClusterSubscription{
+		{
+			Id:                 "sub_demo_001",
+			TenantId:           "tenant_demo_requester",
+			ClusterId:          "cluster_demo_enterprise",
+			AccessLevel:        "subscriber",
+			SubscriptionStatus: pb.ClusterSubscriptionStatus_SUBSCRIPTION_STATUS_PENDING_APPROVAL,
+			TenantName:         stringPtr("Requester Corp"),
+			ClusterName:        stringPtr("Enterprise Private Cloud"),
+			RequestedAt:        timestamppb.New(now.Add(-4 * time.Hour)),
+			CreatedAt:          timestamppb.New(now.Add(-4 * time.Hour)),
+			UpdatedAt:          timestamppb.New(now.Add(-4 * time.Hour)),
+		},
+	}
+}
+
+// GenerateNodePerformance5mConnection creates demo 5-minute node performance data
+func GenerateNodePerformance5mConnection(nodeID *string) *model.NodePerformance5mConnection {
+	now := time.Now()
+
+	nodeFilter := "node_demo_us_west_01"
+	if nodeID != nil && *nodeID != "" {
+		nodeFilter = *nodeID
+	}
+
+	records := []*pb.NodePerformance5M{
+		{
+			Id:             "np5m_demo_001",
+			Timestamp:      timestamppb.New(now.Truncate(5 * time.Minute)),
+			NodeId:         nodeFilter,
+			AvgCpu:         45.5,
+			MaxCpu:         68.2,
+			AvgMemory:      62.3,
+			MaxMemory:      75.8,
+			TotalBandwidth: 5400000000, // 5.4 GB
+			AvgStreams:     12,
+			MaxStreams:     18,
+		},
+		{
+			Id:             "np5m_demo_002",
+			Timestamp:      timestamppb.New(now.Add(-5 * time.Minute).Truncate(5 * time.Minute)),
+			NodeId:         nodeFilter,
+			AvgCpu:         52.1,
+			MaxCpu:         72.5,
+			AvgMemory:      65.8,
+			MaxMemory:      78.2,
+			TotalBandwidth: 6200000000, // 6.2 GB
+			AvgStreams:     15,
+			MaxStreams:     22,
+		},
+		{
+			Id:             "np5m_demo_003",
+			Timestamp:      timestamppb.New(now.Add(-10 * time.Minute).Truncate(5 * time.Minute)),
+			NodeId:         nodeFilter,
+			AvgCpu:         38.7,
+			MaxCpu:         55.3,
+			AvgMemory:      58.1,
+			MaxMemory:      68.5,
+			TotalBandwidth: 4100000000, // 4.1 GB
+			AvgStreams:     10,
+			MaxStreams:     14,
+		},
+	}
+
+	edges := make([]*model.NodePerformance5mEdge, len(records))
+	for i, record := range records {
+		edges[i] = &model.NodePerformance5mEdge{
+			Cursor: record.Id,
+			Node:   record,
+		}
+	}
+
+	return &model.NodePerformance5mConnection{
+		Edges:      edges,
+		PageInfo:   &model.PageInfo{HasNextPage: false, HasPreviousPage: false},
+		TotalCount: len(records),
+	}
+}
+
+// GenerateViewerHoursHourlyConnection creates demo hourly viewer-hours data
+func GenerateViewerHoursHourlyConnection(stream *string) *model.ViewerHoursHourlyConnection {
+	now := time.Now()
+
+	internalName := "demo_live_stream_001"
+	if stream != nil && *stream != "" {
+		internalName = *stream
+	}
+
+	records := []*pb.ViewerHoursHourly{
+		{
+			Id:                  "vhh_demo_001",
+			Hour:                timestamppb.New(now.Truncate(time.Hour)),
+			TenantId:            "00000000-0000-0000-0000-000000000001",
+			InternalName:        internalName,
+			CountryCode:         "US",
+			UniqueViewers:       185,
+			TotalSessionSeconds: 56700,
+			TotalBytes:          2_400_000_000, // 2.4 GB
+		},
+		{
+			Id:                  "vhh_demo_002",
+			Hour:                timestamppb.New(now.Add(-1 * time.Hour).Truncate(time.Hour)),
+			TenantId:            "00000000-0000-0000-0000-000000000001",
+			InternalName:        internalName,
+			CountryCode:         "DE",
+			UniqueViewers:       92,
+			TotalSessionSeconds: 28350,
+			TotalBytes:          1_150_000_000, // 1.15 GB
+		},
+		{
+			Id:                  "vhh_demo_003",
+			Hour:                timestamppb.New(now.Add(-2 * time.Hour).Truncate(time.Hour)),
+			TenantId:            "00000000-0000-0000-0000-000000000001",
+			InternalName:        internalName,
+			CountryCode:         "GB",
+			UniqueViewers:       78,
+			TotalSessionSeconds: 24120,
+			TotalBytes:          980_000_000, // 0.98 GB
+		},
+	}
+
+	edges := make([]*model.ViewerHoursHourlyEdge, len(records))
+	for i, record := range records {
+		edges[i] = &model.ViewerHoursHourlyEdge{
+			Cursor: record.Id,
+			Node:   record,
+		}
+	}
+
+	return &model.ViewerHoursHourlyConnection{
+		Edges:      edges,
+		PageInfo:   &model.PageInfo{HasNextPage: false, HasPreviousPage: false},
+		TotalCount: len(records),
+	}
+}
+
+// GenerateViewerGeoHourlyConnection creates demo hourly geographic viewer data
+func GenerateViewerGeoHourlyConnection(stream *string) *model.ViewerGeoHourlyConnection {
+	now := time.Now()
+
+	records := []*pb.ViewerGeoHourly{
+		{
+			Id:          "vgh_demo_001",
+			Hour:        timestamppb.New(now.Truncate(time.Hour)),
+			TenantId:    "00000000-0000-0000-0000-000000000001",
+			CountryCode: "US",
+			ViewerCount: 185,
+			ViewerHours: 15.75,
+			EgressGb:    2.4,
+		},
+		{
+			Id:          "vgh_demo_002",
+			Hour:        timestamppb.New(now.Truncate(time.Hour)),
+			TenantId:    "00000000-0000-0000-0000-000000000001",
+			CountryCode: "DE",
+			ViewerCount: 92,
+			ViewerHours: 7.875,
+			EgressGb:    1.15,
+		},
+		{
+			Id:          "vgh_demo_003",
+			Hour:        timestamppb.New(now.Truncate(time.Hour)),
+			TenantId:    "00000000-0000-0000-0000-000000000001",
+			CountryCode: "GB",
+			ViewerCount: 78,
+			ViewerHours: 6.7,
+			EgressGb:    0.98,
+		},
+		{
+			Id:          "vgh_demo_004",
+			Hour:        timestamppb.New(now.Truncate(time.Hour)),
+			TenantId:    "00000000-0000-0000-0000-000000000001",
+			CountryCode: "JP",
+			ViewerCount: 45,
+			ViewerHours: 3.85,
+			EgressGb:    0.62,
+		},
+	}
+
+	edges := make([]*model.ViewerGeoHourlyEdge, len(records))
+	for i, record := range records {
+		edges[i] = &model.ViewerGeoHourlyEdge{
+			Cursor: record.Id,
+			Node:   record,
+		}
+	}
+
+	return &model.ViewerGeoHourlyConnection{
+		Edges:      edges,
+		PageInfo:   &model.PageInfo{HasNextPage: false, HasPreviousPage: false},
+		TotalCount: len(records),
+	}
+}
+
+// GenerateStreamHealth5mConnection creates demo 5-minute stream health data
+func GenerateStreamHealth5mConnection(stream *string) *model.StreamHealth5mConnection {
+	now := time.Now()
+
+	internalName := "demo_live_stream_001"
+	if stream != nil && *stream != "" {
+		internalName = *stream
+	}
+
+	records := []*pb.StreamHealth5M{
+		{
+			Id:             "sh5m_demo_001",
+			Timestamp:      timestamppb.New(now.Truncate(5 * time.Minute)),
+			TenantId:       "00000000-0000-0000-0000-000000000001",
+			InternalName:   internalName,
+			NodeId:         "node_demo_us_west_01",
+			RebufferCount:  0,
+			IssueCount:     0,
+			SampleIssues:   "",
+			AvgBitrate:     2500,
+			AvgFps:         29.97,
+			BufferDryCount: 0,
+			QualityTier:    "1080p",
+		},
+		{
+			Id:             "sh5m_demo_002",
+			Timestamp:      timestamppb.New(now.Add(-5 * time.Minute).Truncate(5 * time.Minute)),
+			TenantId:       "00000000-0000-0000-0000-000000000001",
+			InternalName:   internalName,
+			NodeId:         "node_demo_us_west_01",
+			RebufferCount:  2,
+			IssueCount:     1,
+			SampleIssues:   "buffer_dry",
+			AvgBitrate:     2350,
+			AvgFps:         28.5,
+			BufferDryCount: 1,
+			QualityTier:    "1080p",
+		},
+		{
+			Id:             "sh5m_demo_003",
+			Timestamp:      timestamppb.New(now.Add(-10 * time.Minute).Truncate(5 * time.Minute)),
+			TenantId:       "00000000-0000-0000-0000-000000000001",
+			InternalName:   internalName,
+			NodeId:         "node_demo_us_west_01",
+			RebufferCount:  0,
+			IssueCount:     0,
+			SampleIssues:   "",
+			AvgBitrate:     2480,
+			AvgFps:         29.95,
+			BufferDryCount: 0,
+			QualityTier:    "1080p",
+		},
+	}
+
+	edges := make([]*model.StreamHealth5mEdge, len(records))
+	for i, record := range records {
+		edges[i] = &model.StreamHealth5mEdge{
+			Cursor: record.Id,
+			Node:   record,
+		}
+	}
+
+	return &model.StreamHealth5mConnection{
+		Edges:      edges,
+		PageInfo:   &model.PageInfo{HasNextPage: false, HasPreviousPage: false},
+		TotalCount: len(records),
+	}
+}
+
+// GenerateTenantDailyStats creates demo daily tenant statistics
+func GenerateTenantDailyStats(days *int) []*pb.TenantDailyStat {
+	now := time.Now()
+	daysCount := 7
+	if days != nil && *days > 0 {
+		daysCount = *days
+	}
+
+	stats := make([]*pb.TenantDailyStat, daysCount)
+	for i := 0; i < daysCount; i++ {
+		dayTime := now.Add(time.Duration(-i) * 24 * time.Hour).Truncate(24 * time.Hour)
+		stats[i] = &pb.TenantDailyStat{
+			Id:            fmt.Sprintf("tds_demo_%03d", i+1),
+			Date:          timestamppb.New(dayTime),
+			TenantId:      "00000000-0000-0000-0000-000000000001",
+			EgressGb:      float64(25 + i*3 + (i%3)*5),
+			ViewerHours:   float64(150 + i*20 + (i%2)*35),
+			UniqueViewers: int32(450 + i*50 + (i%3)*75),
+			TotalSessions: int32(1250 + i*100 + (i%2)*180),
+			TotalViews:    int64(2500 + int64(i)*200 + int64(i%3)*350),
+		}
+	}
+
+	return stats
+}
+
+// =============================================================================
+// VOD DEMO GENERATORS
+// =============================================================================
+
+// GenerateVodUploadSession creates a demo VOD upload session
+func GenerateVodUploadSession(filename string, sizeBytes int) *model.VodUploadSession {
+	now := time.Now()
+
+	// Calculate parts (20MB chunks)
+	partSize := int64(20 * 1024 * 1024) // 20MB
+	partCount := int(math.Ceil(float64(sizeBytes) / float64(partSize)))
+	if partCount < 1 {
+		partCount = 1
+	}
+	if partCount > 100 {
+		partCount = 100 // Cap for demo
+	}
+
+	parts := make([]*pb.VodUploadPart, partCount)
+	for i := 0; i < partCount; i++ {
+		parts[i] = &pb.VodUploadPart{
+			PartNumber:   int32(i + 1),
+			PresignedUrl: fmt.Sprintf("https://demo-s3.example.com/vod/upload/%s?partNumber=%d&uploadId=demo_upload_123", filename, i+1),
+		}
+	}
+
+	return &model.VodUploadSession{
+		ID:           "demo_upload_" + now.Format("20060102150405"),
+		ArtifactID:   "artifact_demo_vod_" + now.Format("20060102150405"),
+		ArtifactHash: "vod_demo_hash_" + now.Format("150405"),
+		PartSize:     int(partSize),
+		Parts:        parts,
+		ExpiresAt:    now.Add(2 * time.Hour),
+	}
+}
+
+// GenerateVodAsset creates a single demo VOD asset
+func GenerateVodAsset() *model.VodAsset {
+	now := time.Now()
+	title := "Demo Video Upload"
+	description := "A demo video file for testing"
+	filename := "demo_video.mp4"
+	sizeBytes := float64(150 * 1024 * 1024) // 150MB
+	durationMs := 180000                    // 3 minutes
+	resolution := "1920x1080"
+	videoCodec := "h264"
+	audioCodec := "aac"
+	bitrateKbps := 5000
+
+	return &model.VodAsset{
+		ID:              "vod_demo_001",
+		ArtifactHash:    "a1b2c3d4e5f6789012345678901234ab",
+		Title:           &title,
+		Description:     &description,
+		Filename:        &filename,
+		Status:          model.VodAssetStatusReady,
+		StorageLocation: "s3",
+		SizeBytes:       &sizeBytes,
+		DurationMs:      &durationMs,
+		Resolution:      &resolution,
+		VideoCodec:      &videoCodec,
+		AudioCodec:      &audioCodec,
+		BitrateKbps:     &bitrateKbps,
+		CreatedAt:       now.Add(-24 * time.Hour),
+		UpdatedAt:       now.Add(-23 * time.Hour),
+	}
+}
+
+// GenerateVodAssets creates a list of demo VOD assets
+func GenerateVodAssets() []*model.VodAsset {
+	now := time.Now()
+
+	// Helper for string pointers
+	sp := func(s string) *string { return &s }
+	fp := func(f float64) *float64 { return &f }
+	ip := func(i int) *int { return &i }
+
+	return []*model.VodAsset{
+		{
+			ID:              "vod_demo_001",
+			ArtifactHash:    "a1b2c3d4e5f6789012345678901234ab",
+			Title:           sp("Product Demo Video"),
+			Description:     sp("Full product demonstration walkthrough"),
+			Filename:        sp("product_demo_2024.mp4"),
+			Status:          model.VodAssetStatusReady,
+			StorageLocation: "s3",
+			SizeBytes:       fp(250 * 1024 * 1024),
+			DurationMs:      ip(300000), // 5 minutes
+			Resolution:      sp("1920x1080"),
+			VideoCodec:      sp("h264"),
+			AudioCodec:      sp("aac"),
+			BitrateKbps:     ip(6000),
+			CreatedAt:       now.Add(-48 * time.Hour),
+			UpdatedAt:       now.Add(-47 * time.Hour),
+		},
+		{
+			ID:              "vod_demo_002",
+			ArtifactHash:    "b2c3d4e5f678901234567890123456bc",
+			Title:           sp("Tutorial: Getting Started"),
+			Description:     sp("Step-by-step guide for new users"),
+			Filename:        sp("getting_started_tutorial.mp4"),
+			Status:          model.VodAssetStatusReady,
+			StorageLocation: "local",
+			SizeBytes:       fp(180 * 1024 * 1024),
+			DurationMs:      ip(420000), // 7 minutes
+			Resolution:      sp("1280x720"),
+			VideoCodec:      sp("h264"),
+			AudioCodec:      sp("aac"),
+			BitrateKbps:     ip(4000),
+			CreatedAt:       now.Add(-24 * time.Hour),
+			UpdatedAt:       now.Add(-23 * time.Hour),
+		},
+		{
+			ID:              "vod_demo_003",
+			ArtifactHash:    "c3d4e5f67890123456789012345678cd",
+			Title:           sp("Feature Highlight Reel"),
+			Filename:        sp("feature_highlights.mp4"),
+			Status:          model.VodAssetStatusProcessing,
+			StorageLocation: "s3",
+			SizeBytes:       fp(320 * 1024 * 1024),
+			CreatedAt:       now.Add(-2 * time.Hour),
+			UpdatedAt:       now.Add(-1 * time.Hour),
+		},
+		{
+			ID:              "vod_demo_004",
+			ArtifactHash:    "d4e5f6789012345678901234567890de",
+			Title:           sp("Conference Recording"),
+			Description:     sp("Annual developer conference keynote"),
+			Filename:        sp("conference_2024.mp4"),
+			Status:          model.VodAssetStatusUploading,
+			StorageLocation: "pending",
+			SizeBytes:       fp(1500 * 1024 * 1024),
+			CreatedAt:       now.Add(-30 * time.Minute),
+			UpdatedAt:       now.Add(-10 * time.Minute),
+		},
+	}
+}
+
+// GenerateProcessingUsageConnection creates demo transcoding/processing usage records
+func GenerateProcessingUsageConnection(streamName *string, processType *string) *model.ProcessingUsageConnection {
+	now := time.Now()
+
+	records := []*pb.ProcessingUsageRecord{
+		{
+			Id:               "pu_demo_001",
+			Timestamp:        timestamppb.New(now.Add(-1 * time.Hour)),
+			TenantId:         "00000000-0000-0000-0000-000000000001",
+			NodeId:           "node_demo_us_west_01",
+			StreamName:       "demo_live_stream_001",
+			ProcessType:      "AV",
+			TrackType:        stringPtr("video"),
+			DurationMs:       5000,
+			InputCodec:       stringPtr("H264"),
+			OutputCodec:      stringPtr("H264"),
+			InputWidth:       int32Ptr(1920),
+			InputHeight:      int32Ptr(1080),
+			OutputWidth:      int32Ptr(1280),
+			OutputHeight:     int32Ptr(720),
+			InputFrames:      int64Ptr(150),
+			OutputFrames:     int64Ptr(148),
+			InputFramesDelta: int64Ptr(30),
+			OutputFramesDelta: int64Ptr(30),
+			DecodeUsPerFrame:  int64Ptr(850),
+			TransformUsPerFrame: int64Ptr(420),
+			EncodeUsPerFrame: int64Ptr(1200),
+			RtfIn:            float64Ptr(0.95),
+			RtfOut:           float64Ptr(0.97),
+			PipelineLagMs:    int64Ptr(45),
+			OutputBitrateBps: int64Ptr(4500000),
+		},
+		{
+			Id:               "pu_demo_002",
+			Timestamp:        timestamppb.New(now.Add(-1*time.Hour - 5*time.Second)),
+			TenantId:         "00000000-0000-0000-0000-000000000001",
+			NodeId:           "node_demo_us_west_01",
+			StreamName:       "demo_live_stream_001",
+			ProcessType:      "AV",
+			TrackType:        stringPtr("audio"),
+			DurationMs:       5000,
+			InputCodec:       stringPtr("AAC"),
+			OutputCodec:      stringPtr("AAC"),
+			SampleRate:       int32Ptr(48000),
+			Channels:         int32Ptr(2),
+			InputFrames:      int64Ptr(240),
+			OutputFrames:     int64Ptr(240),
+			RtfIn:            float64Ptr(1.0),
+			RtfOut:           float64Ptr(1.0),
+			PipelineLagMs:    int64Ptr(12),
+			OutputBitrateBps: int64Ptr(128000),
+		},
+		{
+			Id:                  "pu_demo_003",
+			Timestamp:           timestamppb.New(now.Add(-2 * time.Hour)),
+			TenantId:            "00000000-0000-0000-0000-000000000001",
+			NodeId:              "node_demo_us_west_01",
+			StreamName:          "demo_live_stream_002",
+			ProcessType:         "Livepeer",
+			TrackType:           stringPtr("video"),
+			DurationMs:          2000,
+			InputCodec:          stringPtr("H264"),
+			Width:               int32Ptr(1920),
+			Height:              int32Ptr(1080),
+			RenditionCount:      int32Ptr(3),
+			LivepeerSessionId:   stringPtr("lp_session_abc123"),
+			SegmentNumber:       int32Ptr(42),
+			SegmentStartMs:      int64Ptr(84000),
+			InputBytes:          int64Ptr(512000),
+			OutputBytesTotal:    int64Ptr(890000),
+			TurnaroundMs:        int64Ptr(320),
+			SpeedFactor:         float64Ptr(6.25),
+			BroadcasterUrl:      stringPtr("https://livepeer-broadcaster.example.com"),
+			RenditionsJson:      stringPtr(`[{"name":"720p","bytes":380000},{"name":"480p","bytes":280000},{"name":"360p","bytes":230000}]`),
+		},
+	}
+
+	// Filter by streamName if provided
+	if streamName != nil && *streamName != "" {
+		var filtered []*pb.ProcessingUsageRecord
+		for _, r := range records {
+			if r.StreamName == *streamName {
+				filtered = append(filtered, r)
+			}
+		}
+		records = filtered
+	}
+
+	// Filter by processType if provided
+	if processType != nil && *processType != "" {
+		var filtered []*pb.ProcessingUsageRecord
+		for _, r := range records {
+			if r.ProcessType == *processType {
+				filtered = append(filtered, r)
+			}
+		}
+		records = filtered
+	}
+
+	edges := make([]*model.ProcessingUsageEdge, len(records))
+	for i, r := range records {
+		edges[i] = &model.ProcessingUsageEdge{
+			Cursor: r.Id,
+			Node:   r,
+		}
+	}
+
+	// Generate demo summaries (last 7 days) with per-codec breakdown
+	summaries := make([]*pb.ProcessingUsageSummary, 7)
+	for i := 0; i < 7; i++ {
+		day := now.AddDate(0, 0, -i).Truncate(24 * time.Hour)
+		// Calculate totals from per-codec values
+		lpH264 := float64(800 + i*100)
+		lpVp9 := float64(200 + i*30)
+		lpAv1 := float64(100 + i*15)
+		lpHevc := float64(100 + i*5)
+		avH264 := float64(5000 + i*300)
+		avVp9 := float64(1500 + i*100)
+		avAv1 := float64(800 + i*60)
+		avHevc := float64(200 + i*20)
+		avAac := float64(800 + i*15)  // Audio is FREE
+		avOpus := float64(200 + i*5)  // Audio is FREE
+
+		summaries[i] = &pb.ProcessingUsageSummary{
+			Date:                  timestamppb.New(day),
+			TenantId:              "00000000-0000-0000-0000-000000000001",
+			// Livepeer totals
+			LivepeerSeconds:       lpH264 + lpVp9 + lpAv1 + lpHevc,
+			LivepeerSegmentCount:  uint64(600 + i*75),
+			LivepeerUniqueStreams: uint32(3 + i%2),
+			// Livepeer per-codec
+			LivepeerH264Seconds: lpH264,
+			LivepeerVp9Seconds:  lpVp9,
+			LivepeerAv1Seconds:  lpAv1,
+			LivepeerHevcSeconds: lpHevc,
+			// Native AV totals
+			NativeAvSeconds:       avH264 + avVp9 + avAv1 + avHevc + avAac + avOpus,
+			NativeAvSegmentCount:  uint64(1700 + i*100),
+			NativeAvUniqueStreams: uint32(5 + i%3),
+			// Native AV per-codec
+			NativeAvH264Seconds: avH264,
+			NativeAvVp9Seconds:  avVp9,
+			NativeAvAv1Seconds:  avAv1,
+			NativeAvHevcSeconds: avHevc,
+			NativeAvAacSeconds:  avAac,
+			NativeAvOpusSeconds: avOpus,
+			// Track type aggregates
+			AudioSeconds: avAac + avOpus,
+			VideoSeconds: lpH264 + lpVp9 + lpAv1 + lpHevc + avH264 + avVp9 + avAv1 + avHevc,
+		}
+	}
+
+	return &model.ProcessingUsageConnection{
+		Edges: edges,
+		PageInfo: &model.PageInfo{
+			HasPreviousPage: false,
+			HasNextPage:     false,
+			StartCursor:     stringPtr("pu_demo_001"),
+			EndCursor:       stringPtr("pu_demo_003"),
+		},
+		TotalCount: len(records),
+		Summaries:  summaries,
+	}
+}
+
+// GenerateRebufferingEventsConnection creates demo rebuffering events data
+func GenerateRebufferingEventsConnection(internalName *string) *model.RebufferingEventsConnection {
+	now := time.Now()
+	streamName := "demo_live_stream_001"
+	if internalName != nil && *internalName != "" {
+		streamName = *internalName
+	}
+
+	// Generate sample rebuffering events
+	bufferStates := []string{"FILLING", "FULL", "DRY", "FILLING"}
+	events := make([]*pb.RebufferingEvent, 4)
+
+	for i := 0; i < 4; i++ {
+		timestamp := now.Add(-time.Duration(30-i*5) * time.Minute)
+		rebufferStart := timestamp.Add(-time.Second * 2)
+		rebufferEnd := timestamp
+
+		events[i] = &pb.RebufferingEvent{
+			Id:            fmt.Sprintf("rebuf_%d", i+1),
+			Timestamp:     timestamppb.New(timestamp),
+			InternalName:  streamName,
+			NodeId:        "demo_node_001",
+			BufferState:   bufferStates[i],
+			PrevState:     bufferStates[(i+3)%4], // Previous state
+			RebufferStart: timestamppb.New(rebufferStart),
+			RebufferEnd:   timestamppb.New(rebufferEnd),
+		}
+	}
+
+	edges := make([]*model.RebufferingEventEdge, len(events))
+	for i, event := range events {
+		edges[i] = &model.RebufferingEventEdge{
+			Cursor: fmt.Sprintf("rebuf_cursor_%d", i+1),
+			Node:   event,
+		}
+	}
+
+	return &model.RebufferingEventsConnection{
+		Edges: edges,
+		PageInfo: &model.PageInfo{
+			HasPreviousPage: false,
+			HasNextPage:     false,
+			StartCursor:     stringPtr("rebuf_cursor_1"),
+			EndCursor:       stringPtr("rebuf_cursor_4"),
+		},
+		TotalCount: len(events),
+	}
+}
+
+// GenerateTenantAnalyticsDailyConnection creates demo tenant daily analytics data
+func GenerateTenantAnalyticsDailyConnection() *model.TenantAnalyticsDailyConnection {
+	now := time.Now()
+
+	// Generate 7 days of tenant analytics
+	records := make([]*pb.TenantAnalyticsDaily, 7)
+	for i := 0; i < 7; i++ {
+		day := now.AddDate(0, 0, -i).Truncate(24 * time.Hour)
+
+		// Simulate varying activity levels
+		baseStreams := 5 + rand.Intn(10)
+		baseViews := 1000 + rand.Intn(5000)
+		baseViewers := 100 + rand.Intn(500)
+		baseEgress := int64(10_000_000_000 + rand.Intn(50_000_000_000)) // 10-60 GB
+
+		records[i] = &pb.TenantAnalyticsDaily{
+			Id:            fmt.Sprintf("tad_%s", day.Format("2006-01-02")),
+			Day:           timestamppb.New(day),
+			TotalStreams:  int32(baseStreams),
+			TotalViews:    int64(baseViews),
+			UniqueViewers: int32(baseViewers),
+			EgressBytes:   baseEgress,
+		}
+	}
+
+	edges := make([]*model.TenantAnalyticsDailyEdge, len(records))
+	for i, record := range records {
+		edges[i] = &model.TenantAnalyticsDailyEdge{
+			Cursor: fmt.Sprintf("tad_cursor_%d", i+1),
+			Node:   record,
+		}
+	}
+
+	return &model.TenantAnalyticsDailyConnection{
+		Edges: edges,
+		PageInfo: &model.PageInfo{
+			HasPreviousPage: false,
+			HasNextPage:     false,
+			StartCursor:     stringPtr("tad_cursor_1"),
+			EndCursor:       stringPtr("tad_cursor_7"),
+		},
+		TotalCount: len(records),
+	}
+}
+
+// GenerateStreamAnalyticsDailyConnection creates demo stream daily analytics data
+func GenerateStreamAnalyticsDailyConnection(internalName *string) *model.StreamAnalyticsDailyConnection {
+	now := time.Now()
+
+	streamNames := []string{"demo_live_stream_001", "demo_live_stream_002", "demo_live_stream_003"}
+	if internalName != nil && *internalName != "" {
+		streamNames = []string{*internalName}
+	}
+
+	// Generate 7 days × N streams
+	var records []*pb.StreamAnalyticsDaily
+	for _, stream := range streamNames {
+		for i := 0; i < 7; i++ {
+			day := now.AddDate(0, 0, -i).Truncate(24 * time.Hour)
+
+			// Simulate varying activity levels per stream
+			baseViews := 100 + rand.Intn(1000)
+			baseViewers := 20 + rand.Intn(200)
+			baseCountries := 3 + rand.Intn(10)
+			baseCities := 10 + rand.Intn(30)
+			baseEgress := int64(1_000_000_000 + rand.Intn(10_000_000_000)) // 1-11 GB
+
+			records = append(records, &pb.StreamAnalyticsDaily{
+				Id:              fmt.Sprintf("sad_%s_%s", stream, day.Format("2006-01-02")),
+				Day:             timestamppb.New(day),
+				InternalName:    stream,
+				TotalViews:      int64(baseViews),
+				UniqueViewers:   int32(baseViewers),
+				UniqueCountries: int32(baseCountries),
+				UniqueCities:    int32(baseCities),
+				EgressBytes:     baseEgress,
+			})
+		}
+	}
+
+	edges := make([]*model.StreamAnalyticsDailyEdge, len(records))
+	for i, record := range records {
+		edges[i] = &model.StreamAnalyticsDailyEdge{
+			Cursor: fmt.Sprintf("sad_cursor_%d", i+1),
+			Node:   record,
+		}
+	}
+
+	return &model.StreamAnalyticsDailyConnection{
+		Edges: edges,
+		PageInfo: &model.PageInfo{
+			HasPreviousPage: false,
+			HasNextPage:     false,
+			StartCursor:     stringPtr("sad_cursor_1"),
+			EndCursor:       stringPtr(fmt.Sprintf("sad_cursor_%d", len(records))),
+		},
+		TotalCount: len(records),
 	}
 }
 

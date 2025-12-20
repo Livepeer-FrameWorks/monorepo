@@ -1,11 +1,28 @@
-query GetUsageRecords($timeRange: TimeRangeInput) {
-  usageRecords(timeRange: $timeRange) {
-    id
-    clusterId
-    clusterName
-    usageType
-    usageValue
-    billingMonth
-    createdAt
+# Fetch paginated usage records by cluster and usage type for billing analysis
+query GetUsageRecords(
+  $timeRange: TimeRangeInput
+  $first: Int = 50
+  $after: String
+) {
+  usageRecordsConnection(timeRange: $timeRange, first: $first, after: $after) {
+    edges {
+      cursor
+      node {
+        id
+        clusterId
+        clusterName
+        usageType
+        usageValue
+        billingMonth
+        createdAt
+      }
+    }
+    pageInfo {
+      hasNextPage
+      hasPreviousPage
+      startCursor
+      endCursor
+    }
+    totalCount
   }
 }

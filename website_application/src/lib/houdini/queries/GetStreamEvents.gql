@@ -1,0 +1,78 @@
+# Fetch stream events data including raw events, storage events, and clip events
+# Used for events panel and recordings tab
+query GetStreamEvents($id: ID!, $timeRange: TimeRangeInput, $first: Int = 50) {
+  stream(id: $id) {
+    id
+
+    # Raw stream events (connect/disconnect, status changes)
+    eventsConnection(timeRange: $timeRange, first: $first) {
+      edges {
+        cursor
+        node {
+          type
+          stream
+          status
+          timestamp
+          details
+        }
+      }
+      pageInfo {
+        ...PageInfoFields
+      }
+      totalCount
+    }
+
+    # Storage lifecycle events (uploads, deletions, moves to cold storage)
+    storageEventsConnection(timeRange: $timeRange, first: $first) {
+      edges {
+        cursor
+        node {
+          id
+          timestamp
+          internalName
+          assetHash
+          action
+          assetType
+          sizeBytes
+          s3Url
+          localPath
+          nodeId
+          durationMs
+          warmDurationMs
+          error
+        }
+      }
+      pageInfo {
+        ...PageInfoFields
+      }
+      totalCount
+    }
+
+    # Clip lifecycle events (requested, processing, complete)
+    clipEventsConnection(timeRange: $timeRange, first: $first) {
+      edges {
+        cursor
+        node {
+          timestamp
+          internalName
+          requestId
+          stage
+          contentType
+          startUnix
+          stopUnix
+          ingestNodeId
+          percent
+          message
+          filePath
+          s3Url
+          sizeBytes
+          expiresAt
+        }
+      }
+      pageInfo {
+        ...PageInfoFields
+      }
+      totalCount
+    }
+  }
+}

@@ -8,28 +8,24 @@
 type Query {
 
   # Streams (from Commodore)
-  streams: [Stream!]
   streamsConnection(first: Int = 50, after: String, last: Int, before: String): StreamsConnection!
   stream(id: ID!): Stream
   validateStreamKey(streamKey: String!): StreamValidation
 
-  # Analytics (from Periscope Query)
-  streamAnalytics(stream: String!, timeRange: TimeRangeInput): StreamAnalytics
+  # Platform Analytics (from Periscope Query)
+  # Note: Stream-specific analytics moved to Stream.analytics edge
   platformOverview(timeRange: TimeRangeInput): PlatformOverview
 
-  # Time-series viewer counts (aggregated from ClickHouse, for charts)
-  # interval: "5m", "15m", "1h", or "1d"
-  viewerCountTimeSeries(stream: String, timeRange: TimeRangeInput, interval: String = "5m"): [ViewerCountBucket!]!
-
   # Geographic Analytics
-  viewerGeographics(stream: String, timeRange: TimeRangeInput): [ViewerGeographic!]
+  viewerGeographicsConnection(stream: String, timeRange: TimeRangeInput, first: Int = 100, after: String, last: Int, before: String): ViewerGeographicsConnection!
   geographicDistribution(stream: String, timeRange: TimeRangeInput, topN: Int = 10): GeographicDistribution
-  loadBalancingMetrics(timeRange: TimeRangeInput, pagination: PaginationInput, sortOrder: SortOrder): [LoadBalancingMetric!]
 
   # Connection and Routing Analytics (Relay-style pagination)
-  routingEventsConnection(stream: String, timeRange: TimeRangeInput, first: Int = 100, after: String, last: Int, before: String, noCache: Boolean = false): RoutingEventsConnection!
+  # subjectTenantId = filter by stream owner (customer) tenant
+  # clusterId = filter by emitting cluster
+  routingEventsConnection(stream: String, timeRange: TimeRangeInput, subjectTenantId: ID, clusterId: String, first: Int = 100, after: String, last: Int, before: String, noCache: Boolean = false): RoutingEventsConnection!
   connectionEventsConnection(stream: String, timeRange: TimeRangeInput, first: Int = 100, after: String, last: Int, before: String, noCache: Boolean = false): ConnectionEventsConnection!
-  clipEventsConnection(internalName: String, stage: String, timeRange: TimeRangeInput, first: Int = 100, after: String, last: Int, before: String, noCache: Boolean = false): ClipEventsConnection!
+  viewerSessionsConnection(stream: String, timeRange: TimeRangeInput, first: Int = 100, after: String, last: Int, before: String, noCache: Boolean = false): ViewerSessionsConnection!
 
   # Artifact State (current status of clips/DVR from live_artifacts)
   artifactState(requestId: ID!): ArtifactState
@@ -40,64 +36,84 @@ type Query {
   nodeMetrics1hConnection(timeRange: TimeRangeInput, nodeId: String, first: Int = 100, after: String, last: Int, before: String, noCache: Boolean = false): NodeMetrics1hConnection!
 
   # Pre-Aggregated Analytics (Materialized Views)
-  streamConnectionHourlyConnection(stream: String, timeRange: TimeRangeInput, first: Int = 100, after: String, last: Int, before: String, noCache: Boolean = false): StreamConnectionHourlyConnection!
-  clientMetrics5mConnection(stream: String, nodeId: String, timeRange: TimeRangeInput, first: Int = 100, after: String, last: Int, before: String, noCache: Boolean = false): ClientMetrics5mConnection!
-  qualityTierDailyConnection(stream: String, timeRange: TimeRangeInput, first: Int = 100, after: String, last: Int, before: String, noCache: Boolean = false): QualityTierDailyConnection!
+  # Note: Stream-specific analytics (clientMetrics5m, streamConnectionHourly, qualityTierDaily, clipEvents, storageEvents) moved to Stream edges
   storageUsageConnection(nodeId: String, timeRange: TimeRangeInput, first: Int = 100, after: String, last: Int, before: String, noCache: Boolean = false): StorageUsageConnection!
+  nodePerformance5mConnection(nodeId: String, timeRange: TimeRangeInput, first: Int = 100, after: String, last: Int, before: String, noCache: Boolean = false): NodePerformance5mConnection!
+  viewerHoursHourlyConnection(stream: String, timeRange: TimeRangeInput, first: Int = 100, after: String, last: Int, before: String, noCache: Boolean = false): ViewerHoursHourlyConnection!
+  viewerGeoHourlyConnection(stream: String, timeRange: TimeRangeInput, first: Int = 100, after: String, last: Int, before: String, noCache: Boolean = false): ViewerGeoHourlyConnection!
+
+  # Processing/Transcoding Usage (from process_billing table via Periscope)
+  processingUsageConnection(streamName: String, processType: String, timeRange: TimeRangeInput, first: Int = 100, after: String, last: Int, before: String, noCache: Boolean = false): ProcessingUsageConnection!
+
+  # Rebuffering Events (buffer state transitions via Periscope)
+  rebufferingEventsConnection(internalName: String, nodeId: String, timeRange: TimeRangeInput, first: Int = 100, after: String, last: Int, before: String, noCache: Boolean = false): RebufferingEventsConnection!
+
+  # Daily Analytics Rollups (from ClickHouse materialized views via Periscope)
+  tenantAnalyticsDailyConnection(timeRange: TimeRangeInput, first: Int = 100, after: String, last: Int, before: String, noCache: Boolean = false): TenantAnalyticsDailyConnection!
+  streamAnalyticsDailyConnection(internalName: String, timeRange: TimeRangeInput, first: Int = 100, after: String, last: Int, before: String, noCache: Boolean = false): StreamAnalyticsDailyConnection!
 
   # Infrastructure Service Monitoring
-  serviceInstances(clusterId: String, nodeId: String, status: InstanceStatus, pagination: PaginationInput): [ServiceInstance!]
   serviceInstancesConnection(clusterId: String, nodeId: String, status: InstanceStatus, first: Int = 50, after: String, last: Int, before: String): ServiceInstancesConnection!
 
   # Stream Management
-  streamKeys(streamId: ID!): [StreamKey!]
-  clips(streamId: ID): [Clip!]
+  streamKeysConnection(streamId: ID!, first: Int = 50, after: String, last: Int, before: String): StreamKeysConnection!
   clipsConnection(streamId: ID, first: Int = 50, after: String, last: Int, before: String): ClipsConnection!
   clip(id: ID!): Clip
   clipViewingUrls(clipId: ID!): ClipViewingUrls
 
-  # Health and quality queries (Relay-style pagination)
-  streamHealthMetricsConnection(stream: String!, timeRange: TimeRangeInput, first: Int = 100, after: String, last: Int, before: String, noCache: Boolean = false): StreamHealthMetricsConnection!
-  trackListEventsConnection(stream: String!, timeRange: TimeRangeInput, first: Int = 100, after: String, last: Int, before: String, noCache: Boolean = false): TrackListEventsConnection!
-  currentStreamHealth(stream: String!): StreamHealthMetric
-  rebufferingEvents(stream: String!, timeRange: TimeRangeInput): [RebufferingEvent!]
-
   # Billing (from Purser)
   billingTiers: [BillingTier!]
-  invoices: [Invoice!]
+  invoicesConnection(first: Int = 50, after: String, last: Int, before: String): InvoicesConnection!
   invoice(id: ID!): Invoice
   billingStatus: BillingStatus
   tenantUsage(timeRange: TimeRangeInput): TenantUsage
-  usageRecords(timeRange: TimeRangeInput): [UsageRecord!]
+  usageRecordsConnection(timeRange: TimeRangeInput, first: Int = 50, after: String, last: Int, before: String): UsageRecordsConnection!
 
   # Tenants & Infrastructure (from Quartermaster)
   tenant: Tenant
-  clusters(pagination: PaginationInput): [Cluster!]
   clustersConnection(first: Int = 50, after: String, last: Int, before: String): ClustersConnection!
   cluster(id: ID!): Cluster
-  nodes(clusterId: String, status: NodeStatus, type: String, tag: String, pagination: PaginationInput): [Node!]
   nodesConnection(clusterId: String, status: NodeStatus, type: String, first: Int = 50, after: String, last: Int, before: String): NodesConnection!
   node(id: ID!): Node
 
   # Service discovery and access (Quartermaster)
-  discoverServices(type: String!, clusterId: String, pagination: PaginationInput): [ServiceInstance!]
-  clustersAccess(pagination: PaginationInput): [ClusterAccess!]
-  clustersAvailable(pagination: PaginationInput): [AvailableCluster!]
-  mySubscriptions(pagination: PaginationInput): [Cluster!]!
+  discoverServicesConnection(type: String!, clusterId: String, first: Int = 50, after: String, last: Int, before: String): ServiceInstancesConnection!
+  clustersAccess(first: Int = 50, after: String): [ClusterAccess!] @deprecated(reason: "Use clustersAccessConnection instead")
+  clustersAccessConnection(first: Int = 50, after: String, last: Int, before: String): ClusterAccessConnection!
+  clustersAvailable(first: Int = 50, after: String): [AvailableCluster!] @deprecated(reason: "Use clustersAvailableConnection instead")
+  clustersAvailableConnection(first: Int = 50, after: String, last: Int, before: String): AvailableClusterConnection!
+  mySubscriptions(first: Int = 50, after: String): [Cluster!]! @deprecated(reason: "Use mySubscriptionsConnection instead")
+  mySubscriptionsConnection(first: Int = 50, after: String, last: Int, before: String): MySubscriptionsConnection!
   serviceInstancesHealth(serviceId: String): [ServiceInstanceHealth!]
 
+  # Cluster Marketplace (Quartermaster)
+  marketplaceClusters(pricingModel: ClusterPricingModel, first: Int = 50, after: String): [MarketplaceCluster!]! @deprecated(reason: "Use marketplaceClustersConnection instead")
+  marketplaceClustersConnection(pricingModel: ClusterPricingModel, first: Int = 50, after: String, last: Int, before: String): MarketplaceClusterConnection!
+  marketplaceCluster(clusterId: String!): MarketplaceCluster
+  pendingSubscriptions(clusterId: ID!): [ClusterSubscription!]! @deprecated(reason: "Use pendingSubscriptionsConnection instead")
+  pendingSubscriptionsConnection(clusterId: ID!, first: Int = 50, after: String, last: Int, before: String): ClusterSubscriptionConnection!
+  clusterInvites(clusterId: ID!): [ClusterInvite!]! @deprecated(reason: "Use clusterInvitesConnection instead")
+  clusterInvitesConnection(clusterId: ID!, first: Int = 50, after: String, last: Int, before: String): ClusterInviteConnection!
+  myClusterInvites: [ClusterInvite!]! @deprecated(reason: "Use myClusterInvitesConnection instead")
+  myClusterInvitesConnection(first: Int = 50, after: String, last: Int, before: String): ClusterInviteConnection!
+
   # Developer API (from Commodore)
-  developerTokens: [DeveloperToken!]
   developerTokensConnection(first: Int = 50, after: String, last: Int, before: String): DeveloperTokensConnection!
 
   # Bootstrap token management (admin/provider only via Quartermaster)
-  bootstrapTokens: [BootstrapToken!]
+  bootstrapTokensConnection(kind: String, first: Int = 50, after: String, last: Int, before: String): BootstrapTokenConnection!
 
   # DVR recording requests (cursor-paginated)
   dvrRecordingsConnection(internalName: String, first: Int, after: String, last: Int, before: String): DVRRecordingsConnection
 
+  # VOD Assets (user-uploaded video files)
+  vodAsset(id: ID!): VodAsset
+  vodAssetsConnection(first: Int = 50, after: String, last: Int, before: String): VodAssetsConnection!
+
   # Viewer endpoint resolution (via Foghorn)
   resolveViewerEndpoint(contentType: String!, contentId: String!): ViewerEndpointResponse
+  # Ingest endpoint resolution for StreamCrafter (via Foghorn)
+  resolveIngestEndpoint(streamKey: String!): IngestEndpointResponse
   # Mist JSON meta (via Commodore -> Foghorn)
   streamMeta(streamKey: String!, targetBaseUrl: String, targetNodeId: String, includeRaw: Boolean): StreamMetaResponse
 }
@@ -115,9 +131,15 @@ type Mutation {
   deleteClip(id: ID!): DeleteClipResult!
 
   # DVR operations (via Commodore)
-  startDVR(internalName: String!, streamId: ID): StartDVRResult!
+  startDVR(internalName: String!, streamId: ID, expiresAt: Int): StartDVRResult!
   stopDVR(dvrHash: ID!): StopDVRResult!
   deleteDVR(dvrHash: ID!): DeleteDVRResult!
+
+  # VOD upload operations (via Foghorn)
+  createVodUpload(input: CreateVodUploadInput!): CreateVodUploadResult!
+  completeVodUpload(input: CompleteVodUploadInput!): CompleteVodUploadResult!
+  abortVodUpload(uploadId: ID!): AbortVodUploadResult!
+  deleteVodAsset(id: ID!): DeleteVodAssetResult!
 
   # Billing operations (via Purser)
   createPayment(input: CreatePaymentInput!): CreatePaymentResult!
@@ -127,6 +149,16 @@ type Mutation {
   updateTenant(input: UpdateTenantInput!): UpdateTenantResult!
   subscribeToCluster(clusterId: ID!): Boolean!
   unsubscribeFromCluster(clusterId: ID!): Boolean!
+
+  # Cluster Marketplace operations (via Quartermaster)
+  createPrivateCluster(input: CreatePrivateClusterInput!): CreatePrivateClusterResult!
+  updateClusterMarketplace(clusterId: ID!, input: UpdateClusterMarketplaceInput!): UpdateClusterResult!
+  createClusterInvite(input: CreateClusterInviteInput!): CreateClusterInviteResult!
+  revokeClusterInvite(inviteId: ID!): RevokeClusterInviteResult!
+  requestClusterSubscription(clusterId: ID!, inviteToken: String): ClusterSubscriptionResult!
+  acceptClusterInvite(inviteToken: String!): ClusterSubscriptionResult!
+  approveClusterSubscription(subscriptionId: ID!): ClusterSubscriptionResult!
+  rejectClusterSubscription(subscriptionId: ID!, reason: String): ClusterSubscriptionResult!
 
   # Developer API operations (via Commodore)
   createDeveloperToken(input: CreateDeveloperTokenInput!): CreateDeveloperTokenResult!
@@ -194,6 +226,11 @@ union StartDVRResult = DVRRequest | ValidationError | NotFoundError | AuthError
 union StopDVRResult = DeleteSuccess | NotFoundError | AuthError
 union DeleteDVRResult = DeleteSuccess | NotFoundError | AuthError
 
+union CreateVodUploadResult = VodUploadSession | ValidationError | AuthError
+union CompleteVodUploadResult = VodAsset | ValidationError | NotFoundError | AuthError
+union AbortVodUploadResult = DeleteSuccess | NotFoundError | AuthError
+union DeleteVodAssetResult = DeleteSuccess | NotFoundError | AuthError
+
 union CreatePaymentResult = Payment | ValidationError | AuthError
 union UpdateTenantResult = Tenant | ValidationError | AuthError
 
@@ -203,10 +240,18 @@ union RevokeDeveloperTokenResult = DeleteSuccess | NotFoundError | AuthError
 union CreateBootstrapTokenResult = BootstrapToken | ValidationError | AuthError
 union RevokeBootstrapTokenResult = DeleteSuccess | NotFoundError | AuthError
 
+# Cluster Marketplace Result Types
+union CreatePrivateClusterResult = CreatePrivateClusterResponse | ValidationError | AuthError
+union UpdateClusterResult = Cluster | ValidationError | NotFoundError | AuthError
+union CreateClusterInviteResult = ClusterInvite | ValidationError | NotFoundError | AuthError
+union RevokeClusterInviteResult = DeleteSuccess | NotFoundError | AuthError
+union ClusterSubscriptionResult = ClusterSubscription | ValidationError | NotFoundError | AuthError
+
 # Root Subscription type for real-time updates
 type Subscription {
-  # Stream lifecycle events
-  streamEvents(stream: String): StreamEvent!
+  # Stream lifecycle events (real-time from Signalman)
+  # Returns rich payload with proto enum event types (EVENT_TYPE_STREAM_LIFECYCLE_UPDATE, etc.)
+  streamEvents(stream: String): StreamSubscriptionEvent!
 
   # Viewer metrics updates
   viewerMetrics(stream: String!): ViewerMetrics!
@@ -217,6 +262,7 @@ type Subscription {
   # Clip lifecycle updates (real-time from Signalman)
   clipLifecycle(stream: String!): ClipLifecycle!
   dvrLifecycle(stream: String!): DVREvent!
+  vodLifecycle: VodLifecycle!
 
   # System health (admin only)
   systemHealth: SystemHealthEvent!
@@ -228,16 +274,17 @@ type Subscription {
 
 # Union type for all possible tenant events in firehose
 type TenantEvent {
-  type: String!
+  type: String!     # Proto enum string (e.g., EVENT_TYPE_STREAM_LIFECYCLE_UPDATE, EVENT_TYPE_VIEWER_CONNECT)
   channel: String!  # STREAMS, ANALYTICS, or SYSTEM
   timestamp: Time!
 
   # One of these will be populated based on event type
-  streamEvent: StreamEvent
+  streamEvent: StreamSubscriptionEvent
   viewerMetrics: ViewerMetrics
   trackListUpdate: TrackListUpdate  # Real-time track updates from Signalman
   clipLifecycle: ClipLifecycle      # Real-time clip lifecycle from Signalman
   dvrEvent: DVREvent
+  vodLifecycle: VodLifecycle        # Real-time VOD upload lifecycle from Signalman
   systemHealthEvent: SystemHealthEvent
 }
 
@@ -249,7 +296,7 @@ type DVREvent {
   manifestPath: String
   startedAt: Int
   endedAt: Int
-  sizeBytes: Int
+  sizeBytes: Float
   segmentCount: Int
   error: String
   nodeId: String
@@ -283,7 +330,7 @@ type ClipLifecycle {
   progressPercent: Int
   filePath: String
   s3Url: String
-  sizeBytes: Int
+  sizeBytes: Float
   error: String
   startedAt: Int
   completedAt: Int
@@ -294,6 +341,28 @@ type ClipLifecycle {
   stopUnix: Int
   durationSec: Int
   clipMode: String
+}
+
+# Real-time VOD upload lifecycle event from Signalman - bound to proto.VodLifecycleData
+type VodLifecycle {
+  status: Int!             # VodLifecycleData.Status enum value
+  vodHash: String!         # Artifact hash (from Commodore)
+  uploadId: String         # S3 multipart upload ID
+  filename: String
+  contentType: String      # MIME type (video/mp4, etc.)
+  sizeBytes: Float         # Expected or actual size
+  s3Url: String            # Final S3 URL when completed
+  filePath: String         # Local file path (if applicable)
+  error: String
+  startedAt: Int           # When upload started (unix timestamp)
+  completedAt: Int         # When upload/processing completed
+  nodeId: String           # Processing node (if any)
+  expiresAt: Int           # Retention expiration (unix timestamp)
+  # Media metadata (populated after processing)
+  durationMs: Int
+  resolution: String       # "1920x1080"
+  videoCodec: String
+  audioCodec: String
 }
 
 # Input types
@@ -337,6 +406,9 @@ input CreateClipInput {
   # DURATION / CLIP_NOW: Duration in seconds
   duration: Int
 
+  # Expiry time (Unix timestamp in seconds)
+  expiresAt: Int
+
   # Legacy fields (deprecated, map to startUnix/stopUnix)
   startTime: Int @deprecated(reason: "Use startUnix instead")
   endTime: Int @deprecated(reason: "Use stopUnix instead")
@@ -344,18 +416,28 @@ input CreateClipInput {
 
 # DVR types
 type DVRRequest {
+  # Business metadata (from Commodore registry)
+  id: ID                     # UUID from Commodore business registry
   dvrHash: ID!
   internalName: String!
+  title: String              # Stream title or custom title
+  createdAt: Time!
+  updatedAt: Time!
+  expiresAt: Time
+  # Lifecycle data (from Periscope via artifactStatesConnection, or Foghorn for single-item queries)
   storageNodeId: String
-  status: String!
+  status: String
   startedAt: Time
   endedAt: Time
   durationSeconds: Int
-  sizeBytes: Int
+  sizeBytes: Float
   manifestPath: String
   errorMessage: String
-  createdAt: Time!
-  updatedAt: Time!
+  # Cold storage info
+  storageLocation: String   # "local", "s3", "freezing", "defrosting"
+  isFrozen: Boolean!
+  frozenAt: Time
+  s3Url: String
 }
 
 # DVR Recordings Connection (cursor-paginated)
@@ -368,6 +450,95 @@ type DVRRecordingsConnection {
 type DVRRecordingEdge {
   cursor: String!
   node: DVRRequest!
+}
+
+# ============================================================================
+# VOD UPLOAD TYPES
+# ============================================================================
+
+# VOD asset status enumeration
+enum VodAssetStatus {
+  UPLOADING      # S3 multipart upload in progress
+  PROCESSING     # Upload complete, validating and extracting metadata
+  READY          # Validated and ready for playback
+  FAILED         # Validation failed or upload error
+  DELETED        # Marked for deletion
+}
+
+# Input for initiating a VOD upload
+input CreateVodUploadInput {
+  filename: String!          # Original filename (for metadata)
+  sizeBytes: Int!            # File size in bytes (required for part calculation)
+  contentType: String        # MIME type (video/mp4, video/webm, etc.)
+  title: String              # Optional title for the asset
+  description: String        # Optional description
+}
+
+# Input for completing a VOD upload (after all parts uploaded to S3)
+input CompleteVodUploadInput {
+  uploadId: ID!              # Upload session ID from createVodUpload
+  parts: [VodUploadCompletedPart!]!  # ETags from each uploaded part
+}
+
+# Completed part info (returned by S3 after each part upload)
+input VodUploadCompletedPart {
+  partNumber: Int!           # 1-indexed part number
+  etag: String!              # ETag header returned by S3 on part upload
+}
+
+# Response from createVodUpload with S3 multipart upload instructions
+type VodUploadSession {
+  id: ID!                    # Upload session ID (S3 uploadId)
+  artifactId: ID!            # Artifact ID in live_artifacts table
+  artifactHash: String!      # Hash for playback URL resolution
+  partSize: Int!             # Recommended part size in bytes
+  parts: [VodUploadPart!]!   # Presigned URLs for each part
+  expiresAt: Time!           # When presigned URLs expire (typically 2 hours)
+}
+
+# Individual part upload instruction
+type VodUploadPart {
+  partNumber: Int!           # 1-indexed part number
+  presignedUrl: String!      # Presigned PUT URL for this part
+}
+
+# VOD asset type (user-uploaded video file)
+type VodAsset {
+  id: ID!
+  artifactHash: String!      # Hash for playback URL resolution
+  title: String
+  description: String
+  filename: String           # Original uploaded filename
+  status: VodAssetStatus!
+  storageLocation: String!   # "s3", "local", "freezing", "defrosting"
+
+  # File metadata (populated after validation)
+  sizeBytes: Float
+  durationMs: Int            # Video duration in milliseconds
+  resolution: String         # e.g., "1920x1080"
+  videoCodec: String         # e.g., "h264", "h265", "vp9"
+  audioCodec: String         # e.g., "aac", "opus"
+  bitrateKbps: Int           # Average bitrate
+
+  # Timestamps
+  createdAt: Time!
+  updatedAt: Time!
+  expiresAt: Time            # Optional expiration
+
+  # Error info (if status is FAILED)
+  errorMessage: String
+}
+
+# VOD Assets Connection (cursor-paginated)
+type VodAssetsConnection {
+  edges: [VodAssetEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type VodAssetEdge {
+  cursor: String!
+  node: VodAsset!
 }
 
 input CreatePaymentInput {
@@ -430,20 +601,41 @@ input CreateBootstrapTokenInput {
   type: BootstrapTokenType!
   expiresIn: Int    # Days until expiration
   usageLimit: Int   # Max uses allowed
+  clusterId: ID     # Required for edge_node tokens, binds token to specific cluster
 }
 
 input CreateStreamKeyInput {
   name: String!
 }
 
+# Cluster Marketplace Inputs
+input CreatePrivateClusterInput {
+  clusterName: String!
+  region: String
+  shortDescription: String
+}
+
+input UpdateClusterMarketplaceInput {
+  visibility: ClusterVisibility
+  pricingModel: ClusterPricingModel
+  monthlyPriceCents: Int
+  requiredBillingTier: String
+  requiresApproval: Boolean
+  shortDescription: String
+  longDescription: String
+}
+
+input CreateClusterInviteInput {
+  clusterId: ID!
+  invitedTenantId: ID!
+  accessLevel: String
+  resourceLimits: JSON
+  expiresInDays: Int
+}
+
 input TimeRangeInput {
   start: Time!
   end: Time!
-}
-
-input PaginationInput {
-  limit: Int
-  offset: Int
 }
 
 enum SortOrder {
@@ -506,7 +698,83 @@ enum BootstrapTokenType {
   SERVICE
 }
 
-# Real-time event types
+# Cluster Marketplace Enums
+enum ClusterVisibility {
+  PUBLIC
+  UNLISTED
+  PRIVATE
+}
+
+enum ClusterPricingModel {
+  FREE_UNMETERED
+  METERED
+  MONTHLY
+  TIER_INHERIT
+  CUSTOM
+}
+
+enum ClusterSubscriptionStatus {
+  PENDING_APPROVAL
+  ACTIVE
+  SUSPENDED
+  REJECTED
+}
+
+# Real-time stream subscription event types (direct proto passthrough)
+# NOTE: These types omit tenant_id/user_id fields for security (internal only)
+
+# Bound to proto.StreamLifecycleUpdate
+type StreamLifecycleUpdate {
+  nodeId: String!
+  internalName: String!
+  status: String!           # "live", "offline"
+  bufferState: String       # "FULL", "EMPTY", "DRY", "RECOVER"
+  uploadedBytes: Float
+  downloadedBytes: Float
+  totalViewers: Int
+  totalInputs: Int
+  viewerSeconds: Float
+}
+
+# Bound to proto.StreamEndTrigger
+type StreamEndEvent {
+  streamName: String!
+  nodeId: String
+  downloadedBytes: Float
+  uploadedBytes: Float
+  totalViewers: Float
+  totalInputs: Float
+  totalOutputs: Float
+  viewerSeconds: Float
+}
+
+# Bound to proto.StreamBufferTrigger - rich health diagnostics
+type StreamBufferEvent {
+  streamName: String!
+  bufferState: String!      # "FULL", "EMPTY", "DRY", "RECOVER"
+  hasIssues: Boolean
+  issuesDescription: String
+  trackCount: Int
+  qualityTier: String
+  streamBufferMs: Int       # Overall buffer depth in ms
+  streamJitterMs: Int       # Max jitter across tracks
+  mistIssues: String        # Mist's issue string (e.g., "HLSnoaudio!")
+  maxKeepawaMs: Int         # Max viewer distance from live edge
+  tracks: [StreamTrack!]    # Full track details
+}
+
+# Real-time subscription event wrapper (uses optional fields pattern like TenantEvent)
+type StreamSubscriptionEvent {
+  eventType: String!        # Proto enum string: EVENT_TYPE_STREAM_LIFECYCLE_UPDATE, EVENT_TYPE_STREAM_END, EVENT_TYPE_STREAM_BUFFER
+  timestamp: Time!
+  # One of these will be populated based on eventType
+  lifecycleUpdate: StreamLifecycleUpdate
+  endEvent: StreamEndEvent
+  bufferEvent: StreamBufferEvent  # Rich health diagnostics (jitter, issues, buffer depth)
+}
+
+# Historical stream event type (for eventsConnection query - from ClickHouse)
+# Bound to proto.StreamEvent from periscope.proto
 type StreamEvent {
   type: StreamEventType!
   stream: String!
@@ -536,8 +804,8 @@ type ViewerMetrics {
   position: Float              # playback position
   bandwidthInBps: Int          # upload bandwidth (bits/sec)
   bandwidthOutBps: Int         # download bandwidth (bits/sec)
-  bytesDownloaded: Int
-  bytesUploaded: Int
+  bytesDownloaded: Float
+  bytesUploaded: Float
   packetsSent: Int
   packetsLost: Int
   packetsRetransmitted: Int
@@ -577,7 +845,8 @@ type StreamTrack {
 }
 
 type SystemHealthEvent {
-  node: String!
+  nodeId: ID                  # Database UUID (for reliable lookups)
+  node: String!               # Logical name (for display/fallback)
   location: String!           # Region/city name (e.g. "NYC")
   status: NodeStatus!
   cpuTenths: Int!             # CPU usage 0-1000 (divide by 10 for %)
@@ -632,9 +901,45 @@ type Stream {
   # Operational metrics (from Periscope Data Plane) - lazy loaded
   metrics: StreamMetrics
 
-  # Analytics edges (Data Plane)
-  eventsConnection(timeRange: TimeRangeInput, first: Int = 100, after: String): StreamEventsConnection
-  healthConnection(timeRange: TimeRangeInput, first: Int = 100, after: String): StreamHealthMetricsConnection
+  # === ANALYTICS EDGES (from ClickHouse) ===
+
+  # Aggregated analytics (stream_events + client_metrics)
+  analytics(timeRange: TimeRangeInput): StreamAnalytics
+
+  # Time-series for charts (5m/15m/1h/1d buckets)
+  viewerTimeSeriesConnection(timeRange: TimeRangeInput, interval: String = "5m", first: Int = 100, after: String, last: Int, before: String): ViewerTimeSeriesConnection!
+
+  # Health monitoring (stream_buffer events)
+  currentHealth: StreamHealthMetric
+  healthConnection(timeRange: TimeRangeInput, first: Int = 100, after: String, last: Int, before: String, noCache: Boolean = false): StreamHealthMetricsConnection!
+  rebufferingEventsConnection(timeRange: TimeRangeInput, first: Int = 100, after: String, last: Int, before: String): RebufferingEventsConnection!
+
+  # Track metadata (track_list events)
+  trackListConnection(timeRange: TimeRangeInput, first: Int = 100, after: String, last: Int, before: String, noCache: Boolean = false): TrackListEventsConnection!
+
+  # Client/viewer quality (client_metrics_5m MV)
+  clientMetricsConnection(timeRange: TimeRangeInput, nodeId: String, first: Int = 100, after: String, last: Int, before: String, noCache: Boolean = false): ClientMetrics5mConnection!
+
+  # Hourly aggregates (stream_connection_hourly MV)
+  connectionHourlyConnection(timeRange: TimeRangeInput, first: Int = 100, after: String, last: Int, before: String, noCache: Boolean = false): StreamConnectionHourlyConnection!
+
+  # Quality distribution (quality_tier_daily MV)
+  qualityDailyConnection(timeRange: TimeRangeInput, first: Int = 100, after: String, last: Int, before: String, noCache: Boolean = false): QualityTierDailyConnection!
+
+  # Clip/DVR lifecycle (clip_events)
+  clipEventsConnection(stage: String, timeRange: TimeRangeInput, first: Int = 100, after: String, last: Int, before: String, noCache: Boolean = false): ClipEventsConnection!
+
+  # Storage lifecycle (storage_events)
+  storageEventsConnection(assetType: String, timeRange: TimeRangeInput, first: Int = 100, after: String, last: Int, before: String, noCache: Boolean = false): StorageEventsConnection!
+
+  # Raw stream events (stream_events table)
+  eventsConnection(timeRange: TimeRangeInput, first: Int = 100, after: String, last: Int, before: String, noCache: Boolean = false): StreamEventsConnection
+
+  # Individual viewer sessions for this stream (viewer_sessions table)
+  viewerSessionsConnection(timeRange: TimeRangeInput, first: Int = 100, after: String, last: Int, before: String, noCache: Boolean = false): ViewerSessionsConnection!
+
+  # 5-minute aggregated health metrics (from stream_health_5m MV)
+  health5mConnection(timeRange: TimeRangeInput, first: Int = 100, after: String, last: Int, before: String, noCache: Boolean = false): StreamHealth5mConnection!
 }
 
 # Operational metrics from Periscope Data Plane
@@ -727,8 +1032,7 @@ type StreamAnalytics {
   # Status
   status: String
   lastUpdated: Time!
-  createdAt: Time!
-  
+
   # Current health state (from STREAM_BUFFER events)
   currentBufferState: String
   currentIssues: String
@@ -745,7 +1049,6 @@ type StreamAnalytics {
   avgBufferHealth: Float
   avgBitrate: Int
   packetLossRate: Float
-  avgConnectionQuality: Float
 }
 
 # Time-bucketed viewer count for charts (from ClickHouse aggregation)
@@ -786,6 +1089,191 @@ type ConnectionEventsConnection {
   totalCount: Int!
 }
 
+# Viewer Geographic Events Connection
+type ViewerGeographicEdge {
+  cursor: String!
+  node: ViewerGeographic!
+}
+
+type ViewerGeographicsConnection {
+  edges: [ViewerGeographicEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+# Viewer Time Series Connection
+type ViewerCountBucketEdge {
+  cursor: String!
+  node: ViewerCountBucket!
+}
+
+type ViewerTimeSeriesConnection {
+  edges: [ViewerCountBucketEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+# Rebuffering Events Connection
+type RebufferingEventEdge {
+  cursor: String!
+  node: RebufferingEvent!
+}
+
+type RebufferingEventsConnection {
+  edges: [RebufferingEventEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+# Stream Keys Connection
+type StreamKeyEdge {
+  cursor: String!
+  node: StreamKey!
+}
+
+type StreamKeysConnection {
+  edges: [StreamKeyEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+# Individual viewer session (from viewer_sessions ClickHouse table)
+type ViewerSession {
+  id: ID!
+  timestamp: Time!
+  internalName: String!
+  nodeId: String
+  sessionId: String!
+  connector: String                    # Protocol: HLS, WebRTC, RTMP
+  countryCode: String
+  city: String
+  latitude: Float
+  longitude: Float
+  durationSeconds: Int
+  bytesUp: Int
+  bytesDown: Int
+  connectionQuality: Float
+  bufferHealth: Float
+  clientBucket: GeoBucket
+}
+
+type ViewerSessionEdge {
+  cursor: String!
+  node: ViewerSession!
+}
+
+type ViewerSessionsConnection {
+  edges: [ViewerSessionEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+# Stream Health 5-Minute Aggregates (from stream_health_5m MV)
+type StreamHealth5m {
+  id: ID!
+  timestamp: Time!
+  nodeId: String
+  rebufferCount: Int!
+  issueCount: Int!
+  sampleIssues: String
+  avgBitrate: Int!
+  avgFps: Float!
+  bufferDryCount: Int!
+  qualityTier: String
+}
+
+type StreamHealth5mEdge {
+  cursor: String!
+  node: StreamHealth5m!
+}
+
+type StreamHealth5mConnection {
+  edges: [StreamHealth5mEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+# Node Performance 5-Minute Aggregates (from node_performance_5m MV)
+type NodePerformance5m {
+  id: ID!
+  timestamp: Time!
+  nodeId: String!
+  avgCpu: Float!
+  maxCpu: Float!
+  avgMemory: Float!
+  maxMemory: Float!
+  totalBandwidth: Int!
+  avgStreams: Int!
+  maxStreams: Int!
+}
+
+type NodePerformance5mEdge {
+  cursor: String!
+  node: NodePerformance5m!
+}
+
+type NodePerformance5mConnection {
+  edges: [NodePerformance5mEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+# Viewer Hours Hourly Aggregates (from viewer_hours_hourly MV)
+type ViewerHoursHourly {
+  id: ID!
+  hour: Time!
+  internalName: String
+  countryCode: String
+  uniqueViewers: Int!
+  totalSessionSeconds: Int!
+  totalBytes: Float!
+  viewerHours: Float!
+  egressGb: Float!
+}
+
+type ViewerHoursHourlyEdge {
+  cursor: String!
+  node: ViewerHoursHourly!
+}
+
+type ViewerHoursHourlyConnection {
+  edges: [ViewerHoursHourlyEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+# Viewer Geographic Hourly Aggregates (from viewer_geo_hourly MV)
+type ViewerGeoHourly {
+  id: ID!
+  hour: Time!
+  countryCode: String!
+  viewerCount: Int!
+  viewerHours: Float!
+  egressGb: Float!
+}
+
+type ViewerGeoHourlyEdge {
+  cursor: String!
+  node: ViewerGeoHourly!
+}
+
+type ViewerGeoHourlyConnection {
+  edges: [ViewerGeoHourlyEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+# Tenant Daily Stats (from tenant_viewer_daily for PlatformOverview.dailyStats)
+type TenantDailyStat {
+  id: ID!
+  date: Time!
+  egressGb: Float!
+  viewerHours: Float!
+  uniqueViewers: Int!
+  totalSessions: Int!
+  totalViews: Int!
+}
+
 # Node Metrics Connection
 type NodeMetricEdge {
   cursor: String!
@@ -817,7 +1305,7 @@ type StreamConnectionHourly {
   id: ID!
   hour: Time!
   internalName: String!
-  totalBytes: Int!
+  totalBytes: Float!
   uniqueViewers: Int!
   totalSessions: Int!
 }
@@ -844,7 +1332,6 @@ type ClientMetrics5m {
   avgBandwidthOut: Float!
   avgConnectionTime: Float!
   packetLossRate: Float
-  avgConnectionQuality: Float
 }
 
 type ClientMetrics5mEdge {
@@ -890,11 +1377,15 @@ type StorageUsageRecord {
   id: ID!
   timestamp: Time!
   nodeId: String!
-  totalBytes: Int!
+  totalBytes: Float!
   fileCount: Int!
-  dvrBytes: Int!
-  clipBytes: Int!
-  recordingBytes: Int!
+  dvrBytes: Float!
+  clipBytes: Float!
+  vodBytes: Float!
+  # Frozen storage breakdown (cold storage in S3)
+  frozenDvrBytes: Float!
+  frozenClipBytes: Float!
+  frozenVodBytes: Float!
 }
 
 type StorageUsageEdge {
@@ -904,6 +1395,188 @@ type StorageUsageEdge {
 
 type StorageUsageConnection {
   edges: [StorageUsageEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+# Storage lifecycle events (freeze/defrost operations)
+type StorageEvent {
+  id: ID!
+  timestamp: Time!
+  internalName: String!
+  assetHash: String!         # clip_hash or dvr_hash
+  action: String!            # freeze_started, frozen, defrost_started, defrosted, freeze_failed, defrost_failed
+  assetType: String!         # clip, dvr
+  sizeBytes: Float!
+  s3Url: String
+  localPath: String
+  nodeId: String!
+  durationMs: Int            # Time taken for operation
+  warmDurationMs: Int        # For evicted: how long asset was cached before eviction
+  error: String
+}
+
+type StorageEventEdge {
+  cursor: String!
+  node: StorageEvent!
+}
+
+type StorageEventsConnection {
+  edges: [StorageEventEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+# ============================================================================
+# Processing/Transcoding Usage (from process_billing table)
+# ============================================================================
+
+# Detailed transcoding record for analytics display
+type ProcessingUsageRecord {
+  id: ID!
+  timestamp: Time!
+  nodeId: String!
+  streamName: String!
+  processType: String!              # "Livepeer", "AV", "FFmpeg"
+  trackType: String                 # "audio" or "video" (KEY FOR BILLING)
+  durationMs: Int!                  # Segment duration or time since last event
+  inputCodec: String
+  outputCodec: String
+
+  # Livepeer-specific fields
+  segmentNumber: Int
+  width: Int                        # Source width
+  height: Int                       # Source height
+  renditionCount: Int
+  broadcasterUrl: String
+  livepeerSessionId: String
+  segmentStartMs: Int
+  inputBytes: Float
+  outputBytesTotal: Float
+  attemptCount: Int
+  turnaroundMs: Int                 # Full transcode roundtrip
+  speedFactor: Float                # Real-time factor (1.0 = real-time)
+  renditionsJson: String            # JSON array: [{name, bytes}, ...]
+
+  # MistProcAV cumulative fields
+  inputFrames: Int
+  outputFrames: Int
+  decodeUsPerFrame: Int
+  transformUsPerFrame: Int
+  encodeUsPerFrame: Int
+  isFinal: Boolean                  # Session end flag
+
+  # MistProcAV delta values (this reporting window)
+  inputFramesDelta: Int
+  outputFramesDelta: Int
+  inputBytesDelta: Float
+  outputBytesDelta: Float
+
+  # MistProcAV dimensions
+  inputWidth: Int
+  inputHeight: Int
+  outputWidth: Int
+  outputHeight: Int
+
+  # MistProcAV frame/audio info
+  inputFpks: Int                    # Input frames per 1000s
+  outputFpsMeasured: Float          # Measured output FPS
+  sampleRate: Int                   # Audio sample rate
+  channels: Int                     # Audio channels
+
+  # MistProcAV timing
+  sourceTimestampMs: Int
+  sinkTimestampMs: Int
+  sourceAdvancedMs: Int
+  sinkAdvancedMs: Int
+
+  # MistProcAV performance
+  rtfIn: Float                      # Real-time factor input
+  rtfOut: Float                     # Real-time factor output
+  pipelineLagMs: Int                # Processing delay
+  outputBitrateBps: Int             # Output bitrate
+}
+
+# Daily summary for billing display
+type ProcessingUsageSummary {
+  date: Time!
+  # Livepeer (totals)
+  livepeerSeconds: Float!           # Total Livepeer Gateway transcode seconds
+  livepeerSegmentCount: Int!        # Number of segments transcoded via Livepeer
+  livepeerUniqueStreams: Int!       # Unique streams using Livepeer
+  # Livepeer per-codec breakdown
+  livepeerH264Seconds: Float!
+  livepeerVp9Seconds: Float!
+  livepeerAv1Seconds: Float!
+  livepeerHevcSeconds: Float!
+  # Native AV (totals)
+  nativeAvSeconds: Float!           # Total local audio/video transcode seconds
+  nativeAvSegmentCount: Int!        # Number of segments processed locally
+  nativeAvUniqueStreams: Int!       # Unique streams using local AV processing
+  # Native AV per-codec breakdown
+  nativeAvH264Seconds: Float!
+  nativeAvVp9Seconds: Float!
+  nativeAvAv1Seconds: Float!
+  nativeAvHevcSeconds: Float!
+  nativeAvAacSeconds: Float!        # Audio is FREE but tracked
+  nativeAvOpusSeconds: Float!       # Audio is FREE but tracked
+  # Track type aggregates
+  audioSeconds: Float!              # Total audio transcode seconds (free)
+  videoSeconds: Float!              # Total video transcode seconds (billable)
+}
+
+type ProcessingUsageEdge {
+  cursor: String!
+  node: ProcessingUsageRecord!
+}
+
+type ProcessingUsageConnection {
+  edges: [ProcessingUsageEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+  summaries: [ProcessingUsageSummary!]!  # Daily summaries (always returned)
+}
+
+# Tenant Analytics Daily (daily tenant-level rollup)
+type TenantAnalyticsDaily {
+  id: ID!
+  day: Time!
+  totalStreams: Int!                 # Unique streams with activity
+  totalViews: Int!                   # Total view events
+  uniqueViewers: Int!                # Unique viewer count
+  egressBytes: Int!                  # Total bytes delivered
+}
+
+type TenantAnalyticsDailyEdge {
+  cursor: String!
+  node: TenantAnalyticsDaily!
+}
+
+type TenantAnalyticsDailyConnection {
+  edges: [TenantAnalyticsDailyEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+# Stream Analytics Daily (daily stream-level rollup)
+type StreamAnalyticsDaily {
+  id: ID!
+  day: Time!
+  internalName: String!
+  totalViews: Int!                   # Total view events
+  uniqueViewers: Int!                # Unique viewer count
+  uniqueCountries: Int!              # Geographic diversity
+  uniqueCities: Int!                 # City-level diversity
+  egressBytes: Int!                  # Total bytes delivered
+}
+
+type StreamAnalyticsDailyEdge {
+  cursor: String!
+  node: StreamAnalyticsDaily!
+}
+
+type StreamAnalyticsDailyConnection {
+  edges: [StreamAnalyticsDailyEdge!]!
   pageInfo: PageInfo!
   totalCount: Int!
 }
@@ -1028,18 +1701,101 @@ type ServiceInstancesConnection {
   totalCount: Int!
 }
 
+# Cluster Access Connection (Tier 2)
+type ClusterAccessEdge {
+  cursor: String!
+  node: ClusterAccess!
+}
+
+type ClusterAccessConnection {
+  edges: [ClusterAccessEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+# Available Cluster Connection (Tier 2)
+type AvailableClusterEdge {
+  cursor: String!
+  node: AvailableCluster!
+}
+
+type AvailableClusterConnection {
+  edges: [AvailableClusterEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+# Marketplace Cluster Connection (Tier 2)
+type MarketplaceClusterEdge {
+  cursor: String!
+  node: MarketplaceCluster!
+}
+
+type MarketplaceClusterConnection {
+  edges: [MarketplaceClusterEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+# Cluster Subscription Connection (Tier 2)
+type ClusterSubscriptionEdge {
+  cursor: String!
+  node: ClusterSubscription!
+}
+
+type ClusterSubscriptionConnection {
+  edges: [ClusterSubscriptionEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+# Cluster Invite Connection (Tier 2)
+type ClusterInviteEdge {
+  cursor: String!
+  node: ClusterInvite!
+}
+
+type ClusterInviteConnection {
+  edges: [ClusterInviteEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+# My Subscriptions Connection (Tier 2)
+type MySubscriptionEdge {
+  cursor: String!
+  node: Cluster!
+}
+
+type MySubscriptionsConnection {
+  edges: [MySubscriptionEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+# Bootstrap Token Connection (Tier 2)
+type BootstrapTokenEdge {
+  cursor: String!
+  node: BootstrapToken!
+}
+
+type BootstrapTokenConnection {
+  edges: [BootstrapTokenEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
 type PlatformOverview {
   totalStreams: Int!
   totalViewers: Int!
   totalBandwidth: Float!
-  totalUsers: Int!
   streamHours: Float!        # Total streaming hours in time range (ingest hours)
   egressGb: Float!           # Total egress bandwidth in GB
   peakViewers: Int!          # Peak concurrent viewers (NOTE: currently unique_viewers, not true peak)
   timeRange: TimeRange!
   # Real-time bandwidth metrics (from live_streams)
-  totalUploadBytes: Int!     # Total ingest bytes (sum across all streams)
-  totalDownloadBytes: Int!   # Total egress bytes (sum across all streams)
+  totalUploadBytes: Float!     # Total ingest bytes (sum across all streams)
+  totalDownloadBytes: Float!   # Total egress bytes (sum across all streams)
   # Viewer consumption metrics (from tenant_viewer_daily)
   viewerHours: Float!        # Total accumulated viewer watch time in hours
   deliveredMinutes: Float!   # viewer_hours * 60 (convenience field)
@@ -1049,6 +1805,8 @@ type PlatformOverview {
   peakConcurrentViewers: Int! # Maximum concurrent viewers at any instant in time range
   # Total views (session starts from tenant_analytics_daily)
   totalViews: Int!           # Total number of view sessions started in time range
+  # Daily breakdown for charts (from tenant_viewer_daily)
+  dailyStats(days: Int = 7): [TenantDailyStat!]!
 }
 
 type BillingTier {
@@ -1110,6 +1868,18 @@ type LineItem {
   total: Money!
 }
 
+# Invoices Connection (for paginated invoices list)
+type InvoiceEdge {
+  cursor: String!
+  node: Invoice!
+}
+
+type InvoicesConnection {
+  edges: [InvoiceEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
 # Custom pricing override for enterprise tenants
 type CustomPricing {
   basePrice: Float                # Custom base price (overrides tier)
@@ -1162,7 +1932,14 @@ type UsageSummary {
   egressGb: Float!
   recordingGb: Float!
   peakBandwidthMbps: Float!
-  transcodingMinutes: Float!      # Placeholder - returns 0 until Livepeer metering enabled
+
+  # Processing/transcoding usage (from Livepeer Gateway and local AV processing)
+  livepeerSeconds: Float!           # Total Livepeer Gateway transcode seconds
+  livepeerSegmentCount: Int!        # Number of segments transcoded via Livepeer
+  livepeerUniqueStreams: Int!       # Unique streams using Livepeer
+  nativeAvSeconds: Float!           # Total local audio/video transcode seconds
+  nativeAvSegmentCount: Int!        # Number of segments processed locally
+  nativeAvUniqueStreams: Int!       # Unique streams using local AV processing
 
   # Storage metrics
   storageGb: Float!
@@ -1171,6 +1948,14 @@ type UsageSummary {
   clipsDeleted: Int!
   clipStorageAddedGb: Float!
   clipStorageDeletedGb: Float!
+  dvrAdded: Int!
+  dvrDeleted: Int!
+  dvrStorageAddedGb: Float!
+  dvrStorageDeletedGb: Float!
+  vodAdded: Int!
+  vodDeleted: Int!
+  vodStorageAddedGb: Float!
+  vodStorageDeletedGb: Float!
 
   # Viewer metrics
   totalStreams: Int!
@@ -1185,11 +1970,6 @@ type UsageSummary {
   uniqueCountries: Int!
   uniqueCities: Int!
   geoBreakdown: [CountryMetrics!]!   # Rich geo breakdown with viewers, hours, percentage
-
-  # Quality metrics
-  avgBufferHealth: Float!
-  avgBitrate: Int!
-  packetLossRate: Float!
 }
 
 # Rich country-level billing metrics (bound to purser.CountryMetrics)
@@ -1240,6 +2020,18 @@ type UsageRecord {
   createdAt: Time
 }
 
+# Usage Records Connection (for paginated usage records list)
+type UsageRecordEdge {
+  cursor: String!
+  node: UsageRecord!
+}
+
+type UsageRecordsConnection {
+  edges: [UsageRecordEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
 # Bound to proto.InfrastructureCluster
 type Cluster {
   id: ID!
@@ -1264,8 +2056,80 @@ type Cluster {
   createdAt: Time
   updatedAt: Time
 
+  # Marketplace fields
+  ownerTenantId: ID
+  visibility: ClusterVisibility!
+  pricingModel: ClusterPricingModel!
+  monthlyPriceCents: Int
+  requiredBillingTier: String
+  requiresApproval: Boolean!
+  shortDescription: String
+  longDescription: String
+  isPlatformCluster: Boolean!
+
   # Edges (nullable - separate data fetches via resolvers)
-  nodes: [Node!]
+  nodesConnection(first: Int = 50, after: String, last: Int, before: String): NodesConnection
+}
+
+# Marketplace cluster listing entry
+type MarketplaceCluster {
+  clusterId: String!
+  clusterName: String!
+  shortDescription: String
+  visibility: ClusterVisibility!
+  pricingModel: ClusterPricingModel!
+  monthlyPriceCents: Int
+  requiredBillingTier: String
+  requiresApproval: Boolean!
+  ownerName: String
+  isPlatformCluster: Boolean!
+  maxConcurrentStreams: Int!
+  maxConcurrentViewers: Int!
+  currentUtilization: Float
+  isSubscribed: Boolean!
+  subscriptionStatus: ClusterSubscriptionStatus
+}
+
+# Cluster subscription/access record
+type ClusterSubscription {
+  id: ID!
+  tenantId: ID!
+  clusterId: String!
+  accessLevel: String!
+  subscriptionStatus: ClusterSubscriptionStatus!
+  resourceLimits: JSON
+  requestedAt: Time
+  approvedAt: Time
+  approvedBy: ID
+  rejectionReason: String
+  expiresAt: Time
+  createdAt: Time!
+  updatedAt: Time!
+  clusterName: String
+  tenantName: String
+}
+
+# Cluster invite for tenant access
+type ClusterInvite {
+  id: ID!
+  clusterId: String!
+  invitedTenantId: ID!
+  inviteToken: String
+  accessLevel: String!
+  resourceLimits: JSON
+  status: String!
+  createdBy: ID!
+  createdAt: Time!
+  expiresAt: Time
+  acceptedAt: Time
+  invitedTenantName: String
+  clusterName: String
+}
+
+# Private cluster creation response
+type CreatePrivateClusterResponse {
+  cluster: Cluster!
+  bootstrapToken: BootstrapToken!
 }
 
 # Bound to proto.InfrastructureNode
@@ -1294,6 +2158,8 @@ type Node {
   updatedAt: Time
   metricsConnection(timeRange: TimeRangeInput, first: Int = 100, after: String): NodeMetricsConnection!
   metrics1hConnection(timeRange: TimeRangeInput, first: Int = 100, after: String): NodeMetrics1hConnection!
+  # Real-time state from live_nodes (ReplacingMergeTree)
+  liveState: LiveNode
 }
 
 # Bound to proto.ClipInfo
@@ -1307,7 +2173,7 @@ type Clip {
   duration: Int!            # Resolved duration (seconds)
   nodeId: String
   storagePath: String
-  sizeBytes: Int
+  sizeBytes: Float
   status: String!
   accessCount: Int
   createdAt: Time
@@ -1315,6 +2181,10 @@ type Clip {
   # Original request parameters for display/audit
   clipMode: String          # Mode used: ABSOLUTE, RELATIVE, DURATION, CLIP_NOW
   requestedParams: JSON     # Full original request params (startUnix, stopUnix, etc.)
+  # Cold storage info
+  storageLocation: String   # "local" or "s3"
+  isFrozen: Boolean!
+  expiresAt: Time
 }
 
 # Bound to proto.ClipViewingURLs - uses map for flexibility
@@ -1485,44 +2355,6 @@ type CountryTimeSeries {
   viewerCount: Int!
 }
 
-# Load balancing and routing metrics with geographic context
-type LoadBalancingMetric {
-  timestamp: Time!
-  stream: String!
-
-  # Node and routing info
-  selectedNode: String!
-  nodeId: String
-
-  # Client geographic data
-  clientCountry: String
-  clientLatitude: Float
-  clientLongitude: Float
-  clientBucket: GeoBucket
-
-  # Node geographic data
-  nodeLatitude: Float
-  nodeLongitude: Float
-  nodeName: String
-  nodeBucket: GeoBucket
-
-  # Performance metrics
-  score: Int
-  status: String!
-  details: String
-
-  # Geographic routing efficiency
-  routingDistance: Float  # Distance between client and selected node
-
-  # Event context
-  eventType: String
-  source: String
-
-  # Routing decision metadata (from Periscope proto)
-  candidatesCount: Int        # Number of candidate nodes evaluated
-  latencyMs: Float            # Routing decision latency in milliseconds
-}
-
 # ============================================================================
 # CONNECTION AND ROUTING EVENT TYPES
 # ============================================================================
@@ -1532,24 +2364,37 @@ type RoutingEvent {
   timestamp: Time!
   streamName: String!
   selectedNode: String!
+  nodeId: String
   status: String!
   details: String
   score: Int
-  
+
   # Client location info
   clientCountry: String
   clientLatitude: Float
   clientLongitude: Float
   clientBucket: GeoBucket
-  
+
   # Node location info
   nodeLatitude: Float
   nodeLongitude: Float
   nodeName: String
   nodeBucket: GeoBucket
-  
+
   # Distance metrics
   routingDistance: Float
+
+  # Routing decision metadata
+  candidatesCount: Int        # Number of candidate nodes evaluated
+  latencyMs: Float            # Routing decision latency in milliseconds
+  eventType: String
+  source: String
+
+  # Dual-tenant attribution (RFC: routing-events-dual-tenant-attribution)
+  # streamTenantId = stream owner (customer) for filtering
+  # clusterId = emitting cluster identifier
+  streamTenantId: ID
+  clusterId: String
 }
 
 # Connection event for viewer connections/disconnections
@@ -1597,7 +2442,8 @@ type ClipEvent {
   message: String
   filePath: String
   s3Url: String
-  sizeBytes: Int
+  sizeBytes: Float
+  expiresAt: Int
 }
 
 # Current state of clips/DVR from live_artifacts table
@@ -1618,8 +2464,9 @@ type ArtifactState {
   manifestPath: String
   filePath: String
   s3Url: String
-  sizeBytes: Int
+  sizeBytes: Float
   processingNodeId: String
+  expiresAt: Time
 }
 
 type ArtifactStateEdge {
@@ -1690,6 +2537,41 @@ type NodeMetricHourly {
   wasHealthy: Boolean!
 }
 
+# Real-time node state from live_nodes (ReplacingMergeTree - current state snapshot)
+# Bound to proto.LiveNode
+type LiveNode {
+  nodeId: String!
+  tenantId: ID!
+
+  # Resources
+  cpuPercent: Float!
+  ramUsedBytes: Float!
+  ramTotalBytes: Float!
+  diskUsedBytes: Float!
+  diskTotalBytes: Float!
+
+  # Network throughput (bytes/sec)
+  upSpeed: Float!
+  downSpeed: Float!
+
+  # Streams
+  activeStreams: Int!
+
+  # Health
+  isHealthy: Boolean!
+
+  # Location
+  latitude: Float!
+  longitude: Float!
+  location: String!
+
+  # Metadata
+  metadata: JSON
+
+  # Timing
+  updatedAt: Time!
+}
+
 # ============================================================================
 # INFRASTRUCTURE SERVICE MONITORING TYPES
 # ============================================================================
@@ -1721,9 +2603,7 @@ type ServiceInstance {
   cpuUsagePercent: Float
   memoryUsageMb: Int
 
-  # Edges
-  node: Node
-  cluster: Cluster
+  # Note: Use nodeId/clusterId directly - edges removed for efficiency
 }
 
 # Cluster access entry (Quartermaster)
@@ -1771,6 +2651,36 @@ type StreamKey {
 }
 
 # ============================================================================
+# INGEST ENDPOINT RESOLUTION TYPES
+# ============================================================================
+
+# Response from Foghorn's ingest endpoint resolution for StreamCrafter
+type IngestEndpointResponse {
+  primary: IngestEndpoint!
+  fallbacks: [IngestEndpoint!]!
+  metadata: IngestMetadata
+}
+
+# Individual ingest endpoint with node and protocol info
+type IngestEndpoint {
+  nodeId: String!
+  baseUrl: String!
+  whipUrl: String          # WHIP ingest URL
+  rtmpUrl: String          # RTMP ingest URL
+  srtUrl: String           # SRT ingest URL
+  region: String
+  loadScore: Float
+}
+
+# Ingest metadata for the stream
+type IngestMetadata {
+  streamId: String!
+  streamKey: String!
+  tenantId: String!
+  recordingEnabled: Boolean!
+}
+
+# ============================================================================
 # VIEWER ENDPOINT RESOLUTION TYPES
 # ============================================================================
 
@@ -1808,7 +2718,7 @@ type PlaybackMetadata {
   title: String
   description: String
   durationSeconds: Int
-  recordingSizeBytes: Int
+  recordingSizeBytes: Float
   clipSource: String
   createdAt: Time
 }
@@ -1830,8 +2740,8 @@ type PlaybackInstance {
   nodeId: String!
   viewers: Int!
   bufferState: String
-  bytesUp: Int
-  bytesDown: Int
+  bytesUp: Float
+  bytesDown: Float
   totalConnections: Int
   inputs: Int
   lastUpdate: Time

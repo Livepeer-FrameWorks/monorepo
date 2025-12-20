@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount, onDestroy, untrack } from "svelte";
+  import { get } from "svelte/store";
   import { auth } from "$lib/stores/auth";
-  import { GetNodesConnectionStore, SystemHealthStore } from "$houdini";
+  import { fragment, GetNodesConnectionStore, GetNodePerformance5mStore, SystemHealthStore, NodeCoreFieldsStore, PageInfoFieldsStore } from "$houdini";
   import type { SystemHealth$result } from "$houdini";
   import { toast } from "$lib/stores/toast.js";
   import LoadingCard from "$lib/components/LoadingCard.svelte";
@@ -24,10 +25,19 @@
   const HardDriveIcon = getIconComponent("HardDrive");
   const SearchIcon = getIconComponent("Search");
   const RefreshCwIcon = getIconComponent("RefreshCw");
+  const CpuIcon = getIconComponent("Cpu");
+  const MemoryStickIcon = getIconComponent("MemoryStick");
+  const ActivityIcon = getIconComponent("Activity");
+  const RadioIcon = getIconComponent("Radio");
 
   // Houdini stores
   const nodesStore = new GetNodesConnectionStore();
+  const nodePerformanceStore = new GetNodePerformance5mStore();
   const systemHealthSub = new SystemHealthStore();
+
+  // Fragment stores for unmasking nested data
+  const nodeCoreStore = new NodeCoreFieldsStore();
+  const pageInfoStore = new PageInfoFieldsStore();
 
   // Pagination state
   let loadingMore = $state(false);
@@ -43,17 +53,62 @@
   let isAuthenticated = false;
 
   // Derived state from Houdini stores
-  let loading = $derived($nodesStore.fetching);
-  let nodes = $derived(
+  let loading = $derived($nodesStore.fetching || $nodePerformanceStore.fetching);
+
+  // Get masked nodes from edges
+  let maskedNodes = $derived(
     $nodesStore.data?.nodesConnection?.edges?.map(e => e.node) ?? []
   );
-  let hasMoreNodes = $derived(
-    $nodesStore.data?.nodesConnection?.pageInfo?.hasNextPage ?? false
+
+  // Unmask nodes with fragment() and get() pattern
+  let nodes = $derived(
+    maskedNodes.map(node => get(fragment(node, nodeCoreStore)))
   );
+  // Unmask pageInfo to access hasNextPage
+  let pageInfo = $derived.by(() => {
+    const masked = $nodesStore.data?.nodesConnection?.pageInfo;
+    return masked ? get(fragment(masked, pageInfoStore)) : null;
+  });
+  let hasMoreNodes = $derived(pageInfo?.hasNextPage ?? false);
   let totalNodeCount = $derived(
     $nodesStore.data?.nodesConnection?.totalCount ?? 0
   );
   let systemHealth = $state<Record<string, SystemHealthData>>({});
+
+  // Aggregate performance stats from 5-minute node performance data
+  let performanceStats = $derived.by(() => {
+    const edges = $nodePerformanceStore.data?.nodePerformance5mConnection?.edges ?? [];
+    if (edges.length === 0) {
+      return { avgCpu: 0, maxCpu: 0, avgMemory: 0, maxMemory: 0, totalBandwidth: 0, avgStreams: 0, maxStreams: 0, dataPoints: 0 };
+    }
+
+    let sumCpu = 0, sumMemory = 0, sumStreams = 0;
+    let maxCpu = 0, maxMemory = 0, maxStreams = 0;
+    let totalBandwidth = 0;
+
+    for (const edge of edges) {
+      const n = edge.node;
+      sumCpu += n.avgCpu ?? 0;
+      sumMemory += n.avgMemory ?? 0;
+      sumStreams += n.avgStreams ?? 0;
+      maxCpu = Math.max(maxCpu, n.maxCpu ?? 0);
+      maxMemory = Math.max(maxMemory, n.maxMemory ?? 0);
+      maxStreams = Math.max(maxStreams, n.maxStreams ?? 0);
+      totalBandwidth += n.totalBandwidth ?? 0;
+    }
+
+    const count = edges.length;
+    return {
+      avgCpu: count > 0 ? sumCpu / count : 0,
+      maxCpu,
+      avgMemory: count > 0 ? sumMemory / count : 0,
+      maxMemory,
+      totalBandwidth,
+      avgStreams: count > 0 ? sumStreams / count : 0,
+      maxStreams,
+      dataPoints: count,
+    };
+  });
 
   // Filters and search
   let searchTerm = $state("");
@@ -89,7 +144,15 @@
 
   async function loadNodeData() {
     try {
-      await nodesStore.fetch();
+      // Fetch nodes and performance data (last 24 hours)
+      const now = new Date();
+      const dayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+      const timeRange = { start: dayAgo.toISOString(), end: now.toISOString() };
+
+      await Promise.all([
+        nodesStore.fetch(),
+        nodePerformanceStore.fetch({ variables: { timeRange, first: 300 } }).catch(() => null),
+      ]);
 
       if ($nodesStore.errors?.length) {
         console.error("Failed to load node data:", $nodesStore.errors);
@@ -126,11 +189,17 @@
 
   // Effect to handle system health subscription updates
   // Use untrack to prevent effect loops when mutating state
+  // Note: nodeId is the database UUID (enriched by Foghorn), node is the logical name
   $effect(() => {
     const healthData = $systemHealthSub.data?.systemHealth;
     if (healthData) {
       untrack(() => {
-        const nodeId = healthData.node;
+        // Use nodeId (database UUID) directly if available, fallback to name lookup
+        const nodeId = healthData.nodeId ?? (() => {
+          const matchingNode = nodes.find((n) => n.nodeName === healthData.node);
+          return matchingNode?.id ?? healthData.node;
+        })();
+
         if (nodeId) {
           systemHealth[nodeId] = {
             event: healthData,
@@ -188,6 +257,13 @@
     const health = systemHealth[nodeId];
     if (!health || !health.event.ramMax) return "0%";
     const percent = (health.event.ramCurrent! / health.event.ramMax) * 100;
+    return `${Math.round(percent)}%`;
+  }
+
+  function formatDiskUsage(nodeId: string) {
+    const health = systemHealth[nodeId];
+    if (!health || !health.event.diskTotalBytes) return "0%";
+    const percent = (health.event.diskUsedBytes! / health.event.diskTotalBytes) * 100;
     return `${Math.round(percent)}%`;
   }
 
@@ -360,6 +436,60 @@
         </div>
       </GridSeam>
 
+      <!-- Performance Overview (from 5-minute aggregates) -->
+      {#if performanceStats.dataPoints > 0}
+        <div class="slab mx-4 sm:mx-6 lg:mx-8 mt-4">
+          <div class="slab-header">
+            <div class="flex items-center gap-2">
+              <ActivityIcon class="w-4 h-4 text-primary" />
+              <h3>Platform Performance (24h)</h3>
+            </div>
+            <span class="text-xs text-muted-foreground">{performanceStats.dataPoints} data points</span>
+          </div>
+          <div class="slab-body--padded">
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div class="p-4 border border-border/30 bg-muted/10 text-center">
+                <CpuIcon class="w-5 h-5 text-primary mx-auto mb-2" />
+                <div class="text-xl font-bold text-primary">
+                  {performanceStats.avgCpu.toFixed(1)}%
+                </div>
+                <p class="text-xs text-muted-foreground">Avg CPU</p>
+                <p class="text-xs text-muted-foreground mt-1">
+                  Peak: {performanceStats.maxCpu.toFixed(1)}%
+                </p>
+              </div>
+              <div class="p-4 border border-border/30 bg-muted/10 text-center">
+                <MemoryStickIcon class="w-5 h-5 text-info mx-auto mb-2" />
+                <div class="text-xl font-bold text-info">
+                  {performanceStats.avgMemory.toFixed(1)}%
+                </div>
+                <p class="text-xs text-muted-foreground">Avg Memory</p>
+                <p class="text-xs text-muted-foreground mt-1">
+                  Peak: {performanceStats.maxMemory.toFixed(1)}%
+                </p>
+              </div>
+              <div class="p-4 border border-border/30 bg-muted/10 text-center">
+                <RadioIcon class="w-5 h-5 text-success mx-auto mb-2" />
+                <div class="text-xl font-bold text-success">
+                  {(performanceStats.totalBandwidth / (1024 * 1024 * 1024)).toFixed(2)} GB
+                </div>
+                <p class="text-xs text-muted-foreground">Total Bandwidth</p>
+              </div>
+              <div class="p-4 border border-border/30 bg-muted/10 text-center">
+                <ServerIcon class="w-5 h-5 text-accent-purple mx-auto mb-2" />
+                <div class="text-xl font-bold text-accent-purple">
+                  {performanceStats.avgStreams.toFixed(1)}
+                </div>
+                <p class="text-xs text-muted-foreground">Avg Streams</p>
+                <p class="text-xs text-muted-foreground mt-1">
+                  Peak: {performanceStats.maxStreams}
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      {/if}
+
       <SectionDivider class="my-8" />
 
       <div class="dashboard-grid border-t border-[hsl(var(--tn-fg-gutter)/0.3)]">
@@ -506,6 +636,7 @@
                     {getNodeHealthScore}
                     {formatCpuUsage}
                     {formatMemoryUsage}
+                    {formatDiskUsage}
                     {getStatusBadgeClass}
                   />
                 {/each}

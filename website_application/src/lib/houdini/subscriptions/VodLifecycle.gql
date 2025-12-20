@@ -1,0 +1,23 @@
+# Real-time VOD upload progress and completion updates
+# Monitors VOD upload stages, S3 processing, and error states
+subscription VodLifecycle {
+  vodLifecycle {
+    status
+    vodHash
+    uploadId
+    filename
+    contentType
+    sizeBytes
+    s3Url
+    filePath
+    error
+    startedAt
+    completedAt
+    nodeId
+    expiresAt
+    durationMs
+    resolution
+    videoCodec
+    audioCodec
+  }
+}

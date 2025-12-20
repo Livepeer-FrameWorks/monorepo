@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,12 +27,14 @@ import (
 
 // ClipInfo represents local clip metadata for VOD serving
 type ClipInfo struct {
-	FilePath   string
-	StreamName string
-	Format     string
-	SizeBytes  uint64
-	CreatedAt  time.Time
-	S3URL      string
+	FilePath     string
+	StreamName   string
+	Format       string
+	SizeBytes    uint64
+	CreatedAt    time.Time
+	S3URL        string
+	SegmentCount int  // Number of segments (for DVR recordings)
+	HasDtsh      bool // True if .dtsh index file exists locally
 }
 
 // PrometheusMonitor handles monitoring of MistServer Prometheus endpoints
@@ -44,14 +47,15 @@ type PrometheusMonitor struct {
 	mistUsername    string // Username for MistServer API
 	mistAPIPassword string // Password for MistServer API
 	// Single node info (since each sidecar monitors one node)
-	nodeID       string
-	baseURL      string
-	latitude     *float64
-	longitude    *float64
-	location     string
-	lastSeen     time.Time
-	isHealthy    bool
-	lastJSONData map[string]interface{} // Store last fetched JSON data
+	nodeID        string
+	baseURL       string // Internal MistServer URL (for API calls)
+	edgePublicURL string // Public edge URL (for client-facing BaseUrl)
+	latitude      *float64
+	longitude     *float64
+	location      string
+	lastSeen      time.Time
+	isHealthy     bool
+	lastJSONData  map[string]interface{} // Store last fetched JSON data
 	// Artifact index for fast VOD lookups
 	artifactIndex    map[string]*ClipInfo // clipHash -> ClipInfo
 	lastArtifactScan time.Time
@@ -166,12 +170,14 @@ func InitPrometheusMonitor(logger logging.Logger) {
 }
 
 // AddNode adds a MistServer node to monitor
-func (pm *PrometheusMonitor) AddNode(nodeID, baseURL string) {
+// baseURL is internal MistServer URL, edgePublicURL is client-facing URL
+func (pm *PrometheusMonitor) AddNode(nodeID, baseURL, edgePublicURL string) {
 	pm.mutex.Lock()
 	defer pm.mutex.Unlock()
 
 	pm.nodeID = nodeID
 	pm.baseURL = baseURL
+	pm.edgePublicURL = edgePublicURL
 	pm.lastSeen = time.Now()
 	pm.isHealthy = false
 	pm.latitude = nil
@@ -183,19 +189,13 @@ func (pm *PrometheusMonitor) AddNode(nodeID, baseURL string) {
 	if pm.mistClient == nil {
 		pm.mistClient = mist.NewClient(monitorLogger)
 	}
-	pm.mistClient.BaseURL = baseURL
+	pm.mistClient.BaseURL = baseURL // Internal URL for API calls
 
 	monitorLogger.WithFields(logging.Fields{
-		"node_id":                nodeID,
-		"base_url":               baseURL,
-		"prometheus_monitor_ptr": fmt.Sprintf("%p", pm),
+		"node_id":         nodeID,
+		"base_url":        baseURL,
+		"edge_public_url": edgePublicURL,
 	}).Info("Added MistServer node for monitoring")
-
-	// Immediately verify the nodeID was set
-	monitorLogger.WithFields(logging.Fields{
-		"stored_node_id": pm.nodeID,
-		"is_empty":       pm.nodeID == "",
-	}).Info("PrometheusMonitor nodeID verification after AddNode")
 }
 
 // RemoveNode removes a MistServer node from monitoring
@@ -264,6 +264,10 @@ func (pm *PrometheusMonitor) monitorNodes() {
 	Ticker := time.NewTicker(10 * time.Second) // Monitor every 10 seconds
 	defer Ticker.Stop()
 
+	// Separate ticker for artifact scanning (less frequent to reduce disk I/O)
+	artifactTicker := time.NewTicker(60 * time.Second)
+	defer artifactTicker.Stop()
+
 	for {
 		select {
 		case <-Ticker.C:
@@ -278,6 +282,12 @@ func (pm *PrometheusMonitor) monitorNodes() {
 				go pm.emitClientLifecycle(nodeID, baseURL)
 			} else {
 				pm.mutex.RUnlock()
+			}
+
+		case <-artifactTicker.C:
+			// Periodic artifact rescan to detect late-appearing .dtsh files
+			if storagePath := os.Getenv("HELMSMAN_STORAGE_LOCAL_PATH"); storagePath != "" {
+				go scanLocalArtifacts(storagePath)
 			}
 
 		case <-pm.stopChannel:
@@ -305,6 +315,7 @@ func (pm *PrometheusMonitor) emitNodeLifecycle(nodeID, baseURL string) {
 	select {
 	case pm.updateChannel <- update:
 	default:
+		control.TriggersDropped.WithLabelValues("node_lifecycle", "channel_full").Inc()
 		monitorLogger.WithFields(logging.Fields{
 			"node_id": nodeID,
 		}).Warn("Update channel full, dropping update for node")
@@ -416,16 +427,12 @@ func (pm *PrometheusMonitor) processActiveStreamData(nodeID, streamName string, 
 
 	if health, ok := streamData["health"].(map[string]interface{}); ok {
 		healthData = health
-		monitorLogger.WithFields(logging.Fields{
-			"node_id":     nodeID,
-			"stream_name": streamName,
-		}).Info("=== RAW HEALTH DATA FOR STREAM ===")
 		healthJSON, _ := json.MarshalIndent(health, "", "  ")
 		monitorLogger.WithFields(logging.Fields{
 			"node_id":     nodeID,
 			"stream_name": streamName,
 			"body":        string(healthJSON),
-		}).Info("=== END RAW HEALTH DATA ===")
+		}).Debug("Raw health data for stream")
 
 		// Parse individual tracks from health data
 		for trackName, trackInfo := range health {
@@ -518,7 +525,7 @@ func (pm *PrometheusMonitor) processActiveStreamData(nodeID, streamName string, 
 						"type":        trackDetail["type"],
 						"codec":       codec,
 						"bitrate":     trackDetail["bitrate_kbps"],
-					}).Info("Parsed track")
+					}).Debug("Parsed track")
 				}
 			}
 		}
@@ -527,12 +534,12 @@ func (pm *PrometheusMonitor) processActiveStreamData(nodeID, streamName string, 
 			"node_id":     nodeID,
 			"stream_name": streamName,
 			"count":       len(trackDetails),
-		}).WithField("count", len(trackDetails)).Info("Extracted tracks from health data")
+		}).Debug("Extracted tracks from health data")
 	} else {
 		monitorLogger.WithFields(logging.Fields{
 			"node_id":     nodeID,
 			"stream_name": streamName,
-		}).WithField("stream_name", streamName).Warn("No health data found for stream")
+		}).Warn("No health data found for stream")
 	}
 
 	// Get node geographic information for logging context
@@ -681,7 +688,11 @@ func (pm *PrometheusMonitor) forwardNodeMetrics(nodeID string) {
 		monitorLogger.WithError(err).Error("Failed to send node lifecycle update via gRPC")
 		return
 	}
-	monitorLogger.WithField("node_id", nodeID).Debug("Successfully sent node lifecycle update to Foghorn via gRPC")
+	monitorLogger.WithFields(logging.Fields{
+		"node_id":  nodeID,
+		"bw_limit": mistTrigger.GetNodeLifecycleUpdate().GetBwLimit(),
+		"ram_max":  mistTrigger.GetNodeLifecycleUpdate().GetRamMax(),
+	}).Info("Sent node lifecycle update to Foghorn")
 }
 
 // extractStreamMetrics extracts per-stream metrics from MistServer JSON data
@@ -810,11 +821,12 @@ func AddPrometheusNode(c *gin.Context) {
 	}
 
 	var request struct {
-		NodeID    string   `json:"node_id" binding:"required"`
-		BaseURL   string   `json:"base_url" binding:"required"`
-		Latitude  *float64 `json:"latitude"`
-		Longitude *float64 `json:"longitude"`
-		Location  string   `json:"location"`
+		NodeID        string   `json:"node_id" binding:"required"`
+		BaseURL       string   `json:"base_url" binding:"required"`
+		EdgePublicURL string   `json:"edge_public_url"` // Optional, falls back to base_url
+		Latitude      *float64 `json:"latitude"`
+		Longitude     *float64 `json:"longitude"`
+		Location      string   `json:"location"`
 	}
 
 	if err := c.ShouldBindJSON(&request); err != nil {
@@ -822,15 +834,20 @@ func AddPrometheusNode(c *gin.Context) {
 		return
 	}
 
-	prometheusMonitor.AddNode(request.NodeID, request.BaseURL)
+	edgeURL := request.EdgePublicURL
+	if edgeURL == "" {
+		edgeURL = request.BaseURL // Fallback to base_url if not provided
+	}
+	prometheusMonitor.AddNode(request.NodeID, request.BaseURL, edgeURL)
 
 	c.JSON(http.StatusOK, gin.H{"message": "Node added successfully"})
 }
 
 // AddPrometheusNodeDirect adds a node directly to the monitor (not via HTTP)
-func AddPrometheusNodeDirect(nodeID, baseURL string) {
+// baseURL is the internal MistServer URL, edgePublicURL is the client-facing URL
+func AddPrometheusNodeDirect(nodeID, baseURL, edgePublicURL string) {
 	if prometheusMonitor != nil {
-		prometheusMonitor.AddNode(nodeID, baseURL)
+		prometheusMonitor.AddNode(nodeID, baseURL, edgePublicURL)
 	}
 }
 
@@ -1370,12 +1387,19 @@ func scanClipsDirectory(clipsDir string, artifactIndex map[string]*ClipInfo) (ui
 									}
 								}
 
+								// Check if .dtsh index file exists
+								hasDtsh := false
+								if _, err := os.Stat(filePath + ".dtsh"); err == nil {
+									hasDtsh = true
+								}
+
 								clipInfo := &ClipInfo{
 									FilePath:   filePath,
 									StreamName: streamName,
 									Format:     format,
 									SizeBytes:  uint64(fileInfo.Size()),
 									CreatedAt:  fileInfo.ModTime(),
+									HasDtsh:    hasDtsh,
 								}
 
 								artifactIndex[clipHash] = clipInfo
@@ -1412,12 +1436,19 @@ func scanClipsDirectory(clipsDir string, artifactIndex map[string]*ClipInfo) (ui
 
 						// Get file info
 						if fileInfo, err := os.Stat(filePath); err == nil {
+							// Check if .dtsh index file exists
+							hasDtsh := false
+							if _, err := os.Stat(filePath + ".dtsh"); err == nil {
+								hasDtsh = true
+							}
+
 							clipInfo := &ClipInfo{
 								FilePath:   filePath,
 								StreamName: streamName,
 								Format:     format,
 								SizeBytes:  uint64(fileInfo.Size()),
 								CreatedAt:  fileInfo.ModTime(),
+								HasDtsh:    hasDtsh,
 							}
 
 							artifactIndex[clipHash] = clipInfo
@@ -1432,6 +1463,34 @@ func scanClipsDirectory(clipsDir string, artifactIndex map[string]*ClipInfo) (ui
 	}
 
 	return totalSize, artifactCount
+}
+
+// calculateDVRSegmentSize parses an HLS manifest and sums up segment file sizes
+func calculateDVRSegmentSize(manifestPath, baseDir string) (uint64, int) {
+	var totalSize uint64
+	var segmentCount int
+
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return 0, 0
+	}
+
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		// Skip empty lines and tags
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		// This is a segment reference (relative path like "segments/1234_0.ts")
+		segPath := filepath.Join(baseDir, line)
+		if info, err := os.Stat(segPath); err == nil && !info.IsDir() {
+			totalSize += uint64(info.Size())
+			segmentCount++
+		}
+	}
+
+	return totalSize, segmentCount
 }
 
 // scanDVRDirectory scans the DVR directory for DVR manifest files
@@ -1478,18 +1537,36 @@ func scanDVRDirectory(dvrDir string, artifactIndex map[string]*ClipInfo) (uint64
 
 					// Get file info
 					if fileInfo, err := os.Stat(filePath); err == nil {
+						// Calculate total size including segments referenced by manifest
+						manifestSize := uint64(fileInfo.Size())
+						segmentSize, segmentCount := calculateDVRSegmentSize(filePath, streamDVRDir)
+						dvrTotalSize := manifestSize + segmentSize
+
+						// Check if any .dtsh index files exist in the DVR directory
+						hasDtsh := false
+						if dirEntries, err := os.ReadDir(streamDVRDir); err == nil {
+							for _, de := range dirEntries {
+								if !de.IsDir() && strings.HasSuffix(de.Name(), ".dtsh") {
+									hasDtsh = true
+									break
+								}
+							}
+						}
+
 						// Add DVR manifest to artifact index using same ClipInfo structure
 						// (DVR manifests can be served as VOD just like clips)
 						dvrInfo := &ClipInfo{
-							FilePath:   filePath,
-							StreamName: internalName,
-							Format:     "m3u8", // HLS manifest format
-							SizeBytes:  uint64(fileInfo.Size()),
-							CreatedAt:  fileInfo.ModTime(),
+							FilePath:     filePath,
+							StreamName:   internalName,
+							Format:       "m3u8", // HLS manifest format
+							SizeBytes:    dvrTotalSize,
+							CreatedAt:    fileInfo.ModTime(),
+							SegmentCount: segmentCount,
+							HasDtsh:      hasDtsh,
 						}
 
 						artifactIndex[dvrHash] = dvrInfo
-						totalSize += uint64(fileInfo.Size())
+						totalSize += dvrTotalSize
 						artifactCount++
 					}
 				}
@@ -1518,6 +1595,7 @@ func GetStoredArtifacts() []*pb.StoredArtifact {
 			SizeBytes:  clipInfo.SizeBytes,
 			CreatedAt:  clipInfo.CreatedAt.Unix(),
 			Format:     clipInfo.Format,
+			HasDtsh:    clipInfo.HasDtsh,
 		}
 
 		// Add S3 URL if available
@@ -1533,8 +1611,16 @@ func GetStoredArtifacts() []*pb.StoredArtifact {
 
 // convertNodeAPIToMistTrigger converts MistServer JSON API response to MistTrigger
 func (pm *PrometheusMonitor) convertNodeAPIToMistTrigger(nodeID string, jsonData map[string]interface{}, logger logging.Logger) *pb.MistTrigger {
+	// Use public edge URL for client-facing BaseUrl (for playback URLs)
+	// Fall back to internal URL if public not configured
+	baseURL := pm.edgePublicURL
+	if baseURL == "" {
+		baseURL = pm.baseURL
+	}
+
 	nodeUpdate := &pb.NodeLifecycleUpdate{
 		NodeId:    nodeID,
+		BaseUrl:   baseURL, // Client-facing URL for playback
 		EventType: "node_lifecycle_update",
 		Timestamp: time.Now().Unix(),
 	}
@@ -1610,15 +1696,42 @@ func (pm *PrometheusMonitor) convertNodeAPIToMistTrigger(nodeID string, jsonData
 		}
 
 		// Extract current connections from curr array
-		// curr = [viewers, incoming, outgoing, unspecified, cached]
-		if curr, ok := jsonData["curr"].([]interface{}); ok && len(curr) >= 1 {
-			if viewers, ok := curr[0].(float64); ok {
-				nodeUpdate.ConnectionsCurrent = uint32(viewers)
+		// curr = [viewers, inputs, outgoing, unspecified, cached]
+		if curr, ok := jsonData["curr"].([]interface{}); ok {
+			if len(curr) > 0 {
+				if viewers, ok := curr[0].(float64); ok {
+					nodeUpdate.ConnectionsCurrent = uint32(viewers)
+				}
+			}
+			if len(curr) > 1 {
+				if inputs, ok := curr[1].(float64); ok {
+					nodeUpdate.ConnectionsInputs = uint32(inputs)
+				}
+			}
+			if len(curr) > 2 {
+				if outgoing, ok := curr[2].(float64); ok {
+					nodeUpdate.ConnectionsOutgoing = uint32(outgoing)
+				}
+			}
+			if len(curr) > 4 {
+				if cached, ok := curr[4].(float64); ok {
+					nodeUpdate.ConnectionsCached = uint32(cached)
+				}
 			}
 		}
 
-		if limit, ok := jsonData["bwlimit"].(float64); ok {
+		// Extract MistServer trigger health statistics (for monitoring/debugging)
+		if triggers, ok := jsonData["triggers"].(map[string]interface{}); ok {
+			if triggersJSON, err := json.Marshal(triggers); err == nil {
+				nodeUpdate.TriggersJson = string(triggersJSON)
+			}
+		}
+
+		if limit, ok := jsonData["bwlimit"].(float64); ok && limit > 0 {
 			nodeUpdate.BwLimit = uint64(limit)
+		} else {
+			// Default to 1Gbps when MistServer doesn't report bwlimit (same as C++ default)
+			nodeUpdate.BwLimit = 128 * 1024 * 1024 // 128 MB/s = ~1 Gbps
 		}
 
 		// Extract location data
@@ -1683,6 +1796,80 @@ func (pm *PrometheusMonitor) convertNodeAPIToMistTrigger(nodeID string, jsonData
 		"shm_percent": shmPercent,
 		"is_healthy":  isHealthy,
 	}).Debug("Node health determination")
+
+	// Populate full Streams map from MistServer data
+	// This is CRITICAL for load balancing - balancer checks stream.Inputs > 0
+	if jsonData != nil {
+		if streams, ok := jsonData["streams"].(map[string]interface{}); ok {
+			nodeUpdate.Streams = make(map[string]*pb.StreamData)
+			for streamName, streamData := range streams {
+				if streamInfo, ok := streamData.(map[string]interface{}); ok {
+					sd := &pb.StreamData{}
+
+					// Extract from curr array: [viewers, inputs, outgoing, unspecified, cached]
+					if curr, ok := streamInfo["curr"].([]interface{}); ok {
+						if len(curr) > 0 {
+							if viewers, ok := curr[0].(float64); ok {
+								sd.Total = uint64(viewers)
+							}
+						}
+						if len(curr) > 1 {
+							if inputs, ok := curr[1].(float64); ok {
+								sd.Inputs = uint32(inputs)
+							}
+						}
+					}
+
+					// Extract from bw array: [bandwidth_in, bandwidth_out]
+					if bw, ok := streamInfo["bw"].([]interface{}); ok && len(bw) >= 2 {
+						if bandwidthIn, ok := bw[0].(float64); ok {
+							sd.BytesUp = uint64(bandwidthIn)
+						}
+						if bandwidthOut, ok := bw[1].(float64); ok {
+							sd.BytesDown = uint64(bandwidthOut)
+						}
+						// Calculate bandwidth per viewer (bytes/sec per viewer)
+						if sd.Total > 0 && sd.BytesDown > 0 {
+							sd.Bandwidth = uint32(sd.BytesDown / sd.Total)
+						}
+					}
+
+					// Extract replicated status
+					if rep, ok := streamInfo["rep"].(bool); ok {
+						sd.Replicated = rep
+					}
+
+					// Extract packet counts from pkts array
+					if pkts, ok := streamInfo["pkts"].([]interface{}); ok {
+						sd.PacketCounts = make([]int64, len(pkts))
+						for i, pkt := range pkts {
+							if v, ok := pkt.(float64); ok {
+								sd.PacketCounts[i] = int64(v)
+							}
+						}
+					}
+
+					// Extract total connections from tot array
+					if tot, ok := streamInfo["tot"].([]interface{}); ok {
+						sd.TotalConnections = make([]int64, len(tot))
+						for i, t := range tot {
+							if v, ok := t.(float64); ok {
+								sd.TotalConnections[i] = int64(v)
+							}
+						}
+					}
+
+					// Use normalized internal name as key (e.g., "live+demo_stream" -> "demo_stream")
+					internalName := mist.ExtractInternalName(streamName)
+					nodeUpdate.Streams[internalName] = sd
+				}
+			}
+			logger.WithFields(logging.Fields{
+				"node_id":      nodeID,
+				"stream_count": len(nodeUpdate.Streams),
+			}).Debug("Populated streams map for NodeLifecycleUpdate")
+		}
+	}
 
 	return &pb.MistTrigger{
 		TriggerType: "NODE_LIFECYCLE_UPDATE",
@@ -1789,21 +1976,26 @@ func convertStreamAPIToMistTrigger(nodeID, streamName, internalName string, stre
 	}
 
 	// Extract basic metrics from stream data
-	if viewers, ok := streamData["viewers"].(float64); ok && viewers > 0 {
+	// Note: 0 is a valid value for all these metrics (e.g., stream just started, no viewers yet)
+	if viewers, ok := streamData["viewers"].(float64); ok {
 		totalViewers := uint32(viewers)
 		streamLifecycleUpdate.TotalViewers = &totalViewers
 	}
-	if inputs, ok := streamData["inputs"].(float64); ok && inputs > 0 {
+	if inputs, ok := streamData["inputs"].(float64); ok {
 		totalInputs := uint32(inputs)
 		streamLifecycleUpdate.TotalInputs = &totalInputs
 	}
-	if upbytes, ok := streamData["upbytes"].(float64); ok && upbytes > 0 {
+	if upbytes, ok := streamData["upbytes"].(float64); ok {
 		uploadedBytes := uint64(upbytes)
 		streamLifecycleUpdate.UploadedBytes = &uploadedBytes
 	}
-	if downbytes, ok := streamData["downbytes"].(float64); ok && downbytes > 0 {
+	if downbytes, ok := streamData["downbytes"].(float64); ok {
 		downloadedBytes := uint64(downbytes)
 		streamLifecycleUpdate.DownloadedBytes = &downloadedBytes
+	}
+	// Extract replicated status (pull vs push stream)
+	if replicated, ok := streamData["replicated"].(bool); ok {
+		streamLifecycleUpdate.Replicated = &replicated
 	}
 
 	// Add health data as stream details
@@ -1814,16 +2006,66 @@ func convertStreamAPIToMistTrigger(nodeID, streamName, internalName string, stre
 		}
 	}
 
+	// Extract packet statistics from streamData (MistServer active_streams API fields)
+	// Note: These are stream-level totals, NOT in the health blob
+	// 0 is valid (e.g., HLS streams don't track packets at stream level)
+	if packsent, ok := streamData["packsent"].(float64); ok {
+		ps := uint64(packsent)
+		streamLifecycleUpdate.PacketsSent = &ps
+	}
+	if packloss, ok := streamData["packloss"].(float64); ok {
+		pl := uint64(packloss)
+		streamLifecycleUpdate.PacketsLost = &pl
+	}
+	if packretrans, ok := streamData["packretrans"].(float64); ok {
+		pr := uint64(packretrans)
+		streamLifecycleUpdate.PacketsRetransmitted = &pr
+	}
+
+	// Extract viewseconds if available (cumulative viewer time)
+	// 0 is valid (stream just started)
+	if viewseconds, ok := streamData["viewseconds"].(float64); ok {
+		vs := uint64(viewseconds)
+		streamLifecycleUpdate.ViewerSeconds = &vs
+	}
+
+	// Extract top-level health blob metrics (stream-wide summary)
+	// 0 is valid (perfect conditions with no buffer latency or jitter)
+	if buffer, ok := healthData["buffer"].(float64); ok {
+		buf := uint32(buffer)
+		streamLifecycleUpdate.BufferMs = &buf
+	}
+	if jitter, ok := healthData["jitter"].(float64); ok {
+		jit := uint32(jitter)
+		streamLifecycleUpdate.JitterMs = &jit
+	}
+	if maxkeepaway, ok := healthData["maxkeepaway"].(float64); ok {
+		mka := uint32(maxkeepaway)
+		streamLifecycleUpdate.MaxKeepawayMs = &mka
+	}
+
 	// Extract quality metrics from track details
 	var qualityTier string
 	var primaryWidth, primaryHeight int32
 	var primaryFPS float64
 	var primaryBitrate int32
 	var primaryCodec string
+	var primaryVideoBufferMs, primaryVideoJitterMs uint32
+	var foundVideo, foundAudio bool
 
 	if len(trackDetails) > 0 {
+		// Serialize full track details to JSON for storage
+		if trackJSON, err := json.Marshal(trackDetails); err == nil {
+			trackDetailsStr := string(trackJSON)
+			streamLifecycleUpdate.TrackDetailsJson = &trackDetailsStr
+		}
+
 		for _, track := range trackDetails {
-			if trackType, ok := track["type"].(string); ok && trackType == "video" {
+			trackType, _ := track["type"].(string)
+
+			// Extract primary video track info
+			if trackType == "video" && !foundVideo {
+				foundVideo = true
 				if width, ok := track["width"].(int); ok {
 					primaryWidth = int32(width)
 				}
@@ -1838,6 +2080,16 @@ func convertStreamAPIToMistTrigger(nodeID, streamName, internalName string, stre
 				}
 				if codec, ok := track["codec"].(string); ok {
 					primaryCodec = codec
+				}
+				// Per-track buffer/jitter for primary video
+				// 0 is valid (perfect conditions with no buffer delay or jitter)
+				if buffer, ok := track["buffer"].(int); ok {
+					primaryVideoBufferMs = uint32(buffer)
+					streamLifecycleUpdate.VideoBufferMs = &primaryVideoBufferMs
+				}
+				if jitter, ok := track["jitter"].(int); ok {
+					primaryVideoJitterMs = uint32(jitter)
+					streamLifecycleUpdate.VideoJitterMs = &primaryVideoJitterMs
 				}
 				// Build rich quality tier label: "1080p60 H264 @ 6Mbps"
 				if primaryHeight > 0 {
@@ -1878,7 +2130,26 @@ func convertStreamAPIToMistTrigger(nodeID, streamName, internalName string, stre
 						}
 					}
 				}
-				break
+			}
+
+			// Extract primary audio track info
+			if trackType == "audio" && !foundAudio {
+				foundAudio = true
+				if channels, ok := track["channels"].(int); ok && channels > 0 {
+					ch := uint32(channels)
+					streamLifecycleUpdate.AudioChannels = &ch
+				}
+				if sampleRate, ok := track["sample_rate"].(int); ok && sampleRate > 0 {
+					sr := uint32(sampleRate)
+					streamLifecycleUpdate.AudioSampleRate = &sr
+				}
+				if codec, ok := track["codec"].(string); ok && codec != "" {
+					streamLifecycleUpdate.AudioCodec = &codec
+				}
+				if bitrate, ok := track["bitrate_kbps"].(int); ok && bitrate > 0 {
+					br := uint32(bitrate)
+					streamLifecycleUpdate.AudioBitrate = &br
+				}
 			}
 		}
 	}
@@ -1893,11 +2164,11 @@ func convertStreamAPIToMistTrigger(nodeID, streamName, internalName string, stre
 		issuesDesc = append(issuesDesc, mistIssues)
 	}
 
-	// Calculate packet loss if available
+	// Calculate packet loss ratio from streamData (already extracted above)
 	var packetLossRatio float64
-	if healthPacketsSent, ok := healthData["packets_sent"].(float64); ok && healthPacketsSent > 0 {
-		if healthPacketsLost, ok := healthData["packets_lost"].(float64); ok {
-			packetLossRatio = healthPacketsLost / healthPacketsSent
+	if packsent, ok := streamData["packsent"].(float64); ok && packsent > 0 {
+		if packloss, ok := streamData["packloss"].(float64); ok {
+			packetLossRatio = packloss / packsent
 		}
 	}
 
@@ -1944,16 +2215,6 @@ func convertStreamAPIToMistTrigger(nodeID, streamName, internalName string, stre
 		streamLifecycleUpdate.PrimaryBitrate = &primaryBitrate
 	}
 
-	// Extract packet statistics from health data (per-stream totals from MistServer)
-	if healthPacketsSent, ok := healthData["packets_sent"].(float64); ok && healthPacketsSent > 0 {
-		ps := uint64(healthPacketsSent)
-		streamLifecycleUpdate.PacketsSent = &ps
-	}
-	if healthPacketsLost, ok := healthData["packets_lost"].(float64); ok {
-		pl := uint64(healthPacketsLost)
-		streamLifecycleUpdate.PacketsLost = &pl
-	}
-
 	return &pb.MistTrigger{
 		TriggerType: "STREAM_LIFECYCLE_UPDATE",
 		NodeId:      nodeID,
@@ -1980,42 +2241,27 @@ func convertClientAPIToMistTrigger(nodeID, streamName, internalName, protocol, h
 	if sessionID != "" {
 		clientLifecycleUpdate.SessionId = &sessionID
 	}
-	if connectionTime > 0 {
-		connectionTimeFloat32 := float32(connectionTime)
-		clientLifecycleUpdate.ConnectionTime = &connectionTimeFloat32
-	}
-	if position > 0 {
-		positionFloat32 := float32(position)
-		clientLifecycleUpdate.Position = &positionFloat32
-	}
-	if bandwidthIn > 0 {
-		bandwidthInUint64 := uint64(bandwidthIn)
-		clientLifecycleUpdate.BandwidthInBps = &bandwidthInUint64
-	}
-	if bandwidthOut > 0 {
-		bandwidthOutUint64 := uint64(bandwidthOut)
-		clientLifecycleUpdate.BandwidthOutBps = &bandwidthOutUint64
-	}
-	if bytesDown > 0 {
-		bytesDownUint64 := uint64(bytesDown)
-		clientLifecycleUpdate.BytesDownloaded = &bytesDownUint64
-	}
-	if bytesUp > 0 {
-		bytesUpUint64 := uint64(bytesUp)
-		clientLifecycleUpdate.BytesUploaded = &bytesUpUint64
-	}
-	if packetsSent > 0 {
-		packetsSentUint64 := uint64(packetsSent)
-		clientLifecycleUpdate.PacketsSent = &packetsSentUint64
-	}
-	if packetsLost > 0 {
-		packetsLostUint64 := uint64(packetsLost)
-		clientLifecycleUpdate.PacketsLost = &packetsLostUint64
-	}
-	if packetsRetransmitted > 0 {
-		packetsRetransmittedUint64 := uint64(packetsRetransmitted)
-		clientLifecycleUpdate.PacketsRetransmitted = &packetsRetransmittedUint64
-	}
+	// Note: 0 is valid for all these metrics (e.g., client just connected)
+	connectionTimeFloat32 := float32(connectionTime)
+	clientLifecycleUpdate.ConnectionTime = &connectionTimeFloat32
+	positionFloat32 := float32(position)
+	clientLifecycleUpdate.Position = &positionFloat32
+	bandwidthInUint64 := uint64(bandwidthIn)
+	clientLifecycleUpdate.BandwidthInBps = &bandwidthInUint64
+	bandwidthOutUint64 := uint64(bandwidthOut)
+	clientLifecycleUpdate.BandwidthOutBps = &bandwidthOutUint64
+	bytesDownUint64 := uint64(bytesDown)
+	clientLifecycleUpdate.BytesDownloaded = &bytesDownUint64
+	bytesUpUint64 := uint64(bytesUp)
+	clientLifecycleUpdate.BytesUploaded = &bytesUpUint64
+	// Always set packet stats - 0 is a valid value (e.g., HLS doesn't track packets)
+	// These fields are explicitly requested from MistServer, so we always have them
+	packetsSentUint64 := uint64(packetsSent)
+	clientLifecycleUpdate.PacketsSent = &packetsSentUint64
+	packetsLostUint64 := uint64(packetsLost)
+	clientLifecycleUpdate.PacketsLost = &packetsLostUint64
+	packetsRetransmittedUint64 := uint64(packetsRetransmitted)
+	clientLifecycleUpdate.PacketsRetransmitted = &packetsRetransmittedUint64
 
 	return &pb.MistTrigger{
 		TriggerType: "CLIENT_LIFECYCLE_UPDATE",

@@ -35,6 +35,9 @@ message CreateClipRequest {
   optional int64 stop_ms = 9;       // Media time (seconds from stream start) - legacy name, actually seconds
   optional int64 duration_sec = 10; // Duration (seconds)
   ClipMode mode = 11;               // How to interpret the time fields
+  optional int64 expires_at = 12;   // Unix timestamp (seconds) for auto-deletion
+  optional string clip_hash = 13;   // Pre-generated hash from Commodore (if provided, Foghorn uses it)
+  optional string user_id = 14;     // User who created the clip (for Decklog events)
 }
 
 // CreateClipResponse - response from clip creation
@@ -68,6 +71,8 @@ message ClipInfo {
   // NEW: Original request parameters for audit/display
   optional string clip_mode = 15;         // Mode used: absolute, relative, duration, clip_now
   optional string requested_params = 16;  // JSON blob of original request params
+  optional string storage_location = 17;  // "local" or "s3"
+  optional google.protobuf.Timestamp expires_at = 18;
 }
 
 // GetClipsRequest - request to list clips
@@ -125,6 +130,7 @@ message StartDVRRequest {
   string internal_name = 2;
   optional string stream_id = 3;
   optional string user_id = 4;
+  optional int64 expires_at = 5;   // Unix timestamp (seconds) for auto-deletion
 }
 
 // StartDVRResponse - response from starting DVR
@@ -182,6 +188,14 @@ message DVRInfo {
   string error_message = 10;
   google.protobuf.Timestamp created_at = 11;
   google.protobuf.Timestamp updated_at = 12;
+  // Cold storage fields
+  optional string storage_location = 13;  // "local", "s3", "freezing", "defrosting"
+  optional string s3_url = 14;
+  optional google.protobuf.Timestamp frozen_at = 15;
+  optional google.protobuf.Timestamp expires_at = 16;
+  // Business metadata (from Commodore registry)
+  optional string id = 17;     // UUID from commodore.dvr_recordings
+  optional string title = 18;  // Stream title or custom title
 }
 
 // ListDVRRecordingsRequest - request to list DVR recordings
@@ -282,6 +296,7 @@ message PlaybackMetadata {
   optional int64 recording_size_bytes = 17;
   optional string clip_source = 18;
   optional google.protobuf.Timestamp created_at = 19;
+  optional string format = 20;  // Native container format: mp4, m3u8, webm, etc.
 }
 
 // ViewerEndpointResponse - response with resolved endpoints
@@ -289,6 +304,43 @@ message ViewerEndpointResponse {
   ViewerEndpoint primary = 1;
   repeated ViewerEndpoint fallbacks = 2;
   optional PlaybackMetadata metadata = 3;
+}
+
+// ============================================================================
+// INGEST ENDPOINT MESSAGES
+// Used by Foghorn for StreamCrafter ingest endpoint resolution
+// ============================================================================
+
+// IngestEndpointRequest - request to resolve ingest endpoint for streaming
+message IngestEndpointRequest {
+  string stream_key = 1;
+  optional string viewer_ip = 2;  // For geo-routing (client IP)
+}
+
+// IngestEndpoint - resolved ingest endpoint for a stream
+message IngestEndpoint {
+  string node_id = 1;
+  string base_url = 2;
+  optional string whip_url = 3;   // WHIP ingest URL
+  optional string rtmp_url = 4;   // RTMP ingest URL
+  optional string srt_url = 5;    // SRT ingest URL
+  optional string region = 6;
+  optional double load_score = 7;
+}
+
+// IngestMetadata - metadata about the stream for ingest
+message IngestMetadata {
+  string stream_id = 1;        // Internal stream name
+  string stream_key = 2;       // Original stream key
+  string tenant_id = 3;
+  bool recording_enabled = 4;
+}
+
+// IngestEndpointResponse - response with resolved ingest endpoints
+message IngestEndpointResponse {
+  IngestEndpoint primary = 1;
+  repeated IngestEndpoint fallbacks = 2;
+  optional IngestMetadata metadata = 3;
 }
 
 // ============================================================================
@@ -339,4 +391,152 @@ message MetaSummary {
 message StreamMetaResponse {
   MetaSummary meta_summary = 1;
   bytes raw = 2;  // Optional raw JSON from MistServer
+}
+
+// ============================================================================
+// VOD UPLOAD MESSAGES
+// User-initiated video file uploads (distinct from clips/DVR which are derived)
+// ============================================================================
+
+// VodStatus - status of a VOD upload (named differently from GraphQL VodAssetStatus to avoid autobind)
+enum VodStatus {
+  VOD_STATUS_UNSPECIFIED = 0;
+  VOD_STATUS_UPLOADING = 1;    // S3 multipart upload in progress
+  VOD_STATUS_PROCESSING = 2;   // Validating and extracting metadata
+  VOD_STATUS_READY = 3;        // Ready for playback
+  VOD_STATUS_FAILED = 4;       // Validation or upload failed
+  VOD_STATUS_DELETED = 5;      // Marked for deletion
+}
+
+// CreateVodUploadRequest - initiate a multipart upload
+message CreateVodUploadRequest {
+  string tenant_id = 1;
+  string user_id = 2;
+  string filename = 3;           // Original filename
+  int64 size_bytes = 4;          // Total file size (for part calculation)
+  optional string content_type = 5;  // MIME type (video/mp4, etc.)
+  optional string title = 6;
+  optional string description = 7;
+  optional string vod_hash = 8;  // Pre-generated by Commodore (if provided, Foghorn uses it)
+}
+
+// CreateVodUploadResponse - multipart upload instructions
+message CreateVodUploadResponse {
+  string upload_id = 1;          // S3 multipart upload ID
+  string artifact_id = 2;        // ID in live_artifacts table
+  string artifact_hash = 3;      // Hash for playback URL resolution
+  int64 part_size = 4;           // Recommended part size (bytes)
+  repeated VodUploadPart parts = 5;  // Presigned URLs for each part
+  google.protobuf.Timestamp expires_at = 6;  // When URLs expire
+}
+
+// VodUploadPart - presigned URL for a single part
+message VodUploadPart {
+  int32 part_number = 1;         // 1-indexed part number
+  string presigned_url = 2;      // PUT URL for this part
+}
+
+// CompleteVodUploadRequest - finalize multipart upload
+message CompleteVodUploadRequest {
+  string tenant_id = 1;
+  string upload_id = 2;          // S3 multipart upload ID
+  repeated VodCompletedPart parts = 3;  // ETags from uploaded parts
+}
+
+// VodCompletedPart - ETag from uploaded part
+message VodCompletedPart {
+  int32 part_number = 1;
+  string etag = 2;               // ETag returned by S3
+}
+
+// CompleteVodUploadResponse - completed upload info
+message CompleteVodUploadResponse {
+  VodAssetInfo asset = 1;
+}
+
+// AbortVodUploadRequest - cancel multipart upload
+message AbortVodUploadRequest {
+  string tenant_id = 1;
+  string upload_id = 2;
+}
+
+// AbortVodUploadResponse - abort confirmation
+message AbortVodUploadResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+// DeleteVodAssetRequest - delete a VOD asset
+message DeleteVodAssetRequest {
+  string tenant_id = 1;
+  string artifact_hash = 2;
+}
+
+// DeleteVodAssetResponse - delete confirmation
+message DeleteVodAssetResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+// GetVodAssetRequest - get a single VOD asset
+message GetVodAssetRequest {
+  string tenant_id = 1;
+  string artifact_hash = 2;
+}
+
+// ListVodAssetsRequest - list VOD assets
+message ListVodAssetsRequest {
+  string tenant_id = 1;
+  common.CursorPaginationRequest pagination = 2;
+}
+
+// ListVodAssetsResponse - paginated list of VOD assets
+message ListVodAssetsResponse {
+  repeated VodAssetInfo assets = 1;
+  common.CursorPaginationResponse pagination = 2;
+}
+
+// VodAssetInfo - full VOD asset details (named differently from GraphQL VodAsset to avoid autobind collision)
+message VodAssetInfo {
+  string id = 1;                 // UUID from live_artifacts
+  string artifact_hash = 2;      // Hash for playback URL resolution
+  string title = 3;
+  string description = 4;
+  string filename = 5;           // Original uploaded filename
+  VodStatus status = 6;
+  string storage_location = 7;   // "s3", "local", "freezing", "defrosting"
+
+  // File metadata (populated after validation)
+  optional int64 size_bytes = 8;
+  optional int32 duration_ms = 9;    // Video duration in milliseconds
+  optional string resolution = 10;   // e.g., "1920x1080"
+  optional string video_codec = 11;  // e.g., "h264", "h265", "vp9"
+  optional string audio_codec = 12;  // e.g., "aac", "opus"
+  optional int32 bitrate_kbps = 13;  // Average bitrate
+
+  // S3 multipart tracking (internal)
+  optional string s3_upload_id = 14;
+  optional string s3_key = 15;
+
+  // Timestamps
+  google.protobuf.Timestamp created_at = 16;
+  google.protobuf.Timestamp updated_at = 17;
+  optional google.protobuf.Timestamp expires_at = 18;
+
+  // Error info
+  optional string error_message = 19;
+}
+
+// VodMetadata - metadata extracted from video file (returned by validation)
+message VodMetadata {
+  int32 duration_ms = 1;
+  string resolution = 2;         // "1920x1080"
+  string video_codec = 3;        // "h264"
+  string audio_codec = 4;        // "aac"
+  int32 bitrate_kbps = 5;
+  optional int32 width = 6;
+  optional int32 height = 7;
+  optional float fps = 8;
+  optional int32 audio_channels = 9;
+  optional int32 audio_sample_rate = 10;
 }

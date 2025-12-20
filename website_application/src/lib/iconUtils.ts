@@ -29,7 +29,9 @@ import {
   Code2,
   Copy,
   CreditCard,
+  Database,
   Edit,
+  ExternalLink,
   Download,
   FileText,
   Film,
@@ -71,6 +73,7 @@ import {
   Server,
   Settings,
   Share2,
+  Signal,
   Square,
   Shield,
   Sparkles,
@@ -124,7 +127,9 @@ const iconMap = {
   Code2,
   Copy,
   CreditCard,
+  Database,
   Edit,
+  ExternalLink,
   Download,
   FileText,
   Film,
@@ -166,6 +171,7 @@ const iconMap = {
   Server,
   Settings,
   Share2,
+  Signal,
   Square,
   Shield,
   Sparkles,
@@ -218,7 +224,9 @@ export type IconName =
   | "Code2"
   | "Copy"
   | "CreditCard"
+  | "Database"
   | "Edit"
+  | "ExternalLink"
   | "Download"
   | "FileText"
   | "Film"
@@ -260,6 +268,7 @@ export type IconName =
   | "Server"
   | "Settings"
   | "Share2"
+  | "Signal"
   | "Square"
   | "Shield"
   | "Sparkles"

@@ -1,3 +1,4 @@
+# Fetch list of cluster subscriptions for the current tenant
 query GetMySubscriptions {
   mySubscriptions {
     id

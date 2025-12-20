@@ -48,6 +48,17 @@ interface StreamMetric {
 
   // Client-side aggregated counts (maintained by tracking connect/disconnect)
   activeConnections?: number;
+
+  // From StreamEvents bufferEvent (rich health diagnostics)
+  bufferState?: string;       // "FULL", "EMPTY", "DRY", "RECOVER"
+  streamBufferMs?: number;    // Actual buffer depth in milliseconds
+  streamJitterMs?: number;    // Max jitter across tracks
+  maxKeepawaMs?: number;      // Viewer lag from live edge
+  hasIssues?: boolean;
+  issuesDescription?: string;
+  mistIssues?: string;        // Raw Mist issue string like "HLSnoaudio!"
+  qualityTier?: string;
+  trackCount?: number;
 }
 
 interface NodeMetric {
@@ -142,11 +153,46 @@ export function initializeWebSocket(): void {
       if (result.data?.streamEvents) {
         const event = result.data.streamEvents;
 
+        // Extract stream name from the payload (check all three event types)
+        const streamName = event.lifecycleUpdate?.internalName || event.endEvent?.streamName || event.bufferEvent?.streamName;
+        if (!streamName) return;
+
+        // Handle buffer events - rich health diagnostics
+        if (event.bufferEvent) {
+          streamMetrics.update((metrics) => ({
+            ...metrics,
+            [streamName]: {
+              ...metrics[streamName],
+              bufferState: event.bufferEvent?.bufferState ?? undefined,
+              streamBufferMs: event.bufferEvent?.streamBufferMs ?? undefined,
+              streamJitterMs: event.bufferEvent?.streamJitterMs ?? undefined,
+              maxKeepawaMs: event.bufferEvent?.maxKeepawaMs ?? undefined,
+              hasIssues: event.bufferEvent?.hasIssues ?? undefined,
+              issuesDescription: event.bufferEvent?.issuesDescription ?? undefined,
+              mistIssues: event.bufferEvent?.mistIssues ?? undefined,
+              qualityTier: event.bufferEvent?.qualityTier ?? undefined,
+              trackCount: event.bufferEvent?.trackCount ?? undefined,
+              lastUpdate: new Date(),
+            },
+          }));
+
+          realtimeEvents.update((events) => {
+            const newEvents = [event, ...events.slice(0, 99)];
+            return newEvents;
+          });
+          return;
+        }
+
+        // Determine stream status from lifecycle/end payload
+        const isLive = event.lifecycleUpdate?.status === "live";
+        const status = event.endEvent ? "OFFLINE" : (isLive ? "LIVE" : "OFFLINE");
+
         streamMetrics.update((metrics) => ({
           ...metrics,
-          [event.stream]: {
-            ...metrics[event.stream],
-            status: event.status ?? undefined,
+          [streamName]: {
+            ...metrics[streamName],
+            status,
+            bufferState: event.lifecycleUpdate?.bufferState ?? metrics[streamName]?.bufferState,
             lastUpdate: new Date(),
           },
         }));
@@ -154,14 +200,14 @@ export function initializeWebSocket(): void {
         // Update realtimeStreams store with latest stream status
         realtimeStreams.update((currentStreams) => {
           const existingStreamIndex = currentStreams.findIndex(
-            (s) => s.id === event.stream,
+            (s) => s.id === streamName,
           );
           if (existingStreamIndex !== -1) {
             // Update existing stream
             const updatedStreams = [...currentStreams];
             updatedStreams[existingStreamIndex] = {
               ...updatedStreams[existingStreamIndex],
-              metrics: { isLive: event.status === "LIVE" },
+              metrics: { isLive },
             };
             return updatedStreams;
           } else {
@@ -169,9 +215,9 @@ export function initializeWebSocket(): void {
             return [
               ...currentStreams,
               {
-                id: event.stream,
-                name: event.stream,
-                metrics: { isLive: event.status === "LIVE" },
+                id: streamName,
+                name: streamName,
+                metrics: { isLive },
               },
             ];
           }

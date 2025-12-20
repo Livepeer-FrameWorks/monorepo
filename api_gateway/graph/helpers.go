@@ -1,32 +1,74 @@
 package graph
 
-import "frameworks/api_gateway/graph/model"
+import (
+	"context"
 
-const defaultLimit = 100
-const maxLimit = 1000
+	"frameworks/api_gateway/internal/loaders"
+	"frameworks/pkg/middleware"
+	pb "frameworks/pkg/proto"
+)
 
-func clampPagination(p *model.PaginationInput, total int) (start int, end int) {
-	limit := defaultLimit
-	if p != nil {
-		if p.Offset != nil {
-			start = *p.Offset
-			if start < 0 {
-				start = 0
-			}
-		}
-		if p.Limit != nil {
-			limit = *p.Limit
-		}
+// getLifecycleData fetches artifact lifecycle data from the ArtifactLifecycleLoader.
+// Used by clip resolvers to get processing status, file paths, etc.
+func (r *clipResolver) getLifecycleData(ctx context.Context, requestID string) *pb.ArtifactState {
+	if requestID == "" {
+		return nil
 	}
-	if limit <= 0 {
-		limit = defaultLimit
+
+	tenantID := middleware.GetTenantID(ctx)
+	if tenantID == "" {
+		return nil
 	}
-	if limit > maxLimit {
-		limit = maxLimit
+
+	lds := loaders.FromContext(ctx)
+	if lds == nil || lds.ArtifactLifecycle == nil {
+		return nil
 	}
-	end = total
-	if start+limit < end {
-		end = start + limit
+
+	state, err := lds.ArtifactLifecycle.Load(ctx, tenantID, requestID)
+	if err != nil {
+		return nil
 	}
-	return start, end
+
+	return state
+}
+
+// getLifecycleData fetches artifact lifecycle data from the ArtifactLifecycleLoader.
+// Used by DVR resolvers to get processing status, file paths, etc.
+func (r *dVRRequestResolver) getLifecycleData(ctx context.Context, requestID string) *pb.ArtifactState {
+	if requestID == "" {
+		return nil
+	}
+
+	tenantID := middleware.GetTenantID(ctx)
+	if tenantID == "" {
+		return nil
+	}
+
+	lds := loaders.FromContext(ctx)
+	if lds == nil || lds.ArtifactLifecycle == nil {
+		return nil
+	}
+
+	state, err := lds.ArtifactLifecycle.Load(ctx, tenantID, requestID)
+	if err != nil {
+		return nil
+	}
+
+	return state
+}
+
+// formatMetricName formats a metric key for display in invoice line items
+func formatMetricName(metric string) string {
+	names := map[string]string{
+		"viewer_hours":     "Delivered Minutes",
+		"storage_gb_hours": "Storage (GB-hours)",
+		"bandwidth_gb":     "Bandwidth (GB)",
+		"ingest_hours":     "Ingest Hours",
+		"transcode_hours":  "Transcode Hours",
+	}
+	if name, ok := names[metric]; ok {
+		return name
+	}
+	return metric
 }

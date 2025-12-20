@@ -39,6 +39,7 @@
     getNodeHealthScore: (nodeId: string) => number;
     formatCpuUsage: (nodeId: string) => string;
     formatMemoryUsage: (nodeId: string) => string;
+    formatDiskUsage: (nodeId: string) => string;
     getStatusBadgeClass: (status: string | null | undefined) => string;
   }
 
@@ -49,6 +50,7 @@
     getNodeHealthScore,
     formatCpuUsage,
     formatMemoryUsage,
+    formatDiskUsage,
     getStatusBadgeClass,
   }: Props = $props();
 </script>
@@ -65,32 +67,42 @@
       <div class="text-right space-y-1">
         <Badge
           variant="outline"
-          tone={getNodeHealthScore(node.nodeName) >= 80 ? 'green' :
-                getNodeHealthScore(node.nodeName) >= 50 ? 'yellow' :
-                getNodeHealthScore(node.nodeName) > 0 ? 'red' :
+          tone={getNodeHealthScore(node.id) >= 80 ? 'green' :
+                getNodeHealthScore(node.id) >= 50 ? 'yellow' :
+                getNodeHealthScore(node.id) > 0 ? 'red' :
                 'neutral'}
           class="text-xs uppercase"
         >
-          {getNodeStatus(node.nodeName)}
+          {getNodeStatus(node.id)}
         </Badge>
-        {#if systemHealth[node.nodeName]}
+        {#if systemHealth[node.id]}
           <p class="text-xs text-muted-foreground">
-            Health: {getNodeHealthScore(node.nodeName)}%
+            Health: {getNodeHealthScore(node.id)}%
           </p>
         {/if}
       </div>
     </div>
 
     <!-- Resource Usage -->
-    <div class="grid grid-cols-2 gap-4 text-sm">
-      <div>
-        <p class="text-muted-foreground">CPU Usage</p>
-        <p class="font-medium">{formatCpuUsage(node.nodeName)}</p>
-      </div>
-      <div>
-        <p class="text-muted-foreground">Memory Usage</p>
-        <p class="font-medium">{formatMemoryUsage(node.nodeName)}</p>
-      </div>
+    <div class="grid grid-cols-3 gap-2 text-sm min-h-[44px]">
+      {#if systemHealth[node.id]}
+        <div>
+          <p class="text-muted-foreground">CPU</p>
+          <p class="font-medium">{formatCpuUsage(node.id)}</p>
+        </div>
+        <div>
+          <p class="text-muted-foreground">Memory</p>
+          <p class="font-medium">{formatMemoryUsage(node.id)}</p>
+        </div>
+        <div>
+          <p class="text-muted-foreground">Disk</p>
+          <p class="font-medium">{formatDiskUsage(node.id)}</p>
+        </div>
+      {:else}
+        <div class="col-span-3 flex items-center justify-center text-xs text-muted-foreground animate-pulse">
+          Waiting for live stats...
+        </div>
+      {/if}
     </div>
 
     <!-- Capacity Specs -->
@@ -146,8 +158,8 @@
       <div>
         <p class="text-muted-foreground">Last Seen</p>
         <p class="text-xs">
-          {#if systemHealth[node.nodeName]}
-            {systemHealth[node.nodeName].ts.toLocaleString()}
+          {#if systemHealth[node.id]}
+            {systemHealth[node.id].ts.toLocaleString()}
           {:else if node.lastHeartbeat}
             {new Date(node.lastHeartbeat).toLocaleString()}
           {:else}
@@ -157,9 +169,9 @@
       </div>
     </div>
 
-    {#if systemHealth[node.nodeName]}
-      {@const shmUsed = systemHealth[node.nodeName].event.shmUsedBytes || 0}
-      {@const shmTotal = systemHealth[node.nodeName].event.shmTotalBytes || 1}
+    {#if systemHealth[node.id]}
+      {@const shmUsed = systemHealth[node.id].event.shmUsedBytes || 0}
+      {@const shmTotal = systemHealth[node.id].event.shmTotalBytes || 1}
       {@const shmPercent = (shmUsed / shmTotal) * 100}
       <div
         class="grid grid-cols-2 md:grid-cols-4 gap-2 border-t border-border/40 pt-3 text-xs"
@@ -167,7 +179,7 @@
         <div>
           <p class="text-muted-foreground">Disk</p>
           <p>
-            {Math.round((systemHealth[node.nodeName].event.diskUsedBytes || 0) / (systemHealth[node.nodeName].event.diskTotalBytes || 1) * 100)}%
+            {Math.round((systemHealth[node.id].event.diskUsedBytes || 0) / (systemHealth[node.id].event.diskTotalBytes || 1) * 100)}%
           </p>
         </div>
         <div>
@@ -183,12 +195,12 @@
         <div>
           <p class="text-muted-foreground">Updated</p>
           <p>
-            {systemHealth[node.nodeName].ts.toLocaleTimeString()}
+            {systemHealth[node.id].ts.toLocaleTimeString()}
           </p>
         </div>
         <div>
           <p class="text-muted-foreground">Score</p>
-          <p>{getNodeHealthScore(node.nodeName)}%</p>
+          <p>{getNodeHealthScore(node.id)}%</p>
         </div>
       </div>
     {/if}

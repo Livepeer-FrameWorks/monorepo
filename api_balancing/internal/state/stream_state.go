@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"net"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 
 	pb "frameworks/pkg/proto"
 )
@@ -15,6 +18,14 @@ var (
 	writeCounter             func(labels map[string]string)
 	rehydrateDurationObserve func(seconds float64, labels map[string]string)
 )
+
+// DtshSyncHandler is called when a .dtsh file needs to be synced to S3 (set by control package)
+var dtshSyncHandler func(nodeID, assetHash, assetType, filePath string)
+
+// SetDtshSyncHandler registers the callback for triggering incremental .dtsh syncs
+func SetDtshSyncHandler(handler func(nodeID, assetHash, assetType, filePath string)) {
+	dtshSyncHandler = handler
+}
 
 // SetMetricsHooks allows the caller to inject metrics callbacks
 func SetMetricsHooks(onWrite func(labels map[string]string), onRehydrateDuration func(seconds float64, labels map[string]string)) {
@@ -37,42 +48,65 @@ type StreamTrack struct {
 
 // StreamState represents the current state of a stream
 type StreamState struct {
-	StreamName         string                 `json:"stream_name"`
-	InternalName       string                 `json:"internal_name"`
-	NodeID             string                 `json:"node_id"`
-	TenantID           string                 `json:"tenant_id"`
-	Status             string                 `json:"status"`       // "live", "offline", etc.
-	BufferState        string                 `json:"buffer_state"` // "FULL", "EMPTY", "DRY", "RECOVER"
-	Tracks             []StreamTrack          `json:"tracks"`
-	Issues             string                 `json:"issues,omitempty"`
-	HasIssues          bool                   `json:"has_issues"`
-	StartedAt          *time.Time             `json:"started_at,omitempty"` // When stream first went live
-	LastUpdate         time.Time              `json:"last_update"`
-	RawDetails         map[string]interface{} `json:"raw_details,omitempty"` // Raw MistServer data
-	Viewers            int                    `json:"viewers"`
-	LastTrackList      string                 `json:"last_track_list,omitempty"`
-	CurrentBytesPerSec int64                  `json:"current_bytes_per_sec,omitempty"`
-	TotalConnections   int                    `json:"total_connections,omitempty"`
-	Inputs             int                    `json:"inputs,omitempty"`
-	BytesUp            int64                  `json:"bytes_up,omitempty"`
-	BytesDown          int64                  `json:"bytes_down,omitempty"`
+	StreamName       string                 `json:"stream_name"`
+	InternalName     string                 `json:"internal_name"`
+	NodeID           string                 `json:"node_id"`
+	TenantID         string                 `json:"tenant_id"`
+	Status           string                 `json:"status"`       // "live", "offline", etc.
+	BufferState      string                 `json:"buffer_state"` // "FULL", "EMPTY", "DRY", "RECOVER"
+	Tracks           []StreamTrack          `json:"tracks"`
+	Issues           string                 `json:"issues,omitempty"`
+	HasIssues        bool                   `json:"has_issues"`
+	StartedAt        *time.Time             `json:"started_at,omitempty"` // When stream first went live
+	LastUpdate       time.Time              `json:"last_update"`
+	RawDetails       map[string]interface{} `json:"raw_details,omitempty"` // Raw MistServer data
+	Viewers          int                    `json:"viewers"`
+	LastTrackList    string                 `json:"last_track_list,omitempty"`
+	TotalConnections int                    `json:"total_connections,omitempty"`
+	Inputs           int                    `json:"inputs,omitempty"`
+	BytesUp          int64                  `json:"bytes_up,omitempty"`
+	BytesDown        int64                  `json:"bytes_down,omitempty"`
 }
 
 // StreamInstanceState represents per-node state for a specific stream
 type StreamInstanceState struct {
-	NodeID             string                 `json:"node_id"`
-	TenantID           string                 `json:"tenant_id"`
-	Status             string                 `json:"status"`
-	BufferState        string                 `json:"buffer_state"`
-	LastTrackList      string                 `json:"last_track_list,omitempty"`
-	CurrentBytesPerSec int64                  `json:"current_bytes_per_sec,omitempty"`
-	Viewers            int                    `json:"viewers"`
-	BytesUp            int64                  `json:"bytes_up,omitempty"`
-	BytesDown          int64                  `json:"bytes_down,omitempty"`
-	TotalConnections   int                    `json:"total_connections,omitempty"`
-	Inputs             int                    `json:"inputs,omitempty"`
-	LastUpdate         time.Time              `json:"last_update"`
-	RawDetails         map[string]interface{} `json:"raw_details,omitempty"`
+	NodeID           string                 `json:"node_id"`
+	TenantID         string                 `json:"tenant_id"`
+	Status           string                 `json:"status"`
+	BufferState      string                 `json:"buffer_state"`
+	LastTrackList    string                 `json:"last_track_list,omitempty"`
+	Viewers          int                    `json:"viewers"`
+	BytesUp          int64                  `json:"bytes_up,omitempty"`
+	BytesDown        int64                  `json:"bytes_down,omitempty"`
+	TotalConnections int                    `json:"total_connections,omitempty"`
+	Inputs           int                    `json:"inputs,omitempty"`
+	Replicated       bool                   `json:"replicated,omitempty"` // True if this is a replicated (pull) stream
+	LastUpdate       time.Time              `json:"last_update"`
+	RawDetails       map[string]interface{} `json:"raw_details,omitempty"`
+}
+
+// VirtualViewerState represents the lifecycle state of a virtual viewer
+type VirtualViewerState string
+
+const (
+	VirtualViewerPending      VirtualViewerState = "PENDING"      // Redirected, awaiting USER_NEW
+	VirtualViewerActive       VirtualViewerState = "ACTIVE"       // USER_NEW received, session live
+	VirtualViewerAbandoned    VirtualViewerState = "ABANDONED"    // Redirect timed out, never connected
+	VirtualViewerDisconnected VirtualViewerState = "DISCONNECTED" // USER_END received
+)
+
+// VirtualViewer tracks a viewer session from redirect through connection to disconnection.
+// This enables accurate bandwidth prediction and session correlation.
+type VirtualViewer struct {
+	ID             string             `json:"id"`              // UUID for this virtual viewer
+	NodeID         string             `json:"node_id"`         // Target node for redirect
+	StreamName     string             `json:"stream_name"`     // Internal stream name
+	ClientIP       string             `json:"client_ip"`       // Client IP for matching USER_NEW
+	State          VirtualViewerState `json:"state"`           // Current lifecycle state
+	RedirectTime   time.Time          `json:"redirect_time"`   // When redirect was issued
+	ConnectTime    time.Time          `json:"connect_time"`    // When USER_NEW matched (zero if not yet)
+	DisconnectTime time.Time          `json:"disconnect_time"` // When USER_END received (zero if not yet)
+	EstBandwidth   uint64             `json:"est_bandwidth"`   // Estimated bytes/sec for this viewer
 }
 
 // NodeState captures per-node state
@@ -133,6 +167,11 @@ type NodeState struct {
 	RAMScore      uint64    `json:"-"` // Pre-computed RAM score component
 	BWAvailable   uint64    `json:"-"` // Available bandwidth (BWLimit - UpSpeed - AddBandwidth)
 	LastScoreTime time.Time `json:"-"` // When scores were last computed
+
+	// Virtual Viewer Tracking
+	PendingRedirects    int       `json:"pending_redirects"` // Count of redirects awaiting USER_NEW
+	EstBandwidthPerUser uint64    `json:"-"`                 // Cached per-viewer bandwidth estimate (bytes/sec)
+	LastPollTime        time.Time `json:"-"`                 // When real metrics arrived from Helmsman
 }
 
 // StreamStateManager manages in-memory cluster state
@@ -141,6 +180,10 @@ type StreamStateManager struct {
 	streamInstances map[string]map[string]*StreamInstanceState // internal_name -> node_id -> instance
 	nodes           map[string]*NodeState                      // node_id -> node state
 	mu              sync.RWMutex
+
+	// Virtual Viewer Tracking (Option B: per-session)
+	virtualViewers map[string]*VirtualViewer // viewerID -> viewer (for full session tracking)
+	viewersByNode  map[string][]string       // nodeID -> []viewerIDs (for fast per-node lookups)
 
 	// Load balancer weights (exactly like C++ version)
 	WeightCPU   uint64
@@ -157,8 +200,9 @@ type StreamStateManager struct {
 	syncPolicies  map[EntityType]SyncPolicy
 	cachePolicies map[string]CachePolicy
 	repos         struct {
-		Clips ClipRepository
-		DVR   DVRRepository
+		Clips     ClipRepository
+		DVR       DVRRepository
+		Artifacts ArtifactRepository
 	}
 	nodeRepo NodeRepository // Hook into persistence/caching layer
 
@@ -174,6 +218,10 @@ func NewStreamStateManager() *StreamStateManager {
 		streamInstances:  make(map[string]map[string]*StreamInstanceState),
 		nodes:            make(map[string]*NodeState),
 		stalenessChecker: make(chan bool),
+
+		// Virtual Viewer Tracking
+		virtualViewers: make(map[string]*VirtualViewer),
+		viewersByNode:  make(map[string][]string),
 
 		// Load balancer weights (same as C++ defaults)
 		WeightCPU:   500,  // Same as C++
@@ -422,7 +470,8 @@ func (sm *StreamStateManager) UpdateUserConnection(internalName, nodeID, tenantI
 }
 
 // addViewerBandwidthPenalty implements bandwidth penalty tracking when a viewer connects (must hold lock)
-func (sm *StreamStateManager) addViewerBandwidthPenalty(nodeID string, _ string, streamInst *StreamInstanceState) {
+// This pre-accounts for expected bandwidth usage before the next NodeLifecycleUpdate arrives with actual metrics.
+func (sm *StreamStateManager) addViewerBandwidthPenalty(nodeID string, _ string, _ *StreamInstanceState) {
 	node := sm.nodes[nodeID]
 	if node == nil {
 		return
@@ -430,35 +479,38 @@ func (sm *StreamStateManager) addViewerBandwidthPenalty(nodeID string, _ string,
 
 	var toAdd uint64 = 0
 
-	// Check if we can estimate bandwidth from this stream instance
-	if streamInst != nil && streamInst.BytesUp > 0 && streamInst.TotalConnections > 0 {
-		toAdd = uint64(streamInst.BytesUp) / uint64(streamInst.TotalConnections)
-	} else {
-		// Calculate estimated bandwidth like C++ balancer
+	// Use node's current UpSpeed (bytes/sec rate) to estimate per-viewer bandwidth
+	// UpSpeed is the real-time upload rate from MistServer, not cumulative bytes
+	if node.UpSpeed > 0 {
+		// Count total viewers across all streams on this node
 		totalViewers := uint64(0)
-		totalBytesUp := uint64(0)
-
-		// Sum across all streams on this node
 		for _, nodeInstances := range sm.streamInstances {
-			if inst := nodeInstances[nodeID]; inst != nil {
+			if inst := nodeInstances[nodeID]; inst != nil && inst.TotalConnections > 0 {
 				totalViewers += uint64(inst.TotalConnections)
-				totalBytesUp += uint64(inst.BytesUp)
 			}
 		}
 
-		if totalViewers > 0 && totalBytesUp > 0 {
-			toAdd = totalBytesUp / totalViewers
+		if totalViewers > 0 {
+			// Estimate bandwidth per viewer = current upload rate / current viewers
+			toAdd = uint64(node.UpSpeed) / totalViewers
 		} else {
-			toAdd = 131072 // assume 1mbps (like C++)
+			// No viewers yet, use the full current upload rate as baseline
+			// (stream is ingesting but nobody watching)
+			toAdd = uint64(node.UpSpeed)
 		}
+	}
+
+	// If we still don't have a good estimate, use default
+	if toAdd == 0 {
+		toAdd = 131072 // assume 1mbps (like C++)
 	}
 
 	// Ensure reasonable limits (like C++)
 	if toAdd < 64*1024 {
-		toAdd = 64 * 1024 // minimum 0.5 mbps
+		toAdd = 64 * 1024 // minimum 0.5 mbps (64 KB/s)
 	}
 	if toAdd > 1024*1024 {
-		toAdd = 1024 * 1024 // maximum 8 mbps
+		toAdd = 1024 * 1024 // maximum 8 mbps (1 MB/s)
 	}
 
 	node.AddBandwidth += toAdd
@@ -491,18 +543,6 @@ func (sm *StreamStateManager) UpdateTrackList(internalName, nodeID, tenantID, tr
 	inst.LastUpdate = time.Now()
 }
 
-func (sm *StreamStateManager) UpdateBandwidth(internalName string, bps int64) {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-	union := sm.streams[internalName]
-	if union == nil {
-		union = &StreamState{InternalName: internalName, StreamName: internalName}
-		sm.streams[internalName] = union
-	}
-	union.CurrentBytesPerSec = bps
-	union.LastUpdate = time.Now()
-}
-
 func (sm *StreamStateManager) SetOffline(internalName, nodeID string) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
@@ -528,7 +568,7 @@ func (sm *StreamStateManager) SetOffline(internalName, nodeID string) {
 	inst.LastUpdate = time.Now()
 }
 
-func (sm *StreamStateManager) UpdateNodeStats(internalName, nodeID string, total, inputs int, up, down int64) {
+func (sm *StreamStateManager) UpdateNodeStats(internalName, nodeID string, total, inputs int, up, down int64, replicated bool) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 	union := sm.streams[internalName]
@@ -554,6 +594,7 @@ func (sm *StreamStateManager) UpdateNodeStats(internalName, nodeID string, total
 	inst.Inputs = inputs
 	inst.BytesUp = up
 	inst.BytesDown = down
+	inst.Replicated = replicated
 	inst.LastUpdate = time.Now()
 }
 
@@ -657,6 +698,22 @@ func (sm *StreamStateManager) UpdateNodeMetrics(nodeID string, metrics struct {
 	sm.recomputeNodeScoresLocked(n)
 }
 
+// UpdateNodeDiskUsage updates the disk usage statistics for a node
+func (sm *StreamStateManager) UpdateNodeDiskUsage(nodeID string, diskTotal, diskUsed uint64) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	n := sm.nodes[nodeID]
+	if n == nil {
+		n = &NodeState{NodeID: nodeID}
+		sm.nodes[nodeID] = n
+	}
+
+	n.DiskTotalBytes = diskTotal
+	n.DiskUsedBytes = diskUsed
+	n.LastUpdate = time.Now()
+}
+
 // SetNodeGPUInfo updates GPU information for a node
 func (sm *StreamStateManager) SetNodeGPUInfo(nodeID string, gpuVendor string, gpuCount int, gpuMemMB int, gpuCC string) {
 	sm.mu.Lock()
@@ -751,7 +808,7 @@ func (sm *StreamStateManager) GetBalancerNodeSnapshots() []BalancerNodeSnapshot 
 				Bandwidth:  0,
 				BytesUp:    uint64(inst.BytesUp),
 				BytesDown:  uint64(inst.BytesDown),
-				Replicated: false,
+				Replicated: inst.Replicated,
 			}
 		}
 	}
@@ -816,6 +873,35 @@ func (sm *StreamStateManager) GetStreamInstances(internalName string) map[string
 			c.RawDetails = copied
 		}
 		out[nodeID] = c
+	}
+	return out
+}
+
+// GetAllStreamInstances returns all stream instances (internalName -> nodeID -> instance)
+func (sm *StreamStateManager) GetAllStreamInstances() map[string]map[string]StreamInstanceState {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
+	out := make(map[string]map[string]StreamInstanceState)
+	for internalName, nodeInstances := range sm.streamInstances {
+		nodeMap := make(map[string]StreamInstanceState)
+		for nodeID, inst := range nodeInstances {
+			if inst == nil {
+				continue
+			}
+			c := *inst
+			if inst.RawDetails != nil {
+				copied := make(map[string]interface{}, len(inst.RawDetails))
+				for k, v := range inst.RawDetails {
+					copied[k] = v
+				}
+				c.RawDetails = copied
+			}
+			nodeMap[nodeID] = c
+		}
+		if len(nodeMap) > 0 {
+			out[internalName] = nodeMap
+		}
 	}
 	return out
 }
@@ -896,14 +982,23 @@ func (sm *StreamStateManager) SetNodeConnectionInfo(nodeID string, host string, 
 	sm.recomputeNodeScoresLocked(n)
 }
 
-// FindNodeByArtifactHash searches for a node hosting the specified artifact (Clip/DVR).
-// Returns the node's host/base URL and the artifact details if found.
-func (sm *StreamStateManager) FindNodeByArtifactHash(hash string) (string, *pb.StoredArtifact) {
+// ArtifactNodeInfo contains node information for artifact routing
+type ArtifactNodeInfo struct {
+	NodeID   string
+	Host     string // Base URL
+	Score    int64  // Load balancing score (lower is better)
+	Artifact *pb.StoredArtifact
+}
+
+// FindNodesByArtifactHash searches for ALL nodes hosting the specified artifact (Clip/DVR).
+// Returns a slice of nodes with their scores for load balancing.
+func (sm *StreamStateManager) FindNodesByArtifactHash(hash string) []ArtifactNodeInfo {
 	snapshot := sm.GetBalancerSnapshotAtomic()
 	if snapshot == nil {
-		return "", nil
+		return nil
 	}
 
+	var nodes []ArtifactNodeInfo
 	for _, node := range snapshot.Nodes {
 		// Skip inactive nodes
 		if !node.IsActive {
@@ -911,11 +1006,39 @@ func (sm *StreamStateManager) FindNodeByArtifactHash(hash string) (string, *pb.S
 		}
 		for _, artifact := range node.Artifacts {
 			if artifact.GetClipHash() == hash {
-				return node.Host, artifact
+				// Combine CPU and RAM scores for load balancing (lower is better)
+				combinedScore := int64(node.CPUScore + node.RAMScore)
+				nodes = append(nodes, ArtifactNodeInfo{
+					NodeID:   node.NodeID,
+					Host:     node.Host,
+					Score:    combinedScore,
+					Artifact: artifact,
+				})
+				break // Only count once per node
 			}
 		}
 	}
-	return "", nil
+	return nodes
+}
+
+// FindNodeByArtifactHash searches for a node hosting the specified artifact (Clip/DVR).
+// Returns the best node's host/base URL and the artifact details if found.
+// For multi-node support with load balancing, use FindNodesByArtifactHash instead.
+func (sm *StreamStateManager) FindNodeByArtifactHash(hash string) (string, *pb.StoredArtifact) {
+	nodes := sm.FindNodesByArtifactHash(hash)
+	if len(nodes) == 0 {
+		return "", nil
+	}
+
+	// If multiple nodes have the artifact, pick the one with the best (lowest) score
+	best := nodes[0]
+	for _, n := range nodes[1:] {
+		if n.Score < best.Score {
+			best = n
+		}
+	}
+
+	return best.Host, best.Artifact
 }
 
 // UpdateAddBandwidth updates the bandwidth penalty for a node
@@ -935,10 +1058,9 @@ func (sm *StreamStateManager) UpdateAddBandwidth(nodeID string, addBandwidth uin
 	sm.recomputeNodeScoresLocked(n)
 }
 
-// SetNodeArtifacts updates the artifacts stored on a node
+// SetNodeArtifacts updates the artifacts stored on a node (in-memory and persistent)
 func (sm *StreamStateManager) SetNodeArtifacts(nodeID string, artifacts []*pb.StoredArtifact) {
 	sm.mu.Lock()
-	defer sm.mu.Unlock()
 
 	n := sm.nodes[nodeID]
 	if n == nil {
@@ -950,6 +1072,89 @@ func (sm *StreamStateManager) SetNodeArtifacts(nodeID string, artifacts []*pb.St
 	n.Artifacts = make([]*pb.StoredArtifact, len(artifacts))
 	copy(n.Artifacts, artifacts)
 	n.LastUpdate = time.Now()
+
+	// Get artifact repo reference while holding lock
+	artifactRepo := sm.repos.Artifacts
+	sm.mu.Unlock()
+
+	// Persist to database (outside lock to avoid blocking)
+	if artifactRepo != nil && len(artifacts) > 0 {
+		records := make([]ArtifactRecord, 0, len(artifacts))
+		for _, a := range artifacts {
+			records = append(records, ArtifactRecord{
+				ArtifactHash: a.GetClipHash(),
+				ArtifactType: inferArtifactType(a.GetFilePath()),
+				StreamName:   a.GetStreamName(),
+				FilePath:     a.GetFilePath(),
+				SizeBytes:    int64(a.GetSizeBytes()),
+				CreatedAt:    a.GetCreatedAt(),
+				HasDtsh:      a.GetHasDtsh(),
+			})
+		}
+		// Fire-and-forget persistence (errors logged in repository)
+		go func() {
+			_ = artifactRepo.UpsertArtifacts(context.Background(), nodeID, records)
+		}()
+	}
+
+	// Check for .dtsh files that appeared after initial sync
+	// If an artifact has HasDtsh=true but was synced without it, trigger incremental sync
+	go sm.checkAndTriggerDtshSync(nodeID, artifacts)
+}
+
+// inferArtifactType determines artifact type from file path
+func inferArtifactType(filePath string) string {
+	if strings.Contains(filePath, "/dvr/") {
+		return "dvr"
+	}
+	return "clip"
+}
+
+// checkAndTriggerDtshSync checks for artifacts that have .dtsh locally but weren't synced with it
+// This catches the race condition where .dtsh is created after the initial sync
+func (sm *StreamStateManager) checkAndTriggerDtshSync(nodeID string, artifacts []*pb.StoredArtifact) {
+	sm.mu.RLock()
+	clipsRepo := sm.repos.Clips
+	dvrRepo := sm.repos.DVR
+	sm.mu.RUnlock()
+
+	if clipsRepo == nil && dvrRepo == nil {
+		return
+	}
+
+	ctx := context.Background()
+
+	for _, artifact := range artifacts {
+		if !artifact.GetHasDtsh() {
+			continue // No .dtsh locally, nothing to sync
+		}
+
+		artifactType := inferArtifactType(artifact.GetFilePath())
+		hash := artifact.GetClipHash()
+
+		var needsSync bool
+
+		if artifactType == "clip" && clipsRepo != nil {
+			// Check if clip is synced but dtsh wasn't included
+			needsSync = clipsRepo.NeedsDtshSync(ctx, hash)
+		} else if artifactType == "dvr" && dvrRepo != nil {
+			// Check if DVR is synced but dtsh wasn't included
+			needsSync = dvrRepo.NeedsDtshSync(ctx, hash)
+		}
+
+		if needsSync {
+			// Trigger incremental .dtsh sync for this artifact
+			go triggerIncrementalDtshSync(nodeID, hash, artifactType, artifact.GetFilePath())
+		}
+	}
+}
+
+// triggerIncrementalDtshSync requests Helmsman to upload just the .dtsh file
+// This is called when .dtsh appeared after the main file was already synced
+func triggerIncrementalDtshSync(nodeID, artifactHash, artifactType, filePath string) {
+	if dtshSyncHandler != nil {
+		dtshSyncHandler(nodeID, artifactHash, artifactType, filePath)
+	}
 }
 
 // RemoveNodeArtifact removes a specific artifact from a node's list
@@ -1098,6 +1303,10 @@ type EnhancedBalancerNodeSnapshot struct {
 	ConfigStreams []string `json:"config_streams"`
 	AddBandwidth  uint64   `json:"add_bandwidth"`
 
+	// Virtual Viewer Tracking
+	PendingRedirects    int    `json:"pending_redirects"`      // Redirects awaiting USER_NEW confirmation
+	EstBandwidthPerUser uint64 `json:"est_bandwidth_per_user"` // Estimated bytes/sec per viewer
+
 	// Raw metrics
 	CPU        float64 `json:"cpu"`
 	RAMMax     float64 `json:"ram_max"`
@@ -1178,7 +1387,7 @@ func (sm *StreamStateManager) GetBalancerSnapshotAtomic() *BalancerSnapshot {
 				Bandwidth:  0, // TODO: Calculate from BytesUp/BytesDown if needed
 				BytesUp:    uint64(inst.BytesUp),
 				BytesDown:  uint64(inst.BytesDown),
-				Replicated: false, // TODO: Detect replication if needed
+				Replicated: inst.Replicated,
 			}
 		}
 	}
@@ -1220,6 +1429,10 @@ func (sm *StreamStateManager) GetBalancerSnapshotAtomic() *BalancerSnapshot {
 			Tags:          append([]string(nil), n.Tags...),
 			ConfigStreams: append([]string(nil), n.ConfigStreams...),
 			AddBandwidth:  n.AddBandwidth,
+
+			// Virtual Viewer Tracking
+			PendingRedirects:    n.PendingRedirects,
+			EstBandwidthPerUser: n.EstBandwidthPerUser,
 
 			// Raw metrics
 			CPU:        n.CPU,
@@ -1398,6 +1611,7 @@ func (sm *StreamStateManager) ConfigurePolicies(cfg PoliciesConfig) {
 	}
 	sm.repos.Clips = cfg.ClipRepo
 	sm.repos.DVR = cfg.DVRRepo
+	sm.repos.Artifacts = cfg.ArtifactRepo
 	sm.nodeRepo = cfg.NodeRepo
 	sm.startReconcilerLocked()
 	sm.mu.Unlock()
@@ -1626,12 +1840,17 @@ func (sm *StreamStateManager) ApplyNodeLifecycle(ctx context.Context, update *pb
 		MaxTranscodes        int
 		CurrentTranscodes    int
 	}{
-		CPU:           float64(update.GetCpuTenths()) / 10.0,
-		RAMMax:        float64(update.GetRamMax()),
-		RAMCurrent:    float64(update.GetRamCurrent()),
-		UpSpeed:       float64(update.GetUpSpeed()),
-		DownSpeed:     float64(update.GetDownSpeed()),
-		BWLimit:       float64(update.GetBwLimit()),
+		CPU:        float64(update.GetCpuTenths()) / 10.0,
+		RAMMax:     float64(update.GetRamMax()),
+		RAMCurrent: float64(update.GetRamCurrent()),
+		UpSpeed:    float64(update.GetUpSpeed()),
+		DownSpeed:  float64(update.GetDownSpeed()),
+		BWLimit: func() float64 {
+			if limit := float64(update.GetBwLimit()); limit > 0 {
+				return limit
+			}
+			return 128 * 1024 * 1024 // Default 1Gbps when not specified
+		}(),
 		CapIngest:     update.GetCapabilities() != nil && update.GetCapabilities().GetIngest(),
 		CapEdge:       update.GetCapabilities() != nil && update.GetCapabilities().GetEdge(),
 		CapStorage:    update.GetCapabilities() != nil && update.GetCapabilities().GetStorage(),
@@ -1720,18 +1939,20 @@ type PoliciesConfig struct {
 	ClipRepo      ClipRepository
 	DVRRepo       DVRRepository
 	NodeRepo      NodeRepository
+	ArtifactRepo  ArtifactRepository
 }
 
 // Records used by repositories
 
 type ClipRecord struct {
-	ClipHash     string
-	TenantID     string
-	InternalName string
-	NodeID       string
-	Status       string
-	StoragePath  string
-	SizeBytes    int64
+	ClipHash        string
+	TenantID        string
+	InternalName    string
+	NodeID          string
+	Status          string
+	StoragePath     string
+	SizeBytes       int64
+	StorageLocation string
 }
 
 type DVRRecord struct {
@@ -1759,6 +1980,8 @@ type ClipRepository interface {
 	ResolveInternalNameByRequestID(ctx context.Context, requestID string) (string, error)
 	UpdateClipProgressByRequestID(ctx context.Context, requestID string, percent uint32) error
 	UpdateClipDoneByRequestID(ctx context.Context, requestID string, status string, storagePath string, sizeBytes int64, errorMsg string) error
+	// NeedsDtshSync returns true if the clip is synced to S3 but .dtsh wasn't included
+	NeedsDtshSync(ctx context.Context, clipHash string) bool
 }
 
 type DVRRepository interface {
@@ -1766,10 +1989,396 @@ type DVRRepository interface {
 	ResolveInternalNameByHash(ctx context.Context, dvrHash string) (string, error)
 	UpdateDVRProgressByHash(ctx context.Context, dvrHash string, status string, sizeBytes int64) error
 	UpdateDVRCompletionByHash(ctx context.Context, dvrHash string, finalStatus string, durationSeconds int64, sizeBytes int64, manifestPath string, errorMsg string) error
+	// NeedsDtshSync returns true if the DVR is synced to S3 but .dtsh files weren't included
+	NeedsDtshSync(ctx context.Context, dvrHash string) bool
 }
 
 type NodeRepository interface {
 	ListAllNodes(ctx context.Context) ([]NodeRecord, error)
 	UpsertNodeOutputs(ctx context.Context, nodeID string, baseURL string, outputsJSON string) error
 	UpsertNodeLifecycle(ctx context.Context, update *pb.NodeLifecycleUpdate) error
+}
+
+// ArtifactRepository handles persistence of artifact registry (clips/DVR on storage nodes)
+type ArtifactRepository interface {
+	// UpsertArtifacts inserts or updates artifacts for a node, and marks stale artifacts as orphaned
+	UpsertArtifacts(ctx context.Context, nodeID string, artifacts []ArtifactRecord) error
+	// DeleteArtifact removes a specific artifact from the registry
+	DeleteArtifact(ctx context.Context, nodeID string, artifactHash string) error
+
+	// Sync tracking methods for dual-storage architecture
+	// GetArtifactSyncInfo retrieves sync status for an artifact (across all nodes)
+	GetArtifactSyncInfo(ctx context.Context, artifactHash string) (*ArtifactSyncInfo, error)
+	// SetSyncStatus updates sync status and S3 URL for an artifact
+	SetSyncStatus(ctx context.Context, artifactHash, status, s3URL string) error
+	// AddCachedNode adds a node to the cached_nodes array for an artifact
+	AddCachedNode(ctx context.Context, artifactHash, nodeID string) error
+	// RemoveCachedNode removes a node from the cached_nodes array
+	RemoveCachedNode(ctx context.Context, artifactHash, nodeID string) error
+	// IsSynced returns true if the artifact is synced to S3
+	IsSynced(ctx context.Context, artifactHash string) (bool, error)
+	// GetArtifactNodes returns all node IDs that have a local copy of the artifact
+	GetArtifactNodes(ctx context.Context, artifactHash string) ([]string, error)
+	// SetCachedAt updates the cached_at timestamp (for warm duration tracking)
+	SetCachedAt(ctx context.Context, artifactHash string) error
+	// GetCachedAt retrieves the cached_at timestamp (Unix ms) for calculating warm duration
+	GetCachedAt(ctx context.Context, artifactHash string) (int64, error)
+}
+
+// ArtifactRecord represents an artifact (clip or DVR) stored on a node
+type ArtifactRecord struct {
+	ArtifactHash string
+	ArtifactType string // "clip" or "dvr"
+	StreamName   string
+	FilePath     string
+	SizeBytes    int64
+	CreatedAt    int64 // Unix timestamp
+	SegmentCount int   // DVR only
+	SegmentBytes int64 // DVR only
+	HasDtsh      bool  // True if .dtsh index file exists locally
+}
+
+// ArtifactSyncInfo represents sync tracking state for an artifact
+type ArtifactSyncInfo struct {
+	ArtifactHash    string
+	ArtifactType    string
+	SyncStatus      string   // pending, in_progress, synced, failed
+	S3URL           string   // S3 location when synced
+	CachedNodes     []string // Node IDs with local copies
+	LastSyncAttempt int64    // Unix timestamp
+	SyncError       string
+	CachedAt        int64 // When asset was last cached locally (Unix timestamp ms)
+}
+
+// =============================================================================
+// Virtual Viewer Lifecycle Methods (Option B: Full Per-Session Tracking)
+// =============================================================================
+
+// CreateVirtualViewer creates a new PENDING virtual viewer when a redirect is issued.
+// Returns the viewer ID for correlation.
+func (sm *StreamStateManager) CreateVirtualViewer(nodeID, streamName, clientIP string) string {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	// Ensure node exists
+	node := sm.nodes[nodeID]
+	if node == nil {
+		node = &NodeState{NodeID: nodeID}
+		sm.nodes[nodeID] = node
+	}
+
+	// Calculate estimated bandwidth for this viewer
+	estBW := sm.calculateEstBandwidthPerUserLocked(node)
+
+	// Create the virtual viewer
+	viewerID := uuid.New().String()
+	viewer := &VirtualViewer{
+		ID:           viewerID,
+		NodeID:       nodeID,
+		StreamName:   streamName,
+		ClientIP:     clientIP,
+		State:        VirtualViewerPending,
+		RedirectTime: time.Now(),
+		EstBandwidth: estBW,
+	}
+
+	// Store in maps
+	sm.virtualViewers[viewerID] = viewer
+	sm.viewersByNode[nodeID] = append(sm.viewersByNode[nodeID], viewerID)
+
+	// Update node's pending count and add bandwidth
+	node.PendingRedirects++
+	node.AddBandwidth += estBW
+
+	// Recompute scores since AddBandwidth changed
+	sm.recomputeNodeScoresLocked(node)
+
+	return viewerID
+}
+
+// ConfirmVirtualViewer transitions a PENDING viewer to ACTIVE when USER_NEW arrives.
+// Matches by (nodeID, streamName, clientIP), oldest PENDING first.
+// Returns true if a matching viewer was found and confirmed.
+func (sm *StreamStateManager) ConfirmVirtualViewer(nodeID, streamName, clientIP string) bool {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	node := sm.nodes[nodeID]
+	if node == nil {
+		return false
+	}
+
+	// Find oldest PENDING viewer matching criteria
+	var matchedViewer *VirtualViewer
+	var oldestTime time.Time
+
+	for _, viewerID := range sm.viewersByNode[nodeID] {
+		viewer := sm.virtualViewers[viewerID]
+		if viewer == nil || viewer.State != VirtualViewerPending {
+			continue
+		}
+		// Match by node, stream, and client IP
+		if viewer.StreamName == streamName && viewer.ClientIP == clientIP {
+			if matchedViewer == nil || viewer.RedirectTime.Before(oldestTime) {
+				matchedViewer = viewer
+				oldestTime = viewer.RedirectTime
+			}
+		}
+	}
+
+	if matchedViewer == nil {
+		// No matching PENDING viewer - this is a direct connection (not redirected by us)
+		return false
+	}
+
+	// Transition to ACTIVE
+	matchedViewer.State = VirtualViewerActive
+	matchedViewer.ConnectTime = time.Now()
+
+	// Decrement pending count and remove bandwidth penalty
+	node.PendingRedirects--
+	if node.PendingRedirects < 0 {
+		node.PendingRedirects = 0
+	}
+	if node.AddBandwidth >= matchedViewer.EstBandwidth {
+		node.AddBandwidth -= matchedViewer.EstBandwidth
+	} else {
+		node.AddBandwidth = 0
+	}
+
+	// Recompute scores
+	sm.recomputeNodeScoresLocked(node)
+
+	return true
+}
+
+// DisconnectVirtualViewer transitions an ACTIVE viewer to DISCONNECTED when USER_END arrives.
+// Matches by (nodeID, streamName, clientIP), oldest ACTIVE first.
+func (sm *StreamStateManager) DisconnectVirtualViewer(nodeID, streamName, clientIP string) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	// Find oldest ACTIVE viewer matching criteria
+	var matchedViewer *VirtualViewer
+	var oldestTime time.Time
+
+	for _, viewerID := range sm.viewersByNode[nodeID] {
+		viewer := sm.virtualViewers[viewerID]
+		if viewer == nil || viewer.State != VirtualViewerActive {
+			continue
+		}
+		if viewer.StreamName == streamName && viewer.ClientIP == clientIP {
+			if matchedViewer == nil || viewer.ConnectTime.Before(oldestTime) {
+				matchedViewer = viewer
+				oldestTime = viewer.ConnectTime
+			}
+		}
+	}
+
+	if matchedViewer != nil {
+		matchedViewer.State = VirtualViewerDisconnected
+		matchedViewer.DisconnectTime = time.Now()
+	}
+
+	// Cleanup old DISCONNECTED viewers (keep for a short retention period)
+	sm.cleanupOldViewersLocked(nodeID, 5*time.Minute)
+}
+
+// ReconcileVirtualViewers is called on NODE_LIFECYCLE_UPDATE to reconcile state with reality.
+// It updates the bandwidth estimate, times out stale PENDING viewers, and recalculates AddBandwidth.
+func (sm *StreamStateManager) ReconcileVirtualViewers(nodeID string, realTotalConnections int, realUpSpeed uint64) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	node := sm.nodes[nodeID]
+	if node == nil {
+		return
+	}
+
+	// 1. Update real metrics (already done by UpdateNodeMetrics, but capture here too)
+	node.UpSpeed = float64(realUpSpeed)
+	node.LastPollTime = time.Now()
+
+	// 2. Update bandwidth estimate for future redirects
+	if realTotalConnections > 0 && realUpSpeed > 0 {
+		node.EstBandwidthPerUser = sm.clampBandwidth(realUpSpeed / uint64(realTotalConnections))
+	}
+
+	// 3. Timeout stale PENDING viewers (>30s old)
+	sm.timeoutStalePendingViewersLocked(nodeID, 30*time.Second)
+
+	// 4. Recalculate AddBandwidth based on remaining pending viewers
+	var totalPendingBW uint64
+	pendingCount := 0
+	for _, viewerID := range sm.viewersByNode[nodeID] {
+		viewer := sm.virtualViewers[viewerID]
+		if viewer != nil && viewer.State == VirtualViewerPending {
+			totalPendingBW += viewer.EstBandwidth
+			pendingCount++
+		}
+	}
+	node.PendingRedirects = pendingCount
+	node.AddBandwidth = totalPendingBW
+
+	// 5. Recompute scores
+	sm.recomputeNodeScoresLocked(node)
+}
+
+// timeoutStalePendingViewersLocked marks old PENDING viewers as ABANDONED (must hold lock)
+func (sm *StreamStateManager) timeoutStalePendingViewersLocked(nodeID string, maxAge time.Duration) {
+	now := time.Now()
+	cutoff := now.Add(-maxAge)
+
+	for _, viewerID := range sm.viewersByNode[nodeID] {
+		viewer := sm.virtualViewers[viewerID]
+		if viewer == nil || viewer.State != VirtualViewerPending {
+			continue
+		}
+		if viewer.RedirectTime.Before(cutoff) {
+			viewer.State = VirtualViewerAbandoned
+			viewer.DisconnectTime = now
+		}
+	}
+}
+
+// cleanupOldViewersLocked removes DISCONNECTED and ABANDONED viewers older than retention (must hold lock)
+func (sm *StreamStateManager) cleanupOldViewersLocked(nodeID string, retention time.Duration) {
+	now := time.Now()
+	cutoff := now.Add(-retention)
+
+	var remainingViewers []string
+	for _, viewerID := range sm.viewersByNode[nodeID] {
+		viewer := sm.virtualViewers[viewerID]
+		if viewer == nil {
+			continue
+		}
+		// Keep if still PENDING or ACTIVE, or if recently completed
+		if viewer.State == VirtualViewerPending || viewer.State == VirtualViewerActive {
+			remainingViewers = append(remainingViewers, viewerID)
+		} else if viewer.DisconnectTime.After(cutoff) {
+			remainingViewers = append(remainingViewers, viewerID)
+		} else {
+			// Remove from main map
+			delete(sm.virtualViewers, viewerID)
+		}
+	}
+	sm.viewersByNode[nodeID] = remainingViewers
+}
+
+// calculateEstBandwidthPerUserLocked estimates per-viewer bandwidth (must hold lock)
+func (sm *StreamStateManager) calculateEstBandwidthPerUserLocked(node *NodeState) uint64 {
+	// Priority 1: Use cached estimate if recent
+	if node.EstBandwidthPerUser > 0 {
+		return node.EstBandwidthPerUser
+	}
+
+	// Priority 2: Calculate from this node's current metrics
+	if node.UpSpeed > 0 {
+		// Count total viewers on this node
+		totalViewers := uint64(0)
+		for _, nodeInstances := range sm.streamInstances {
+			if inst := nodeInstances[node.NodeID]; inst != nil && inst.TotalConnections > 0 {
+				totalViewers += uint64(inst.TotalConnections)
+			}
+		}
+		if totalViewers > 0 {
+			return sm.clampBandwidth(uint64(node.UpSpeed) / totalViewers)
+		}
+	}
+
+	// Priority 3: Use cluster-wide average
+	clusterUp, clusterViewers := sm.getClusterTotalsLocked()
+	if clusterUp > 0 && clusterViewers > 0 {
+		return sm.clampBandwidth(clusterUp / clusterViewers)
+	}
+
+	// Priority 4: Default assumption (1 Mbps)
+	return 131072
+}
+
+// getClusterTotalsLocked returns total upload speed and viewer count across all nodes (must hold lock)
+func (sm *StreamStateManager) getClusterTotalsLocked() (totalUp uint64, totalViewers uint64) {
+	for _, node := range sm.nodes {
+		if node == nil || !node.IsHealthy {
+			continue
+		}
+		totalUp += uint64(node.UpSpeed)
+	}
+	for _, nodeInstances := range sm.streamInstances {
+		for _, inst := range nodeInstances {
+			if inst != nil && inst.TotalConnections > 0 {
+				totalViewers += uint64(inst.TotalConnections)
+			}
+		}
+	}
+	return
+}
+
+// clampBandwidth ensures bandwidth estimate is within reasonable bounds
+func (sm *StreamStateManager) clampBandwidth(bw uint64) uint64 {
+	const minBW = 64 * 1024   // 0.5 Mbps (64 KB/s)
+	const maxBW = 1024 * 1024 // 8 Mbps (1 MB/s)
+	if bw < minBW {
+		return minBW
+	}
+	if bw > maxBW {
+		return maxBW
+	}
+	return bw
+}
+
+// GetVirtualViewerStats returns statistics about virtual viewers for observability
+func (sm *StreamStateManager) GetVirtualViewerStats() map[string]interface{} {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
+	stats := map[string]interface{}{
+		"total_viewers": len(sm.virtualViewers),
+	}
+
+	// Count by state
+	pending, active, abandoned, disconnected := 0, 0, 0, 0
+	for _, viewer := range sm.virtualViewers {
+		switch viewer.State {
+		case VirtualViewerPending:
+			pending++
+		case VirtualViewerActive:
+			active++
+		case VirtualViewerAbandoned:
+			abandoned++
+		case VirtualViewerDisconnected:
+			disconnected++
+		}
+	}
+	stats["pending"] = pending
+	stats["active"] = active
+	stats["abandoned"] = abandoned
+	stats["disconnected"] = disconnected
+
+	// Per-node pending counts
+	nodeStats := make(map[string]int)
+	for nodeID, node := range sm.nodes {
+		if node != nil {
+			nodeStats[nodeID] = node.PendingRedirects
+		}
+	}
+	stats["pending_by_node"] = nodeStats
+
+	return stats
+}
+
+// GetVirtualViewersForNode returns all virtual viewers for a specific node
+func (sm *StreamStateManager) GetVirtualViewersForNode(nodeID string) []*VirtualViewer {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
+	var viewers []*VirtualViewer
+	for _, viewerID := range sm.viewersByNode[nodeID] {
+		if viewer := sm.virtualViewers[viewerID]; viewer != nil {
+			// Return a copy
+			viewerCopy := *viewer
+			viewers = append(viewers, &viewerCopy)
+		}
+	}
+	return viewers
 }

@@ -40,10 +40,28 @@ service DVRControlService {
   rpc ListDVRRecordings(shared.ListDVRRecordingsRequest) returns (shared.ListDVRRecordingsResponse);
 }
 
-// ViewerControlService handles viewer endpoint resolution
+// ViewerControlService handles viewer and ingest endpoint resolution
 service ViewerControlService {
   // ResolveViewerEndpoint resolves the best endpoint(s) for a viewer
   rpc ResolveViewerEndpoint(shared.ViewerEndpointRequest) returns (shared.ViewerEndpointResponse);
+  // ResolveIngestEndpoint resolves the best endpoint(s) for StreamCrafter ingest
+  rpc ResolveIngestEndpoint(shared.IngestEndpointRequest) returns (shared.IngestEndpointResponse);
   // GetStreamMeta returns MistServer JSON meta for a stream
   rpc GetStreamMeta(shared.StreamMetaRequest) returns (shared.StreamMetaResponse);
+}
+
+// VodControlService handles VOD upload management (user-initiated video uploads)
+service VodControlService {
+  // CreateVodUpload initiates a multipart upload and returns presigned URLs
+  rpc CreateVodUpload(shared.CreateVodUploadRequest) returns (shared.CreateVodUploadResponse);
+  // CompleteVodUpload finalizes the multipart upload after all parts are uploaded
+  rpc CompleteVodUpload(shared.CompleteVodUploadRequest) returns (shared.CompleteVodUploadResponse);
+  // AbortVodUpload cancels an in-progress multipart upload
+  rpc AbortVodUpload(shared.AbortVodUploadRequest) returns (shared.AbortVodUploadResponse);
+  // GetVodAsset returns a single VOD asset by hash
+  rpc GetVodAsset(shared.GetVodAssetRequest) returns (shared.VodAssetInfo);
+  // ListVodAssets returns paginated list of VOD assets for a tenant
+  rpc ListVodAssets(shared.ListVodAssetsRequest) returns (shared.ListVodAssetsResponse);
+  // DeleteVodAsset deletes a VOD asset
+  rpc DeleteVodAsset(shared.DeleteVodAssetRequest) returns (shared.DeleteVodAssetResponse);
 }

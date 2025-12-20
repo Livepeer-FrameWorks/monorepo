@@ -1,3 +1,4 @@
+# Regenerate a new stream key for a stream
 mutation RefreshStreamKey($id: ID!) {
   refreshStreamKey(id: $id) {
     __typename

@@ -1,3 +1,4 @@
+# Validate stream key and return validation status with error details if invalid
 query ValidateStreamKey($streamKey: String!) {
   validateStreamKey(streamKey: $streamKey) {
     status

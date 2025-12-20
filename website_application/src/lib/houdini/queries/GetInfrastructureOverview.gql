@@ -1,3 +1,5 @@
+# Fetch complete infrastructure overview including tenant, clusters, nodes, and node metrics
+# Comprehensive query for infrastructure dashboard with resource utilization data
 query GetInfrastructureOverview(
   $timeRange: TimeRangeInput
   $first: Int = 100
@@ -9,62 +11,66 @@ query GetInfrastructureOverview(
     cluster
     createdAt
   }
-
-  clusters {
-    id
-    clusterId
-    clusterName
-    healthStatus
-    isDefaultCluster
-    isSubscribed
-    createdAt
-    nodes {
-      id
-      nodeName
-      clusterId
-      nodeType
-      status
-      region
-      externalIp
-      internalIp
-      wireguardIp
-      availabilityZone
-      cpuCores
-      memoryGb
-      diskGb
-      lastHeartbeat
-      createdAt
-      latitude
-      longitude
+  clustersConnection(first: 50) {
+    edges {
+      cursor
+      node {
+        id
+        clusterId
+        clusterName
+        clusterType
+        deploymentModel
+        baseUrl
+        databaseUrl
+        periscopeUrl
+        kafkaBrokers
+        maxConcurrentStreams
+        maxConcurrentViewers
+        maxBandwidthMbps
+        currentStreamCount
+        currentViewerCount
+        currentBandwidthMbps
+        healthStatus
+        isActive
+        isDefaultCluster
+        isSubscribed
+        createdAt
+        updatedAt
+        ownerTenantId
+        visibility
+        pricingModel
+        monthlyPriceCents
+        requiredBillingTier
+        requiresApproval
+        shortDescription
+        longDescription
+        isPlatformCluster
+      }
     }
+    pageInfo {
+      ...PageInfoFields
+    }
+    totalCount
   }
-
-  nodes {
-    id
-    nodeName
-    clusterId
-    nodeType
-    status
-    region
-    externalIp
-    internalIp
-    wireguardIp
-    availabilityZone
-    cpuCores
-    memoryGb
-    diskGb
-    lastHeartbeat
-    createdAt
-    latitude
-    longitude
+  nodesConnection(first: 50) {
+    edges {
+      cursor
+      node {
+        ...NodeCoreFields
+      }
+    }
+    pageInfo {
+      ...PageInfoFields
+    }
+    totalCount
   }
-
   nodeMetrics1hConnection(
     timeRange: $timeRange
     first: $first
     noCache: $noCache
   ) {
     edges {
+      cursor
       node {
         timestamp
         nodeId
@@ -82,8 +88,7 @@ query GetInfrastructureOverview(
       }
     }
     pageInfo {
-      hasNextPage
-      endCursor
+      ...PageInfoFields
     }
     totalCount
   }

@@ -164,8 +164,8 @@ func (sm *SubscriptionManager) GetOrCreateConnection(ctx context.Context, config
 }
 
 // SubscribeToStreams subscribes to stream events and returns a channel of updates
-// Returns proto.StreamEvent directly (bound to GraphQL StreamEvent)
-func (sm *SubscriptionManager) SubscribeToStreams(ctx context.Context, config ConnectionConfig, streamID *string) (<-chan *pb.StreamEvent, error) {
+// Returns model.StreamSubscriptionEvent with direct proto payloads (StreamLifecycleUpdate or StreamEndTrigger)
+func (sm *SubscriptionManager) SubscribeToStreams(ctx context.Context, config ConnectionConfig, streamID *string) (<-chan *model.StreamSubscriptionEvent, error) {
 	client, err := sm.GetOrCreateConnection(ctx, config)
 	if err != nil {
 		return nil, err
@@ -175,7 +175,7 @@ func (sm *SubscriptionManager) SubscribeToStreams(ctx context.Context, config Co
 		return nil, fmt.Errorf("failed to subscribe to streams: %w", err)
 	}
 
-	updates := make(chan *pb.StreamEvent, 10)
+	updates := make(chan *model.StreamSubscriptionEvent, 10)
 	go sm.processStreamMessages(ctx, client, updates, streamID)
 	return updates, nil
 }
@@ -261,6 +261,22 @@ func (sm *SubscriptionManager) SubscribeToDVRLifecycle(ctx context.Context, conf
 	return updates, nil
 }
 
+// SubscribeToVodLifecycle subscribes to VOD lifecycle events and returns a channel
+// Returns proto.VodLifecycleData directly (bound via gqlgen.yml)
+func (sm *SubscriptionManager) SubscribeToVodLifecycle(ctx context.Context, config ConnectionConfig) (<-chan *pb.VodLifecycleData, error) {
+	client, err := sm.GetOrCreateConnection(ctx, config)
+	if err != nil {
+		return nil, err
+	}
+	// VOD events are likely on STREAMS channel (similar to Clips)
+	if err := client.SubscribeToStreams(); err != nil {
+		return nil, fmt.Errorf("failed to subscribe to VOD lifecycle: %w", err)
+	}
+	updates := make(chan *pb.VodLifecycleData, 10)
+	go sm.processVodLifecycleMessages(ctx, client, updates)
+	return updates, nil
+}
+
 // SubscribeToFirehose subscribes to ALL events (streams, analytics, system) and returns a unified channel
 func (sm *SubscriptionManager) SubscribeToFirehose(ctx context.Context, config ConnectionConfig) (<-chan *model.TenantEvent, error) {
 	client, err := sm.GetOrCreateConnection(ctx, config)
@@ -313,7 +329,8 @@ func (sm *SubscriptionManager) processFirehoseMessages(ctx context.Context, clie
 }
 
 // convertProtoToTenantEvent converts any Signalman proto event to a unified TenantEvent
-// Passes proto types directly - they're bound via gqlgen.yml
+// Uses proto enum strings for event type (e.g., EVENT_TYPE_STREAM_LIFECYCLE_UPDATE)
+// Passes proto types directly where possible via gqlgen.yml bindings
 func (sm *SubscriptionManager) convertProtoToTenantEvent(event *pb.SignalmanEvent) *model.TenantEvent {
 	if event == nil {
 		return nil
@@ -324,7 +341,8 @@ func (sm *SubscriptionManager) convertProtoToTenantEvent(event *pb.SignalmanEven
 		timestamp = event.Timestamp.AsTime()
 	}
 
-	eventType := protoEventTypeToString(event.EventType)
+	// Use proto enum string directly (EVENT_TYPE_STREAM_LIFECYCLE_UPDATE, etc.)
+	eventType := event.EventType.String()
 	channel := sm.getChannelForEventType(event.EventType)
 
 	tenantEvent := &model.TenantEvent{
@@ -338,34 +356,57 @@ func (sm *SubscriptionManager) convertProtoToTenantEvent(event *pb.SignalmanEven
 	}
 
 	// Populate the appropriate event type based on the channel/event type
-	// Pass proto types directly - they're bound via gqlgen.yml
-	switch {
-	case sm.isStreamEvent(event.EventType):
-		tenantEvent.StreamEvent = sm.extractStreamEvent(event)
+	// Pass proto types directly where possible via gqlgen.yml bindings
+	switch event.EventType {
+	case pb.EventType_EVENT_TYPE_STREAM_LIFECYCLE_UPDATE:
+		// Create StreamSubscriptionEvent with direct proto payload
+		tenantEvent.StreamEvent = &model.StreamSubscriptionEvent{
+			EventType:       eventType,
+			Timestamp:       timestamp,
+			LifecycleUpdate: event.Data.GetStreamLifecycle(),
+		}
 
-	case event.EventType == pb.EventType_EVENT_TYPE_VIEWER_CONNECT ||
-		event.EventType == pb.EventType_EVENT_TYPE_VIEWER_DISCONNECT ||
-		event.EventType == pb.EventType_EVENT_TYPE_CLIENT_LIFECYCLE_UPDATE:
+	case pb.EventType_EVENT_TYPE_STREAM_END:
+		// Create StreamSubscriptionEvent with direct proto payload
+		tenantEvent.StreamEvent = &model.StreamSubscriptionEvent{
+			EventType: eventType,
+			Timestamp: timestamp,
+			EndEvent:  event.Data.GetStreamEnd(),
+		}
+
+	case pb.EventType_EVENT_TYPE_STREAM_BUFFER:
+		// Create StreamSubscriptionEvent with rich health data (jitter, buffer depth, issues)
+		tenantEvent.StreamEvent = &model.StreamSubscriptionEvent{
+			EventType:   eventType,
+			Timestamp:   timestamp,
+			BufferEvent: event.Data.GetStreamBuffer(),
+		}
+
+	case pb.EventType_EVENT_TYPE_VIEWER_CONNECT,
+		pb.EventType_EVENT_TYPE_VIEWER_DISCONNECT,
+		pb.EventType_EVENT_TYPE_CLIENT_LIFECYCLE_UPDATE:
 		// Pass proto ClientLifecycleUpdate directly (bound to ViewerMetrics)
 		tenantEvent.ViewerMetrics = event.Data.GetClientLifecycle()
 
-	case event.EventType == pb.EventType_EVENT_TYPE_STREAM_TRACK_LIST:
+	case pb.EventType_EVENT_TYPE_STREAM_TRACK_LIST:
 		// Pass proto StreamTrackListTrigger directly (bound to TrackListUpdate)
 		tenantEvent.TrackListUpdate = event.Data.GetTrackList()
 
-	case event.EventType == pb.EventType_EVENT_TYPE_CLIP_LIFECYCLE:
+	case pb.EventType_EVENT_TYPE_CLIP_LIFECYCLE:
 		// Pass proto ClipLifecycleData directly (bound to ClipLifecycle)
 		tenantEvent.ClipLifecycle = event.Data.GetClipLifecycle()
 
-	case event.EventType == pb.EventType_EVENT_TYPE_DVR_LIFECYCLE:
-		// DVR lifecycle - pass DVRLifecycleData
-		// Note: GraphQL dvrLifecycle subscription returns ClipEvent, but the types are different
-		// For firehose we could add a separate DVREvent field if needed
+	case pb.EventType_EVENT_TYPE_DVR_LIFECYCLE:
+		// Pass proto DVRLifecycleData directly (bound to DVREvent)
 		tenantEvent.DvrEvent = event.Data.GetDvrLifecycle()
 
-	case event.EventType == pb.EventType_EVENT_TYPE_NODE_LIFECYCLE_UPDATE:
+	case pb.EventType_EVENT_TYPE_NODE_LIFECYCLE_UPDATE:
 		// Pass proto NodeLifecycleUpdate directly (bound to SystemHealthEvent)
 		tenantEvent.SystemHealthEvent = event.Data.GetNodeLifecycle()
+
+	case pb.EventType_EVENT_TYPE_VOD_LIFECYCLE:
+		// Pass proto VodLifecycleData directly (bound via gqlgen.yml)
+		tenantEvent.VodLifecycle = event.Data.GetVodLifecycle()
 	}
 
 	return tenantEvent
@@ -379,7 +420,8 @@ func (sm *SubscriptionManager) getChannelForEventType(eventType pb.EventType) st
 		pb.EventType_EVENT_TYPE_STREAM_BUFFER,
 		pb.EventType_EVENT_TYPE_STREAM_END,
 		pb.EventType_EVENT_TYPE_STREAM_SOURCE,
-		pb.EventType_EVENT_TYPE_PLAY_REWRITE:
+		pb.EventType_EVENT_TYPE_PLAY_REWRITE,
+		pb.EventType_EVENT_TYPE_VOD_LIFECYCLE:
 		return "STREAMS"
 
 	case pb.EventType_EVENT_TYPE_NODE_LIFECYCLE_UPDATE,
@@ -392,8 +434,8 @@ func (sm *SubscriptionManager) getChannelForEventType(eventType pb.EventType) st
 }
 
 // processStreamMessages processes stream messages from Signalman gRPC
-// Passes proto.StreamEvent directly without conversion
-func (sm *SubscriptionManager) processStreamMessages(ctx context.Context, client *signalmanclient.GRPCClient, output chan<- *pb.StreamEvent, streamID *string) {
+// Passes proto payloads directly via model.StreamSubscriptionEvent (no lossy conversion)
+func (sm *SubscriptionManager) processStreamMessages(ctx context.Context, client *signalmanclient.GRPCClient, output chan<- *model.StreamSubscriptionEvent, streamID *string) {
 	defer close(output)
 
 	events := client.Events()
@@ -406,8 +448,10 @@ func (sm *SubscriptionManager) processStreamMessages(ctx context.Context, client
 				return
 			}
 
-			// Filter by event type
-			if !sm.isStreamEvent(event.EventType) {
+			// Filter by event type - handle lifecycle, end, and buffer events
+			if event.EventType != pb.EventType_EVENT_TYPE_STREAM_LIFECYCLE_UPDATE &&
+				event.EventType != pb.EventType_EVENT_TYPE_STREAM_END &&
+				event.EventType != pb.EventType_EVENT_TYPE_STREAM_BUFFER {
 				continue
 			}
 
@@ -419,12 +463,36 @@ func (sm *SubscriptionManager) processStreamMessages(ctx context.Context, client
 				}
 			}
 
-			if update := sm.extractStreamEvent(event); update != nil {
-				select {
-				case output <- update:
-				case <-ctx.Done():
-					return
+			// Get timestamp from event
+			timestamp := time.Now()
+			if event.Timestamp != nil {
+				timestamp = event.Timestamp.AsTime()
+			}
+
+			// Create StreamSubscriptionEvent with direct proto payload (no lossy transformation)
+			update := &model.StreamSubscriptionEvent{
+				EventType: event.EventType.String(), // Proto enum string (EVENT_TYPE_STREAM_LIFECYCLE_UPDATE)
+				Timestamp: timestamp,
+			}
+
+			// Populate the appropriate payload field - direct proto passthrough
+			if event.Data != nil {
+				switch event.EventType {
+				case pb.EventType_EVENT_TYPE_STREAM_LIFECYCLE_UPDATE:
+					// Now available: Signalman forwards StreamLifecycleUpdate from Kafka
+					update.LifecycleUpdate = event.Data.GetStreamLifecycle()
+				case pb.EventType_EVENT_TYPE_STREAM_END:
+					update.EndEvent = event.Data.GetStreamEnd()
+				case pb.EventType_EVENT_TYPE_STREAM_BUFFER:
+					// Rich health diagnostics: jitter, buffer depth, issues
+					update.BufferEvent = event.Data.GetStreamBuffer()
 				}
+			}
+
+			select {
+			case output <- update:
+			case <-ctx.Done():
+				return
 			}
 		}
 	}
@@ -614,6 +682,42 @@ func (sm *SubscriptionManager) processDVRLifecycleMessages(ctx context.Context, 
 		}
 	}
 }
+
+// processVodLifecycleMessages processes VOD lifecycle messages from Signalman gRPC
+// Passes proto.VodLifecycleData directly (bound via gqlgen.yml, no conversion needed)
+func (sm *SubscriptionManager) processVodLifecycleMessages(ctx context.Context, client *signalmanclient.GRPCClient, output chan<- *pb.VodLifecycleData) {
+	defer close(output)
+
+	events := client.Events()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case event, ok := <-events:
+			if !ok {
+				return
+			}
+
+			// Filter for VOD lifecycle events
+			if event.EventType != pb.EventType_EVENT_TYPE_VOD_LIFECYCLE {
+				continue
+			}
+
+			// Pass proto directly - no conversion needed (bound via gqlgen.yml)
+			if event.Data != nil {
+				if vod := event.Data.GetVodLifecycle(); vod != nil {
+					select {
+					case output <- vod:
+					case <-ctx.Done():
+						return
+					}
+				}
+			}
+		}
+	}
+}
+
+// DELETED: convertVodLifecycle - no longer needed, proto bound directly via gqlgen.yml
 
 // extractClientLifecycle extracts ClientLifecycleUpdate from a Signalman event
 // Returns nil if event is not a viewer/client lifecycle event
@@ -812,11 +916,14 @@ func getStreamIDFromProtoEvent(event *pb.SignalmanEvent) string {
 	if se := event.Data.GetStreamEnd(); se != nil {
 		return se.StreamName
 	}
-	if sb := event.Data.GetStreamBandwidth(); sb != nil {
-		return sb.StreamName
-	}
 	if rec := event.Data.GetRecording(); rec != nil {
 		return rec.StreamName
+	}
+	if buf := event.Data.GetStreamBuffer(); buf != nil {
+		return buf.StreamName
+	}
+	if sl := event.Data.GetStreamLifecycle(); sl != nil {
+		return sl.InternalName
 	}
 	return ""
 }
@@ -836,29 +943,7 @@ func (sm *SubscriptionManager) isStreamEvent(eventType pb.EventType) bool {
 	}
 }
 
-// extractStreamEvent extracts and constructs a proto.StreamEvent from a Signalman event
-func (sm *SubscriptionManager) extractStreamEvent(event *pb.SignalmanEvent) *pb.StreamEvent {
-	streamID := getStreamIDFromProtoEvent(event)
-	status := ""
-
-	switch event.EventType {
-	case pb.EventType_EVENT_TYPE_STREAM_LIFECYCLE_UPDATE:
-		status = "LIVE"
-	case pb.EventType_EVENT_TYPE_STREAM_END:
-		status = "ENDED"
-	case pb.EventType_EVENT_TYPE_STREAM_BUFFER, pb.EventType_EVENT_TYPE_STREAM_TRACK_LIST:
-		status = "LIVE"
-	default:
-		return nil
-	}
-
-	return &pb.StreamEvent{
-		Timestamp:    event.Timestamp,
-		EventType:    protoEventTypeToString(event.EventType),
-		Status:       status,
-		InternalName: streamID,
-	}
-}
+// DELETED: extractStreamEvent - no longer needed, proto payloads passed directly via model.StreamSubscriptionEvent
 
 // extractClipLifecycle extracts ClipLifecycleData from a Signalman event
 // Returns nil if event is not a clip lifecycle event
@@ -884,68 +969,5 @@ func (sm *SubscriptionManager) extractDvrLifecycle(event *pb.SignalmanEvent) *pb
 	return event.Data.GetDvrLifecycle()
 }
 
-// protoEventTypeToString converts proto EventType to string for backward compatibility
-func protoEventTypeToString(et pb.EventType) string {
-	switch et {
-	case pb.EventType_EVENT_TYPE_STREAM_LIFECYCLE_UPDATE:
-		return "stream_lifecycle_update"
-	case pb.EventType_EVENT_TYPE_STREAM_TRACK_LIST:
-		return "stream_track_list"
-	case pb.EventType_EVENT_TYPE_STREAM_BUFFER:
-		return "stream_buffer"
-	case pb.EventType_EVENT_TYPE_STREAM_END:
-		return "stream_end"
-	case pb.EventType_EVENT_TYPE_STREAM_SOURCE:
-		return "stream_source"
-	case pb.EventType_EVENT_TYPE_PLAY_REWRITE:
-		return "play_rewrite"
-	case pb.EventType_EVENT_TYPE_NODE_LIFECYCLE_UPDATE:
-		return "node_lifecycle_update"
-	case pb.EventType_EVENT_TYPE_LOAD_BALANCING:
-		return "load_balancing"
-	case pb.EventType_EVENT_TYPE_VIEWER_CONNECT:
-		return "viewer_connect"
-	case pb.EventType_EVENT_TYPE_VIEWER_DISCONNECT:
-		return "viewer_disconnect"
-	case pb.EventType_EVENT_TYPE_CLIENT_LIFECYCLE_UPDATE:
-		return "client_lifecycle_update"
-	case pb.EventType_EVENT_TYPE_CLIP_LIFECYCLE:
-		return "clip_lifecycle"
-	case pb.EventType_EVENT_TYPE_DVR_LIFECYCLE:
-		return "dvr_lifecycle"
-	case pb.EventType_EVENT_TYPE_PUSH_REWRITE:
-		return "push_rewrite"
-	case pb.EventType_EVENT_TYPE_PUSH_OUT_START:
-		return "push_out_start"
-	case pb.EventType_EVENT_TYPE_PUSH_END:
-		return "push_end"
-	case pb.EventType_EVENT_TYPE_STREAM_BANDWIDTH:
-		return "stream_bandwidth"
-	case pb.EventType_EVENT_TYPE_RECORDING_COMPLETE:
-		return "recording_complete"
-	default:
-		return "unknown"
-	}
-}
-
-func int64PtrFrom(v *int64) *int64 {
-	if v == nil {
-		return nil
-	}
-	x := *v
-	return &x
-}
-func uint32PtrFrom(v *uint32) *uint32 {
-	if v == nil {
-		return nil
-	}
-	x := *v
-	return &x
-}
-func uint64PtrFrom(v *uint64) *uint64 {
-	if v == nil {
-		return nil
-	}
-	x := *v
-	return &x
-}
+// DELETED: protoEventTypeToString - now using event.EventType.String() directly for proto enum names
+// DELETED: int64PtrFrom, uint32PtrFrom, uint64PtrFrom - no longer needed with direct proto passthrough

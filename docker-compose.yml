@@ -43,6 +43,7 @@ services:
       WS_MAX_CONNECTIONS_PER_TENANT: ${WS_MAX_CONNECTIONS_PER_TENANT}
       JWT_SECRET: ${JWT_SECRET}
       SERVICE_TOKEN: ${SERVICE_TOKEN}
+      CLUSTER_ID: ${CLUSTER_ID}
     ports:
       - "18000:18000"
     depends_on:
@@ -122,6 +123,12 @@ services:
   # Note: MistServer requires significant shared memory for holding stream buffers.
   mistserver:
     image: livepeerframeworks/mistserver:latest
+    # build:
+    #   context: ../mistserver
+    #   dockerfile: Dockerfile.mistserver
+    #   args:
+    #   - VERSION=local-dev
+    #   - DEBUG=4
     container_name: frameworks-mistserver
     platform: linux/amd64
     shm_size: '2gb'  # Allocate 2GB of shared memory for MistServer
@@ -134,8 +141,6 @@ services:
       - "8889:8889/udp"   # TS-SRT
       - "18203:18203/udp" # WebRTC
     volumes:
-      # TODO: Make this read-only once initial configuration is stable
-      # Currently writable as we're actively developing/testing configs
       - ./infrastructure/mistserver.conf:/etc/mistserver.conf
       - mistserver_data:/var/lib/mistserver
       # Demo recordings for dev environment (clips & DVR artifacts)
@@ -202,6 +207,7 @@ services:
       GEO_WEIGHT: ${GEO_WEIGHT}
       STREAM_BONUS: ${STREAM_BONUS}
       SERVICE_TOKEN: ${SERVICE_TOKEN}
+      CLUSTER_ID: ${CLUSTER_ID}
     ports:
       - "18008:18008"
       - "18019:18019"
@@ -362,6 +368,7 @@ services:
       LOG_LEVEL: ${LOG_LEVEL}
       JWT_SECRET: ${JWT_SECRET}
       SERVICE_TOKEN: ${SERVICE_TOKEN}
+      CLUSTER_ID: ${CLUSTER_ID}
     depends_on:
       postgres:
         condition: service_healthy
@@ -405,6 +412,7 @@ services:
       DECKLOG_METRICS_PORT: ${DECKLOG_METRICS_PORT}
       QUARTERMASTER_URL: ${QUARTERMASTER_URL}
       SERVICE_TOKEN: ${SERVICE_TOKEN}
+      CLUSTER_ID: ${CLUSTER_ID}
     ports:
       - "18006:18006"
       - "18026:18026"
@@ -431,7 +439,7 @@ services:
       retries: 3
       start_period: 15s
 
-  # Signalman - WebSocket Hub Service  
+  # Signalman - WebSocket Hub Service
   signalman:
     <<: *default-env
     container_name: frameworks-signalman
@@ -445,7 +453,7 @@ services:
       kafka:
         condition: service_healthy
       quartermaster:
-        condition: service_started
+        condition: service_healthy
     environment:
       PORT: ${SIGNALMAN_PORT}
       GRPC_PORT: ${SIGNALMAN_GRPC_PORT}
@@ -459,6 +467,7 @@ services:
       REGION: ${REGION}
       JWT_SECRET: ${JWT_SECRET}
       SERVICE_TOKEN: ${SERVICE_TOKEN}
+      CLUSTER_ID: ${CLUSTER_ID}
     ports:
       - "18009:18009"
       - "19005:19005"
@@ -499,6 +508,7 @@ services:
       WEBAPP_PUBLIC_URL: ${WEBAPP_PUBLIC_URL}
       SERVICE_TOKEN: ${SERVICE_TOKEN}
       TURNSTILE_AUTH_SECRET_KEY: ${TURNSTILE_AUTH_SECRET_KEY}
+      CLUSTER_ID: ${CLUSTER_ID}
     ports:
       - "18001:18001"   # HTTP (auth, webhooks, health)
       - "19001:19001"   # gRPC (internal)
@@ -506,7 +516,7 @@ services:
       postgres:
         condition: service_healthy
       quartermaster:
-        condition: service_started
+        condition: service_healthy
     networks:
       - frameworks
     mem_limit: 512m
@@ -535,7 +545,7 @@ services:
       HELMSMAN_WEBHOOK_URL: ${HELMSMAN_WEBHOOK_URL}
       FOGHORN_URL: ${FOGHORN_URL}
       FOGHORN_CONTROL_ADDR: ${FOGHORN_CONTROL_ADDR}
-      EDGE_PUBLIC_HOSTNAME: ${EDGE_PUBLIC_HOSTNAME}
+      EDGE_PUBLIC_URL: ${EDGE_PUBLIC_URL}
       MISTSERVER_URL: ${MISTSERVER_URL}
       MIST_PASSWORD: ${MIST_PASSWORD}
       MIST_API_USERNAME: ${MIST_API_USERNAME}
@@ -547,10 +557,10 @@ services:
       GRPC_USE_TLS: ${HELMSMAN_GRPC_USE_TLS}
       GRPC_TLS_CERT_PATH: ${HELMSMAN_GRPC_TLS_CERT_PATH}
       GRPC_TLS_KEY_PATH: ${HELMSMAN_GRPC_TLS_KEY_PATH}
-      HELMSMAN_STORAGE_LOCAL_PATH: /recordings
+      HELMSMAN_STORAGE_LOCAL_PATH: /var/lib/mistserver/recordings
     volumes:
       - ./infrastructure/edge/machine-id:/etc/machine-id:ro
-      - ./infrastructure/demo-recordings:/recordings
+      - ./infrastructure/demo-recordings:/var/lib/mistserver/recordings
     depends_on:
       commodore:
         condition: service_started
@@ -605,6 +615,7 @@ services:
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
       QUARTERMASTER_URL: ${QUARTERMASTER_URL}
       SERVICE_TOKEN: ${SERVICE_TOKEN}
+      CLUSTER_ID: ${CLUSTER_ID}
     depends_on:
       postgres:
         condition: service_healthy
@@ -658,6 +669,7 @@ services:
       CLICKHOUSE_DB: ${CLICKHOUSE_DB}
       CLICKHOUSE_USER: ${CLICKHOUSE_USER}
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+      CLUSTER_ID: ${CLUSTER_ID}
     depends_on:
       postgres:
         condition: service_healthy
@@ -710,6 +722,7 @@ services:
       JWT_SECRET: ${JWT_SECRET}
       SERVICE_TOKEN: ${SERVICE_TOKEN}
       QUARTERMASTER_GRPC_ADDR: ${QUARTERMASTER_GRPC_ADDR}
+      CLUSTER_ID: ${CLUSTER_ID}
       # Optional: Crypto payment providers (uncomment when needed)
       # - MOLLIE_API_KEY=${MOLLIE_API_KEY}
       # - ETHERSCAN_API_KEY=${ETHERSCAN_API_KEY}
@@ -803,6 +816,7 @@ services:
         - VITE_GRAPHQL_HTTP_URL=${VITE_GRAPHQL_HTTP_URL}
         - VITE_GRAPHQL_WS_URL=${VITE_GRAPHQL_WS_URL}
         - VITE_STREAMING_INGEST_URL=${VITE_STREAMING_INGEST_URL}
+        - VITE_STREAMING_PLAY_URL=${VITE_STREAMING_PLAY_URL}
         - VITE_STREAMING_EDGE_URL=${VITE_STREAMING_EDGE_URL}
         - VITE_STREAMING_RTMP_PORT=${VITE_STREAMING_RTMP_PORT}
         - VITE_STREAMING_SRT_PORT=${VITE_STREAMING_SRT_PORT}
@@ -953,7 +967,7 @@ services:
       website:
         condition: service_started
       quartermaster:
-        condition: service_started
+        condition: service_healthy
     networks:
       - frameworks
     mem_limit: 256m

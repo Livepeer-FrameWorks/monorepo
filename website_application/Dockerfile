@@ -9,6 +9,7 @@ ARG VITE_AUTH_URL
 ARG VITE_GRAPHQL_HTTP_URL
 ARG VITE_GRAPHQL_WS_URL
 ARG VITE_STREAMING_INGEST_URL
+ARG VITE_STREAMING_PLAY_URL
 ARG VITE_STREAMING_EDGE_URL
 ARG VITE_STREAMING_RTMP_PORT
 ARG VITE_STREAMING_SRT_PORT
@@ -25,6 +26,7 @@ ENV VITE_AUTH_URL=${VITE_AUTH_URL}
 ENV VITE_GRAPHQL_HTTP_URL=${VITE_GRAPHQL_HTTP_URL}
 ENV VITE_GRAPHQL_WS_URL=${VITE_GRAPHQL_WS_URL}
 ENV VITE_STREAMING_INGEST_URL=${VITE_STREAMING_INGEST_URL}
+ENV VITE_STREAMING_PLAY_URL=${VITE_STREAMING_PLAY_URL}
 ENV VITE_STREAMING_EDGE_URL=${VITE_STREAMING_EDGE_URL}
 ENV VITE_STREAMING_RTMP_PORT=${VITE_STREAMING_RTMP_PORT}
 ENV VITE_STREAMING_SRT_PORT=${VITE_STREAMING_SRT_PORT}
@@ -44,7 +46,19 @@ RUN apk add --no-cache git ca-certificates tzdata \
 
 # workspace manifests
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+
+# npm_player workspace packages
 COPY npm_player/package.json npm_player/
+COPY npm_player/packages/core/package.json npm_player/packages/core/
+COPY npm_player/packages/svelte/package.json npm_player/packages/svelte/
+COPY npm_player/packages/react/package.json npm_player/packages/react/
+
+# npm_studio workspace packages
+COPY npm_studio/package.json npm_studio/
+COPY npm_studio/packages/core/package.json npm_studio/packages/core/
+COPY npm_studio/packages/svelte/package.json npm_studio/packages/svelte/
+COPY npm_studio/packages/react/package.json npm_studio/packages/react/
+
 COPY website_application/package.json website_application/
 
 # install deps for the dashboard workspace
@@ -57,6 +71,7 @@ RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store \
 
 # copy sources
 COPY npm_player/ npm_player/
+COPY npm_studio/ npm_studio/
 COPY website_application/ website_application/
 
 # copy GraphQL schema for Houdini codegen
@@ -79,10 +94,12 @@ WORKDIR /app
 # copy workspace manifests and pruned node_modules
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY npm_player/package.json npm_player/
+COPY npm_studio/package.json npm_studio/
 COPY website_application/package.json website_application/
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/website_application/node_modules ./website_application/node_modules
 COPY --from=builder /app/npm_player ./npm_player
+COPY --from=builder /app/npm_studio ./npm_studio
 
 # copy build artifacts
 COPY --from=builder /app/website_application/build ./website_application/build

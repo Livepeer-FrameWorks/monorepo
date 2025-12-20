@@ -1,3 +1,4 @@
+# Fetch paginated list of clusters with core configuration and capacity metrics
 query GetClustersConnection($first: Int = 50, $after: String) {
   clustersConnection(first: $first, after: $after) @paginate {
     edges {

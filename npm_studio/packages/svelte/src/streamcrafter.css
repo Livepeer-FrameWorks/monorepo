@@ -1,0 +1,2 @@
+/* Re-export core streamcrafter CSS - apps import from wrapper, not core */
+@import "@livepeer-frameworks/streamcrafter-core/streamcrafter.css";

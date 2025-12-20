@@ -5,7 +5,7 @@
   import { getIconComponent } from "$lib/iconUtils";
   import BufferStateIndicator from "$lib/components/health/BufferStateIndicator.svelte";
 
-  type HealthState = "HEALTHY" | "UNHEALTHY" | "IDLE";
+  type HealthState = "HEALTHY" | "UNHEALTHY" | "IDLE" | "LOADING";
 
   interface HealthCheck {
     name: string;
@@ -20,6 +20,13 @@
     bitrate?: number | null;
     fps?: number | null;
     issuesDescription?: string | null;
+    // Rich health data from STREAM_BUFFER subscription
+    streamBufferMs?: number | null;    // Actual buffer depth in milliseconds
+    streamJitterMs?: number | null;    // Max jitter across tracks
+    maxKeepawaMs?: number | null;      // Viewer lag from live edge
+    hasIssues?: boolean | null;
+    mistIssues?: string | null;        // Raw Mist issue string
+    trackCount?: number | null;
   }
 
   interface StreamAnalytics {
@@ -44,7 +51,7 @@
   // Derive global health state
   let globalHealth = $derived.by((): HealthState => {
     if (!isLive) return "IDLE";
-    if (!health) return "IDLE";
+    if (!health) return "LOADING";  // Stream is live but health data hasn't loaded yet
 
     // Check for critical issues
     if (health.bufferState === "DRY") return "UNHEALTHY";
@@ -73,6 +80,16 @@
       label: health.bufferState?.toLowerCase() ?? "unknown",
     });
 
+    // Jitter check (from real-time subscription)
+    if (health.streamJitterMs !== undefined && health.streamJitterMs !== null) {
+      const jitter = health.streamJitterMs;
+      checks.push({
+        name: "Jitter",
+        status: jitter > 100 ? "error" : jitter > 50 ? "warning" : "ok",
+        label: `${jitter}ms`,
+      });
+    }
+
     // Transcoding check (based on quality tier presence)
     checks.push({
       name: "Transcoding",
@@ -90,6 +107,15 @@
       });
     }
 
+    // Issues check (from real-time subscription)
+    if (health.hasIssues) {
+      checks.push({
+        name: "Issues",
+        status: "error",
+        label: health.mistIssues ?? "detected",
+      });
+    }
+
     return checks;
   });
 
@@ -97,6 +123,7 @@
     switch (state) {
       case "HEALTHY": return "text-success";
       case "UNHEALTHY": return "text-error";
+      case "LOADING": return "text-muted-foreground animate-pulse";
       case "IDLE": return "text-muted-foreground";
     }
   }
@@ -105,6 +132,7 @@
     switch (state) {
       case "HEALTHY": return "bg-success/10";
       case "UNHEALTHY": return "bg-error/10";
+      case "LOADING": return "bg-muted/30";
       case "IDLE": return "bg-muted/50";
     }
   }
@@ -163,6 +191,8 @@
         </span>
         {#if !isLive}
           <p class="text-xs text-muted-foreground mt-1">Stream is offline</p>
+        {:else if globalHealth === "LOADING"}
+          <p class="text-xs text-muted-foreground mt-1">Fetching health data...</p>
         {/if}
       </div>
     </div>
@@ -190,10 +220,39 @@
       <div class="p-4 border-b border-border">
         <div class="text-xs text-muted-foreground uppercase tracking-wide mb-2">Buffer State</div>
         <BufferStateIndicator
-          bufferState={health.bufferState ?? "EMPTY"}
+          bufferState={health.bufferState ?? "unknown"}
           bufferHealth={health.bufferHealth}
           size="md"
         />
+      </div>
+    {/if}
+
+    <!-- Buffer Depth & Jitter (from real-time subscription) -->
+    {#if isLive && (health?.streamBufferMs || health?.streamJitterMs || health?.maxKeepawaMs)}
+      <div class="p-4 border-b border-border">
+        <div class="text-xs text-muted-foreground uppercase tracking-wide mb-2">Real-time Metrics</div>
+        <div class="space-y-2">
+          {#if health.streamBufferMs !== undefined && health.streamBufferMs !== null}
+            <div class="flex justify-between text-sm">
+              <span class="text-muted-foreground">Buffer Depth</span>
+              <span class="font-mono text-info">{health.streamBufferMs}ms</span>
+            </div>
+          {/if}
+          {#if health.streamJitterMs !== undefined && health.streamJitterMs !== null}
+            <div class="flex justify-between text-sm">
+              <span class="text-muted-foreground">Jitter</span>
+              <span class="font-mono {health.streamJitterMs > 100 ? 'text-error' : health.streamJitterMs > 50 ? 'text-warning' : 'text-success'}">
+                {health.streamJitterMs}ms
+              </span>
+            </div>
+          {/if}
+          {#if health.maxKeepawaMs !== undefined && health.maxKeepawaMs !== null}
+            <div class="flex justify-between text-sm">
+              <span class="text-muted-foreground">Viewer Lag</span>
+              <span class="font-mono text-muted-foreground">{health.maxKeepawaMs}ms</span>
+            </div>
+          {/if}
+        </div>
       </div>
     {/if}
 
@@ -203,7 +262,7 @@
         <div class="text-xs text-muted-foreground uppercase tracking-wide mb-2">Ingest Rate</div>
         <div class="flex items-baseline gap-2">
           <span class="text-2xl font-mono text-info">
-            {(health.bitrate / 1000000).toFixed(1)}
+            {(health.bitrate / 1000).toFixed(1)}
           </span>
           <span class="text-sm text-muted-foreground">Mbps</span>
         </div>
@@ -253,7 +312,7 @@
     </div>
     {#if isLive && health?.bitrate}
       <div class="mt-4 text-xs font-mono text-muted-foreground writing-mode-vertical">
-        {(health.bitrate / 1000000).toFixed(1)}Mbps
+        {(health.bitrate / 1000).toFixed(1)}Mbps
       </div>
     {/if}
   </div>

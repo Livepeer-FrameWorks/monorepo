@@ -134,52 +134,75 @@ func TestClampLimit(t *testing.T) {
 	}
 }
 
-func TestParseRequest(t *testing.T) {
+func TestParse(t *testing.T) {
 	validCursor := EncodeCursor(time.Now(), "test-id")
 
 	tests := []struct {
 		name      string
-		first     int32
-		after     *string
+		req       *pb.CursorPaginationRequest
 		wantLimit int
+		wantDir   Direction
 		wantErr   bool
 	}{
 		{
-			name:      "default limit, no cursor",
-			first:     0,
-			after:     nil,
+			name:      "nil request",
+			req:       nil,
 			wantLimit: DefaultLimit,
+			wantDir:   Forward,
+		},
+		{
+			name:      "default limit, no cursor",
+			req:       &pb.CursorPaginationRequest{First: 0},
+			wantLimit: DefaultLimit,
+			wantDir:   Forward,
 		},
 		{
 			name:      "custom limit, no cursor",
-			first:     25,
-			after:     nil,
+			req:       &pb.CursorPaginationRequest{First: 25},
 			wantLimit: 25,
+			wantDir:   Forward,
 		},
 		{
 			name:      "with valid cursor",
-			first:     10,
-			after:     &validCursor,
+			req:       &pb.CursorPaginationRequest{First: 10, After: &validCursor},
 			wantLimit: 10,
+			wantDir:   Forward,
 		},
 		{
 			name:      "with invalid cursor",
-			first:     10,
-			after:     strPtr("invalid-cursor"),
+			req:       &pb.CursorPaginationRequest{First: 10, After: strPtr("invalid-cursor")},
 			wantLimit: 0,
 			wantErr:   true,
 		},
 		{
 			name:      "limit over max",
-			first:     1000,
-			after:     nil,
+			req:       &pb.CursorPaginationRequest{First: 1000},
 			wantLimit: MaxLimit,
+			wantDir:   Forward,
+		},
+		{
+			name:      "backward pagination with last",
+			req:       &pb.CursorPaginationRequest{Last: 20},
+			wantLimit: 20,
+			wantDir:   Backward,
+		},
+		{
+			name:      "backward pagination with before cursor",
+			req:       &pb.CursorPaginationRequest{Last: 15, Before: &validCursor},
+			wantLimit: 15,
+			wantDir:   Backward,
+		},
+		{
+			name:      "backward takes precedence over forward",
+			req:       &pb.CursorPaginationRequest{First: 10, Last: 20},
+			wantLimit: 20,
+			wantDir:   Backward,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			limit, _, err := ParseRequest(tt.first, tt.after)
+			params, err := Parse(tt.req)
 			if tt.wantErr {
 				if err == nil {
 					t.Error("expected error, got nil")
@@ -189,8 +212,11 @@ func TestParseRequest(t *testing.T) {
 			if err != nil {
 				t.Errorf("unexpected error: %v", err)
 			}
-			if limit != tt.wantLimit {
-				t.Errorf("limit = %d, want %d", limit, tt.wantLimit)
+			if params.Limit != tt.wantLimit {
+				t.Errorf("limit = %d, want %d", params.Limit, tt.wantLimit)
+			}
+			if params.Direction != tt.wantDir {
+				t.Errorf("direction = %d, want %d", params.Direction, tt.wantDir)
 			}
 		})
 	}
@@ -262,16 +288,16 @@ func TestParseBidirectional(t *testing.T) {
 			wantCursor:    true,
 		},
 		{
-			name:          "invalid after cursor",
-			first:         10,
-			after:         strPtr("invalid"),
-			wantErr:       true,
+			name:    "invalid after cursor",
+			first:   10,
+			after:   strPtr("invalid"),
+			wantErr: true,
 		},
 		{
-			name:          "invalid before cursor",
-			last:          10,
-			before:        strPtr("invalid"),
-			wantErr:       true,
+			name:    "invalid before cursor",
+			last:    10,
+			before:  strPtr("invalid"),
+			wantErr: true,
 		},
 	}
 

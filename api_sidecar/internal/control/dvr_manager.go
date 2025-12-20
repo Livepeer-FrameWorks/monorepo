@@ -1,7 +1,11 @@
 package control
 
 import (
+	"bufio"
+	"context"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +18,20 @@ import (
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+// HTTP client for S3 presigned URL uploads
+var httpClient = &http.Client{
+	Timeout: 2 * time.Minute,
+}
+
+// newHTTPRequest creates an HTTP request with context
+func newHTTPRequest(ctx context.Context, method, url string, body io.Reader) (*http.Request, error) {
+	req, err := http.NewRequestWithContext(ctx, method, url, body)
+	if err != nil {
+		return nil, err
+	}
+	return req, nil
+}
 
 // DVR push retry constants
 const (
@@ -47,6 +65,10 @@ type DVRJob struct {
 	MaxRetries      int
 	TargetURI       string // Store for recreation
 	StreamName      string // Store for recreation
+
+	// Dual-storage: Incremental sync tracking
+	SyncedSegments map[string]bool // Track which segments already synced to S3
+	syncMutex      sync.Mutex      // Protects SyncedSegments
 }
 
 // DVRManager manages active DVR recording sessions
@@ -82,6 +104,120 @@ func initDVRManager() {
 	})
 }
 
+// GetDVRManager returns the global DVR manager instance
+func GetDVRManager() *DVRManager {
+	return dvrManager
+}
+
+// HandleNewSegment handles a RECORDING_SEGMENT trigger for immediate sync
+func (dm *DVRManager) HandleNewSegment(streamName, filePath string) {
+	dm.mutex.RLock()
+	defer dm.mutex.RUnlock()
+
+	// Find job matching the stream name
+	var targetJob *DVRJob
+	for _, job := range dm.jobs {
+		if job.StreamName == streamName {
+			targetJob = job
+			break
+		}
+	}
+
+	if targetJob == nil {
+		// Not tracking this stream or not an active DVR
+		return
+	}
+
+	// Verify file is within output directory to avoid path traversal
+	if !strings.HasPrefix(filePath, targetJob.OutputDir) {
+		dm.logger.WithFields(logging.Fields{
+			"stream":     streamName,
+			"file_path":  filePath,
+			"output_dir": targetJob.OutputDir,
+		}).Warn("Received RECORDING_SEGMENT for file outside DVR output directory")
+		return
+	}
+
+	// Trigger sync for this specific segment
+	go dm.syncSpecificSegment(targetJob, filePath)
+}
+
+// syncSpecificSegment syncs a single segment file to S3
+func (dm *DVRManager) syncSpecificSegment(job *DVRJob, filePath string) {
+	if !IsConnected() {
+		return
+	}
+
+	segName := filepath.Base(filePath)
+
+	// Check if already synced
+	job.syncMutex.Lock()
+	if job.SyncedSegments[segName] {
+		job.syncMutex.Unlock()
+		return
+	}
+	job.syncMutex.Unlock()
+
+	// Get segment size
+	info, err := os.Stat(filePath)
+	if err != nil {
+		job.Logger.WithError(err).WithField("segment", segName).Warn("Segment file not found for sync")
+		return
+	}
+
+	// Request sync permission
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Use relative path for hash construction to match polling logic: dvrHash/filename
+	resp, err := RequestFreezePermission(ctx, "dvr_segment", job.DVRHash+"/"+segName, filePath, uint64(info.Size()), []string{segName})
+	if err != nil {
+		job.Logger.WithError(err).WithField("segment", segName).Warn("Failed to request segment sync permission")
+		return
+	}
+
+	if !resp.Approved {
+		if resp.Reason == "already_synced" {
+			job.syncMutex.Lock()
+			job.SyncedSegments[segName] = true
+			job.syncMutex.Unlock()
+		}
+		return
+	}
+
+	presignedURL := resp.SegmentUrls[segName]
+	if presignedURL == "" {
+		presignedURL = resp.PresignedPutUrl
+	}
+
+	if presignedURL == "" {
+		job.Logger.WithField("segment", segName).Warn("No presigned URL provided for segment sync")
+		return
+	}
+
+	// Upload
+	err = dm.uploadSegmentToS3(ctx, filePath, presignedURL)
+	if err != nil {
+		job.Logger.WithError(err).WithField("segment", segName).Warn("Failed to upload segment to S3")
+		return
+	}
+
+	// Mark as synced
+	job.syncMutex.Lock()
+	job.SyncedSegments[segName] = true
+	job.syncMutex.Unlock()
+
+	job.Logger.WithFields(logging.Fields{
+		"segment":  segName,
+		"size_kb":  info.Size() / 1024,
+		"dvr_hash": job.DVRHash,
+		"trigger":  "RECORDING_SEGMENT",
+	}).Debug("DVR segment synced to S3 via trigger")
+
+	// Opportunistically sync manifest
+	dm.syncManifest(job)
+}
+
 // StartRecording starts a new DVR recording job
 func (dm *DVRManager) StartRecording(dvrHash, internalName, sourceURL string, config *pb.DVRConfig, sendFunc func(*pb.ControlMessage)) error {
 	dm.mutex.Lock()
@@ -100,18 +236,19 @@ func (dm *DVRManager) StartRecording(dvrHash, internalName, sourceURL string, co
 
 	// Create DVR job
 	job := &DVRJob{
-		DVRHash:      dvrHash,
-		InternalName: internalName,
-		SourceURL:    sourceURL,
-		Config:       config,
-		StartTime:    time.Now(),
-		OutputDir:    outputDir,
-		ManifestPath: filepath.Join(outputDir, fmt.Sprintf("%s.m3u8", dvrHash)),
-		SendFunc:     sendFunc,
-		Logger:       dm.logger,
-		Status:       "starting",
-		MaxRetries:   MaxDVRRetries,
-		RetryCount:   0,
+		DVRHash:        dvrHash,
+		InternalName:   internalName,
+		SourceURL:      sourceURL,
+		Config:         config,
+		StartTime:      time.Now(),
+		OutputDir:      outputDir,
+		ManifestPath:   filepath.Join(outputDir, fmt.Sprintf("%s.m3u8", dvrHash)),
+		SendFunc:       sendFunc,
+		Logger:         dm.logger,
+		Status:         "starting",
+		MaxRetries:     MaxDVRRetries,
+		RetryCount:     0,
+		SyncedSegments: make(map[string]bool), // Initialize sync tracking
 	}
 
 	// Start the recording process via MistServer push
@@ -208,12 +345,14 @@ func (dm *DVRManager) startDVRPush(job *DVRJob) error {
 	return nil
 }
 
-// monitorJob monitors a DVR job's progress
+// monitorJob monitors a DVR job's progress and performs incremental sync
 func (dm *DVRManager) monitorJob(job *DVRJob) {
 	progressTicker := time.NewTicker(30 * time.Second) // Progress updates every 30s
 	pushTicker := time.NewTicker(PushMonitorInterval)  // Push monitoring every 5s
+	syncTicker := time.NewTicker(10 * time.Second)     // Incremental sync every 10s
 	defer progressTicker.Stop()
 	defer pushTicker.Stop()
+	defer syncTicker.Stop()
 
 	for {
 		select {
@@ -240,6 +379,18 @@ func (dm *DVRManager) monitorJob(job *DVRJob) {
 
 			// Check and maintain push status
 			dm.maintainPushStatus(job)
+
+		case <-syncTicker.C:
+			dm.mutex.RLock()
+			_, exists := dm.jobs[job.DVRHash]
+			dm.mutex.RUnlock()
+
+			if !exists {
+				return // Job completed or stopped
+			}
+
+			// Dual-storage: Sync new segments to S3
+			dm.syncNewSegments(job)
 
 		case <-time.After(5 * time.Minute): // Timeout if no updates
 			if job.Status == "starting" {
@@ -491,4 +642,251 @@ func (dm *DVRManager) GetActiveJobs() map[string]string {
 		jobs[hash] = job.Status
 	}
 	return jobs
+}
+
+// syncNewSegments performs incremental sync of DVR segments to S3
+// MistServer writes playlist BEFORE starting next segment, so segments in manifest are "sealed"
+func (dm *DVRManager) syncNewSegments(job *DVRJob) {
+	if !IsConnected() {
+		return // No Foghorn connection, skip sync
+	}
+
+	// Read and parse manifest to get segment list
+	segments, err := dm.parseManifestSegments(job.ManifestPath)
+	if err != nil {
+		// Manifest may not exist yet during early recording
+		return
+	}
+
+	if len(segments) == 0 {
+		return
+	}
+
+	// Check for new segments (not yet synced)
+	job.syncMutex.Lock()
+	var newSegments []string
+	for _, seg := range segments {
+		if !job.SyncedSegments[seg] {
+			newSegments = append(newSegments, seg)
+		}
+	}
+	job.syncMutex.Unlock()
+
+	if len(newSegments) == 0 {
+		return // All segments already synced
+	}
+
+	job.Logger.WithFields(logging.Fields{
+		"new_segments": len(newSegments),
+		"total_synced": len(job.SyncedSegments),
+	}).Debug("Syncing new DVR segments to S3")
+
+	// Request sync for each new segment
+	segmentsDir := filepath.Join(job.OutputDir, "segments")
+	for _, segName := range newSegments {
+		segPath := filepath.Join(segmentsDir, segName)
+
+		// Get segment size
+		info, err := os.Stat(segPath)
+		if err != nil {
+			job.Logger.WithError(err).WithField("segment", segName).Debug("Segment not ready, skipping")
+			continue
+		}
+
+		// Request sync permission and presigned URL from Foghorn
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		resp, err := RequestFreezePermission(ctx, "dvr_segment", job.DVRHash+"/"+segName, segPath, uint64(info.Size()), []string{segName})
+		cancel()
+
+		if err != nil {
+			job.Logger.WithError(err).WithField("segment", segName).Warn("Failed to request segment sync permission")
+			continue
+		}
+
+		if !resp.Approved {
+			// Could be already synced or rate limited - check reason
+			if resp.Reason == "already_synced" {
+				job.syncMutex.Lock()
+				job.SyncedSegments[segName] = true
+				job.syncMutex.Unlock()
+			}
+			continue
+		}
+
+		// Get presigned URL for segment
+		presignedURL := resp.SegmentUrls[segName]
+		if presignedURL == "" {
+			presignedURL = resp.PresignedPutUrl // Fallback for single file
+		}
+
+		if presignedURL == "" {
+			job.Logger.WithField("segment", segName).Warn("No presigned URL provided for segment sync")
+			continue
+		}
+
+		// Upload segment using presigned URL
+		// NOTE: We use the storage package's presigned client for actual upload
+		// For now, we mark intent to sync - actual upload delegated to storage manager
+		err = dm.uploadSegmentToS3(ctx, segPath, presignedURL)
+		if err != nil {
+			job.Logger.WithError(err).WithField("segment", segName).Warn("Failed to upload segment to S3")
+			continue
+		}
+
+		// Mark as synced
+		job.syncMutex.Lock()
+		job.SyncedSegments[segName] = true
+		job.syncMutex.Unlock()
+
+		job.Logger.WithFields(logging.Fields{
+			"segment":  segName,
+			"size_kb":  info.Size() / 1024,
+			"dvr_hash": job.DVRHash,
+		}).Debug("DVR segment synced to S3")
+	}
+
+	// Also sync the manifest itself periodically (every 5 segments or so)
+	if len(job.SyncedSegments) > 0 && len(job.SyncedSegments)%5 == 0 {
+		dm.syncManifest(job)
+	}
+}
+
+// parseManifestSegments extracts segment filenames from an HLS manifest
+func (dm *DVRManager) parseManifestSegments(manifestPath string) ([]string, error) {
+	file, err := os.Open(manifestPath)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	var segments []string
+	scanner := bufio.NewScanner(file)
+	var pendingExtinf bool
+
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+
+		if strings.HasPrefix(line, "#EXTINF:") {
+			pendingExtinf = true
+			continue
+		}
+
+		if pendingExtinf && !strings.HasPrefix(line, "#") && line != "" {
+			// This is a segment filename (may have path like "segments/foo.ts")
+			segName := filepath.Base(line)
+			// Strip query params if present
+			if idx := strings.Index(segName, "?"); idx > 0 {
+				segName = segName[:idx]
+			}
+			segments = append(segments, segName)
+			pendingExtinf = false
+		}
+	}
+
+	return segments, scanner.Err()
+}
+
+// uploadSegmentToS3 uploads a segment file using a presigned PUT URL
+func (dm *DVRManager) uploadSegmentToS3(ctx context.Context, filePath, presignedURL string) error {
+	// Use the storage package's presigned client
+	// For now, defer to a simple HTTP PUT implementation
+	file, err := os.Open(filePath)
+	if err != nil {
+		return fmt.Errorf("failed to open segment file: %w", err)
+	}
+	defer file.Close()
+
+	info, err := file.Stat()
+	if err != nil {
+		return fmt.Errorf("failed to stat segment file: %w", err)
+	}
+
+	req, err := newHTTPRequest(ctx, "PUT", presignedURL, file)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+	req.ContentLength = info.Size()
+	req.Header.Set("Content-Type", "video/MP2T")
+
+	// Use storage presigned client if available, otherwise fall back to http.DefaultClient
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to upload to S3: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("S3 upload failed with status %d", resp.StatusCode)
+	}
+
+	return nil
+}
+
+// syncManifest uploads the current manifest to S3
+func (dm *DVRManager) syncManifest(job *DVRJob) {
+	if !IsConnected() {
+		return
+	}
+
+	// Request presigned URL for manifest
+	manifestName := job.DVRHash + ".m3u8"
+	info, err := os.Stat(job.ManifestPath)
+	if err != nil {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	resp, err := RequestFreezePermission(ctx, "dvr_manifest", job.DVRHash+"/"+manifestName, job.ManifestPath, uint64(info.Size()), []string{manifestName})
+	if err != nil || !resp.Approved {
+		return
+	}
+
+	presignedURL := resp.SegmentUrls[manifestName]
+	if presignedURL == "" {
+		presignedURL = resp.PresignedPutUrl
+	}
+
+	if presignedURL == "" {
+		return
+	}
+
+	// Upload manifest
+	if err := dm.uploadManifestToS3(ctx, job.ManifestPath, presignedURL); err != nil {
+		job.Logger.WithError(err).Debug("Failed to sync manifest to S3")
+	}
+}
+
+// uploadManifestToS3 uploads a manifest file using a presigned PUT URL
+func (dm *DVRManager) uploadManifestToS3(ctx context.Context, filePath, presignedURL string) error {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	info, err := file.Stat()
+	if err != nil {
+		return err
+	}
+
+	req, err := newHTTPRequest(ctx, "PUT", presignedURL, file)
+	if err != nil {
+		return err
+	}
+	req.ContentLength = info.Size()
+	req.Header.Set("Content-Type", "application/vnd.apple.mpegurl")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("manifest upload failed with status %d", resp.StatusCode)
+	}
+
+	return nil
 }

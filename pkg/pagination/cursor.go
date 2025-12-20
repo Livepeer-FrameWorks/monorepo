@@ -74,14 +74,6 @@ func EncodeCursor(timestamp time.Time, id string) string {
 	return Cursor{Timestamp: timestamp, ID: id}.Encode()
 }
 
-// EncodeIndexCursor creates an index-based cursor for legacy offset pagination.
-// This is a temporary fallback during migration to keyset pagination.
-// TODO: Remove once all resolvers are migrated to keyset pagination.
-func EncodeIndexCursor(index int) string {
-	raw := fmt.Sprintf("idx:%d", index)
-	return base64.StdEncoding.EncodeToString([]byte(raw))
-}
-
 // ClampLimit ensures limit is within valid bounds.
 func ClampLimit(limit int) int {
 	if limit <= 0 {
@@ -172,14 +164,14 @@ func (b *KeysetBuilder) Condition(params *Params, startArgIdx int) (string, []in
 		// Forward: WHERE (ts, id) < ($cursor_ts, $cursor_id)
 		// This fetches items BEFORE the cursor position (older items when sorted DESC)
 		return fmt.Sprintf("(%s, %s) < ($%d, $%d)",
-			b.TimestampColumn, b.IDColumn, startArgIdx, startArgIdx+1),
+				b.TimestampColumn, b.IDColumn, startArgIdx, startArgIdx+1),
 			[]interface{}{params.Cursor.Timestamp, params.Cursor.ID}
 	}
 
 	// Backward: WHERE (ts, id) > ($cursor_ts, $cursor_id)
 	// This fetches items AFTER the cursor position (newer items when sorted ASC)
 	return fmt.Sprintf("(%s, %s) > ($%d, $%d)",
-		b.TimestampColumn, b.IDColumn, startArgIdx, startArgIdx+1),
+			b.TimestampColumn, b.IDColumn, startArgIdx, startArgIdx+1),
 		[]interface{}{params.Cursor.Timestamp, params.Cursor.ID}
 }
 

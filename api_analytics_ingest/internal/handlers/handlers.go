@@ -13,6 +13,8 @@ import (
 	"frameworks/pkg/logging"
 	"frameworks/pkg/mist"
 	pb "frameworks/pkg/proto"
+
+	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
@@ -68,6 +70,10 @@ func (h *AnalyticsHandler) HandleAnalyticsEvent(event kafka.AnalyticsEvent) erro
 	// Track analytics event received
 	if h.metrics != nil {
 		h.metrics.AnalyticsEvents.WithLabelValues(event.EventType, "received").Inc()
+		// Detect missing enrichment early (Decklog normalizes to zero UUID to avoid CH errors).
+		if event.TenantID == "00000000-0000-0000-0000-000000000000" {
+			h.metrics.AnalyticsEvents.WithLabelValues(event.EventType, "tenant_missing").Inc()
+		}
 	}
 
 	// Process based on event type using direct protobuf parsing
@@ -94,10 +100,10 @@ func (h *AnalyticsHandler) HandleAnalyticsEvent(event kafka.AnalyticsEvent) erro
 		err = h.processPushLifecycle(ctx, event)
 	case "stream_track_list":
 		err = h.processTrackList(ctx, event)
-	case "stream_bandwidth":
-		err = h.processBandwidthThreshold(ctx, event)
 	case "recording_complete":
 		err = h.processRecordingLifecycle(ctx, event)
+	case "recording_segment":
+		err = h.processRecordingSegment(ctx, event)
 	case "stream_lifecycle_update":
 		err = h.processStreamLifecycle(ctx, event)
 	case "node_lifecycle_update":
@@ -110,13 +116,19 @@ func (h *AnalyticsHandler) HandleAnalyticsEvent(event kafka.AnalyticsEvent) erro
 		err = h.processClipLifecycle(ctx, event)
 	case "dvr_lifecycle":
 		err = h.processDVRLifecycle(ctx, event)
+	case "storage_lifecycle":
+		err = h.processStorageLifecycle(ctx, event)
 	case "storage_snapshot":
 		err = h.processStorageSnapshot(ctx, event)
+	case "process_billing":
+		err = h.processProcessBilling(ctx, event)
+	case "vod_lifecycle":
+		err = h.processVodLifecycle(ctx, event)
 	default:
 		h.logger.WithFields(logging.Fields{
 			"event_type": event.EventType,
 			"event_id":   event.EventID,
-		}).Debug("Unknown event type, skipping")
+		}).Info("Unknown event type, skipping")
 		if h.metrics != nil {
 			h.metrics.AnalyticsEvents.WithLabelValues(event.EventType, "skipped").Inc()
 		}
@@ -162,7 +174,7 @@ func (h *AnalyticsHandler) processStorageSnapshot(ctx context.Context, event kaf
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO storage_snapshots (
 			timestamp, node_id, tenant_id,
-			total_bytes, file_count, dvr_bytes, clip_bytes, recording_bytes
+			total_bytes, file_count, dvr_bytes, clip_bytes, vod_bytes
 		)`)
 	if err != nil {
 		h.logger.Errorf("Failed to prepare ClickHouse batch for storage_snapshots: %v", err)
@@ -178,7 +190,7 @@ func (h *AnalyticsHandler) processStorageSnapshot(ctx context.Context, event kaf
 			usage.GetFileCount(),
 			usage.GetDvrBytes(),
 			usage.GetClipBytes(),
-			usage.GetRecordingBytes(),
+			usage.GetVodBytes(),
 		); err != nil {
 			h.logger.Errorf("Failed to append to storage_snapshots batch: %v", err)
 			return err
@@ -224,7 +236,7 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, event kaf
 			viewer_seconds, has_issues, issues_description,
 			track_count, quality_tier, primary_width, primary_height,
 			primary_fps, primary_codec, primary_bitrate,
-			packets_sent, packets_lost,
+			packets_sent, packets_lost, packets_retransmitted,
 			started_at, updated_at
 		)`)
 	if err != nil {
@@ -241,6 +253,13 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, event kaf
 		status = streamLifecycle.GetStatus()
 	}
 
+	// Derive buffer_state if not set but buffer_ms is available.
+	// live_streams.buffer_state is non-nullable; prefer a reasonable default over empty.
+	bufferState := streamLifecycle.GetBufferState()
+	if bufferState == "" && streamLifecycle.GetBufferMs() > 0 {
+		bufferState = "FULL"
+	}
+
 	// Convert started_at unix timestamp to time.Time if present
 	var startedAt interface{}
 	if streamLifecycle.StartedAt != nil && *streamLifecycle.StartedAt > 0 {
@@ -252,7 +271,7 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, event kaf
 		internalName,
 		mt.GetNodeId(),
 		status,
-		streamLifecycle.GetBufferState(),
+		bufferState,
 		streamLifecycle.GetTotalViewers(),
 		uint16(streamLifecycle.GetTotalInputs()),
 		streamLifecycle.GetUploadedBytes(),
@@ -267,8 +286,9 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, event kaf
 		nilIfZeroFloat32(streamLifecycle.GetPrimaryFps()),
 		nilIfEmptyString(streamLifecycle.GetPrimaryCodec()),
 		nilIfZeroInt32(streamLifecycle.GetPrimaryBitrate()),
-		nilIfZeroUint64(streamLifecycle.GetPacketsSent()),
-		nilIfZeroUint64(streamLifecycle.GetPacketsLost()),
+		valueOrNilUint64Ptr(streamLifecycle.PacketsSent),
+		valueOrNilUint64Ptr(streamLifecycle.PacketsLost),
+		valueOrNilUint64Ptr(streamLifecycle.PacketsRetransmitted),
 		startedAt,
 		event.Timestamp,
 	); err != nil {
@@ -349,6 +369,97 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, event kaf
 
 	if h.metrics != nil {
 		h.metrics.ClickHouseInserts.WithLabelValues("stream_events", "success").Inc()
+	}
+
+	// 3. Write to stream_health_metrics (for health charts - every 10s sample)
+	// This provides continuous health data from polling, not just sparse STREAM_BUFFER triggers
+	if h.metrics != nil {
+		h.metrics.ClickHouseInserts.WithLabelValues("stream_health_metrics", "attempt").Inc()
+	}
+
+	healthBatch, err := h.clickhouse.PrepareBatch(ctx, `
+		INSERT INTO stream_health_metrics (
+			timestamp, tenant_id, internal_name, node_id,
+			bitrate, fps, width, height, codec, quality_tier,
+			buffer_state, buffer_size, buffer_health,
+			has_issues, issues_description, track_count,
+			track_metadata,
+			audio_channels, audio_sample_rate, audio_codec, audio_bitrate
+		)`)
+	if err != nil {
+		h.logger.Errorf("Failed to prepare stream_health_metrics batch: %v", err)
+		if h.metrics != nil {
+			h.metrics.ClickHouseInserts.WithLabelValues("stream_health_metrics", "error").Inc()
+		}
+		// Don't fail the whole event if health insert fails - live_streams and stream_events are more important
+		return nil
+	}
+
+	// Calculate buffer_health ratio (0.0-1.0): buffer_ms / max_keepaway_ms.
+	var bufferHealth interface{}
+	if streamLifecycle.GetBufferMs() > 0 && streamLifecycle.GetMaxKeepawayMs() > 0 {
+		ratio := float32(streamLifecycle.GetBufferMs()) / float32(streamLifecycle.GetMaxKeepawayMs())
+		if ratio > 1 {
+			ratio = 1
+		}
+		bufferHealth = ratio
+	}
+
+	// ClickHouse JSON type expects an object at the top level. Store track details under { "tracks": [...] }.
+	trackMetadataJSON := "{}"
+	if raw := strings.TrimSpace(streamLifecycle.GetTrackDetailsJson()); raw != "" {
+		if strings.HasPrefix(raw, "{") {
+			trackMetadataJSON = raw
+		} else if strings.HasPrefix(raw, "[") {
+			trackMetadataJSON = fmt.Sprintf("{\"tracks\":%s}", raw)
+		}
+	}
+
+	var audioChannels interface{}
+	if v := streamLifecycle.GetAudioChannels(); v > 0 {
+		audioChannels = uint8(v)
+	}
+
+	if err := healthBatch.Append(
+		event.Timestamp,
+		event.TenantID,
+		internalName,
+		mt.GetNodeId(),
+		nilIfZeroInt32(streamLifecycle.GetPrimaryBitrate()),
+		nilIfZeroFloat32(streamLifecycle.GetPrimaryFps()),
+		nilIfZeroUint16(streamLifecycle.GetPrimaryWidth()),
+		nilIfZeroUint16(streamLifecycle.GetPrimaryHeight()),
+		nilIfEmptyString(streamLifecycle.GetPrimaryCodec()),
+		nilIfEmptyString(streamLifecycle.GetQualityTier()),
+		bufferState,
+		nilIfZeroUint32(streamLifecycle.GetBufferMs()),
+		bufferHealth,
+		nilIfZeroBool(streamLifecycle.GetHasIssues()),
+		nilIfEmptyString(streamLifecycle.GetIssuesDescription()),
+		nilIfZeroUint16(streamLifecycle.GetTrackCount()),
+		trackMetadataJSON,
+		audioChannels,
+		nilIfZeroUint32(streamLifecycle.GetAudioSampleRate()),
+		nilIfEmptyString(streamLifecycle.GetAudioCodec()),
+		nilIfZeroUint32(streamLifecycle.GetAudioBitrate()),
+	); err != nil {
+		h.logger.Errorf("Failed to append to stream_health_metrics: %v", err)
+		if h.metrics != nil {
+			h.metrics.ClickHouseInserts.WithLabelValues("stream_health_metrics", "error").Inc()
+		}
+		return nil
+	}
+
+	if err := healthBatch.Send(); err != nil {
+		h.logger.Errorf("Failed to send stream_health_metrics: %v", err)
+		if h.metrics != nil {
+			h.metrics.ClickHouseInserts.WithLabelValues("stream_health_metrics", "error").Inc()
+		}
+		return nil
+	}
+
+	if h.metrics != nil {
+		h.metrics.ClickHouseInserts.WithLabelValues("stream_health_metrics", "success").Inc()
 	}
 
 	return nil
@@ -833,6 +944,60 @@ func (h *AnalyticsHandler) processRecordingLifecycle(ctx context.Context, event 
 	return nil
 }
 
+// processRecordingSegment handles RECORDING_SEGMENT events (per-segment DVR tracking)
+func (h *AnalyticsHandler) processRecordingSegment(ctx context.Context, event kafka.AnalyticsEvent) error {
+	h.logger.Infof("Processing recording segment event: %s", event.EventID)
+
+	// Parse RecordingSegmentTrigger from protobuf
+	var mt pb.MistTrigger
+	if err := h.parseProtobufData(event, &mt); err != nil {
+		return fmt.Errorf("failed to parse MistTrigger: %w", err)
+	}
+	tp, ok := mt.GetTriggerPayload().(*pb.MistTrigger_RecordingSegment)
+	if !ok || tp == nil {
+		return fmt.Errorf("unexpected payload for recording_segment")
+	}
+	segment := tp.RecordingSegment
+	// Normalize internal name by stripping live+/vod+ prefix for consistent analytics keys
+	internalName := mist.ExtractInternalName(segment.GetStreamName())
+
+	// Write to stream_events for time-series analysis
+	batch, err := h.clickhouse.PrepareBatch(ctx, `
+		INSERT INTO stream_events (
+			timestamp, event_id, tenant_id, internal_name, node_id, event_type,
+			duration, output_file, event_data
+		)`)
+	if err != nil {
+		h.logger.Errorf("Failed to prepare ClickHouse batch: %v", err)
+		return err
+	}
+
+	// duration_ms to seconds for consistency with recording-complete
+	durationSec := uint32(segment.GetDurationMs() / 1000)
+
+	if err := batch.Append(
+		event.Timestamp,
+		event.EventID,
+		event.TenantID,
+		internalName,
+		mt.GetNodeId(),
+		"recording_segment",
+		nilIfZeroUint32(durationSec),
+		segment.GetFilePath(),
+		marshalTypedEventData(&segment),
+	); err != nil {
+		h.logger.Errorf("Failed to append to ClickHouse batch: %v", err)
+		return err
+	}
+
+	if err := batch.Send(); err != nil {
+		h.logger.Errorf("Failed to send ClickHouse batch: %v", err)
+		return err
+	}
+
+	return nil
+}
+
 // processStreamView handles stream view events
 func (h *AnalyticsHandler) processStreamView(ctx context.Context, event kafka.AnalyticsEvent) error {
 	h.logger.Infof("Processing stream view event: %s", event.EventID)
@@ -904,7 +1069,8 @@ func (h *AnalyticsHandler) processLoadBalancing(ctx context.Context, event kafka
             timestamp, tenant_id, internal_name, selected_node, status, details, score,
             client_ip, client_country, client_latitude, client_longitude, client_bucket_h3, client_bucket_res,
             node_latitude, node_longitude, node_name, node_bucket_h3, node_bucket_res,
-            selected_node_id, routing_distance_km
+            selected_node_id, routing_distance_km,
+            stream_tenant_id, cluster_id, latency_ms
         )`)
 	if err != nil {
 		h.logger.Errorf("Failed to prepare ClickHouse batch: %v", err)
@@ -933,6 +1099,15 @@ func (h *AnalyticsHandler) processLoadBalancing(ctx context.Context, event kafka
 		nodeBucketRes = uint8(loadBalancing.NodeBucket.Resolution)
 	}
 
+	// Dual-tenant attribution (RFC: routing-events-dual-tenant-attribution)
+	var streamTenantID interface{}
+	if loadBalancing.StreamTenantId != nil && *loadBalancing.StreamTenantId != "" {
+		if parsed, err := uuid.Parse(*loadBalancing.StreamTenantId); err == nil {
+			streamTenantID = parsed
+		}
+	}
+	clusterID := loadBalancing.GetClusterId()
+
 	if err := batch.Append(
 		event.Timestamp,
 		event.TenantID,
@@ -954,6 +1129,9 @@ func (h *AnalyticsHandler) processLoadBalancing(ctx context.Context, event kafka
 		nodeBucketRes,
 		selID,
 		routeKm,
+		streamTenantID,
+		clusterID,
+		loadBalancing.GetLatencyMs(),
 	); err != nil {
 		h.logger.Errorf("Failed to append to ClickHouse batch: %v", err)
 		return err
@@ -971,7 +1149,7 @@ func (h *AnalyticsHandler) processLoadBalancing(ctx context.Context, event kafka
 	h.logger.WithFields(logging.Fields{
 		"event_id":    event.EventID,
 		"stream_name": loadBalancing.GetInternalName(),
-	}).Debug("Processed load balancing event")
+	}).Info("Processed load balancing event")
 
 	return nil
 }
@@ -1165,10 +1343,10 @@ func (h *AnalyticsHandler) processNodeLifecycle(ctx context.Context, event kafka
 		uint64(nodeLifecycle.GetShmUsedBytes()),
 		uint64(nodeLifecycle.GetDiskTotalBytes()),
 		uint64(nodeLifecycle.GetDiskUsedBytes()),
-		uint64(nodeLifecycle.GetBandwidthInTotal()),  // cumulative bytes received
-		uint64(nodeLifecycle.GetBandwidthOutTotal()), // cumulative bytes sent
-		int64(nodeLifecycle.GetUpSpeed()),            // rate: bytes/sec
-		int64(nodeLifecycle.GetDownSpeed()),          // rate: bytes/sec
+		uint64(nodeLifecycle.GetBandwidthInTotal()),   // cumulative bytes received
+		uint64(nodeLifecycle.GetBandwidthOutTotal()),  // cumulative bytes sent
+		int64(nodeLifecycle.GetUpSpeed()),             // rate: bytes/sec
+		int64(nodeLifecycle.GetDownSpeed()),           // rate: bytes/sec
 		uint32(nodeLifecycle.GetConnectionsCurrent()), // current viewer connections
 		int(nodeLifecycle.GetActiveStreams()),
 		nodeLifecycle.GetIsHealthy(),
@@ -1227,14 +1405,14 @@ func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event kafka.
 
 	// Extract primary video track fields
 	var (
-		bitrate                          *uint32
-		fps                              *float32
-		width, height                    *uint16
-		codec                            *string
-		frameMsMax, frameMsMin           *float32
-		keyframeMsMax, keyframeMsMin     *float32
-		framesMax, framesMin             *uint32
-		gopSize                          *uint16
+		bitrate                      *uint32
+		fps                          *float32
+		width, height                *uint16
+		codec                        *string
+		frameMsMax, frameMsMin       *float32
+		keyframeMsMax, keyframeMsMin *float32
+		framesMax, framesMin         *uint32
+		gopSize                      *uint16
 	)
 	if primaryVideo != nil {
 		if v := primaryVideo.GetBitrateKbps(); v > 0 {
@@ -1367,10 +1545,10 @@ func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event kafka.
 		return err
 	}
 
-	// Serialize tracks to JSON for track_metadata column
-	var trackMetadataJSON string
+	// Serialize tracks to JSON for track_metadata column (ClickHouse JSON requires object, not array)
+	trackMetadataJSON := "{}"
 	if tracks := streamBuffer.GetTracks(); len(tracks) > 0 {
-		if jsonBytes, err := json.Marshal(tracks); err == nil {
+		if jsonBytes, err := json.Marshal(map[string]interface{}{"tracks": tracks}); err == nil {
 			trackMetadataJSON = string(jsonBytes)
 		}
 	}
@@ -1603,59 +1781,6 @@ func (h *AnalyticsHandler) processTrackList(ctx context.Context, event kafka.Ana
 	return nil
 }
 
-// processBandwidthThreshold handles bandwidth threshold events
-func (h *AnalyticsHandler) processBandwidthThreshold(ctx context.Context, event kafka.AnalyticsEvent) error {
-	h.logger.Infof("Processing bandwidth threshold event: %s", event.EventID)
-
-	// Parse StreamBandwidthTrigger from MistTrigger envelope
-	var mt pb.MistTrigger
-	if err := h.parseProtobufData(event, &mt); err != nil {
-		return fmt.Errorf("failed to parse MistTrigger: %w", err)
-	}
-	tp, ok := mt.GetTriggerPayload().(*pb.MistTrigger_StreamBandwidth)
-	if !ok || tp == nil {
-		return fmt.Errorf("unexpected payload for stream_bandwidth")
-	}
-	bandwidthThreshold := tp.StreamBandwidth
-	// Normalize internal name by stripping live+/vod+ prefix for consistent analytics keys
-	internalName := mist.ExtractInternalName(bandwidthThreshold.GetStreamName())
-
-	// Write to stream_events for threshold alerts using typed data
-	batch, err := h.clickhouse.PrepareBatch(ctx, `
-		INSERT INTO stream_events (
-			timestamp, event_id, tenant_id, internal_name, event_type, node_id,
-			current_bytes_per_sec, threshold_exceeded, threshold_value, event_data
-		)`)
-	if err != nil {
-		h.logger.Errorf("Failed to prepare bandwidth threshold batch: %v", err)
-		return err
-	}
-
-	if err := batch.Append(
-		event.Timestamp,
-		event.EventID,
-		event.TenantID,
-		internalName,
-		"stream_bandwidth",
-		mt.GetNodeId(),
-		bandwidthThreshold.GetCurrentBytesPerSecond(),
-		nilIfFalse(bandwidthThreshold.GetThresholdExceeded()),
-		nilIfZeroUint64(bandwidthThreshold.GetThresholdValue()),
-		marshalTypedEventData(&bandwidthThreshold),
-	); err != nil {
-		h.logger.Errorf("Failed to append bandwidth threshold event: %v", err)
-		return err
-	}
-
-	if err := batch.Send(); err != nil {
-		h.logger.Errorf("Failed to send bandwidth threshold batch: %v", err)
-		return err
-	}
-
-	h.logger.Debugf("Successfully processed bandwidth threshold for stream: %s", bandwidthThreshold.GetStreamName())
-	return nil
-}
-
 // nilIfZero returns nil if the value is zero/empty, otherwise returns the value
 func nilIfZero[T comparable](value T) interface{} {
 	var zero T
@@ -1762,10 +1887,12 @@ func (h *AnalyticsHandler) processClipLifecycle(ctx context.Context, event kafka
 	// Optional - extract from enriched ClipLifecycleData
 	// Note: Only extract fields that exist in clip_events ClickHouse schema
 	var (
-		startUnix, stopUnix         interface{}
-		ingestNode, percent         interface{}
-		message, filePath, s3url    interface{}
-		sizeBytes                   interface{}
+		startUnix, stopUnix      interface{}
+		ingestNode, percent      interface{}
+		message, filePath, s3url interface{}
+		sizeBytes                interface{}
+		expiresAt                interface{} // int64 for clip_events
+		expiresAtTime            interface{} // time.Time for live_artifacts
 	)
 	// Clip time boundaries (enriched by Foghorn from original ClipPullRequest)
 	if cl.GetStartUnix() != 0 {
@@ -1793,6 +1920,10 @@ func (h *AnalyticsHandler) processClipLifecycle(ctx context.Context, event kafka
 	if cl.GetSizeBytes() != 0 {
 		sizeBytes = cl.GetSizeBytes()
 	}
+	if cl.GetExpiresAt() != 0 {
+		expiresAt = cl.GetExpiresAt()
+		expiresAtTime = time.Unix(cl.GetExpiresAt(), 0)
+	}
 
 	if h.metrics != nil {
 		h.metrics.ClickHouseInserts.WithLabelValues("live_artifacts", "attempt").Inc()
@@ -1804,7 +1935,7 @@ func (h *AnalyticsHandler) processClipLifecycle(ctx context.Context, event kafka
 			tenant_id, request_id, internal_name, content_type, stage,
 			progress_percent, error_message, requested_at, started_at, completed_at,
 			clip_start_unix, clip_stop_unix, file_path, s3_url, size_bytes,
-			processing_node_id, updated_at
+			processing_node_id, updated_at, expires_at
 		)`)
 	if err != nil {
 		h.logger.Errorf("Failed to prepare live_artifacts batch: %v", err)
@@ -1835,6 +1966,7 @@ func (h *AnalyticsHandler) processClipLifecycle(ctx context.Context, event kafka
 		nilIfZeroUint64(cl.GetSizeBytes()),
 		nilIfEmptyString(cl.GetNodeId()),
 		event.Timestamp,
+		expiresAtTime,
 	); err != nil {
 		h.logger.Errorf("Failed to append to live_artifacts batch: %v", err)
 		if h.metrics != nil {
@@ -1861,7 +1993,7 @@ func (h *AnalyticsHandler) processClipLifecycle(ctx context.Context, event kafka
 		INSERT INTO clip_events (
 			timestamp, tenant_id, internal_name, request_id, stage, content_type,
 			start_unix, stop_unix, ingest_node_id,
-			percent, message, file_path, s3_url, size_bytes
+			percent, message, file_path, s3_url, size_bytes, expires_at
 		)`)
 	if err != nil {
 		if h.metrics != nil {
@@ -1885,6 +2017,7 @@ func (h *AnalyticsHandler) processClipLifecycle(ctx context.Context, event kafka
 		filePath,
 		s3url,
 		sizeBytes,
+		expiresAt,
 	); err != nil {
 		if h.metrics != nil {
 			h.metrics.ClickHouseInserts.WithLabelValues("clip_events", "error").Inc()
@@ -1931,8 +2064,15 @@ func (h *AnalyticsHandler) processDVRLifecycle(ctx context.Context, event kafka.
 		internalName = mist.ExtractInternalName(*dvrData.InternalName)
 	}
 
-	// Map status to stage
-	stageStr := dvrData.GetStatus().String()
+	// Map status to stage (normalize proto enum to lowercase for ClickHouse)
+	stageStr := normalizeDVRStage(dvrData.GetStatus())
+
+	var expiresAt interface{}
+	var expiresAtTime interface{}
+	if dvrData.GetExpiresAt() != 0 {
+		expiresAt = dvrData.GetExpiresAt()
+		expiresAtTime = time.Unix(dvrData.GetExpiresAt(), 0)
+	}
 
 	if h.metrics != nil {
 		h.metrics.ClickHouseInserts.WithLabelValues("live_artifacts", "attempt").Inc()
@@ -1943,7 +2083,7 @@ func (h *AnalyticsHandler) processDVRLifecycle(ctx context.Context, event kafka.
 		INSERT INTO live_artifacts (
 			tenant_id, request_id, internal_name, content_type, stage,
 			progress_percent, error_message, requested_at, started_at, completed_at,
-			segment_count, manifest_path, file_path, processing_node_id, updated_at
+			segment_count, manifest_path, file_path, processing_node_id, updated_at, expires_at
 		)`)
 	if err != nil {
 		h.logger.Errorf("Failed to prepare live_artifacts batch: %v", err)
@@ -1969,6 +2109,7 @@ func (h *AnalyticsHandler) processDVRLifecycle(ctx context.Context, event kafka.
 		nilIfEmptyString(dvrData.GetManifestPath()), // file_path = manifest_path for DVR
 		nilIfEmptyString(mt.GetNodeId()),
 		event.Timestamp,
+		expiresAtTime,
 	); err != nil {
 		h.logger.Errorf("Failed to append to live_artifacts batch: %v", err)
 		if h.metrics != nil {
@@ -1994,7 +2135,7 @@ func (h *AnalyticsHandler) processDVRLifecycle(ctx context.Context, event kafka.
 	batch, err := h.clickhouse.PrepareBatch(ctx, `
 		INSERT INTO clip_events (
 			timestamp, tenant_id, internal_name, request_id, stage, content_type,
-			start_unix, stop_unix, ingest_node_id, file_path, message
+			start_unix, stop_unix, ingest_node_id, file_path, message, expires_at
 		)`)
 	if err != nil {
 		if h.metrics != nil {
@@ -2020,6 +2161,7 @@ func (h *AnalyticsHandler) processDVRLifecycle(ctx context.Context, event kafka.
 		mt.GetNodeId(),                         // ingest_node_id
 		dvrData.GetManifestPath(),              // file_path
 		message,                                // message
+		expiresAt,
 	); err != nil {
 		if h.metrics != nil {
 			h.metrics.ClickHouseInserts.WithLabelValues("clip_events", "error").Inc()
@@ -2041,6 +2183,241 @@ func (h *AnalyticsHandler) processDVRLifecycle(ctx context.Context, event kafka.
 	return nil
 }
 
+// processVodLifecycle handles VOD upload lifecycle events
+// Writes to: live_artifacts (current state) + clip_events (historical log)
+// VOD differs from clips/DVR in that uploads happen directly to S3 via presigned URLs,
+// with Foghorn tracking the lifecycle and emitting events to Kafka.
+func (h *AnalyticsHandler) processVodLifecycle(ctx context.Context, event kafka.AnalyticsEvent) error {
+	h.logger.Infof("Processing VOD lifecycle event: %s", event.EventID)
+
+	// Parse MistTrigger envelope -> VodLifecycleData
+	var mt pb.MistTrigger
+	if err := h.parseProtobufData(event, &mt); err != nil {
+		return fmt.Errorf("failed to parse MistTrigger: %w", err)
+	}
+	tp, ok := mt.GetTriggerPayload().(*pb.MistTrigger_VodLifecycleData)
+	if !ok || tp == nil {
+		return fmt.Errorf("unexpected payload for vod_lifecycle")
+	}
+	vodData := tp.VodLifecycleData
+
+	var tenantID string
+	if vodData.TenantId != nil {
+		tenantID = *vodData.TenantId
+	}
+
+	// Map status to stage string (normalize proto enum to lowercase for ClickHouse)
+	stageStr := normalizeVodStage(vodData.GetStatus())
+
+	var expiresAtTime interface{}
+	if vodData.GetExpiresAt() != 0 {
+		expiresAtTime = time.Unix(vodData.GetExpiresAt(), 0)
+	}
+
+	if h.metrics != nil {
+		h.metrics.ClickHouseInserts.WithLabelValues("live_artifacts", "attempt").Inc()
+	}
+
+	// 1. Write to live_artifacts (current state - ReplacingMergeTree)
+	// VOD uses vod_hash as request_id, and content_type='vod'
+	stateBatch, err := h.clickhouse.PrepareBatch(ctx, `
+		INSERT INTO live_artifacts (
+			tenant_id, request_id, internal_name, content_type, stage,
+			progress_percent, error_message, requested_at, started_at, completed_at,
+			file_path, s3_url, size_bytes, processing_node_id, updated_at, expires_at
+		)`)
+	if err != nil {
+		h.logger.Errorf("Failed to prepare live_artifacts batch for VOD: %v", err)
+		if h.metrics != nil {
+			h.metrics.ClickHouseInserts.WithLabelValues("live_artifacts", "error").Inc()
+		}
+		return err
+	}
+
+	// VOD assets don't have an internal_name (stream name), use filename instead
+	internalName := ""
+	if vodData.Filename != nil {
+		internalName = *vodData.Filename
+	}
+
+	if err := stateBatch.Append(
+		tenantID,
+		vodData.GetVodHash(), // request_id = vod_hash
+		internalName,         // internal_name = filename for VOD
+		"vod",                // content_type
+		stageStr,             // stage
+		uint8(0),             // progress_percent - not tracked for VOD
+		nilIfEmptyStringPtr(vodData.Error),
+		event.Timestamp,                        // requested_at
+		nilIfZeroInt64Ptr(vodData.StartedAt),   // started_at
+		nilIfZeroInt64Ptr(vodData.CompletedAt), // completed_at
+		nilIfEmptyStringPtr(vodData.FilePath),  // file_path
+		nilIfEmptyStringPtr(vodData.S3Url),     // s3_url
+		nilIfZeroUint64Ptr(vodData.SizeBytes),  // size_bytes
+		nilIfEmptyStringPtr(vodData.NodeId),    // processing_node_id
+		event.Timestamp,                        // updated_at
+		expiresAtTime,                          // expires_at
+	); err != nil {
+		h.logger.Errorf("Failed to append to live_artifacts batch for VOD: %v", err)
+		if h.metrics != nil {
+			h.metrics.ClickHouseInserts.WithLabelValues("live_artifacts", "error").Inc()
+		}
+		return err
+	}
+
+	if err := stateBatch.Send(); err != nil {
+		h.logger.Errorf("Failed to send live_artifacts batch for VOD: %v", err)
+		if h.metrics != nil {
+			h.metrics.ClickHouseInserts.WithLabelValues("live_artifacts", "error").Inc()
+		}
+		return err
+	}
+
+	if h.metrics != nil {
+		h.metrics.ClickHouseInserts.WithLabelValues("live_artifacts", "success").Inc()
+		h.metrics.ClickHouseInserts.WithLabelValues("clip_events", "attempt").Inc()
+	}
+
+	// 2. Write to clip_events (historical log - MergeTree)
+	// Reuse clip_events table for VOD lifecycle events (content_type differentiates)
+	batch, err := h.clickhouse.PrepareBatch(ctx, `
+		INSERT INTO clip_events (
+			timestamp, tenant_id, internal_name, request_id, stage, content_type,
+			ingest_node_id, file_path, s3_url, size_bytes, message, expires_at
+		)`)
+	if err != nil {
+		if h.metrics != nil {
+			h.metrics.ClickHouseInserts.WithLabelValues("clip_events", "error").Inc()
+		}
+		return err
+	}
+
+	var expiresAt interface{}
+	if vodData.GetExpiresAt() != 0 {
+		expiresAt = vodData.GetExpiresAt()
+	}
+
+	if err := batch.Append(
+		event.Timestamp,
+		tenantID,
+		internalName,                          // internal_name = filename
+		vodData.GetVodHash(),                  // request_id = vod_hash
+		stageStr,                              // stage
+		"vod",                                 // content_type
+		nilIfEmptyStringPtr(vodData.NodeId),   // ingest_node_id
+		nilIfEmptyStringPtr(vodData.FilePath), // file_path
+		nilIfEmptyStringPtr(vodData.S3Url),    // s3_url
+		nilIfZeroUint64Ptr(vodData.SizeBytes), // size_bytes
+		nilIfEmptyStringPtr(vodData.Error),    // message (error message)
+		expiresAt,                             // expires_at
+	); err != nil {
+		if h.metrics != nil {
+			h.metrics.ClickHouseInserts.WithLabelValues("clip_events", "error").Inc()
+		}
+		return err
+	}
+
+	if err := batch.Send(); err != nil {
+		if h.metrics != nil {
+			h.metrics.ClickHouseInserts.WithLabelValues("clip_events", "error").Inc()
+		}
+		return err
+	}
+
+	if h.metrics != nil {
+		h.metrics.ClickHouseInserts.WithLabelValues("clip_events", "success").Inc()
+	}
+
+	h.logger.WithFields(logging.Fields{
+		"vod_hash":  vodData.GetVodHash(),
+		"tenant_id": tenantID,
+		"stage":     stageStr,
+	}).Info("VOD lifecycle event processed")
+
+	return nil
+}
+
+// normalizeVodStage maps VodLifecycleData.Status enum to lowercase stage string
+func normalizeVodStage(status pb.VodLifecycleData_Status) string {
+	switch status {
+	case pb.VodLifecycleData_STATUS_REQUESTED:
+		return "requested"
+	case pb.VodLifecycleData_STATUS_UPLOADING:
+		return "uploading"
+	case pb.VodLifecycleData_STATUS_PROCESSING:
+		return "processing"
+	case pb.VodLifecycleData_STATUS_COMPLETED:
+		return "completed"
+	case pb.VodLifecycleData_STATUS_FAILED:
+		return "failed"
+	case pb.VodLifecycleData_STATUS_DELETED:
+		return "deleted"
+	default:
+		return "unknown"
+	}
+}
+
+// processStorageLifecycle handles storage lifecycle events
+func (h *AnalyticsHandler) processStorageLifecycle(ctx context.Context, event kafka.AnalyticsEvent) error {
+	h.logger.Infof("Processing storage lifecycle event: %s", event.EventID)
+
+	// Parse MistTrigger envelope -> StorageLifecycleData
+	var mt pb.MistTrigger
+	if err := h.parseProtobufData(event, &mt); err != nil {
+		return fmt.Errorf("failed to parse MistTrigger: %w", err)
+	}
+	tp, ok := mt.GetTriggerPayload().(*pb.MistTrigger_StorageLifecycleData)
+	if !ok || tp == nil {
+		return fmt.Errorf("unexpected payload for storage_lifecycle")
+	}
+	sld := tp.StorageLifecycleData
+
+	// Normalize internal name
+	internalName := ""
+	if sld.InternalName != nil {
+		internalName = mist.ExtractInternalName(sld.GetInternalName())
+	}
+
+	actionStr := strings.ToLower(strings.TrimPrefix(sld.GetAction().String(), "ACTION_"))
+
+	batch, err := h.clickhouse.PrepareBatch(ctx, `
+		INSERT INTO storage_events (
+			timestamp, tenant_id, internal_name, asset_hash,
+			action, asset_type, size_bytes, s3_url, local_path,
+			node_id, duration_ms, warm_duration_ms, error
+		)`)
+	if err != nil {
+		h.logger.Errorf("Failed to prepare ClickHouse batch: %v", err)
+		return err
+	}
+
+	if err := batch.Append(
+		event.Timestamp,
+		event.TenantID,
+		internalName,
+		sld.GetAssetHash(),
+		actionStr,
+		sld.GetAssetType(),
+		sld.GetSizeBytes(),
+		nilIfEmptyString(sld.GetS3Url()),
+		nilIfEmptyString(sld.GetLocalPath()),
+		nilIfEmptyString(mt.GetNodeId()),
+		nilIfZeroInt64(sld.GetDurationMs()),
+		nilIfZeroInt64(sld.GetWarmDurationMs()),
+		nilIfEmptyString(sld.GetError()),
+	); err != nil {
+		h.logger.Errorf("Failed to append to storage_events batch: %v", err)
+		return err
+	}
+
+	if err := batch.Send(); err != nil {
+		h.logger.Errorf("Failed to send storage_events batch: %v", err)
+		return err
+	}
+
+	return nil
+}
+
 func nilIfZeroInt64(v int64) interface{} {
 	if v == 0 {
 		return nil
@@ -2053,4 +2430,216 @@ func nilIfZeroInt32ToUint32(v int32) interface{} {
 		return nil
 	}
 	return uint32(v)
+}
+
+// normalizeDVRStage converts proto DVRLifecycleData_Status to lowercase stage string for ClickHouse
+func normalizeDVRStage(status pb.DVRLifecycleData_Status) string {
+	switch status {
+	case pb.DVRLifecycleData_STATUS_STARTED:
+		return "started"
+	case pb.DVRLifecycleData_STATUS_RECORDING:
+		return "recording"
+	case pb.DVRLifecycleData_STATUS_STOPPED:
+		return "stopped"
+	case pb.DVRLifecycleData_STATUS_FAILED:
+		return "failed"
+	case pb.DVRLifecycleData_STATUS_DELETED:
+		return "deleted"
+	default:
+		return "unknown"
+	}
+}
+
+// processProcessBilling handles process billing events from Helmsman
+// These track transcoding operations (Livepeer Gateway, MistProcAV) for billing
+func (h *AnalyticsHandler) processProcessBilling(ctx context.Context, event kafka.AnalyticsEvent) error {
+	h.logger.Infof("Processing process billing event: %s", event.EventID)
+
+	// Parse MistTrigger envelope -> ProcessBillingEvent
+	var mt pb.MistTrigger
+	if err := h.parseProtobufData(event, &mt); err != nil {
+		return fmt.Errorf("failed to parse MistTrigger: %w", err)
+	}
+	tp, ok := mt.GetTriggerPayload().(*pb.MistTrigger_ProcessBilling)
+	if !ok || tp == nil {
+		return fmt.Errorf("unexpected payload for process_billing")
+	}
+	pbe := tp.ProcessBilling
+
+	// Normalize stream name by stripping live+/vod+ prefix for consistent analytics keys
+	streamName := mist.ExtractInternalName(pbe.GetStreamName())
+
+	// Use tenant_id from event envelope (already enriched by Decklog)
+	tenantID := event.TenantID
+
+	if h.metrics != nil {
+		h.metrics.ClickHouseInserts.WithLabelValues("process_billing", "attempt").Inc()
+	}
+
+	// Write to process_billing table
+	batch, err := h.clickhouse.PrepareBatch(ctx, `
+		INSERT INTO process_billing (
+			timestamp, tenant_id, node_id, stream_name,
+			process_type, track_type, duration_ms,
+			input_codec, output_codec,
+			segment_number, width, height, rendition_count, broadcaster_url, upload_time_us,
+			livepeer_session_id, segment_start_ms, input_bytes, output_bytes_total,
+			attempt_count, turnaround_ms, speed_factor, renditions_json,
+			input_frames, output_frames, decode_us_per_frame, transform_us_per_frame, encode_us_per_frame, is_final,
+			input_frames_delta, output_frames_delta, input_bytes_delta, output_bytes_delta,
+			input_width, input_height, output_width, output_height,
+			input_fpks, output_fps_measured, sample_rate, channels,
+			source_timestamp_ms, sink_timestamp_ms, source_advanced_ms, sink_advanced_ms,
+			rtf_in, rtf_out, pipeline_lag_ms, output_bitrate_bps
+		)`)
+	if err != nil {
+		h.logger.Errorf("Failed to prepare process_billing batch: %v", err)
+		if h.metrics != nil {
+			h.metrics.ClickHouseInserts.WithLabelValues("process_billing", "error").Inc()
+		}
+		return err
+	}
+
+	if err := batch.Append(
+		event.Timestamp,
+		tenantID,
+		pbe.GetNodeId(),
+		streamName,
+		// Process info
+		pbe.GetProcessType(),
+		nilIfEmptyStringPtr(pbe.TrackType),
+		pbe.GetDurationMs(),
+		// Codec info
+		nilIfEmptyStringPtr(pbe.InputCodec),
+		nilIfEmptyStringPtr(pbe.OutputCodec),
+		// Livepeer-specific fields
+		nilIfZeroInt32Ptr(pbe.SegmentNumber),
+		nilIfZeroInt32Ptr(pbe.Width),
+		nilIfZeroInt32Ptr(pbe.Height),
+		nilIfZeroInt32Ptr(pbe.RenditionCount),
+		nilIfEmptyStringPtr(pbe.BroadcasterUrl),
+		nilIfZeroInt64Ptr(pbe.UploadTimeUs),
+		nilIfEmptyStringPtr(pbe.LivepeerSessionId),
+		nilIfZeroInt64Ptr(pbe.SegmentStartMs),
+		nilIfZeroInt64Ptr(pbe.InputBytes),
+		nilIfZeroInt64Ptr(pbe.OutputBytesTotal),
+		nilIfZeroInt32Ptr(pbe.AttemptCount),
+		nilIfZeroInt64Ptr(pbe.TurnaroundMs),
+		nilIfZeroFloat64Ptr(pbe.SpeedFactor),
+		nilIfEmptyStringPtr(pbe.RenditionsJson),
+		// MistProcAV cumulative/timing
+		nilIfZeroInt64Ptr(pbe.InputFrames),
+		nilIfZeroInt64Ptr(pbe.OutputFrames),
+		nilIfZeroInt64Ptr(pbe.DecodeUsPerFrame),
+		nilIfZeroInt64Ptr(pbe.TransformUsPerFrame),
+		nilIfZeroInt64Ptr(pbe.EncodeUsPerFrame),
+		boolToNullableUInt8(pbe.IsFinal),
+		// MistProcAV delta values
+		nilIfZeroInt64Ptr(pbe.InputFramesDelta),
+		nilIfZeroInt64Ptr(pbe.OutputFramesDelta),
+		nilIfZeroInt64Ptr(pbe.InputBytesDelta),
+		nilIfZeroInt64Ptr(pbe.OutputBytesDelta),
+		// MistProcAV dimensions
+		nilIfZeroInt32Ptr(pbe.InputWidth),
+		nilIfZeroInt32Ptr(pbe.InputHeight),
+		nilIfZeroInt32Ptr(pbe.OutputWidth),
+		nilIfZeroInt32Ptr(pbe.OutputHeight),
+		// MistProcAV frame/audio info
+		nilIfZeroInt32Ptr(pbe.InputFpks),
+		nilIfZeroFloat64Ptr(pbe.OutputFpsMeasured),
+		nilIfZeroInt32Ptr(pbe.SampleRate),
+		nilIfZeroInt32Ptr(pbe.Channels),
+		// MistProcAV timing
+		nilIfZeroInt64Ptr(pbe.SourceTimestampMs),
+		nilIfZeroInt64Ptr(pbe.SinkTimestampMs),
+		nilIfZeroInt64Ptr(pbe.SourceAdvancedMs),
+		nilIfZeroInt64Ptr(pbe.SinkAdvancedMs),
+		// MistProcAV performance
+		nilIfZeroFloat64Ptr(pbe.RtfIn),
+		nilIfZeroFloat64Ptr(pbe.RtfOut),
+		nilIfZeroInt64Ptr(pbe.PipelineLagMs),
+		nilIfZeroInt64Ptr(pbe.OutputBitrateBps),
+	); err != nil {
+		h.logger.Errorf("Failed to append to process_billing batch: %v", err)
+		if h.metrics != nil {
+			h.metrics.ClickHouseInserts.WithLabelValues("process_billing", "error").Inc()
+		}
+		return err
+	}
+
+	if err := batch.Send(); err != nil {
+		h.logger.Errorf("Failed to send process_billing batch: %v", err)
+		if h.metrics != nil {
+			h.metrics.ClickHouseInserts.WithLabelValues("process_billing", "error").Inc()
+		}
+		return err
+	}
+
+	if h.metrics != nil {
+		h.metrics.ClickHouseInserts.WithLabelValues("process_billing", "success").Inc()
+	}
+
+	h.logger.WithFields(logging.Fields{
+		"stream":       streamName,
+		"process_type": pbe.GetProcessType(),
+		"track_type":   pbe.GetTrackType(),
+		"duration_ms":  pbe.GetDurationMs(),
+	}).Debug("Successfully processed process billing event")
+
+	return nil
+}
+
+// Helper functions for optional pointer fields
+func nilIfEmptyStringPtr(s *string) interface{} {
+	if s == nil || *s == "" {
+		return nil
+	}
+	return *s
+}
+
+func nilIfZeroInt32Ptr(v *int32) interface{} {
+	if v == nil || *v == 0 {
+		return nil
+	}
+	return *v
+}
+
+func nilIfZeroInt64Ptr(v *int64) interface{} {
+	if v == nil || *v == 0 {
+		return nil
+	}
+	return *v
+}
+
+func nilIfZeroUint64Ptr(v *uint64) interface{} {
+	if v == nil || *v == 0 {
+		return nil
+	}
+	return *v
+}
+
+// valueOrNilUint64Ptr returns the value if pointer is non-nil (preserves 0), nil otherwise.
+// Use this for fields where 0 is a valid value (e.g., packet stats - HLS has 0 packets).
+func valueOrNilUint64Ptr(v *uint64) interface{} {
+	if v == nil {
+		return nil
+	}
+	return *v
+}
+
+func nilIfZeroFloat64Ptr(v *float64) interface{} {
+	if v == nil || *v == 0 {
+		return nil
+	}
+	return *v
+}
+
+func boolToNullableUInt8(v *bool) interface{} {
+	if v == nil {
+		return nil
+	}
+	if *v {
+		return uint8(1)
+	}
+	return uint8(0)
 }

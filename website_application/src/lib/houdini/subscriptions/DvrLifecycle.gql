@@ -1,3 +1,5 @@
+# Real-time DVR recording lifecycle updates from start to completion
+# Tracks recording status, progress, manifest paths, and error states
 subscription DvrLifecycle($stream: String!) {
   dvrLifecycle(stream: $stream) {
     status

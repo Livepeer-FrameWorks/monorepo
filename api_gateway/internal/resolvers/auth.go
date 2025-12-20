@@ -89,7 +89,10 @@ func (r *Resolver) DoGetMe(ctx context.Context) (*pb.User, error) {
 
 	// JWT token is in context, validated by middleware
 	// gRPC uses metadata from context, not explicit token param
-	_, ok := ctx.Value("jwt_token").(string)
+	var ok bool
+	if v := ctx.Value("jwt_token"); v != nil {
+		_, ok = v.(string)
+	}
 	if !ok {
 		if r.Metrics != nil {
 			r.Metrics.Operations.WithLabelValues("getMe", "auth_error").Inc()

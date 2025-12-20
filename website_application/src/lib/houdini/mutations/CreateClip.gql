@@ -1,22 +1,9 @@
+# Create a new clip from a stream recording
 mutation CreateClip($input: CreateClipInput!) {
   createClip(input: $input) {
     __typename
     ... on Clip {
-      id
-      clipHash
-      streamName
-      title
-      description
-      startTime
-      duration
-      nodeId
-      storagePath
-      sizeBytes
-      status
-      accessCount
-      createdAt
-      updatedAt
-      ...AllClips_insert @prepend
+      ...ClipFields
     }
     ... on ValidationError {
       ...ValidationErrorFields @mask_disable

@@ -1,3 +1,4 @@
+# Fetch current tenant basic information
 query GetTenant {
   tenant {
     id

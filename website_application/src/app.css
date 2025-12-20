@@ -2,6 +2,12 @@
 @import "tw-animate-css";
 @import "leaflet/dist/leaflet.css";
 
+/* StreamCrafter CSS (wrapped in @layer fw-streamcrafter for isolation) */
+@import "../../npm_studio/packages/core/src/styles/streamcrafter.css";
+
+/* Player CSS (wrapped in @layer fw-player for isolation) */
+@import "../../npm_player/packages/core/src/styles/player.css";
+
 /* Import design tokens (HSL format for alpha transparency) */
 @import "./styles/tokens.css";
 

@@ -333,9 +333,12 @@ func newAdminBootstrapTokensCreateCmd() *cobra.Command {
 		if err := validateDuration(ttl); err != nil {
 			return fmt.Errorf("--ttl: %w", err)
 		}
-		// edge_node requires tenant-id
+		// edge_node requires tenant-id and cluster-id
 		if kind == "edge_node" && strings.TrimSpace(tenantID) == "" {
 			return fmt.Errorf("--tenant-id is required for edge_node tokens")
+		}
+		if kind == "edge_node" && strings.TrimSpace(clusterID) == "" {
+			return fmt.Errorf("--cluster-id is required for edge_node tokens (binds token to specific cluster)")
 		}
 		// Validate optional UUIDs if provided
 		if tenantID != "" {
@@ -403,7 +406,7 @@ func newAdminBootstrapTokensCreateCmd() *cobra.Command {
 	}}
 	cmd.Flags().StringVar(&kind, "kind", "edge_node", "token kind: edge_node|service")
 	cmd.Flags().StringVar(&tenantID, "tenant-id", "", "tenant id (required for edge_node)")
-	cmd.Flags().StringVar(&clusterID, "cluster-id", "", "cluster id (optional)")
+	cmd.Flags().StringVar(&clusterID, "cluster-id", "", "cluster id (required for edge_node, binds token to cluster)")
 	cmd.Flags().StringVar(&expectedIP, "expected-ip", "", "expected client IP (optional)")
 	cmd.Flags().StringVar(&ttl, "ttl", "24h", "time-to-live (e.g., 24h)")
 	cmd.Flags().StringVar(&name, "name", "Bootstrap Token", "display name for the token")

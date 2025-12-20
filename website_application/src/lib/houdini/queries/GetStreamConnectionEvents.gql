@@ -1,3 +1,5 @@
+# Fetch paginated connection events for a specific stream
+# Returns viewer connect/disconnect events with geographic details
 query GetStreamConnectionEvents(
   $stream: String!
   $timeRange: TimeRangeInput

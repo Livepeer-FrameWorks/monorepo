@@ -24,8 +24,9 @@ const config = {
   turnstileSiteKey: import.meta.env.VITE_TURNSTILE_FORMS_SITE_KEY || '',
 
   // Gateway GraphQL URL (used by Status page and Player)
-  // Example: http://localhost:18090/graphql/
-  gatewayUrl: import.meta.env.VITE_GATEWAY_URL || 'http://localhost:18090/graphql/',
+  // In dev: use relative path so Vite proxy can intercept
+  // In prod: set VITE_GATEWAY_URL to full URL (e.g., https://api.example.com/graphql)
+  gatewayUrl: import.meta.env.VITE_GATEWAY_URL || '/graphql',
 
   // Company information
   companyName: import.meta.env.VITE_COMPANY_NAME || 'FrameWorks',

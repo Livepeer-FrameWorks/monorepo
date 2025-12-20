@@ -25,7 +25,6 @@ type GRPCClient struct {
 	connection pb.ConnectionAnalyticsServiceClient
 	node       pb.NodeAnalyticsServiceClient
 	routing    pb.RoutingAnalyticsServiceClient
-	realtime   pb.RealtimeAnalyticsServiceClient
 	platform   pb.PlatformAnalyticsServiceClient
 	clip       pb.ClipAnalyticsServiceClient
 	aggregated pb.AggregatedAnalyticsServiceClient
@@ -121,7 +120,6 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 		connection: pb.NewConnectionAnalyticsServiceClient(conn),
 		node:       pb.NewNodeAnalyticsServiceClient(conn),
 		routing:    pb.NewRoutingAnalyticsServiceClient(conn),
-		realtime:   pb.NewRealtimeAnalyticsServiceClient(conn),
 		platform:   pb.NewPlatformAnalyticsServiceClient(conn),
 		clip:       pb.NewClipAnalyticsServiceClient(conn),
 		aggregated: pb.NewAggregatedAnalyticsServiceClient(conn),
@@ -185,13 +183,6 @@ func (c *GRPCClient) GetStreamAnalytics(ctx context.Context, tenantID string, st
 	return c.stream.GetStreamAnalytics(ctx, req)
 }
 
-// GetStreamDetails returns detailed analytics for a specific stream
-func (c *GRPCClient) GetStreamDetails(ctx context.Context, internalName string) (*pb.GetStreamDetailsResponse, error) {
-	return c.stream.GetStreamDetails(ctx, &pb.GetStreamDetailsRequest{
-		InternalName: internalName,
-	})
-}
-
 // GetStreamEvents returns events for a specific stream with cursor pagination
 func (c *GRPCClient) GetStreamEvents(ctx context.Context, internalName string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetStreamEventsResponse, error) {
 	return c.stream.GetStreamEvents(ctx, &pb.GetStreamEventsRequest{
@@ -204,15 +195,6 @@ func (c *GRPCClient) GetStreamEvents(ctx context.Context, internalName string, t
 // GetBufferEvents returns buffer events for a specific stream
 func (c *GRPCClient) GetBufferEvents(ctx context.Context, internalName string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetBufferEventsResponse, error) {
 	return c.stream.GetBufferEvents(ctx, &pb.GetBufferEventsRequest{
-		InternalName: internalName,
-		TimeRange:    buildTimeRange(timeRange),
-		Pagination:   buildCursorPagination(opts),
-	})
-}
-
-// GetEndEvents returns end events for a specific stream
-func (c *GRPCClient) GetEndEvents(ctx context.Context, internalName string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetEndEventsResponse, error) {
-	return c.stream.GetEndEvents(ctx, &pb.GetEndEventsRequest{
 		InternalName: internalName,
 		TimeRange:    buildTimeRange(timeRange),
 		Pagination:   buildCursorPagination(opts),
@@ -252,13 +234,6 @@ func (c *GRPCClient) GetStreamsStatus(ctx context.Context, tenantID string, stre
 // ============================================================================
 // Viewer Analytics
 // ============================================================================
-
-// GetViewerStats returns viewer statistics for a specific stream
-func (c *GRPCClient) GetViewerStats(ctx context.Context, internalName string) (*pb.GetViewerStatsResponse, error) {
-	return c.viewer.GetViewerStats(ctx, &pb.GetViewerStatsRequest{
-		InternalName: internalName,
-	})
-}
 
 // GetViewerMetrics returns viewer session metrics
 func (c *GRPCClient) GetViewerMetrics(ctx context.Context, tenantID string, streamID *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetViewerMetricsResponse, error) {
@@ -358,12 +333,24 @@ func (c *GRPCClient) GetNodeMetrics1H(ctx context.Context, nodeID *string, timeR
 	return c.node.GetNodeMetrics1H(ctx, req)
 }
 
+// GetLiveNodes returns current state of nodes from live_nodes (ReplacingMergeTree)
+// Supports multi-tenant access for subscribed clusters via relatedTenantIDs
+func (c *GRPCClient) GetLiveNodes(ctx context.Context, nodeID *string, relatedTenantIDs []string) (*pb.GetLiveNodesResponse, error) {
+	req := &pb.GetLiveNodesRequest{
+		RelatedTenantIds: relatedTenantIDs,
+	}
+	if nodeID != nil {
+		req.NodeId = nodeID
+	}
+	return c.node.GetLiveNodes(ctx, req)
+}
+
 // ============================================================================
 // Routing Analytics
 // ============================================================================
 
 // GetRoutingEvents returns routing decision events
-func (c *GRPCClient) GetRoutingEvents(ctx context.Context, stream *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts, relatedTenantIDs []string) (*pb.GetRoutingEventsResponse, error) {
+func (c *GRPCClient) GetRoutingEvents(ctx context.Context, stream *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts, relatedTenantIDs []string, subjectTenantID, clusterID *string) (*pb.GetRoutingEventsResponse, error) {
 	req := &pb.GetRoutingEventsRequest{
 		TimeRange:        buildTimeRange(timeRange),
 		Pagination:       buildCursorPagination(opts),
@@ -372,26 +359,14 @@ func (c *GRPCClient) GetRoutingEvents(ctx context.Context, stream *string, timeR
 	if stream != nil {
 		req.Stream = stream
 	}
+	// Dual-tenant attribution filters (RFC: routing-events-dual-tenant-attribution)
+	if subjectTenantID != nil {
+		req.StreamTenantId = subjectTenantID
+	}
+	if clusterID != nil {
+		req.ClusterId = clusterID
+	}
 	return c.routing.GetRoutingEvents(ctx, req)
-}
-
-// ============================================================================
-// Realtime Analytics
-// ============================================================================
-
-// GetRealtimeStreams returns current live streams with analytics
-func (c *GRPCClient) GetRealtimeStreams(ctx context.Context) (*pb.GetRealtimeStreamsResponse, error) {
-	return c.realtime.GetRealtimeStreams(ctx, &pb.GetRealtimeStreamsRequest{})
-}
-
-// GetRealtimeViewers returns current viewer counts across all streams
-func (c *GRPCClient) GetRealtimeViewers(ctx context.Context) (*pb.GetRealtimeViewersResponse, error) {
-	return c.realtime.GetRealtimeViewers(ctx, &pb.GetRealtimeViewersRequest{})
-}
-
-// GetRealtimeEvents returns recent events across all streams
-func (c *GRPCClient) GetRealtimeEvents(ctx context.Context) (*pb.GetRealtimeEventsResponse, error) {
-	return c.realtime.GetRealtimeEvents(ctx, &pb.GetRealtimeEventsRequest{})
 }
 
 // ============================================================================
@@ -447,6 +422,22 @@ func (c *GRPCClient) GetArtifactStates(ctx context.Context, tenantID string, int
 	}
 	if stage != nil {
 		req.Stage = stage
+	}
+	return c.clip.GetArtifactStates(ctx, req)
+}
+
+// GetArtifactStatesByIDs returns artifact states for specific request IDs (batch lookup)
+// Used by GraphQL field resolvers to efficiently fetch lifecycle data for multiple clips/DVRs
+func (c *GRPCClient) GetArtifactStatesByIDs(ctx context.Context, tenantID string, requestIDs []string, contentType *string) (*pb.GetArtifactStatesResponse, error) {
+	req := &pb.GetArtifactStatesRequest{
+		TenantId:   tenantID,
+		RequestIds: requestIDs,
+		Pagination: &pb.CursorPaginationRequest{
+			First: int32(len(requestIDs)), // Request exactly the number we need
+		},
+	}
+	if contentType != nil {
+		req.ContentType = contentType
 	}
 	return c.clip.GetArtifactStates(ctx, req)
 }
@@ -508,4 +499,136 @@ func (c *GRPCClient) GetStorageUsage(ctx context.Context, tenantID string, nodeI
 		req.NodeId = nodeID
 	}
 	return c.aggregated.GetStorageUsage(ctx, req)
+}
+
+// GetStorageEvents returns storage lifecycle events (freeze/defrost operations)
+func (c *GRPCClient) GetStorageEvents(ctx context.Context, tenantID string, internalName *string, assetType *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetStorageEventsResponse, error) {
+	req := &pb.GetStorageEventsRequest{
+		TenantId:   tenantID,
+		TimeRange:  buildTimeRange(timeRange),
+		Pagination: buildCursorPagination(opts),
+	}
+	if internalName != nil {
+		req.InternalName = internalName
+	}
+	if assetType != nil {
+		req.AssetType = assetType
+	}
+	return c.aggregated.GetStorageEvents(ctx, req)
+}
+
+// GetStreamHealth5m returns 5-minute aggregated health metrics for a stream
+func (c *GRPCClient) GetStreamHealth5m(ctx context.Context, tenantID string, internalName string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetStreamHealth5MResponse, error) {
+	req := &pb.GetStreamHealth5MRequest{
+		TenantId:     tenantID,
+		InternalName: internalName,
+		TimeRange:    buildTimeRange(timeRange),
+		Pagination:   buildCursorPagination(opts),
+	}
+	return c.aggregated.GetStreamHealth5M(ctx, req)
+}
+
+// GetNodePerformance5m returns 5-minute aggregated node performance metrics
+func (c *GRPCClient) GetNodePerformance5m(ctx context.Context, tenantID string, nodeID *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetNodePerformance5MResponse, error) {
+	req := &pb.GetNodePerformance5MRequest{
+		TenantId:   tenantID,
+		TimeRange:  buildTimeRange(timeRange),
+		Pagination: buildCursorPagination(opts),
+	}
+	if nodeID != nil {
+		req.NodeId = nodeID
+	}
+	return c.aggregated.GetNodePerformance5M(ctx, req)
+}
+
+// GetViewerHoursHourly returns hourly viewer hours aggregates
+func (c *GRPCClient) GetViewerHoursHourly(ctx context.Context, tenantID string, stream *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetViewerHoursHourlyResponse, error) {
+	req := &pb.GetViewerHoursHourlyRequest{
+		TenantId:   tenantID,
+		TimeRange:  buildTimeRange(timeRange),
+		Pagination: buildCursorPagination(opts),
+	}
+	if stream != nil {
+		req.Stream = stream
+	}
+	return c.aggregated.GetViewerHoursHourly(ctx, req)
+}
+
+// GetViewerGeoHourly returns hourly geographic breakdown of viewers
+func (c *GRPCClient) GetViewerGeoHourly(ctx context.Context, tenantID string, stream *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetViewerGeoHourlyResponse, error) {
+	req := &pb.GetViewerGeoHourlyRequest{
+		TenantId:   tenantID,
+		TimeRange:  buildTimeRange(timeRange),
+		Pagination: buildCursorPagination(opts),
+	}
+	if stream != nil {
+		req.Stream = stream
+	}
+	return c.aggregated.GetViewerGeoHourly(ctx, req)
+}
+
+// GetTenantDailyStats returns daily tenant statistics for PlatformOverview.dailyStats
+func (c *GRPCClient) GetTenantDailyStats(ctx context.Context, tenantID string, days int32) (*pb.GetTenantDailyStatsResponse, error) {
+	req := &pb.GetTenantDailyStatsRequest{
+		TenantId: tenantID,
+		Days:     days,
+	}
+	return c.aggregated.GetTenantDailyStats(ctx, req)
+}
+
+// GetProcessingUsage returns transcoding/processing usage records and daily summaries
+// Used for billing display and transcoding analytics pages
+func (c *GRPCClient) GetProcessingUsage(ctx context.Context, tenantID string, streamName *string, processType *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts, summaryOnly bool) (*pb.GetProcessingUsageResponse, error) {
+	req := &pb.GetProcessingUsageRequest{
+		TenantId:    tenantID,
+		TimeRange:   buildTimeRange(timeRange),
+		Pagination:  buildCursorPagination(opts),
+		SummaryOnly: summaryOnly,
+	}
+	if streamName != nil {
+		req.StreamName = streamName
+	}
+	if processType != nil {
+		req.ProcessType = processType
+	}
+	return c.aggregated.GetProcessingUsage(ctx, req)
+}
+
+// GetRebufferingEvents returns buffer state transition events
+func (c *GRPCClient) GetRebufferingEvents(ctx context.Context, tenantID string, internalName *string, nodeID *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetRebufferingEventsResponse, error) {
+	req := &pb.GetRebufferingEventsRequest{
+		TenantId:   tenantID,
+		TimeRange:  buildTimeRange(timeRange),
+		Pagination: buildCursorPagination(opts),
+	}
+	if internalName != nil {
+		req.InternalName = internalName
+	}
+	if nodeID != nil {
+		req.NodeId = nodeID
+	}
+	return c.aggregated.GetRebufferingEvents(ctx, req)
+}
+
+// GetTenantAnalyticsDaily returns daily tenant-level analytics rollups
+func (c *GRPCClient) GetTenantAnalyticsDaily(ctx context.Context, tenantID string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetTenantAnalyticsDailyResponse, error) {
+	req := &pb.GetTenantAnalyticsDailyRequest{
+		TenantId:   tenantID,
+		TimeRange:  buildTimeRange(timeRange),
+		Pagination: buildCursorPagination(opts),
+	}
+	return c.aggregated.GetTenantAnalyticsDaily(ctx, req)
+}
+
+// GetStreamAnalyticsDaily returns daily stream-level analytics rollups
+func (c *GRPCClient) GetStreamAnalyticsDaily(ctx context.Context, tenantID string, internalName *string, timeRange *TimeRangeOpts, opts *CursorPaginationOpts) (*pb.GetStreamAnalyticsDailyResponse, error) {
+	req := &pb.GetStreamAnalyticsDailyRequest{
+		TenantId:   tenantID,
+		TimeRange:  buildTimeRange(timeRange),
+		Pagination: buildCursorPagination(opts),
+	}
+	if internalName != nil {
+		req.InternalName = internalName
+	}
+	return c.aggregated.GetStreamAnalyticsDaily(ctx, req)
 }

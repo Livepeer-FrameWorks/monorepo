@@ -1,3 +1,4 @@
+# Subscribe to real-time updates from a cluster
 mutation SubscribeToCluster($clusterId: ID!) {
   subscribeToCluster(clusterId: $clusterId)
 }

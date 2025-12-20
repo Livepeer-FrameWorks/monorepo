@@ -189,12 +189,19 @@ func main() {
 		defer cancel()
 		grpcPortInt, _ := strconv.Atoi(grpcPort)
 		advertiseHost := config.GetEnv("SIGNALMAN_HOST", "signalman")
+		clusterID := config.GetEnv("CLUSTER_ID", "")
 		if _, err := qc.BootstrapService(ctx, &pb.BootstrapServiceRequest{
 			Type:          "signalman",
 			Version:       version.Version,
 			Protocol:      "grpc",
 			Port:          int32(grpcPortInt),
 			AdvertiseHost: &advertiseHost,
+			ClusterId: func() *string {
+				if clusterID != "" {
+					return &clusterID
+				}
+				return nil
+			}(),
 		}); err != nil {
 			logger.WithError(err).Warn("Quartermaster bootstrap (signalman) failed")
 		} else {
@@ -251,14 +258,14 @@ func mapEventTypeToProto(eventType string) pb.EventType {
 		return pb.EventType_EVENT_TYPE_CLIP_LIFECYCLE
 	case "dvr_lifecycle":
 		return pb.EventType_EVENT_TYPE_DVR_LIFECYCLE
+	case "vod_lifecycle":
+		return pb.EventType_EVENT_TYPE_VOD_LIFECYCLE
 	case "push_rewrite":
 		return pb.EventType_EVENT_TYPE_PUSH_REWRITE
 	case "push_out_start":
 		return pb.EventType_EVENT_TYPE_PUSH_OUT_START
 	case "push_end":
 		return pb.EventType_EVENT_TYPE_PUSH_END
-	case "stream_bandwidth":
-		return pb.EventType_EVENT_TYPE_STREAM_BANDWIDTH
 	case "recording_complete":
 		return pb.EventType_EVENT_TYPE_RECORDING_COMPLETE
 	default:
@@ -298,6 +305,8 @@ func eventToProtoData(data map[string]interface{}, logger logging.Logger) *pb.Ev
 		eventData.Payload = &pb.EventData_ClipLifecycle{ClipLifecycle: p.ClipLifecycleData}
 	case *pb.MistTrigger_DvrLifecycleData:
 		eventData.Payload = &pb.EventData_DvrLifecycle{DvrLifecycle: p.DvrLifecycleData}
+	case *pb.MistTrigger_VodLifecycleData:
+		eventData.Payload = &pb.EventData_VodLifecycle{VodLifecycle: p.VodLifecycleData}
 	case *pb.MistTrigger_LoadBalancingData:
 		eventData.Payload = &pb.EventData_LoadBalancing{LoadBalancing: p.LoadBalancingData}
 	case *pb.MistTrigger_PushRewrite:
@@ -312,10 +321,12 @@ func eventToProtoData(data map[string]interface{}, logger logging.Logger) *pb.Ev
 		eventData.Payload = &pb.EventData_ViewerDisconnect{ViewerDisconnect: p.ViewerDisconnect}
 	case *pb.MistTrigger_StreamEnd:
 		eventData.Payload = &pb.EventData_StreamEnd{StreamEnd: p.StreamEnd}
-	case *pb.MistTrigger_StreamBandwidth:
-		eventData.Payload = &pb.EventData_StreamBandwidth{StreamBandwidth: p.StreamBandwidth}
 	case *pb.MistTrigger_RecordingComplete:
 		eventData.Payload = &pb.EventData_Recording{Recording: p.RecordingComplete}
+	case *pb.MistTrigger_StreamLifecycleUpdate:
+		eventData.Payload = &pb.EventData_StreamLifecycle{StreamLifecycle: p.StreamLifecycleUpdate}
+	case *pb.MistTrigger_StreamBuffer:
+		eventData.Payload = &pb.EventData_StreamBuffer{StreamBuffer: p.StreamBuffer}
 	}
 
 	return eventData

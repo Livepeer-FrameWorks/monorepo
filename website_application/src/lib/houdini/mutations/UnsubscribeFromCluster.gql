@@ -1,3 +1,4 @@
+# Unsubscribe from real-time cluster updates
 mutation UnsubscribeFromCluster($clusterId: ID!) {
   unsubscribeFromCluster(clusterId: $clusterId)
 }

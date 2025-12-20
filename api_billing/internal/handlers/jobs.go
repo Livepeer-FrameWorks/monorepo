@@ -146,7 +146,7 @@ func (jm *JobManager) handleUsageReport(ctx context.Context, msg kafka.Message) 
 	jm.logger.WithFields(logging.Fields{
 		"tenant_id": summary.TenantID,
 		"period":    summary.Period,
-	}).Debug("Processed usage summary from Kafka")
+	}).Info("Processed usage summary from Kafka")
 
 	return nil
 }
@@ -248,7 +248,7 @@ func (jm *JobManager) generateMonthlyInvoices() {
 		// Get usage data from the new usage_records table
 		// Use precise timestamp boundaries instead of billing_month string
 		prevMonthStart := firstOfMonth.AddDate(0, -1, 0) // First of previous month
-		prevMonthEnd := firstOfMonth                      // First of current month (exclusive)
+		prevMonthEnd := firstOfMonth                     // First of current month (exclusive)
 		usageData := map[string]float64{}
 
 		// Fetch raw records to aggregate correctly (SUM vs MAX)
@@ -346,6 +346,43 @@ func (jm *JobManager) generateMonthlyInvoices() {
 				// TODO: Get compute allocation limit when compute billing is implemented
 				// For now, charge all GPU hours at overage rate
 				meteredAmount += gpuHours * effectiveOverageRates.Compute.UnitPrice
+			}
+
+			// 4. Processing/Transcoding charges with per-codec pricing
+			processingRates := effectiveOverageRates.Processing
+			if customPricing.OverageRates.Processing.H264RatePerMin > 0 {
+				processingRates = customPricing.OverageRates.Processing
+			}
+
+			if processingRates.H264RatePerMin > 0 {
+				baseRate := processingRates.H264RatePerMin
+				var processingCost float64
+
+				// Helper to calculate cost for a codec
+				calcCodecCost := func(seconds float64, codec string) float64 {
+					if seconds <= 0 {
+						return 0
+					}
+					minutes := seconds / 60
+					multiplier := processingRates.GetCodecMultiplier(codec)
+					return minutes * baseRate * multiplier
+				}
+
+				// Livepeer per-codec costs
+				processingCost += calcCodecCost(usageData["livepeer_h264_seconds"], "h264")
+				processingCost += calcCodecCost(usageData["livepeer_vp9_seconds"], "vp9")
+				processingCost += calcCodecCost(usageData["livepeer_av1_seconds"], "av1")
+				processingCost += calcCodecCost(usageData["livepeer_hevc_seconds"], "hevc")
+
+				// Native AV per-codec costs (audio codecs return 0 due to 0.0 multiplier)
+				processingCost += calcCodecCost(usageData["native_av_h264_seconds"], "h264")
+				processingCost += calcCodecCost(usageData["native_av_vp9_seconds"], "vp9")
+				processingCost += calcCodecCost(usageData["native_av_av1_seconds"], "av1")
+				processingCost += calcCodecCost(usageData["native_av_hevc_seconds"], "hevc")
+				processingCost += calcCodecCost(usageData["native_av_aac_seconds"], "aac")   // 0.0x = FREE
+				processingCost += calcCodecCost(usageData["native_av_opus_seconds"], "opus") // 0.0x = FREE
+
+				meteredAmount += processingCost
 			}
 		}
 
@@ -1009,7 +1046,7 @@ func (jm *JobManager) deriveWalletPrivateKey(address, asset string) (string, err
 		"address": address,
 		"asset":   asset,
 		"key_len": len(privateKey),
-	}).Debug("Derived wallet private key")
+	}).Info("Derived wallet private key")
 
 	return privateKey, nil
 }
@@ -1097,7 +1134,7 @@ func (jm *JobManager) processUsageSummary(summary models.UsageSummary, source st
 		// For now, use timestamp.
 		periodStart = summary.Timestamp
 		periodEnd = summary.Timestamp
-		
+
 		jm.logger.WithFields(logging.Fields{
 			"tenant_id": summary.TenantID,
 			"period":    summary.Period,
@@ -1116,28 +1153,89 @@ func (jm *JobManager) processUsageSummary(summary models.UsageSummary, source st
 		"clips_deleted":           float64(summary.ClipsDeleted),
 		"clip_storage_added_gb":   summary.ClipStorageAddedGB,
 		"clip_storage_deleted_gb": summary.ClipStorageDeletedGB,
+		"dvr_added":               float64(summary.DvrAdded),
+		"dvr_deleted":             float64(summary.DvrDeleted),
+		"dvr_storage_added_gb":    summary.DvrStorageAddedGB,
+		"dvr_storage_deleted_gb":  summary.DvrStorageDeletedGB,
+		"vod_added":               float64(summary.VodAdded),
+		"vod_deleted":             float64(summary.VodDeleted),
+		"vod_storage_added_gb":    summary.VodStorageAddedGB,
+		"vod_storage_deleted_gb":  summary.VodStorageDeletedGB,
 		"max_viewers":             float64(summary.MaxViewers),
 		"total_streams":           float64(summary.TotalStreams),
+		"total_viewers":           float64(summary.TotalViewers),
+		"peak_viewers":            float64(summary.PeakViewers),
+		// Processing/transcoding usage for billing (legacy totals)
+		"livepeer_seconds":         summary.LivepeerSeconds,
+		"livepeer_segment_count":   float64(summary.LivepeerSegmentCount),
+		"livepeer_unique_streams":  float64(summary.LivepeerUniqueStreams),
+		"native_av_seconds":        summary.NativeAvSeconds,
+		"native_av_segment_count":  float64(summary.NativeAvSegmentCount),
+		"native_av_unique_streams": float64(summary.NativeAvUniqueStreams),
+		// Per-codec breakdown: Livepeer
+		"livepeer_h264_seconds": summary.LivepeerH264Seconds,
+		"livepeer_vp9_seconds":  summary.LivepeerVP9Seconds,
+		"livepeer_av1_seconds":  summary.LivepeerAV1Seconds,
+		"livepeer_hevc_seconds": summary.LivepeerHEVCSeconds,
+		// Per-codec breakdown: Native AV
+		"native_av_h264_seconds": summary.NativeAvH264Seconds,
+		"native_av_vp9_seconds":  summary.NativeAvVP9Seconds,
+		"native_av_av1_seconds":  summary.NativeAvAV1Seconds,
+		"native_av_hevc_seconds": summary.NativeAvHEVCSeconds,
+		"native_av_aac_seconds":  summary.NativeAvAACSeconds,
+		"native_av_opus_seconds": summary.NativeAvOpusSeconds,
+		// Track type aggregates
+		"audio_seconds": summary.AudioSeconds,
+		"video_seconds": summary.VideoSeconds,
 	}
 
 	// Build usage details JSONB
 	usageDetails := models.JSONB{
 		"max_viewers":             summary.MaxViewers,
+		"total_viewers":           summary.TotalViewers,
+		"peak_viewers":            summary.PeakViewers,
 		"total_streams":           summary.TotalStreams,
 		"unique_users":            summary.UniqueUsers,
 		"avg_viewers":             summary.AvgViewers,
 		"unique_countries":        summary.UniqueCountries,
 		"unique_cities":           summary.UniqueCities,
 		"geo_breakdown":           summary.GeoBreakdown,
-		"avg_buffer_health":       summary.AvgBufferHealth,
-		"avg_bitrate":             summary.AvgBitrate,
-		"packet_loss_rate":        summary.PacketLossRate,
 		"source":                  source,
 		"clips_added":             summary.ClipsAdded,
 		"clips_deleted":           summary.ClipsDeleted,
 		"clip_storage_added_gb":   summary.ClipStorageAddedGB,
 		"clip_storage_deleted_gb": summary.ClipStorageDeletedGB,
+		"dvr_added":               summary.DvrAdded,
+		"dvr_deleted":             summary.DvrDeleted,
+		"dvr_storage_added_gb":    summary.DvrStorageAddedGB,
+		"dvr_storage_deleted_gb":  summary.DvrStorageDeletedGB,
+		"vod_added":               summary.VodAdded,
+		"vod_deleted":             summary.VodDeleted,
+		"vod_storage_added_gb":    summary.VodStorageAddedGB,
+		"vod_storage_deleted_gb":  summary.VodStorageDeletedGB,
 		"storage_gb":              summary.StorageGB,
+		// Processing/transcoding usage details (legacy totals)
+		"livepeer_seconds":         summary.LivepeerSeconds,
+		"livepeer_segment_count":   summary.LivepeerSegmentCount,
+		"livepeer_unique_streams":  summary.LivepeerUniqueStreams,
+		"native_av_seconds":        summary.NativeAvSeconds,
+		"native_av_segment_count":  summary.NativeAvSegmentCount,
+		"native_av_unique_streams": summary.NativeAvUniqueStreams,
+		// Per-codec breakdown: Livepeer
+		"livepeer_h264_seconds": summary.LivepeerH264Seconds,
+		"livepeer_vp9_seconds":  summary.LivepeerVP9Seconds,
+		"livepeer_av1_seconds":  summary.LivepeerAV1Seconds,
+		"livepeer_hevc_seconds": summary.LivepeerHEVCSeconds,
+		// Per-codec breakdown: Native AV
+		"native_av_h264_seconds": summary.NativeAvH264Seconds,
+		"native_av_vp9_seconds":  summary.NativeAvVP9Seconds,
+		"native_av_av1_seconds":  summary.NativeAvAV1Seconds,
+		"native_av_hevc_seconds": summary.NativeAvHEVCSeconds,
+		"native_av_aac_seconds":  summary.NativeAvAACSeconds,
+		"native_av_opus_seconds": summary.NativeAvOpusSeconds,
+		// Track type aggregates
+		"audio_seconds": summary.AudioSeconds,
+		"video_seconds": summary.VideoSeconds,
 	}
 
 	// Upsert each usage type
@@ -1186,7 +1284,7 @@ func (jm *JobManager) updateInvoiceDraft(tenantID string) error {
 		&overageRates, &storageAllocation, &bandwidthAllocation, &customPricing)
 
 	if err == sql.ErrNoRows {
-		jm.logger.WithField("tenant_id", tenantID).Debug("No active subscription, skipping invoice draft")
+		jm.logger.WithField("tenant_id", tenantID).Info("No active subscription, skipping invoice draft")
 		return nil
 	}
 	if err != nil {
@@ -1291,7 +1389,7 @@ func (jm *JobManager) updateInvoiceDraft(tenantID string) error {
 		"tenant_id":         tenantID,
 		"billing_period":    periodStart.Format("2006-01"),
 		"calculated_amount": totalAmount,
-	}).Debug("Updated invoice draft")
+	}).Info("Updated invoice draft")
 
 	return nil
 }

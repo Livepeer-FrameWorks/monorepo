@@ -23,7 +23,8 @@ function parseStreamingUrl(url: string): ParsedStreamingUrl {
 const rawConfig = {
   ingestUrl:
     import.meta.env.VITE_STREAMING_INGEST_URL || "http://localhost:8080",
-  edgeUrl: import.meta.env.VITE_STREAMING_EDGE_URL || "http://localhost:8080",
+  playUrl: import.meta.env.VITE_STREAMING_PLAY_URL || "http://localhost:18008", // Foghorn for HTTP 307 redirects
+  edgeUrl: import.meta.env.VITE_STREAMING_EDGE_URL || "http://localhost:8080", // Direct edge for non-HTTP protocols
   rtmpPort: import.meta.env.VITE_STREAMING_RTMP_PORT || "1935",
   srtPort: import.meta.env.VITE_STREAMING_SRT_PORT || "8889",
   rtmpPath: import.meta.env.VITE_STREAMING_RTMP_PATH || "/live",
@@ -38,7 +39,8 @@ const rawConfig = {
 
 // Parsed URLs for deriving hostnames and TLS mode
 const ingest = parseStreamingUrl(rawConfig.ingestUrl);
-const edge = parseStreamingUrl(rawConfig.edgeUrl);
+const play = parseStreamingUrl(rawConfig.playUrl); // Foghorn for HTTP protocols
+const edge = parseStreamingUrl(rawConfig.edgeUrl); // Direct edge for non-HTTP protocols
 
 // Derived config that components can use
 interface Config {
@@ -48,7 +50,11 @@ interface Config {
   rtmpPort: string;
   srtPort: string;
   rtmpPath: string;
-  // Edge/delivery endpoints
+  // Foghorn (HTTP protocol 307 redirects)
+  playHostname: string;
+  playPort: string;
+  playUseTls: boolean;
+  // Edge/delivery endpoints (direct for non-HTTP protocols)
   edgeHostname: string;
   edgePort: string;
   edgeUseTls: boolean;
@@ -67,7 +73,11 @@ const config: Config = {
   rtmpPort: rawConfig.rtmpPort,
   srtPort: rawConfig.srtPort,
   rtmpPath: rawConfig.rtmpPath,
-  // Edge
+  // Foghorn (play)
+  playHostname: play.hostname,
+  playPort: play.port,
+  playUseTls: play.useTls,
+  // Edge (direct)
   edgeHostname: edge.hostname,
   edgePort: edge.port,
   edgeUseTls: edge.useTls,
@@ -93,11 +103,18 @@ function buildSrtBaseUrl(): string {
   return `srt://${config.ingestHostname}:${config.srtPort}`;
 }
 
-// Build HTTP(S) base URL for edge delivery
+// Build HTTP(S) base URL for edge delivery (direct non-HTTP protocols)
 function buildEdgeBaseUrl(): string {
   const proto = config.edgeUseTls ? "https" : "http";
   const portPart = config.edgePort ? `:${config.edgePort}` : "";
   return `${proto}://${config.edgeHostname}${portPart}`;
+}
+
+// Build HTTP(S) base URL for Foghorn (HTTP protocol 307 redirects)
+function buildPlayBaseUrl(): string {
+  const proto = config.playUseTls ? "https" : "http";
+  const portPart = config.playPort ? `:${config.playPort}` : "";
+  return `${proto}://${config.playHostname}${portPart}`;
 }
 
 // Build WHIP/WHEP base URL (same host as ingest, uses HTTP(S))
@@ -140,15 +157,15 @@ export function getIngestUrls(streamKey: string): Partial<IngestUrls> {
 export function getDeliveryUrls(playbackId: string): Partial<DeliveryUrls> {
   if (!playbackId) return {};
 
-  const edgeBase = buildEdgeBaseUrl();
+  const playBase = buildPlayBaseUrl(); // HTTP protocols via Foghorn
 
   return {
-    hls: `${edgeBase}${config.hlsPath}/${playbackId}/index.m3u8`,
-    webrtc: `${edgeBase}${config.webrtcPath}/${playbackId}`,
-    webm: `${edgeBase}/${playbackId}.webm`,
-    mkv: `${edgeBase}/${playbackId}.mkv`,
-    mp4: `${edgeBase}/${playbackId}.mp4`,
-    embed: `${edgeBase}${config.embedPath}/${playbackId}`,
+    hls: `${playBase}${config.hlsPath}/${playbackId}/index.m3u8`,
+    webrtc: `${playBase}${config.webrtcPath}/${playbackId}`,
+    webm: `${playBase}/${playbackId}.webm`,
+    mkv: `${playBase}/${playbackId}.mkv`,
+    mp4: `${playBase}/${playbackId}.mp4`,
+    embed: `${playBase}${config.embedPath}/${playbackId}`,
   };
 }
 
@@ -227,7 +244,7 @@ export interface ContentDeliveryUrls {
  */
 export function getContentDeliveryUrls(
   contentId: string,
-  contentType: ContentType
+  contentType: ContentType,
 ): ContentDeliveryUrls {
   if (!contentId) {
     return {
@@ -237,37 +254,38 @@ export function getContentDeliveryUrls(
     };
   }
 
-  const edgeBase = buildEdgeBaseUrl();
+  const playBase = buildPlayBaseUrl(); // Foghorn for HTTP protocols (307 redirects)
+  const edgeBase = buildEdgeBaseUrl(); // Direct edge for non-HTTP protocols
   const proto = config.edgeUseTls ? "s" : ""; // for srt/rtsp/rtmp/dtsc secure variants
   const wsProto = config.edgeUseTls ? "wss" : "ws";
 
-  // Primary protocols - shown by default
+  // Primary protocols - HTTP via Foghorn (307 redirects), non-HTTP direct to edge
   const primary: PrimaryProtocolUrls = {
-    play: `${edgeBase}/play/${contentId}`,
-    hls: `${edgeBase}/play/${contentId}/hls/index.m3u8`,
-    hlsCmaf: `${edgeBase}/play/${contentId}/cmaf/index.m3u8`,
-    dash: `${edgeBase}/play/${contentId}/cmaf/index.mpd`,
-    webrtc: `${edgeBase}/play/${contentId}/webrtc`,
-    mp4: `${edgeBase}/play/${contentId}.mp4`,
-    webm: `${edgeBase}/play/${contentId}.webm`,
-    srt: `srt${proto}://${config.edgeHostname}${config.edgePort ? `:${config.srtPort}` : ""}?streamid=${contentId}`,
+    play: `${playBase}/play/${contentId}`,
+    hls: `${playBase}/play/${contentId}/hls/index.m3u8`,
+    hlsCmaf: `${playBase}/play/${contentId}/cmaf/index.m3u8`,
+    dash: `${playBase}/play/${contentId}/cmaf/index.mpd`,
+    webrtc: `${playBase}/play/${contentId}/webrtc`,
+    mp4: `${playBase}/play/${contentId}.mp4`,
+    webm: `${playBase}/play/${contentId}.webm`,
+    srt: `srt${proto}://${config.edgeHostname}:${config.srtPort}?streamid=${contentId}`, // Direct edge (UDP)
   };
 
-  // Additional protocols - shown in expandable section
+  // Additional protocols - HTTP via Foghorn, non-HTTP direct to edge
   const additional: AdditionalProtocolUrls = {
-    rtsp: `rtsp${proto}://${config.edgeHostname}${config.edgePort ? `:${config.edgePort}` : ""}/play/${contentId}`,
-    rtmp: `rtmp${proto}://${config.edgeHostname}:${config.rtmpPort}/play/${contentId}`,
-    ts: `${edgeBase}/play/${contentId}.ts`,
-    flv: `${edgeBase}/play/${contentId}.flv`,
-    mkv: `${edgeBase}/play/${contentId}.mkv`,
-    aac: `${edgeBase}/play/${contentId}.aac`,
-    smoothStreaming: `${edgeBase}/play/${contentId}/cmaf/Manifest`,
-    hds: `${edgeBase}/play/${contentId}/dynamic/manifest.f4m`,
-    sdp: `${edgeBase}/play/${contentId}.sdp`,
-    rawH264: `${edgeBase}/play/${contentId}.h264`,
-    wsmp4: `${wsProto}://${config.edgeHostname}${config.edgePort ? `:${config.edgePort}` : ""}/play/${contentId}.mp4`,
-    wsWebrtc: `${wsProto}://${config.edgeHostname}${config.edgePort ? `:${config.edgePort}` : ""}/play/webrtc/${contentId}`,
-    dtsc: `dtsc${proto}://${config.edgeHostname}${config.edgePort ? `:${config.edgePort}` : ""}/play/${contentId}`,
+    rtsp: `rtsp${proto}://${config.edgeHostname}:${config.edgePort || "554"}/play/${contentId}`, // Direct edge
+    rtmp: `rtmp${proto}://${config.edgeHostname}:${config.rtmpPort}/play/${contentId}`, // Direct edge
+    ts: `${playBase}/play/${contentId}.ts`,
+    flv: `${playBase}/play/${contentId}.flv`,
+    mkv: `${playBase}/play/${contentId}.mkv`,
+    aac: `${playBase}/play/${contentId}.aac`,
+    smoothStreaming: `${playBase}/play/${contentId}/cmaf/Manifest`,
+    hds: `${playBase}/play/${contentId}/dynamic/manifest.f4m`,
+    sdp: `${playBase}/play/${contentId}.sdp`,
+    rawH264: `${playBase}/play/${contentId}.h264`,
+    wsmp4: `${wsProto}://${config.edgeHostname}:${config.edgePort || "8080"}/play/${contentId}.mp4`, // WebSocket direct edge
+    wsWebrtc: `${wsProto}://${config.edgeHostname}:${config.edgePort || "8080"}/play/webrtc/${contentId}`, // WebSocket direct edge
+    dtsc: `dtsc${proto}://${config.edgeHostname}:${config.edgePort || "4200"}/play/${contentId}`, // Direct edge (MistServer internal)
   };
 
   const embed = getEmbedCodeForContent(contentId, contentType);
@@ -278,15 +296,18 @@ export function getContentDeliveryUrls(
 /**
  * Generate embed code snippet for a given content type
  */
-function getEmbedCodeForContent(contentId: string, contentType: ContentType): string {
-  return `import { Player } from '@livepeer-frameworks/player';
-import '@livepeer-frameworks/player/player.css';
+function getEmbedCodeForContent(
+  contentId: string,
+  contentType: ContentType,
+): string {
+  return `import { Player } from '@livepeer-frameworks/player-react';
+import '@livepeer-frameworks/player-react/player.css';
 
 <Player
   contentType="${contentType}"
   contentId="${contentId}"
   options={{
-    gatewayUrl: '${rawConfig.edgeUrl}',
+    gatewayUrl: '${rawConfig.playUrl}',
     autoplay: true,
     muted: true,
   }}
@@ -304,28 +325,133 @@ export interface ProtocolInfo {
 /** Protocol information for building UI selectors */
 export const PROTOCOL_INFO: ProtocolInfo[] = [
   // Primary protocols
-  { key: "play", label: "Play Page", description: "Universal endpoint - returns all protocols", category: "primary" },
-  { key: "hls", label: "HLS", description: "HTTP Live Streaming - best compatibility", category: "primary" },
-  { key: "hlsCmaf", label: "HLS (CMAF)", description: "Lower latency HLS variant", category: "primary" },
-  { key: "dash", label: "DASH", description: "MPEG-DASH adaptive streaming", category: "primary" },
-  { key: "webrtc", label: "WebRTC", description: "Ultra-low latency (~0.5s)", category: "primary" },
-  { key: "mp4", label: "MP4", description: "Progressive download", category: "primary" },
-  { key: "webm", label: "WebM", description: "Open format (VP8/VP9)", category: "primary" },
-  { key: "srt", label: "SRT", description: "Secure Reliable Transport", category: "primary" },
+  {
+    key: "play",
+    label: "Play Page",
+    description: "Universal endpoint - returns all protocols",
+    category: "primary",
+  },
+  {
+    key: "hls",
+    label: "HLS",
+    description: "HTTP Live Streaming - best compatibility",
+    category: "primary",
+  },
+  {
+    key: "hlsCmaf",
+    label: "HLS (CMAF)",
+    description: "Lower latency HLS variant",
+    category: "primary",
+  },
+  {
+    key: "dash",
+    label: "DASH",
+    description: "MPEG-DASH adaptive streaming",
+    category: "primary",
+  },
+  {
+    key: "webrtc",
+    label: "WebRTC",
+    description: "Ultra-low latency (~0.5s)",
+    category: "primary",
+  },
+  {
+    key: "mp4",
+    label: "MP4",
+    description: "Progressive download",
+    category: "primary",
+  },
+  {
+    key: "webm",
+    label: "WebM",
+    description: "Open format (VP8/VP9)",
+    category: "primary",
+  },
+  {
+    key: "srt",
+    label: "SRT",
+    description: "Secure Reliable Transport",
+    category: "primary",
+  },
   // Additional protocols
-  { key: "rtsp", label: "RTSP", description: "IP cameras, VLC, ffmpeg", category: "additional" },
-  { key: "rtmp", label: "RTMP", description: "Legacy Flash/OBS playback", category: "additional" },
-  { key: "ts", label: "MPEG-TS", description: "Transport stream, DVB compatible", category: "additional" },
-  { key: "flv", label: "FLV", description: "Flash Video (legacy)", category: "additional" },
-  { key: "mkv", label: "MKV", description: "Matroska container", category: "additional" },
-  { key: "aac", label: "AAC", description: "Audio-only stream", category: "additional" },
-  { key: "smoothStreaming", label: "Smooth Streaming", description: "Microsoft format", category: "additional" },
-  { key: "hds", label: "HDS", description: "Adobe HTTP Dynamic Streaming", category: "additional" },
-  { key: "sdp", label: "SDP", description: "Session Description Protocol", category: "additional" },
-  { key: "rawH264", label: "Raw H264", description: "Elementary video stream", category: "additional" },
-  { key: "wsmp4", label: "WS/MP4", description: "MP4 over WebSocket", category: "additional" },
-  { key: "wsWebrtc", label: "WS/WebRTC", description: "WebRTC over WebSocket", category: "additional" },
-  { key: "dtsc", label: "DTSC", description: "MistServer internal", category: "additional" },
+  {
+    key: "rtsp",
+    label: "RTSP",
+    description: "IP cameras, VLC, ffmpeg",
+    category: "additional",
+  },
+  {
+    key: "rtmp",
+    label: "RTMP",
+    description: "Legacy Flash/OBS playback",
+    category: "additional",
+  },
+  {
+    key: "ts",
+    label: "MPEG-TS",
+    description: "Transport stream, DVB compatible",
+    category: "additional",
+  },
+  {
+    key: "flv",
+    label: "FLV",
+    description: "Flash Video (legacy)",
+    category: "additional",
+  },
+  {
+    key: "mkv",
+    label: "MKV",
+    description: "Matroska container",
+    category: "additional",
+  },
+  {
+    key: "aac",
+    label: "AAC",
+    description: "Audio-only stream",
+    category: "additional",
+  },
+  {
+    key: "smoothStreaming",
+    label: "Smooth Streaming",
+    description: "Microsoft format",
+    category: "additional",
+  },
+  {
+    key: "hds",
+    label: "HDS",
+    description: "Adobe HTTP Dynamic Streaming",
+    category: "additional",
+  },
+  {
+    key: "sdp",
+    label: "SDP",
+    description: "Session Description Protocol",
+    category: "additional",
+  },
+  {
+    key: "rawH264",
+    label: "Raw H264",
+    description: "Elementary video stream",
+    category: "additional",
+  },
+  {
+    key: "wsmp4",
+    label: "WS/MP4",
+    description: "MP4 over WebSocket",
+    category: "additional",
+  },
+  {
+    key: "wsWebrtc",
+    label: "WS/WebRTC",
+    description: "WebRTC over WebSocket",
+    category: "additional",
+  },
+  {
+    key: "dtsc",
+    label: "DTSC",
+    description: "MistServer internal",
+    category: "additional",
+  },
 ];
 
 // Convenience function to get just the RTMP server URL (without stream key)
@@ -346,14 +472,14 @@ export function getPlaybackUrl(playbackId: string): string {
 export function getEmbedCode(playbackId: string): string {
   if (!playbackId) return "";
   // Return NPM package usage snippet instead of iframe
-  return `import { Player } from '@livepeer-frameworks/player';
-import '@livepeer-frameworks/player/player.css';
+  return `import { Player } from '@livepeer-frameworks/player-react';
+import '@livepeer-frameworks/player-react/player.css';
 
 <Player
   contentType="live"
   contentId="${playbackId}"
   options={{
-    gatewayUrl: '${rawConfig.edgeUrl}',
+    gatewayUrl: '${rawConfig.playUrl}',
     autoplay: true,
     muted: true,
   }}

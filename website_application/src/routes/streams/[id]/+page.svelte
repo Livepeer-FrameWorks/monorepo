@@ -4,12 +4,13 @@
   import { goto } from "$app/navigation";
   import { resolve } from "$app/paths";
   import {
+    fragment,
     GetStreamStore,
     GetStreamKeysStore,
     GetDVRRequestsStore,
-    GetStreamAnalyticsStore,
-    GetCurrentStreamHealthStore,
-    GetViewerCountTimeSeriesStore,
+    GetClipsConnectionStore,
+    GetStreamOverviewStore,
+    GetStreamAnalyticsDailyConnectionStore,
     UpdateStreamStore,
     DeleteStreamStore,
     RefreshStreamKeyStore,
@@ -20,6 +21,10 @@
     TrackListUpdatesStore,
     ClipLifecycleStore,
     DvrLifecycleStore,
+    StreamCoreFieldsStore,
+    StreamMetricsFieldsStore,
+    StreamAnalyticsFieldsStore,
+    StreamHealthFieldsStore,
   } from "$houdini";
   import type {
     StreamEvents$result,
@@ -29,6 +34,7 @@
     DvrLifecycle$result,
   } from "$houdini";
   import { toast } from "$lib/stores/toast.js";
+  import { streamMetrics as realtimeStreamMetrics } from "$lib/stores/realtime";
   import LoadingCard from "$lib/components/LoadingCard.svelte";
   import { getIconComponent } from "$lib/iconUtils";
   import { Button } from "$lib/components/ui/button";
@@ -46,7 +52,6 @@
     StreamKeyCard,
     StreamPlaybackCard,
     OverviewTabPanel,
-    StreamKeysTabPanel,
     RecordingsTabPanel,
     PlaybackTabPanel,
     HealthSidebar,
@@ -60,9 +65,8 @@
   const streamStore = new GetStreamStore();
   const streamKeysStore = new GetStreamKeysStore();
   const dvrRequestsStore = new GetDVRRequestsStore();
-  const analyticsStore = new GetStreamAnalyticsStore();
-  const healthStore = new GetCurrentStreamHealthStore();
-  const viewerCountStore = new GetViewerCountTimeSeriesStore();
+  const clipsStore = new GetClipsConnectionStore();
+  const streamOverviewStore = new GetStreamOverviewStore();
   const updateStreamMutation = new UpdateStreamStore();
   const deleteStreamMutation = new DeleteStreamStore();
   const refreshStreamKeyMutation = new RefreshStreamKeyStore();
@@ -73,24 +77,125 @@
   const trackListSub = new TrackListUpdatesStore();
   const clipLifecycleSub = new ClipLifecycleStore();
   const dvrLifecycleSub = new DvrLifecycleStore();
+  const streamDailyStore = new GetStreamAnalyticsDailyConnectionStore();
+
+  // Fragment stores for unmasking nested data
+  const streamCoreStore = new StreamCoreFieldsStore();
+  const streamMetricsStore = new StreamMetricsFieldsStore();
+  const streamAnalyticsStore = new StreamAnalyticsFieldsStore();
+  const streamHealthStore = new StreamHealthFieldsStore();
 
   // Types from Houdini
   type StreamType = NonNullable<NonNullable<typeof $streamStore.data>["stream"]>;
-  type StreamKeyType = NonNullable<NonNullable<typeof $streamKeysStore.data>["streamKeys"]>[0];
+  type StreamKeyType = NonNullable<NonNullable<NonNullable<NonNullable<typeof $streamKeysStore.data>["streamKeysConnection"]>["edges"]>[0]>["node"];
   type RecordingType = NonNullable<NonNullable<NonNullable<typeof $dvrRequestsStore.data>["dvrRecordingsConnection"]>["edges"]>[0]["node"];
   type TrackInfo = NonNullable<TrackListUpdates$result["trackListUpdates"]>;
-  type HealthData = NonNullable<NonNullable<typeof $healthStore.data>["currentStreamHealth"]>;
+  type HealthData = NonNullable<NonNullable<NonNullable<typeof $streamOverviewStore.data>["stream"]>["currentHealth"]>;
 
   // page is a store; derive the param so it stays in sync with navigation
   let streamId = $derived(page.params.id as string);
 
+  // Get masked stream data from store
+  let maskedStream = $derived($streamStore.data?.stream ?? null);
+
+  // Unmask StreamCoreFields
+  let streamCoreStoreResult = $derived(
+    maskedStream ? fragment(maskedStream, streamCoreStore) : null
+  );
+  let streamCore = $derived(streamCoreStoreResult ? $streamCoreStoreResult : null);
+
+  // Unmask StreamMetricsFields
+  let streamMetricsStoreResult = $derived(
+    maskedStream?.metrics ? fragment(maskedStream.metrics, streamMetricsStore) : null
+  );
+  let streamMetrics = $derived(streamMetricsStoreResult ? $streamMetricsStoreResult : null);
+
+  // Unmask StreamAnalyticsFields from GetStream query
+  let streamAnalyticsStoreResult = $derived(
+    maskedStream?.analytics ? fragment(maskedStream.analytics, streamAnalyticsStore) : null
+  );
+  let streamAnalytics = $derived(streamAnalyticsStoreResult ? $streamAnalyticsStoreResult : null);
+
+  // Unmask StreamHealthFields from GetStream query
+  let streamHealthStoreResult = $derived(
+    maskedStream?.currentHealth ? fragment(maskedStream.currentHealth, streamHealthStore) : null
+  );
+  let streamHealth = $derived(streamHealthStoreResult ? $streamHealthStoreResult : null);
+
+  // Combine unmasked data into stream object
+  let stream = $derived(
+    streamCore
+      ? {
+          ...streamCore,
+          metrics: streamMetrics,
+          analytics: streamAnalytics,
+          currentHealth: streamHealth,
+        }
+      : null
+  );
+
   // Derived state from Houdini stores
-  let stream = $derived($streamStore.data?.stream ?? null);
-  let streamKeys = $derived($streamKeysStore.data?.streamKeys ?? []);
+  // Map to create mutable objects (Houdini returns readonly types)
+  let streamKeys = $derived(
+    ($streamKeysStore.data?.streamKeysConnection?.edges?.map(e => ({
+      id: e.node.id,
+      streamId: e.node.streamId,
+      keyValue: e.node.keyValue,
+      keyName: e.node.keyName ?? '',
+      isActive: e.node.isActive,
+      createdAt: e.node.createdAt,
+      lastUsedAt: e.node.lastUsedAt ?? undefined
+    })) ?? [])
+  );
   let recordings = $derived($dvrRequestsStore.data?.dvrRecordingsConnection?.edges?.map(e => e.node) ?? []);
-  let analytics = $derived($analyticsStore.data?.streamAnalytics ?? null);
-  let health = $derived($healthStore.data?.currentStreamHealth ?? null);
-  let viewerMetrics = $derived($viewerCountStore.data?.viewerCountTimeSeries ?? []);
+  let clips = $derived($clipsStore.data?.clipsConnection?.edges?.map(e => e.node) ?? []);
+
+  // Analytics and health from GetStreamDetail query (also needs unmasking)
+  let maskedDetailStream = $derived($streamOverviewStore.data?.stream ?? null);
+  let detailAnalyticsStoreResult = $derived(
+    maskedDetailStream?.analytics ? fragment(maskedDetailStream.analytics, streamAnalyticsStore) : null
+  );
+  let detailHealthStoreResult = $derived(
+    maskedDetailStream?.currentHealth ? fragment(maskedDetailStream.currentHealth, streamHealthStore) : null
+  );
+  let analytics = $derived(detailAnalyticsStoreResult ? $detailAnalyticsStoreResult : streamAnalytics);
+  let baseHealth = $derived(detailHealthStoreResult ? $detailHealthStoreResult : streamHealth);
+  // Merge base health (from GraphQL query) with real-time metrics (from subscription)
+  let health = $derived.by(() => {
+    const realtime = stream?.id ? $realtimeStreamMetrics[stream.id] : null;
+    if (!baseHealth && !realtime) return null;
+    return {
+      ...baseHealth,
+      // Real-time buffer/jitter data from STREAM_BUFFER subscription (overrides if present)
+      bufferState: realtime?.bufferState ?? baseHealth?.bufferState,
+      streamBufferMs: realtime?.streamBufferMs,
+      streamJitterMs: realtime?.streamJitterMs,
+      maxKeepawaMs: realtime?.maxKeepawaMs,
+      hasIssues: realtime?.hasIssues,
+      issuesDescription: realtime?.issuesDescription ?? baseHealth?.issuesDescription,
+      mistIssues: realtime?.mistIssues,
+      trackCount: realtime?.trackCount,
+      qualityTier: realtime?.qualityTier ?? baseHealth?.qualityTier,
+    };
+  });
+  let viewerMetrics = $derived($streamOverviewStore.data?.stream?.viewerTimeSeriesConnection?.edges?.map(e => e.node) ?? []);
+
+  // Stream daily analytics history
+  let streamDailyAnalytics = $derived.by(() => {
+    const edges = $streamDailyStore.data?.streamAnalyticsDailyConnection?.edges ?? [];
+    if (edges.length === 0) return [];
+    return edges.map(edge => ({
+      day: edge.node.day,
+      internalName: edge.node.internalName,
+      totalViews: edge.node.totalViews,
+      uniqueViewers: edge.node.uniqueViewers,
+      uniqueCountries: edge.node.uniqueCountries,
+      uniqueCities: edge.node.uniqueCities,
+      egressBytes: edge.node.egressBytes,
+      egressGb: edge.node.egressBytes / (1024 * 1024 * 1024),
+    })).sort((a, b) => new Date(a.day).getTime() - new Date(b.day).getTime());
+  });
+
   let loading = $derived($streamStore.fetching || $streamKeysStore.fetching);
   let error = $state<string | null>(null);
   let showEditModal = $state(false);
@@ -123,6 +228,49 @@
 
   // Derived: is stream live?
   let isLive = $derived(stream?.metrics?.isLive ?? false);
+
+  // Fallback track info from StreamMetricsFields when subscription hasn't fired yet
+  // This uses the primary track data that's already fetched with the stream query
+  // Type assertion needed because we're creating a partial match for display purposes
+  let fallbackTracks = $derived.by((): TrackInfo | null => {
+    if (!streamMetrics?.isLive || !streamMetrics?.primaryCodec) return null;
+    // Create a fallback that satisfies the TrackInfo type from the subscription
+    // OverviewTabPanel only uses a subset of these fields for display
+    return {
+      streamName: stream?.name ?? '',
+      totalTracks: 1,
+      videoTrackCount: 1,
+      audioTrackCount: 0,
+      qualityTier: streamMetrics.qualityTier ?? null,
+      primaryWidth: streamMetrics.primaryWidth ?? null,
+      primaryHeight: streamMetrics.primaryHeight ?? null,
+      primaryFps: streamMetrics.primaryFps ?? null,
+      primaryVideoBitrate: streamMetrics.primaryBitrate ?? null,
+      primaryVideoCodec: streamMetrics.primaryCodec ?? null,
+      primaryAudioBitrate: null,
+      primaryAudioCodec: null,
+      primaryAudioChannels: null,
+      primaryAudioSampleRate: null,
+      tracks: [{
+        trackName: 'video0',
+        trackType: 'video',
+        codec: streamMetrics.primaryCodec ?? null,
+        width: streamMetrics.primaryWidth ?? null,
+        height: streamMetrics.primaryHeight ?? null,
+        fps: streamMetrics.primaryFps ?? null,
+        bitrateKbps: streamMetrics.primaryBitrate ? Math.round(streamMetrics.primaryBitrate / 1000) : null,
+        bitrateBps: streamMetrics.primaryBitrate ?? null,
+        buffer: null,
+        jitter: null,
+        resolution: streamMetrics.primaryWidth && streamMetrics.primaryHeight
+          ? `${streamMetrics.primaryWidth}x${streamMetrics.primaryHeight}`
+          : null,
+        hasBFrames: null,
+        channels: null,
+        sampleRate: null,
+      }]
+    };
+  });
 
   // Effect to handle subscription errors
   $effect(() => {
@@ -203,10 +351,14 @@
     // Set up auto-refresh every 60 seconds as fallback
     refreshInterval = setInterval(loadLiveData, 60000);
 
-    // Refresh health every 30 seconds when live
+    // Refresh health every 30 seconds when live (via streamOverviewStore)
     healthRefreshInterval = setInterval(async () => {
       if (isLive && stream?.id) {
-        await healthStore.fetch({ variables: { stream: stream.id } });
+        const timeRange = {
+          start: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+          end: new Date().toISOString()
+        };
+        await streamOverviewStore.fetch({ variables: { id: stream.id, timeRange, interval: "5m" } });
       }
     }, 30000);
   });
@@ -222,15 +374,14 @@
   });
 
   function startSubscriptions() {
-    const streamData = $streamStore.data?.stream;
-    if (!streamData) return;
+    if (!stream) return;
 
     // Use stream.id (internal UUID) for subscriptions - this is the canonical identifier
-    streamEventsSub.listen({ stream: streamData.id });
-    viewerMetricsSub.listen({ stream: streamData.id });
-    trackListSub.listen({ stream: streamData.id });
-    clipLifecycleSub.listen({ stream: streamData.id });
-    dvrLifecycleSub.listen({ stream: streamData.id });
+    streamEventsSub.listen({ stream: stream.id });
+    viewerMetricsSub.listen({ stream: stream.id });
+    trackListSub.listen({ stream: stream.id });
+    clipLifecycleSub.listen({ stream: stream.id });
+    dvrLifecycleSub.listen({ stream: stream.id });
   }
 
   function addEvent(type: EventType, message: string, details?: string) {
@@ -260,24 +411,33 @@
   };
 
   function handleStreamEvent(event: NonNullable<StreamEvents$result["streamEvents"]>) {
-    if (event.type === "STREAM_START" || event.status === "LIVE") {
-      toast.success("Stream is now live!");
-      addEvent("stream_start", "Stream started", `Status: ${event.status}`);
-      // Expand event log on stream start
-      eventLogCollapsed = false;
-    } else if (event.type === "STREAM_END" || event.status === "OFFLINE") {
-      toast.info("Stream went offline");
-      addEvent("stream_end", "Stream ended");
-    } else if (event.type === "STREAM_ERROR") {
-      addEvent("error", "Stream error", event.details ? JSON.stringify(event.details) : undefined);
-    } else if (event.type === "BUFFER_UPDATE") {
-      // Buffer updates are handled by health subscription, log only critical ones
-      const details = event.details as Record<string, unknown> | null;
-      if (details?.bufferState === "DRY") {
-        addEvent("warning", "Buffer dry", "Stream may be experiencing issues");
+    // Handle lifecycle update (stream going live/offline with rich data)
+    if (event.lifecycleUpdate) {
+      const isLive = event.lifecycleUpdate.status === "live";
+      if (isLive) {
+        toast.success("Stream is now live!");
+        addEvent("stream_start", "Stream started", `Viewers: ${event.lifecycleUpdate.totalViewers ?? 0}`);
+        // Expand event log on stream start
+        eventLogCollapsed = false;
+      } else {
+        toast.info("Stream went offline");
+        addEvent("stream_end", "Stream ended");
       }
-    } else if (event.type === "TRACK_LIST_UPDATE") {
-      addEvent("track_change", "Track list updated");
+
+      // Log buffer state if concerning
+      if (event.lifecycleUpdate.bufferState === "DRY" || event.lifecycleUpdate.bufferState === "EMPTY") {
+        addEvent("warning", "Buffer issue", `Buffer state: ${event.lifecycleUpdate.bufferState}`);
+      }
+    }
+
+    // Handle stream end event (final stats)
+    if (event.endEvent) {
+      toast.info("Stream ended");
+      const stats = [
+        event.endEvent.totalViewers ? `Viewers: ${event.endEvent.totalViewers}` : null,
+        event.endEvent.viewerSeconds ? `Watch time: ${Math.round(event.endEvent.viewerSeconds / 60)}min` : null,
+      ].filter(Boolean).join(", ");
+      addEvent("stream_end", "Stream ended", stats || undefined);
     }
   }
 
@@ -337,15 +497,20 @@
         start: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
         end: new Date().toISOString(),
       };
-      // Use stream.id (internal UUID) for analytics queries - this is the canonical identifier
-      const streamUUID = result.data.stream.id;
+      // Longer time range for daily analytics (30 days)
+      const dailyTimeRange = {
+        start: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString(),
+        end: new Date().toISOString(),
+      };
+      // Use streamId (route param) which is the same as the internal UUID
+      const streamUUID = streamId;
 
       await Promise.all([
         streamKeysStore.fetch({ variables: { streamId } }),
         dvrRequestsStore.fetch({ variables: { internalName: streamId } }),
-        analyticsStore.fetch({ variables: { stream: streamUUID, timeRange } }).catch(() => null),
-        healthStore.fetch({ variables: { stream: streamUUID } }).catch(() => null),
-        viewerCountStore.fetch({ variables: { stream: streamUUID, timeRange, interval: "5m" } }).catch(() => null),
+        clipsStore.fetch({ variables: { streamId: streamUUID, first: 100 } }),
+        streamOverviewStore.fetch({ variables: { id: streamUUID, timeRange, interval: "5m" } }).catch(() => null),
+        streamDailyStore.fetch({ variables: { internalName: streamUUID, timeRange: dailyTimeRange, first: 30 } }).catch(() => null),
       ]);
 
       startSubscriptions();
@@ -364,13 +529,12 @@
         start: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
         end: new Date().toISOString(),
       };
-      // Use stream.id (internal UUID) for analytics queries - this is the canonical identifier
-      const streamUUID = $streamStore.data?.stream?.id;
+      // Use streamId (route param) which is the same as the internal UUID
+      const streamUUID = streamId;
 
       await Promise.all([
         streamStore.fetch({ variables: { id: streamId } }),
-        streamUUID ? analyticsStore.fetch({ variables: { stream: streamUUID, timeRange } }).catch(() => null) : Promise.resolve(),
-        streamUUID ? viewerCountStore.fetch({ variables: { stream: streamUUID, timeRange, interval: "5m" } }).catch(() => null) : Promise.resolve(),
+        streamUUID ? streamOverviewStore.fetch({ variables: { id: streamUUID, timeRange, interval: "5m" } }).catch(() => null) : Promise.resolve(),
       ]);
     } catch (err) {
       console.error("Failed to refresh live data:", err);
@@ -573,7 +737,7 @@
           <Button
             variant="ghost"
             size="sm"
-            class="gap-2 hidden md:flex {healthSidebarCollapsed ? '' : 'bg-[hsl(var(--tn-bg-visual))] text-primary'}"
+            class="gap-2 flex {healthSidebarCollapsed ? '' : 'bg-[hsl(var(--tn-bg-visual))] text-primary'}"
             onclick={toggleHealthSidebar}
           >
             <ActivityIcon class="w-4 h-4" />
@@ -650,18 +814,11 @@
                     Overview
                   </TabsTrigger>
                   <TabsTrigger
-                    value="setup"
+                    value="ingest"
                     class="gap-2 px-4 py-3 text-sm font-medium text-muted-foreground border-b-2 border-transparent rounded-none data-[state=active]:text-info data-[state=active]:border-info cursor-pointer hover:bg-muted/20 transition-colors"
                   >
                     <SettingsIcon class="w-4 h-4" />
-                    Setup
-                  </TabsTrigger>
-                  <TabsTrigger
-                    value="keys"
-                    class="gap-2 px-4 py-3 text-sm font-medium text-muted-foreground border-b-2 border-transparent rounded-none data-[state=active]:text-info data-[state=active]:border-info cursor-pointer hover:bg-muted/20 transition-colors"
-                  >
-                    <KeyIcon class="w-4 h-4" />
-                    Keys ({streamKeys.length})
+                    Ingest
                   </TabsTrigger>
                   <TabsTrigger
                     value="recordings"
@@ -684,23 +841,20 @@
                   {stream}
                   {streamKeys}
                   {recordings}
+                  {clips}
                   {analytics}
-                  tracks={currentTracks}
+                  tracks={currentTracks ?? fallbackTracks}
                   {viewerMetrics}
+                  dailyAnalytics={streamDailyAnalytics}
                 />
               </TabsContent>
 
-              <TabsContent value="setup" class="p-0 min-h-[20rem]">
+              <TabsContent value="ingest" class="p-0 min-h-[20rem]">
                 <StreamSetupPanel
                   {stream}
+                  {streamKeys}
                   onRefreshKey={handleRefreshStreamKey}
                   refreshingKey={actionLoading.refreshKey}
-                />
-              </TabsContent>
-
-              <TabsContent value="keys" class="p-0 min-h-[20rem]">
-                <StreamKeysTabPanel
-                  {streamKeys}
                   onCreateKey={() => (showCreateKeyModal = true)}
                   onCopyKey={copyToClipboard}
                   onDeleteKey={handleDeleteStreamKey}
@@ -735,7 +889,7 @@
       </div>
 
       <!-- Health Sidebar (right side, collapsible) -->
-      <div class="hidden md:block shrink-0 {healthSidebarCollapsed ? 'w-10' : 'w-72'}">
+      <div class="block shrink-0 {healthSidebarCollapsed ? 'w-10' : 'w-72'}">
         <HealthSidebar
           {streamId}
           streamName={stream.name}

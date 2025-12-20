@@ -1,10 +1,20 @@
 package config
 
 import (
+	"runtime"
 	"strconv"
 
 	"frameworks/pkg/config"
+
+	"golang.org/x/sys/unix"
 )
+
+// getSystemMemoryBytes returns total system memory in bytes.
+// Uses platform-specific methods: sysinfo on Linux, sysctl on Darwin.
+func getSystemMemoryBytes() uint64 {
+	// This will be implemented differently per platform via build tags
+	return getMemoryBytes()
+}
 
 // HelmsmanConfig holds all configuration for the Helmsman sidecar.
 // Required vars will cause the service to fail at startup if missing.
@@ -29,6 +39,12 @@ type HelmsmanConfig struct {
 	StorageS3Prefix      string
 	StorageCapacityBytes uint64
 
+	// Cold storage thresholds (S3 credentials are held by Foghorn, not here!)
+	// Helmsman receives presigned URLs from Foghorn for secure uploads/downloads
+	FreezeThreshold       float64 // Start freezing at this disk usage % (default: 85)
+	TargetAfterFreeze     float64 // Target usage after freeze (default: 70)
+	DefrostTimeoutSeconds int     // Max wait for sync defrost (default: 30)
+
 	// Capabilities (all default to true)
 	CapIngest     bool
 	CapEdge       bool
@@ -39,8 +55,8 @@ type HelmsmanConfig struct {
 	MaxTranscodes int
 
 	// Edge node configuration
-	EdgePublicHostname string
-	EnrollmentToken    string
+	EdgePublicURL   string // Full URL like http://localhost:18090/view
+	EnrollmentToken string
 
 	// Webhook URL for MistServer triggers
 	WebhookURL string
@@ -74,6 +90,11 @@ func LoadHelmsmanConfig() *HelmsmanConfig {
 		StorageS3Prefix:      config.GetEnv("HELMSMAN_STORAGE_S3_PREFIX", ""),
 		StorageCapacityBytes: parseUint64(config.GetEnv("HELMSMAN_STORAGE_CAPACITY_BYTES", "0")),
 
+		// Cold storage thresholds (S3 creds are in Foghorn, not here!)
+		FreezeThreshold:       parseFloat64(config.GetEnv("HELMSMAN_FREEZE_THRESHOLD", "0.85")),
+		TargetAfterFreeze:     parseFloat64(config.GetEnv("HELMSMAN_TARGET_AFTER_FREEZE", "0.70")),
+		DefrostTimeoutSeconds: config.GetEnvInt("HELMSMAN_DEFROST_TIMEOUT_SECONDS", 30),
+
 		// Capabilities (default true)
 		CapIngest:     config.GetEnvBool("HELMSMAN_CAP_INGEST", true),
 		CapEdge:       config.GetEnvBool("HELMSMAN_CAP_EDGE", true),
@@ -84,8 +105,8 @@ func LoadHelmsmanConfig() *HelmsmanConfig {
 		MaxTranscodes: config.GetEnvInt("HELMSMAN_MAX_TRANSCODES", 0),
 
 		// Edge node
-		EdgePublicHostname: config.GetEnv("EDGE_PUBLIC_HOSTNAME", ""),
-		EnrollmentToken:    config.GetEnv("EDGE_ENROLLMENT_TOKEN", ""),
+		EdgePublicURL:   config.RequireEnv("EDGE_PUBLIC_URL"),
+		EnrollmentToken: config.GetEnv("EDGE_ENROLLMENT_TOKEN", ""),
 
 		// Webhook URL (defaults handled at usage site if empty)
 		WebhookURL: config.GetEnv("HELMSMAN_WEBHOOK_URL", ""),
@@ -103,4 +124,46 @@ func parseUint64(s string) uint64 {
 	}
 	v, _ := strconv.ParseUint(s, 10, 64)
 	return v
+}
+
+func parseFloat64(s string) float64 {
+	if s == "" {
+		return 0
+	}
+	v, _ := strconv.ParseFloat(s, 64)
+	return v
+}
+
+// HardwareSpecs holds detected hardware information
+type HardwareSpecs struct {
+	CPUCores int32
+	MemoryGB int32
+	DiskGB   int32
+}
+
+// DetectHardware detects CPU cores, memory, and disk capacity.
+// Uses runtime and syscall to get system information.
+func DetectHardware(storagePath string) *HardwareSpecs {
+	specs := &HardwareSpecs{}
+
+	// CPU cores via runtime
+	specs.CPUCores = int32(runtime.NumCPU())
+
+	// Memory via platform-specific implementation (getMemoryBytes in hardware_*.go)
+	totalBytes := getSystemMemoryBytes()
+	specs.MemoryGB = int32(totalBytes / (1024 * 1024 * 1024))
+
+	// Disk capacity - use storage path if provided, otherwise root
+	diskPath := "/"
+	if storagePath != "" {
+		diskPath = storagePath
+	}
+	var statfs unix.Statfs_t
+	if err := unix.Statfs(diskPath, &statfs); err == nil {
+		// Total disk space in bytes, convert to GB
+		totalBytes := statfs.Blocks * uint64(statfs.Bsize)
+		specs.DiskGB = int32(totalBytes / (1024 * 1024 * 1024))
+	}
+
+	return specs
 }

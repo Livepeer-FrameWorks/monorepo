@@ -26,6 +26,7 @@ function parseStreamingUrl(url) {
 
 const ingestUrl = env.STREAMING_INGEST_URL || 'http://localhost:8080';
 const edgeUrl = env.STREAMING_EDGE_URL || 'http://localhost:8080';
+const playUrl = env.STREAMING_PLAY_URL || 'http://localhost:18008';
 const ingest = parseStreamingUrl(ingestUrl);
 const edge = parseStreamingUrl(edgeUrl);
 
@@ -53,6 +54,8 @@ const envVarMap = {
 	SRT_HOST: `${ingest.hostname}:${srtPort}`,
 	WHIP_URL: `${httpProto}://${ingest.hostname}${ingestPortPart}${webrtcPath}`,
 	EDGE_URL: `${edgeHttpProto}://${edge.hostname}${edgePortPart}`,
+	PLAY_URL: playUrl,
+	INGEST_URL: ingestUrl,
 	HLS_PATH: hlsPath,
 	WEBRTC_PATH: webrtcPath,
 	// Raw hostname for SRT examples that need just the host

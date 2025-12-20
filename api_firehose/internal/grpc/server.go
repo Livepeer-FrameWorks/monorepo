@@ -57,6 +57,9 @@ func (s *DecklogServer) convertProtobufToKafkaEvent(msg interface{}, eventType, 
 		normalized = "00000000-0000-0000-0000-000000000000"
 		// best-effort warning so we can trace missing enrichment
 		s.logger.WithFields(logging.Fields{"event_type": eventType}).Warn("Missing tenant_id; using zero UUID")
+		if s.metrics != nil && s.metrics.EventsIngested != nil {
+			s.metrics.EventsIngested.WithLabelValues(eventType, "tenant_missing").Inc()
+		}
 	}
 	// Serialize the entire protobuf message to JSON transparently
 	marshaler := protojson.MarshalOptions{
@@ -129,8 +132,6 @@ func (s *DecklogServer) unwrapMistTrigger(trigger *pb.MistTrigger) (proto.Messag
 		eventType = "stream_end"
 	case *pb.MistTrigger_TrackList:
 		eventType = "stream_track_list"
-	case *pb.MistTrigger_StreamBandwidth:
-		eventType = "stream_bandwidth"
 	case *pb.MistTrigger_RecordingComplete:
 		eventType = "recording_complete"
 	case *pb.MistTrigger_StreamLifecycleUpdate:
@@ -163,6 +164,21 @@ func (s *DecklogServer) unwrapMistTrigger(trigger *pb.MistTrigger) (proto.Messag
 		if payload.DvrLifecycleData.TenantId != nil {
 			tenantID = *payload.DvrLifecycleData.TenantId
 		}
+	case *pb.MistTrigger_StorageLifecycleData:
+		eventType = "storage_lifecycle"
+		if payload.StorageLifecycleData.TenantId != nil {
+			tenantID = *payload.StorageLifecycleData.TenantId
+		}
+	case *pb.MistTrigger_ProcessBilling:
+		eventType = "process_billing"
+		if payload.ProcessBilling.TenantId != nil {
+			tenantID = *payload.ProcessBilling.TenantId
+		}
+	case *pb.MistTrigger_VodLifecycleData:
+		eventType = "vod_lifecycle"
+		if payload.VodLifecycleData.TenantId != nil {
+			tenantID = *payload.VodLifecycleData.TenantId
+		}
 	default:
 		eventType = "unknown"
 	}
@@ -181,6 +197,9 @@ func (s *DecklogServer) SendEvent(ctx context.Context, trigger *pb.MistTrigger) 
 
 	// Unwrap inner payload and determine event type + tenant
 	msg, eventType, tenantID := s.unwrapMistTrigger(trigger)
+	if s.metrics != nil && s.metrics.EventsIngested != nil {
+		s.metrics.EventsIngested.WithLabelValues(eventType, "received").Inc()
+	}
 
 	// Convert to analytics event with transparent protobuf serialization of the full envelope
 	analyticsEvent, err := s.convertProtobufToKafkaEvent(msg, eventType, "foghorn", tenantID)
@@ -190,6 +209,9 @@ func (s *DecklogServer) SendEvent(ctx context.Context, trigger *pb.MistTrigger) 
 			"node_id":      trigger.GetNodeId(),
 		}).Error("Failed to convert event to analytics message")
 		if s.metrics != nil {
+			if s.metrics.EventsIngested != nil {
+				s.metrics.EventsIngested.WithLabelValues(eventType, "conversion_error").Inc()
+			}
 			s.metrics.GRPCRequests.WithLabelValues("SendEvent", "conversion_error").Inc()
 		}
 		return nil, err
@@ -205,6 +227,9 @@ func (s *DecklogServer) SendEvent(ctx context.Context, trigger *pb.MistTrigger) 
 			"node_id":      trigger.GetNodeId(),
 		}).Error("Failed to publish event")
 		if s.metrics != nil {
+			if s.metrics.EventsIngested != nil {
+				s.metrics.EventsIngested.WithLabelValues(eventType, "publish_error").Inc()
+			}
 			s.metrics.GRPCRequests.WithLabelValues("SendEvent", "kafka_error").Inc()
 			s.metrics.KafkaMessages.WithLabelValues("analytics_events", "publish", "error").Inc()
 		}

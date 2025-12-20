@@ -1,56 +1,61 @@
-import { Player, type ContentEndpoints } from "@livepeer-frameworks/player";
-import { cn } from "@/lib/utils";
+import { useMemo, useState } from "react";
+import { Player } from "@livepeer-frameworks/player-react";
+import { usePlayground } from "@/context/PlaygroundContext";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { Button } from "@/components/ui/button";
+import { buildContentEndpointsFromSources } from "@/lib/mist-utils";
 
-export type PlayerPreviewProps = {
-  showPlayer: boolean;
-  networkOptIn: boolean;
-  endpoints: ContentEndpoints | null;
-  contentId: string;
-  contentType: "live" | "dvr" | "clip";
-  thumbnailUrl: string;
-  clickToPlay: boolean;
-  autoplayMuted: boolean;
-};
+export function PlayerPreview() {
+  const { streamName, playbackSources, thumbnailUrl, autoplayMuted, viewerBase } = usePlayground();
+  const [isConnected, setIsConnected] = useState(false);
 
-export function PlayerPreview({
-  showPlayer,
-  networkOptIn,
-  endpoints,
-  contentId,
-  contentType,
-  thumbnailUrl,
-  clickToPlay,
-  autoplayMuted
-}: PlayerPreviewProps) {
+  const endpoints = useMemo(
+    () => buildContentEndpointsFromSources(playbackSources, streamName, viewerBase),
+    [playbackSources, streamName, viewerBase]
+  );
+
+  const showPlayer = isConnected;
+
   return (
-    <div className="slab">
+    <div className="slab flex-1">
       <div className="slab-header">
-        <h3 className="slab-title">Player Output</h3>
-        <p className="slab-description">
-          {showPlayer ? "Rendering with live player logic." : "Enable networking and configure an endpoint to mount the player."}
-        </p>
+        <h3 className="slab-title">Player</h3>
       </div>
-      <div className="slab-body--padded">
-        <div className={cn("relative aspect-video overflow-hidden border border-border bg-muted", !showPlayer && "flex items-center justify-center")}>
-          {showPlayer && endpoints ? (
-            <Player
-              contentId={contentId}
-              contentType={contentType}
-              endpoints={endpoints}
-              thumbnailUrl={thumbnailUrl}
-              options={{
-                autoplay: autoplayMuted || !clickToPlay,
-                muted: autoplayMuted,
-                controls: true,
-                stockControls: true
-              }}
-            />
+      <div className="slab-body--flush flex flex-col">
+        <div className="relative aspect-video overflow-hidden border-b border-border/30 bg-muted/40">
+          {showPlayer ? (
+            <ErrorBoundary>
+              <Player
+                contentId={streamName}
+                contentType="live"
+                endpoints={endpoints || undefined}
+                thumbnailUrl={thumbnailUrl || undefined}
+                options={{
+                  autoplay: autoplayMuted,
+                  muted: autoplayMuted,
+                  controls: true,
+                  devMode: true,
+                  debug: true,
+                  mistUrl: viewerBase, // Enable Direct Connect
+                }}
+              />
+            </ErrorBoundary>
           ) : (
-            <span className="text-sm text-muted-foreground">
-              {networkOptIn ? "Add a URL or choose a fixture to begin." : "Networking disabled. Toggle it on to exercise the player."}
-            </span>
+            <div className="flex h-full items-center justify-center">
+              <span className="text-sm text-muted-foreground">
+                Player unloaded
+              </span>
+            </div>
           )}
         </div>
+      </div>
+      <div className="slab-actions slab-actions--row">
+        <Button variant="ghost" onClick={() => setIsConnected(true)} disabled={isConnected}>
+          Load
+        </Button>
+        <Button variant="ghost" onClick={() => setIsConnected(false)} disabled={!isConnected}>
+          Unload
+        </Button>
       </div>
     </div>
   );

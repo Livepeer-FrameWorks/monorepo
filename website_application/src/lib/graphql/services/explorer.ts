@@ -19,6 +19,8 @@ import {
   isScalarType,
 } from "./schemaUtils";
 
+import { extractOperationType } from "./gqlParser";
+
 // Re-export template types for consumers
 export type { Template, TemplateGroups };
 
@@ -27,6 +29,59 @@ export { searchTemplatesFromLoader as searchTemplates };
 
 // Cached schema for query generation
 let cachedSchema: IntrospectedSchema | null = null;
+
+// Cached templates for field-to-template matching
+let cachedTemplatesMap: Map<string, Template> | null = null;
+
+/**
+ * Build a map of field names to templates for quick lookup
+ * Key format: "operationType:fieldName" e.g. "query:streamsConnection"
+ */
+async function buildTemplateMap(): Promise<Map<string, Template>> {
+  if (cachedTemplatesMap) return cachedTemplatesMap;
+
+  const templates = await loadAllTemplates();
+  const map = new Map<string, Template>();
+
+  // Extract field name from query body using regex
+  const extractFieldName = (query: string): string | null => {
+    // Match the first field after the operation definition
+    // e.g. "query GetStreams { streamsConnection(...) { ... } }" -> "streamsConnection"
+    const match = query.match(/\{\s*(\w+)/);
+    return match ? match[1] : null;
+  };
+
+  for (const template of templates.queries) {
+    const fieldName = extractFieldName(template.query);
+    if (fieldName) {
+      // Use the most specific/comprehensive template (longer query = more fields)
+      const key = `query:${fieldName}`;
+      const existing = map.get(key);
+      if (!existing || template.query.length > existing.query.length) {
+        map.set(key, template);
+      }
+    }
+  }
+
+  for (const template of templates.mutations) {
+    const fieldName = extractFieldName(template.query);
+    if (fieldName) {
+      const key = `mutation:${fieldName}`;
+      map.set(key, template);
+    }
+  }
+
+  for (const template of templates.subscriptions) {
+    const fieldName = extractFieldName(template.query);
+    if (fieldName) {
+      const key = `subscription:${fieldName}`;
+      map.set(key, template);
+    }
+  }
+
+  cachedTemplatesMap = map;
+  return map;
+}
 
 interface ExplorerResult {
   data?: unknown;
@@ -314,11 +369,16 @@ const GET_ROOT_TYPES = `
 export const explorerService = {
   /**
    * Get the full GraphQL schema via introspection
-   * Also caches the schema for use in query generation
+   * Also caches the schema and loads templates for use in query generation
    */
   async getSchema(): Promise<IntrospectedSchema> {
     try {
-      const result = await executeGraphQL(INTROSPECT_SCHEMA);
+      // Load templates in parallel with schema introspection
+      const [result] = await Promise.all([
+        executeGraphQL(INTROSPECT_SCHEMA),
+        buildTemplateMap(), // Pre-load templates for field-to-template matching
+      ]);
+
       if (result.errors?.length) {
         throw new Error(result.errors[0].message);
       }
@@ -413,6 +473,28 @@ export const explorerService = {
    */
   async searchTemplates(query: string): Promise<Template[]> {
     return searchTemplatesFromLoader(query);
+  },
+
+  /**
+   * Find an existing Houdini template that uses the given field
+   * Returns the template if found, null otherwise
+   * This is synchronous and uses a cached map - call ensureTemplatesLoaded() first
+   */
+  findTemplateForField(
+    fieldName: string,
+    operationType: string,
+  ): Template | null {
+    if (!cachedTemplatesMap) return null;
+    const key = `${operationType}:${fieldName}`;
+    return cachedTemplatesMap.get(key) || null;
+  },
+
+  /**
+   * Ensure templates are loaded into the cache
+   * Call this during initialization
+   */
+  async ensureTemplatesLoaded(): Promise<void> {
+    await buildTemplateMap();
   },
 
   /**
@@ -574,8 +656,9 @@ ${Object.entries(variables)
 
   /**
    * Generate a query from a schema field
-   * Creates a basic query with argument placeholders and common return fields
-   * Uses cached schema for proper union type handling
+   * First checks for existing Houdini templates that use this field,
+   * then falls back to creating a query with argument placeholders and common return fields.
+   * Uses cached schema for proper union type handling.
    */
   generateQueryFromField(
     field: SchemaField,
@@ -584,6 +667,19 @@ ${Object.entries(variables)
   ): GeneratedQuery {
     const fieldNamePascal =
       field.name.charAt(0).toUpperCase() + field.name.slice(1);
+
+    // Check if we have a cached template for this field (loaded from Houdini .gql files)
+    // Templates are the source of truth for comprehensive queries
+    const matchingTemplate = this.findTemplateForField(
+      field.name,
+      operationType,
+    );
+    if (matchingTemplate) {
+      return {
+        query: matchingTemplate.query,
+        variables: matchingTemplate.variables,
+      };
+    }
 
     // Build argument definitions and usage
     const args = field.args || [];
@@ -727,8 +823,9 @@ ${Object.entries(variables)
           stream: "stream-name",
           title: "My Clip",
           description: "Clip description",
-          startTime: 0,
-          endTime: 30,
+          mode: "TRIM",
+          startUnix: 0,
+          stopUnix: 30,
         };
 
       case "CreateStreamKeyInput":
@@ -836,9 +933,9 @@ ${Object.entries(variables)
       StreamAnalytics: `{
     streamId
     totalViews
-    totalViewTime
+    totalSessionDuration
     peakViewers
-    averageViewers
+    avgViewers
     uniqueViewers
   }`,
       Clip: `{
@@ -846,20 +943,9 @@ ${Object.entries(variables)
     title
     description
     startTime
-    endTime
     duration
-    playbackId
     status
     createdAt
-  }`,
-      Recording: `{
-    id
-    streamId
-    startTime
-    endTime
-    duration
-    status
-    playbackUrl
   }`,
       BillingStatus: `{
     status
@@ -868,7 +954,7 @@ ${Object.entries(variables)
     currentTier {
       id
       name
-      price
+      basePrice
     }
   }`,
       StreamEvent: `{
@@ -1027,15 +1113,15 @@ ${fragments.join("\n")}
         };
       }
 
-      // Check for query/mutation/subscription keywords
-      const hasOperation =
-        /^(query|mutation|subscription)\s+/.test(query.trim()) ||
-        /\{\s*(query|mutation|subscription)\s+/.test(query);
+      // Use extractOperationType which correctly handles comment-prefixed queries
+      // Returns 'query', 'mutation', 'subscription', or 'fragment'
+      const opType = extractOperationType(query);
 
-      if (!hasOperation && !query.trim().startsWith("{")) {
+      // Fragment definitions aren't executable operations
+      if (opType === "fragment") {
         return {
           valid: false,
-          error: "Query must start with query, mutation, subscription, or {",
+          error: "Fragment definitions cannot be executed directly",
         };
       }
 

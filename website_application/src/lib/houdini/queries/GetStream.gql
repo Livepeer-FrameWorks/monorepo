@@ -1,34 +1,15 @@
-query GetStream($id: ID!) {
+# Fetch stream with core fields, operational metrics, analytics, and current health
+query GetStream($id: ID!, $timeRange: TimeRangeInput) {
   stream(id: $id) {
-    id
-    name
-    description
-    streamKey
-    playbackId
-    record
-    createdAt
-    updatedAt
+    ...StreamCoreFields
     metrics {
-      status
-      isLive
-      currentViewers
-      peakViewers
-      totalViews
-      startedAt
-      endedAt
-      duration
-      lastEventAt
-      lastEventType
-      # Quality metrics
-      bufferState
-      qualityTier
-      primaryWidth
-      primaryHeight
-      primaryFps
-      primaryCodec
-      primaryBitrate
-      hasIssues
-      issuesDescription
+      ...StreamMetricsFields
+    }
+    analytics(timeRange: $timeRange) {
+      ...StreamAnalyticsFields
+    }
+    currentHealth {
+      ...StreamHealthFields
     }
   }
 }

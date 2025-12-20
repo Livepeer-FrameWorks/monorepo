@@ -3,6 +3,7 @@ package models
 import (
 	"database/sql/driver"
 	"encoding/json"
+	"strings"
 	"time"
 )
 
@@ -27,11 +28,44 @@ type AllocationDetails struct {
 	Unit      string   `json:"unit,omitempty"`
 }
 
+// ProcessingRates represents transcoding/processing pricing rates
+// H264RatePerMin is the base rate for H264 transcoding per minute
+// CodecMultipliers are applied to the base rate for different codecs:
+//   - H264: 1.0x (baseline)
+//   - HEVC: 1.5x (more compute intensive)
+//   - VP9:  1.5x (more compute intensive)
+//   - AV1:  2.0x (most compute intensive)
+//   - AAC/Opus/MP3: 0.0x (audio transcoding is free but tracked)
+type ProcessingRates struct {
+	H264RatePerMin   float64            `json:"h264_rate_per_min"`
+	CodecMultipliers map[string]float64 `json:"codec_multipliers,omitempty"`
+}
+
+// GetCodecMultiplier returns the multiplier for a codec, defaulting to 1.0 for unknown codecs
+func (p ProcessingRates) GetCodecMultiplier(codec string) float64 {
+	if p.CodecMultipliers == nil {
+		return 1.0
+	}
+	// Normalize codec name to lowercase
+	codecLower := strings.ToLower(codec)
+	if mult, ok := p.CodecMultipliers[codecLower]; ok {
+		return mult
+	}
+	// Default to 1.0 for unknown video codecs, 0.0 for known audio codecs
+	switch codecLower {
+	case "aac", "opus", "mp3", "ac3", "flac", "vorbis":
+		return 0.0
+	default:
+		return 1.0
+	}
+}
+
 // OverageRates represents overage pricing rates
 type OverageRates struct {
-	Bandwidth AllocationDetails `json:"bandwidth,omitempty"`
-	Storage   AllocationDetails `json:"storage,omitempty"`
-	Compute   AllocationDetails `json:"compute,omitempty"`
+	Bandwidth  AllocationDetails `json:"bandwidth,omitempty"`
+	Storage    AllocationDetails `json:"storage,omitempty"`
+	Compute    AllocationDetails `json:"compute,omitempty"`
+	Processing ProcessingRates   `json:"processing,omitempty"`
 }
 
 // UsageDetail represents a single usage line item
@@ -132,6 +166,14 @@ func (ad AllocationDetails) Value() (driver.Value, error) {
 
 func (ad *AllocationDetails) Scan(value interface{}) error {
 	return scanToJSON(ad, value)
+}
+
+func (pr ProcessingRates) Value() (driver.Value, error) {
+	return valueFromJSON(pr)
+}
+
+func (pr *ProcessingRates) Scan(value interface{}) error {
+	return scanToJSON(pr, value)
 }
 
 func (or OverageRates) Value() (driver.Value, error) {

@@ -1,4 +1,5 @@
 .git
+.cache
 .gitmodules
 .gitignore
 node_modules

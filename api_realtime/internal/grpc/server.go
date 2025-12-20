@@ -143,7 +143,7 @@ func redactClientIPs(event *pb.SignalmanEvent) {
 		if p.ClientLifecycle != nil {
 			p.ClientLifecycle.Host = "" // Redact client IP
 		}
-	// LoadBalancingData, NodeLifecycleUpdate - do NOT redact (infrastructure IPs)
+		// LoadBalancingData, NodeLifecycleUpdate - do NOT redact (infrastructure IPs)
 	}
 }
 
@@ -477,8 +477,6 @@ func eventTypeToString(et pb.EventType) string {
 		return "push_out_start"
 	case pb.EventType_EVENT_TYPE_PUSH_END:
 		return "push_end"
-	case pb.EventType_EVENT_TYPE_STREAM_BANDWIDTH:
-		return "stream_bandwidth"
 	case pb.EventType_EVENT_TYPE_RECORDING_COMPLETE:
 		return "recording_complete"
 	default:

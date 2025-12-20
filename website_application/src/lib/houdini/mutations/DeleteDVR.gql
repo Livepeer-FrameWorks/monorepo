@@ -1,0 +1,14 @@
+# Delete a DVR recording by its hash
+mutation DeleteDVR($dvrHash: ID!) {
+  deleteDVR(dvrHash: $dvrHash) {
+    ... on DeleteSuccess {
+      ...DeleteSuccessFields @mask_disable
+    }
+    ... on NotFoundError {
+      ...NotFoundErrorFields @mask_disable
+    }
+    ... on AuthError {
+      ...AuthErrorFields @mask_disable
+    }
+  }
+}

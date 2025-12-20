@@ -1,3 +1,5 @@
+# Fetch paginated list of DVR recordings with lifecycle status and storage paths
+# Returns DVR metadata from Commodore (use artifactStatesConnection for live status)
 query GetDVRRequests($internalName: String, $first: Int = 50, $after: String) {
   dvrRecordingsConnection(
     internalName: $internalName
@@ -7,8 +9,15 @@ query GetDVRRequests($internalName: String, $first: Int = 50, $after: String) {
     edges {
       cursor
       node {
+        # Business metadata (from Commodore)
+        id
         dvrHash
         internalName
+        title
+        createdAt
+        updatedAt
+        expiresAt
+        # Lifecycle data (null from Commodore, use artifactStatesConnection for live status)
         storageNodeId
         status
         startedAt
@@ -17,8 +26,10 @@ query GetDVRRequests($internalName: String, $first: Int = 50, $after: String) {
         sizeBytes
         manifestPath
         errorMessage
-        createdAt
-        updatedAt
+        storageLocation
+        isFrozen
+        frozenAt
+        s3Url
       }
     }
     pageInfo {

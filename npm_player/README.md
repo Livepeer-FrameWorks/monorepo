@@ -1,10 +1,22 @@
 # FrameWorks Player
-![NPM](https://img.shields.io/badge/npm-%40frameworks%2Fplayer-blue)
+![NPM](https://img.shields.io/badge/npm-%40livepeer--frameworks%2Fplayer--react-blue)
 ![License](https://img.shields.io/badge/license-Unlicense-lightgrey)
 
 A player component library for **FrameWorks** with Gateway integration and intelligent protocol selection. Supports MistPlayer, DirectSource (MP4/WEBM), and WHEP (WebRTC-HTTP Egress Protocol).
 
 The `Player` component resolves optimal endpoints via the FrameWorks Gateway, while raw components accept URIs directly for custom implementations.
+
+> **Looking for browser-based streaming (ingest)?** See [StreamCrafter](../npm_studio/README.md) - the companion library for WHIP publishing from camera/screen.
+
+## Packages
+
+This library is split into three packages:
+
+| Package | Description |
+|---------|-------------|
+| `@livepeer-frameworks/player-core` | Framework-agnostic core logic, player implementations, and CSS |
+| `@livepeer-frameworks/player-react` | React components and hooks |
+| `@livepeer-frameworks/player-svelte` | Svelte 5 components |
 
 ## Vite playground
 
@@ -27,15 +39,31 @@ npm run dev
 - The ShadCN/Tailwind surface compiles to `dist/player.css`. Publishing automatically runs `pnpm run build:css`, but if you are consuming straight from the repo run it once locally and then import the stylesheet:
 
 ```ts
-import '@livepeer-frameworks/player/player.css';
+// Import from the wrapper package you're using:
+import '@livepeer-frameworks/player-react/player.css';  // React
+import '@livepeer-frameworks/player-svelte/player.css'; // Svelte
 ```
 
-- If you prefer to tree-shake the utilities directly, add `node_modules/@livepeer-frameworks/player/src/**/*.{ts,tsx}` to your Tailwind content array and skip the prebuilt CSS instead.
+- If you prefer to tree-shake the utilities directly, add `node_modules/@livepeer-frameworks/player-core/src/**/*.{ts,tsx}` to your Tailwind content array and skip the prebuilt CSS instead.
 
 ## Installation
 
+### React
+
 ```bash
-npm install --save @livepeer-frameworks/player
+npm install --save @livepeer-frameworks/player-react
+```
+
+### Svelte 5
+
+```bash
+npm install --save @livepeer-frameworks/player-svelte
+```
+
+### Vanilla JS / Other Frameworks
+
+```bash
+npm install --save @livepeer-frameworks/player-core
 ```
 
 ### Local development
@@ -54,18 +82,50 @@ This concurrently watches the Rollup build, Tailwind stylesheet, and Vite playgr
 The player ships with a precompiled stylesheet. In most setups the CSS is auto-injected when you import the library. If you prefer to manage styles manually, add:
 
 ```ts
-import '@livepeer-frameworks/player/player.css';
+// Import from the wrapper package you're using:
+import '@livepeer-frameworks/player-react/player.css';  // React
+import '@livepeer-frameworks/player-svelte/player.css'; // Svelte
 // optional: ensurePlayerStyles() forces injection when running in micro-frontends.
 ```
 
 ## Usage
 
-### Basic Usage
+## Controls & Shortcuts
+
+The player ships with built-in keyboard/mouse shortcuts when the player container is focused (click/tap once to focus).
+
+**Keyboard**
+| Shortcut | Action | Notes |
+|---|---|---|
+| Space | Play/Pause | Hold = 2× speed (when seekable) |
+| K | Play/Pause | YouTube-style |
+| J / ← | Skip back 10s | Disabled on live-only |
+| L / → | Skip forward 10s | Disabled on live-only |
+| ↑ / ↓ | Volume ±10% | — |
+| M | Mute/Unmute | — |
+| F | Fullscreen toggle | — |
+| C | Captions toggle | — |
+| 0–9 | Seek to 0–90% | Disabled on live-only |
+| , / . | Prev/Next frame (paused) | WebCodecs = true step; others = buffered-only |
+
+**Mouse / Touch**
+| Gesture | Action | Notes |
+|---|---|---|
+| Double‑click | Fullscreen toggle | Desktop |
+| Double‑tap (left/right) | Skip ±10s | Touch only, disabled on live-only |
+| Click/Tap & Hold | 2× speed | Disabled on live-only |
+
+**Constraints**
+- **Live-only** streams disable seeking/skip/2× hold and frame-step.
+- **Live with DVR buffer** enables the same shortcuts as VOD.
+- Frame stepping only moves within **already buffered** ranges (no network seek). WebCodecs supports true frame stepping when paused.
+
+### Basic Usage (React)
 
 Import the components you need:
 
 ```jsx
-import { Player, MistPlayer, DirectSourcePlayer, WHEPPlayer } from '@livepeer-frameworks/player';
+import { Player, MistPlayer, DirectSourcePlayer, WHEPPlayer } from '@livepeer-frameworks/player-react';
 ```
 
 ### Player Component (Recommended)
@@ -74,12 +134,12 @@ The `Player` component resolves viewing endpoints via the FrameWorks Gateway and
 
 ```jsx
 import React from 'react';
-import { Player } from '@livepeer-frameworks/player';
+import { Player } from '@livepeer-frameworks/player-react';
 
 function App() {
   return (
     <div style={{ width: '100%', height: '500px' }}>
-      <Player 
+      <Player
         contentType="live"            // 'live' | 'dvr' | 'clip'
         contentId="internal-or-hash"  // stream internal name, DVR hash, or clip hash
         options={{ gatewayUrl: 'https://your-bridge/graphql' /* authToken optional */ }}
@@ -101,7 +161,7 @@ The player pulls in heavy transport stacks (`hls.js`, `dashjs`, `video.js`) on d
 
 ```tsx
 // preload once per module
-const heroPlayerLoader = () => import('@livepeer-frameworks/player');
+const heroPlayerLoader = () => import('@livepeer-frameworks/player-react');
 const HeroPlayer = React.lazy(heroPlayerLoader);
 
 useEffect(() => {
@@ -115,24 +175,47 @@ return (
 );
 ```
 
-#### Svelte example
+#### Svelte / Vanilla JS example
+
+For non-React frameworks, use the `FrameWorksPlayer` class:
 
 ```svelte
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { Player } from '@livepeer-frameworks/player-svelte';
+</script>
+
+<Player
+  contentId="live+demo"
+  contentType="live"
+  gatewayUrl="https://your-gateway/graphql"
+  autoplay={true}
+  muted={true}
+/>
+```
+
+Or using the vanilla JS class for more control:
+
+```svelte
+<script lang="ts">
+  import { onMount, onDestroy } from 'svelte';
+  import type { FrameWorksPlayer as FrameWorksPlayerType } from '@livepeer-frameworks/player-core';
 
   let container: HTMLDivElement;
-  let playerModulePromise: Promise<typeof import('@livepeer-frameworks/player')> | null =
-    typeof window !== 'undefined' ? import('@livepeer-frameworks/player') : null;
+  let player: FrameWorksPlayerType | null = null;
 
   onMount(async () => {
-    if (!playerModulePromise) {
-      playerModulePromise = import('@livepeer-frameworks/player');
-    }
-    const { Player } = await playerModulePromise;
-    const instance = new Player(container, { contentId: 'live+demo', contentType: 'live' });
-    return () => instance.destroy?.();
+    const { FrameWorksPlayer } = await import('@livepeer-frameworks/player-core');
+
+    player = new FrameWorksPlayer(container, {
+      contentId: 'live+demo',
+      contentType: 'live',
+      gatewayUrl: 'https://your-gateway/graphql',
+      autoplay: true,
+      muted: true,
+    });
   });
+
+  onDestroy(() => player?.destroy());
 </script>
 
 <div bind:this={container}></div>
@@ -150,7 +233,7 @@ import {
   ensurePlayersRegistered,
   type StreamInfo,
   type PlayerOptions,
-} from '@livepeer-frameworks/player';
+} from '@livepeer-frameworks/player-core';
 
 const manager = createPlayerManager({ debug: true });
 
@@ -164,6 +247,94 @@ const videoElement = await manager.initializePlayer(container, streamInfo, optio
 ```
 
 `ensurePlayersRegistered` caches the asynchronous imports per manager, so subsequent calls are free and any lazily fetched chunks stay warm in the browser cache.
+
+### FrameWorksPlayer (Vanilla JS Class)
+
+For non-React environments (Svelte, Vue, Angular, plain HTML), use the `FrameWorksPlayer` class. It provides the same functionality as the React `<Player />` component but with a constructor-based API.
+
+```ts
+import { FrameWorksPlayer } from '@livepeer-frameworks/player-core';
+import '@livepeer-frameworks/player-core/player.css'; // or import from wrapper package
+
+const player = new FrameWorksPlayer('#player-container', {
+  contentId: 'my-stream',
+  contentType: 'live',
+  gatewayUrl: 'https://your-gateway/graphql',
+  autoplay: true,
+  muted: true,
+  controls: true,
+  onStateChange: (state, context) => {
+    console.log('Player state:', state, context);
+  },
+  onReady: (videoElement) => {
+    console.log('Player ready!', videoElement);
+  },
+  onError: (error) => {
+    console.error('Player error:', error);
+  },
+});
+
+// Playback control
+player.play();
+player.pause();
+player.seek(30);
+player.setVolume(0.5);
+player.setMuted(false);
+player.jumpToLive();
+
+// State queries
+player.getState();        // 'playing' | 'paused' | 'buffering' | ...
+player.getCurrentTime();  // number (seconds)
+player.getDuration();     // number (seconds)
+player.isReady();         // boolean
+
+// Event subscription
+const unsub = player.on('timeUpdate', ({ currentTime, duration }) => {
+  console.log(`${currentTime} / ${duration}`);
+});
+unsub(); // unsubscribe
+
+// Cleanup
+player.destroy();
+```
+
+#### FrameWorksPlayerOptions
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `contentId` | string | required | Stream name, DVR hash, or clip hash |
+| `contentType` | 'live' \| 'dvr' \| 'clip' | required | Content type |
+| `gatewayUrl` | string | - | Gateway GraphQL endpoint |
+| `authToken` | string | - | Bearer token for private streams |
+| `endpoints` | ContentEndpoints | - | Pre-resolved endpoints (skip gateway) |
+| `autoplay` | boolean | true | Auto-start playback |
+| `muted` | boolean | true | Start muted |
+| `controls` | boolean | true | Show player controls |
+| `poster` | string | - | Poster/thumbnail image URL |
+| `debug` | boolean | false | Enable debug logging |
+| `onStateChange` | function | - | Called on player state changes |
+| `onStreamStateChange` | function | - | Called on stream state changes (live) |
+| `onTimeUpdate` | function | - | Called on time updates |
+| `onReady` | function | - | Called when player is ready |
+| `onError` | function | - | Called on errors |
+
+#### Player States
+
+The `onStateChange` callback receives one of these states:
+
+- `booting` – Initializing
+- `gateway_loading` – Resolving endpoints from gateway
+- `gateway_ready` – Endpoints resolved
+- `gateway_error` – Gateway resolution failed
+- `no_endpoint` – No endpoints available
+- `selecting_player` – Choosing best player/protocol
+- `connecting` – Connecting to stream
+- `buffering` – Buffering data
+- `playing` – Playing
+- `paused` – Paused
+- `ended` – Playback ended
+- `error` – Playback error
+- `destroyed` – Player destroyed
 
 ### Thumbnail Support
 
@@ -215,7 +386,7 @@ Use MistPlayer directly when you already have resolved URIs:
 
 ```jsx
 import React from 'react';
-import { MistPlayer } from '@livepeer-frameworks/player';
+import { MistPlayer } from '@livepeer-frameworks/player-react';
 
 function App() {
   const htmlUrl = "https://edge.example.com/view/your-stream-name.html";
@@ -240,7 +411,7 @@ Use DirectSourcePlayer when you have a direct MP4/WEBM URL (small VOD):
 
 ```jsx
 import React from 'react';
-import { DirectSourcePlayer } from '@livepeer-frameworks/player';
+import { DirectSourcePlayer } from '@livepeer-frameworks/player-react';
 
 function App() {
   const mp4Url = "https://edge.example.com/videos/your-clip.mp4";
@@ -259,7 +430,7 @@ Use WHEPPlayer directly for WHEP (WebRTC-HTTP Egress Protocol) streaming:
 
 ```jsx
 import React from 'react';
-import { WHEPPlayer } from '@livepeer-frameworks/player';
+import { WHEPPlayer } from '@livepeer-frameworks/player-react';
 
 function App() {
   const whepUrl = "https://edge.example.com/view/webrtc/your-stream-name";

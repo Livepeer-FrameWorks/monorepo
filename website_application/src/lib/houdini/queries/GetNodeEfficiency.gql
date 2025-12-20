@@ -1,3 +1,5 @@
+# Fetch node efficiency metrics combining resource utilization and routing events
+# Used for analyzing node performance and load balancing effectiveness
 query GetNodeEfficiency(
   $nodeId: String!
   $timeRange: TimeRangeInput

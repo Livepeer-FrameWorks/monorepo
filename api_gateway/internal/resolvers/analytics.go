@@ -62,8 +62,12 @@ func (r *Resolver) DoGetStreamAnalytics(ctx context.Context, streamId string, ti
 	}
 
 	// Extract tenant ID from context for data isolation
-	tenantID, ok := ctx.Value("tenant_id").(string)
-	if !ok {
+	// Extract tenant ID from context for data isolation
+	var tenantID string
+	if v, ok := ctx.Value("tenant_id").(string); ok {
+		tenantID = v
+	}
+	if tenantID == "" {
 		return nil, fmt.Errorf("tenant context required")
 	}
 
@@ -99,8 +103,12 @@ func (r *Resolver) DoGetPlatformOverview(ctx context.Context, timeRange *model.T
 	}
 
 	// Extract tenant ID from context
-	tenantID, ok := ctx.Value("tenant_id").(string)
-	if !ok {
+	// Extract tenant ID from context for data isolation
+	var tenantID string
+	if v, ok := ctx.Value("tenant_id").(string); ok {
+		tenantID = v
+	}
+	if tenantID == "" {
 		return nil, fmt.Errorf("tenant context required")
 	}
 
@@ -130,8 +138,12 @@ func (r *Resolver) DoGetViewerCountTimeSeries(ctx context.Context, stream *strin
 	}
 
 	// Extract tenant ID from context for data isolation
-	tenantID, ok := ctx.Value("tenant_id").(string)
-	if !ok {
+	// Extract tenant ID from context for data isolation
+	var tenantID string
+	if v, ok := ctx.Value("tenant_id").(string); ok {
+		tenantID = v
+	}
+	if tenantID == "" {
 		return nil, fmt.Errorf("tenant context required")
 	}
 
@@ -232,71 +244,6 @@ func (r *Resolver) DoGetCurrentStreamHealth(ctx context.Context, streamId string
 	return nil, nil
 }
 
-// DoGetRebufferingEvents returns rebuffering events for a stream
-func (r *Resolver) DoGetRebufferingEvents(ctx context.Context, streamId string, timeRange *model.TimeRangeInput) ([]*model.RebufferingEvent, error) {
-	if middleware.IsDemoMode(ctx) {
-		r.Logger.Debug("Demo mode: returning synthetic rebuffering events")
-		return demo.GenerateRebufferingEvents(), nil
-	}
-
-	// Convert time range for Periscope client
-	tr := toTimeRangeOpts(timeRange)
-	cacheKey := streamId
-	if timeRange != nil {
-		cacheKey += ":" + timeRange.Start.Format(time.RFC3339) + ":" + timeRange.End.Format(time.RFC3339)
-	}
-
-	// Get buffer events as proxy for rebuffering
-	val, err := r.fetchPeriscope(ctx, "buffer_events", []string{cacheKey}, func(ctx context.Context) (interface{}, error) {
-		return r.Clients.Periscope.GetBufferEvents(ctx, streamId, tr, nil)
-	})
-	if err != nil {
-		r.Logger.WithError(err).Error("Failed to get buffer events")
-		return nil, fmt.Errorf("failed to get rebuffering events: %w", err)
-	}
-	bufferEvents := val.(*pb.GetBufferEventsResponse)
-
-	// Convert buffer events to rebuffering events
-	var result []*model.RebufferingEvent
-	var prevState model.BufferState = model.BufferStateFull
-
-	for _, event := range bufferEvents.Events {
-		// Parse buffer state from event status or data
-		bufferState := model.BufferStateEmpty // Default
-		if event.Status == "FULL" {
-			bufferState = model.BufferStateFull
-		} else if event.Status == "DRY" {
-			bufferState = model.BufferStateDry
-		} else if event.Status == "RECOVER" {
-			bufferState = model.BufferStateRecover
-		}
-
-		// Detect rebuffer start (transition from FULL to DRY)
-		rebufferStart := (prevState == model.BufferStateFull && bufferState == model.BufferStateDry)
-		rebufferEnd := (prevState == model.BufferStateDry && bufferState == model.BufferStateRecover)
-
-		if rebufferStart || rebufferEnd {
-			ts := time.Time{}
-			if event.Timestamp != nil {
-				ts = event.Timestamp.AsTime()
-			}
-			result = append(result, &model.RebufferingEvent{
-				Timestamp:     ts,
-				Stream:        streamId,
-				NodeID:        event.NodeId,
-				BufferState:   bufferState,
-				PreviousState: prevState,
-				RebufferStart: rebufferStart,
-				RebufferEnd:   rebufferEnd,
-			})
-		}
-
-		prevState = bufferState
-	}
-
-	return result, nil
-}
-
 // DoGetViewerGeographics returns geographic data for individual viewer/connection events
 func (r *Resolver) DoGetViewerGeographics(ctx context.Context, stream *string, timeRange *model.TimeRangeInput) ([]*pb.ConnectionEvent, error) {
 	if middleware.IsDemoMode(ctx) {
@@ -341,8 +288,12 @@ func (r *Resolver) DoGetGeographicDistribution(ctx context.Context, stream *stri
 	}
 
 	// Extract tenant ID from context for data isolation
-	tenantID, ok := ctx.Value("tenant_id").(string)
-	if !ok {
+	// Extract tenant ID from context for data isolation
+	var tenantID string
+	if v, ok := ctx.Value("tenant_id").(string); ok {
+		tenantID = v
+	}
+	if tenantID == "" {
 		return nil, fmt.Errorf("tenant context required")
 	}
 
@@ -401,57 +352,6 @@ func (r *Resolver) DoGetGeographicDistribution(ctx context.Context, stream *stri
 	}, nil
 }
 
-// DoGetLoadBalancingMetrics returns load balancing and routing metrics with geographic context
-func (r *Resolver) DoGetLoadBalancingMetrics(ctx context.Context, timeRange *model.TimeRangeInput) ([]*pb.RoutingEvent, error) {
-	if middleware.IsDemoMode(ctx) {
-		r.Logger.Debug("Demo mode: returning synthetic load balancing metrics")
-		return demo.GenerateLoadBalancingMetrics(), nil
-	}
-
-	// Extract tenant ID from context for data isolation
-	tenantID, ok := ctx.Value("tenant_id").(string)
-	if !ok {
-		return nil, fmt.Errorf("tenant context required")
-	}
-
-	tr := toTimeRangeOpts(timeRange)
-	cacheKey := "all"
-	if timeRange != nil {
-		cacheKey = timeRange.Start.Format(time.RFC3339) + ":" + timeRange.End.Format(time.RFC3339)
-	}
-
-	// Fetch related tenant IDs (from subscriptions)
-	var relatedTenantIDs []string
-	if user := middleware.GetUserFromContext(ctx); user != nil {
-		// Fetch subscribed clusters to find their owners
-		subs, err := r.Clients.Quartermaster.ListMySubscriptions(ctx, &pb.ListMySubscriptionsRequest{
-			TenantId: user.TenantID,
-		})
-		if err == nil && subs != nil {
-			for _, cluster := range subs.Clusters {
-				if cluster.OwnerTenantId != nil && *cluster.OwnerTenantId != "" && *cluster.OwnerTenantId != user.TenantID {
-					relatedTenantIDs = append(relatedTenantIDs, *cluster.OwnerTenantId)
-				}
-			}
-		}
-	}
-
-	// Fetch routing events from Periscope
-	val, err := r.fetchPeriscope(ctx, "routing_events", []string{cacheKey}, func(ctx context.Context) (interface{}, error) {
-		return r.Clients.Periscope.GetRoutingEvents(ctx, nil, tr, nil, relatedTenantIDs)
-	})
-	if err != nil {
-		r.Logger.WithError(err).WithFields(logrus.Fields{
-			"tenant_id": tenantID,
-		}).Error("Failed to get routing events")
-		return nil, fmt.Errorf("failed to get load balancing metrics: %w", err)
-	}
-	resp := val.(*pb.GetRoutingEventsResponse)
-
-	// Events already privacy-safe (no IP, bucketed coords); return as-is
-	return resp.Events, nil
-}
-
 func isZeroCoord(lat, lon float64) bool {
 	return lat == 0 && lon == 0
 }
@@ -495,36 +395,7 @@ func timeKey(t *time.Time) string {
 	return t.UTC().Format(time.RFC3339Nano)
 }
 
-func clampPagination(p *model.PaginationInput, total int) (start int, end int) {
-	const defaultLimit = 100
-	const maxLimit = 1000
-
-	limit := defaultLimit
-	if p != nil {
-		if p.Offset != nil {
-			start = *p.Offset
-			if start < 0 {
-				start = 0
-			}
-		}
-		if p.Limit != nil {
-			limit = *p.Limit
-		}
-	}
-	if limit <= 0 {
-		limit = defaultLimit
-	}
-	if limit > maxLimit {
-		limit = maxLimit
-	}
-	end = total
-	if start+limit < end {
-		end = start + limit
-	}
-	return start, end
-}
-
-func (r *Resolver) loadRoutingEvents(ctx context.Context, stream *string, startTime, endTime *time.Time, opts *periscopeclient.CursorPaginationOpts, skipCache bool, relatedTenantIDs []string) (*pb.GetRoutingEventsResponse, error) {
+func (r *Resolver) loadRoutingEvents(ctx context.Context, stream *string, startTime, endTime *time.Time, opts *periscopeclient.CursorPaginationOpts, skipCache bool, relatedTenantIDs []string, subjectTenantID, clusterID *string) (*pb.GetRoutingEventsResponse, error) {
 	streamKey := ""
 	if stream != nil {
 		streamKey = *stream
@@ -533,6 +404,12 @@ func (r *Resolver) loadRoutingEvents(ctx context.Context, stream *string, startT
 	// Build cache key including pagination parameters and related tenants
 	relatedKey := strings.Join(relatedTenantIDs, ",")
 	keyParts := []string{streamKey, timeKey(startTime), timeKey(endTime), relatedKey}
+	if subjectTenantID != nil {
+		keyParts = append(keyParts, "st:"+*subjectTenantID)
+	}
+	if clusterID != nil {
+		keyParts = append(keyParts, "cl:"+*clusterID)
+	}
 	if opts != nil {
 		keyParts = append(keyParts, fmt.Sprintf("f%d", opts.First))
 		if opts.After != nil {
@@ -547,7 +424,7 @@ func (r *Resolver) loadRoutingEvents(ctx context.Context, stream *string, startT
 	}
 
 	val, err := r.fetchPeriscopeWithOptions(ctx, "routing_events", keyParts, func(ctx context.Context) (interface{}, error) {
-		return r.Clients.Periscope.GetRoutingEvents(ctx, stream, tr, opts, relatedTenantIDs)
+		return r.Clients.Periscope.GetRoutingEvents(ctx, stream, tr, opts, relatedTenantIDs, subjectTenantID, clusterID)
 	}, skipCache)
 	if err != nil {
 		return nil, err
@@ -756,4 +633,34 @@ func (r *Resolver) loadStreamHealthMetrics(ctx context.Context, stream *string, 
 		return nil, err
 	}
 	return val.(*pb.GetStreamHealthMetricsResponse), nil
+}
+
+// DoGetTenantDailyStats returns daily tenant statistics for PlatformOverview.dailyStats.
+func (r *Resolver) DoGetTenantDailyStats(ctx context.Context, days *int) ([]*pb.TenantDailyStat, error) {
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Demo mode: returning synthetic tenant daily stats")
+		return demo.GenerateTenantDailyStats(days), nil
+	}
+
+	var tenantID string
+	if v, ok := ctx.Value("tenant_id").(string); ok {
+		tenantID = v
+	}
+	if tenantID == "" {
+		return nil, fmt.Errorf("tenant context required")
+	}
+
+	// Default to 7 days if not specified
+	daysVal := int32(7)
+	if days != nil && *days > 0 {
+		daysVal = int32(*days)
+	}
+
+	response, err := r.Clients.Periscope.GetTenantDailyStats(ctx, tenantID, daysVal)
+	if err != nil {
+		r.Logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to get tenant daily stats")
+		return nil, fmt.Errorf("failed to get tenant daily stats: %w", err)
+	}
+
+	return response.Stats, nil
 }

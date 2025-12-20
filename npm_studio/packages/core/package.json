@@ -1,0 +1,54 @@
+{
+  "name": "@livepeer-frameworks/streamcrafter-core",
+  "version": "0.0.1",
+  "type": "module",
+  "description": "Core streaming logic for StreamCrafter - framework agnostic WebCodecs-based browser streaming",
+  "main": "dist/cjs/index.cjs",
+  "module": "dist/esm/index.js",
+  "types": "dist/types/index.d.ts",
+  "style": "dist/streamcrafter.css",
+  "files": [
+    "dist",
+    "src"
+  ],
+  "exports": {
+    ".": {
+      "import": "./dist/esm/index.js",
+      "require": "./dist/cjs/index.cjs",
+      "types": "./dist/types/index.d.ts"
+    },
+    "./vanilla": {
+      "import": "./dist/esm/vanilla.js",
+      "require": "./dist/cjs/vanilla.cjs",
+      "types": "./dist/types/vanilla/index.d.ts"
+    },
+    "./streamcrafter.css": "./dist/streamcrafter.css",
+    "./styles.css": "./dist/streamcrafter.css",
+    "./styles/streamcrafter.css": "./dist/streamcrafter.css"
+  },
+  "scripts": {
+    "build": "pnpm run build:css && NODE_ENV=production rollup -c",
+    "build:css": "mkdir -p ./dist && cp ./src/styles/streamcrafter.css ./dist/streamcrafter.css",
+    "build:watch": "NODE_ENV=development rollup -c --watch",
+    "type-check": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@rollup/plugin-commonjs": "^28.0.6",
+    "@rollup/plugin-node-resolve": "^16.0.1",
+    "@rollup/plugin-typescript": "^12.1.4",
+    "@webgpu/types": "^0.1.68",
+    "rollup": "^4.48.1",
+    "tslib": "^2.8.1",
+    "typescript": "^5.9.2"
+  },
+  "keywords": [
+    "streaming",
+    "webcodecs",
+    "whip",
+    "webrtc",
+    "ingest",
+    "broadcast"
+  ],
+  "author": "Livepeer FrameWorks",
+  "license": "Unlicense"
+}

@@ -25,6 +25,9 @@ func GraphQLContextMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ctx := c.Request.Context()
 
+		// Inject Gin context for resolvers that need direct access (e.g. for ClientIP)
+		ctx = context.WithValue(ctx, "GinContext", c)
+
 		// Check for service token in Authorization header
 		if existingServiceToken := ctx.Value("service_token"); existingServiceToken == nil {
 			authHeader := c.GetHeader("Authorization")
@@ -100,8 +103,10 @@ func GraphQLAttachLoaders(sc *clients.ServiceClients) gin.HandlerFunc {
 
 // GetUserFromContext extracts user information from GraphQL resolver context
 func GetUserFromContext(ctx context.Context) *UserContext {
-	if user, ok := ctx.Value("user").(*UserContext); ok {
-		return user
+	if v := ctx.Value("user"); v != nil {
+		if user, ok := v.(*UserContext); ok {
+			return user
+		}
 	}
 	return nil
 }
@@ -122,7 +127,11 @@ func RequireAuth(ctx context.Context) (*UserContext, error) {
 
 // HasServiceToken checks if the current context has a service token
 func HasServiceToken(ctx context.Context) bool {
-	token, ok := ctx.Value("service_token").(string)
+	var token string
+	var ok bool
+	if v := ctx.Value("service_token"); v != nil {
+		token, ok = v.(string)
+	}
 	return ok && token != ""
 }
 

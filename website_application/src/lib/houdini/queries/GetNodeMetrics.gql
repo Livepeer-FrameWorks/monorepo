@@ -1,3 +1,5 @@
+# Fetch paginated node metrics including CPU, memory, disk, network, and connection data
+# Used for individual node monitoring and resource tracking
 query GetNodeMetrics(
   $nodeId: String
   $timeRange: TimeRangeInput

@@ -1,0 +1,49 @@
+# Fetch stream overview data for the main stream detail page
+# Includes core fields, metrics, analytics, viewer time series, and current health
+# Other data (events, sessions, quality) are fetched separately to stay under complexity limit
+query GetStreamOverview(
+  $id: ID!
+  $timeRange: TimeRangeInput
+  $interval: String = "5m"
+  $first: Int = 50
+) {
+  stream(id: $id) {
+    # Core config fields
+    ...StreamCoreFields
+
+    # Operational metrics
+    metrics {
+      ...StreamMetricsFields
+    }
+
+    # Aggregated analytics
+    analytics(timeRange: $timeRange) {
+      ...StreamAnalyticsFields
+    }
+
+    # Time-series for Viewer Trend chart
+    viewerTimeSeriesConnection(
+      timeRange: $timeRange
+      interval: $interval
+      first: $first
+    ) {
+      edges {
+        cursor
+        node {
+          timestamp
+          viewerCount
+          stream
+        }
+      }
+      pageInfo {
+        ...PageInfoFields
+      }
+      totalCount
+    }
+
+    # Current health snapshot
+    currentHealth {
+      ...StreamHealthFields
+    }
+  }
+}

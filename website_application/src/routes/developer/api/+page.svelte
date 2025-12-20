@@ -12,9 +12,12 @@
     LogIn,
     Copy,
     Plus,
+    ChevronDown,
+    ChevronUp,
   } from "lucide-svelte";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
+  import { Badge } from "$lib/components/ui/badge";
   import {
     Select,
     SelectTrigger,
@@ -22,7 +25,6 @@
     SelectItem,
   } from "$lib/components/ui/select";
   import { Alert, AlertDescription } from "$lib/components/ui/alert";
-  import { TokenCard } from "$lib/components/cards";
 
   // Houdini stores - names must match the query/mutation names in .gql files
   const tokensStore = new GetAPITokensConnectionStore();
@@ -54,6 +56,7 @@
 
   let newlyCreatedToken = $state<NewTokenDisplay | null>(null);
   let creatingToken = $state(false);
+  let tokensExpanded = $state(true);
 
   // Derived state from Houdini stores
   let loading = $derived($tokensStore.fetching);
@@ -161,6 +164,24 @@
     }
   }
 
+  function formatDate(dateString: string | Date | null | undefined) {
+    if (!dateString) return "—";
+    return new Date(dateString).toLocaleDateString();
+  }
+
+  function getStatusBadgeClass(status: string) {
+    switch (status.toLowerCase()) {
+      case "active":
+        return "border-success/40 bg-success/10 text-success";
+      case "revoked":
+        return "border-destructive/40 bg-destructive/10 text-destructive";
+      case "expired":
+        return "border-warning/40 bg-warning/10 text-warning";
+      default:
+        return "border-muted-foreground/40 bg-muted-foreground/10 text-muted-foreground";
+    }
+  }
+
 </script>
 
 <svelte:head>
@@ -218,78 +239,108 @@
         </div>
       </div>
     {:else}
-      <!-- Main Content: Two Column Layout -->
-      <div class="flex-1 flex overflow-hidden">
-        <!-- Left Sidebar: Tokens -->
-        <div class="w-80 border-r border-border flex flex-col shrink-0">
-          <div class="px-4 py-3 border-b border-border flex items-center justify-between">
+      <!-- Main Content: Stacked Layout -->
+      <div class="flex-1 flex flex-col overflow-hidden">
+        <!-- API Tokens Panel (collapsible) -->
+        <div class="border-b border-border shrink-0">
+          <!-- Header -->
+          <button
+            class="w-full px-4 py-2 flex items-center justify-between hover:bg-muted/30 transition-colors"
+            onclick={() => tokensExpanded = !tokensExpanded}
+          >
             <div class="flex items-center gap-2">
-              <h3 class="font-semibold text-foreground text-sm">API Tokens</h3>
+              <Key class="w-4 h-4 text-muted-foreground" />
+              <span class="font-medium text-sm text-foreground">API Tokens</span>
               {#if totalTokenCount > 0}
                 <span class="text-xs text-muted-foreground">({apiTokens.length}{#if hasMoreTokens}+{/if})</span>
               {/if}
             </div>
-            <Button
-              variant="outline"
-              size="sm"
-              class="gap-1 h-7 text-xs"
-              onclick={() => {
-                showCreateTokenModal = true;
-                newlyCreatedToken = null;
-              }}
-            >
-              <Plus class="w-3 h-3" />
-              New
-            </Button>
-          </div>
-          <div class="flex-1 overflow-y-auto">
-            {#if apiTokens.length === 0}
-              <div class="text-center py-8 px-4">
-                <Key class="w-6 h-6 text-muted-foreground mx-auto mb-3" />
-                <p class="text-sm text-muted-foreground mb-3">No API tokens yet</p>
-                <Button
-                  size="sm"
-                  class="gap-1"
-                  onclick={() => {
-                    showCreateTokenModal = true;
-                    newlyCreatedToken = null;
-                  }}
-                >
-                  <Plus class="w-3 h-3" />
-                  Create Token
-                </Button>
-              </div>
-            {:else}
-              <div class="divide-y divide-border/50">
-                {#each apiTokens as token, index (`${token.id}-${index}`)}
-                  <TokenCard
-                    {token}
-                    onRevoke={() => revokeAPIToken(token.id, token.tokenName)}
-                  />
-                {/each}
-              </div>
-              {#if hasMoreTokens}
-                <div class="p-3 border-t border-border/50">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    class="w-full"
-                    onclick={loadMoreTokens}
-                    disabled={loadingMore}
-                  >
-                    {#if loadingMore}
-                      Loading...
-                    {:else}
-                      Load More Tokens
-                    {/if}
-                  </Button>
-                </div>
+            <div class="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                class="gap-1 h-6 text-xs"
+                onclick={(e: MouseEvent) => {
+                  e.stopPropagation();
+                  showCreateTokenModal = true;
+                  newlyCreatedToken = null;
+                }}
+              >
+                <Plus class="w-3 h-3" />
+                New Token
+              </Button>
+              {#if tokensExpanded}
+                <ChevronUp class="w-4 h-4 text-muted-foreground" />
+              {:else}
+                <ChevronDown class="w-4 h-4 text-muted-foreground" />
               {/if}
-            {/if}
-          </div>
+            </div>
+          </button>
+
+          <!-- Tokens Table (collapsible) -->
+          {#if tokensExpanded}
+            <div class="max-h-48 overflow-y-auto">
+              {#if apiTokens.length === 0}
+                <div class="px-4 py-4 text-center text-sm text-muted-foreground">
+                  No API tokens yet. Create one to get started.
+                </div>
+              {:else}
+                <table class="w-full text-sm">
+                  <thead class="bg-muted/30 sticky top-0">
+                    <tr class="text-left text-xs text-muted-foreground">
+                      <th class="px-4 py-2 font-medium">Name</th>
+                      <th class="px-4 py-2 font-medium">Status</th>
+                      <th class="px-4 py-2 font-medium hidden sm:table-cell">Created</th>
+                      <th class="px-4 py-2 font-medium hidden md:table-cell">Last Used</th>
+                      <th class="px-4 py-2 font-medium hidden lg:table-cell">Expires</th>
+                      <th class="px-4 py-2 font-medium text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody class="divide-y divide-border/50">
+                    {#each apiTokens as token, index (`${token.id}-${index}`)}
+                      <tr class="hover:bg-muted/20">
+                        <td class="px-4 py-2 font-medium text-foreground">{token.tokenName}</td>
+                        <td class="px-4 py-2">
+                          <Badge variant="outline" class={`text-xs ${getStatusBadgeClass(token.status)}`}>
+                            {token.status}
+                          </Badge>
+                        </td>
+                        <td class="px-4 py-2 text-muted-foreground hidden sm:table-cell">{formatDate(token.createdAt)}</td>
+                        <td class="px-4 py-2 text-muted-foreground hidden md:table-cell">{formatDate(token.lastUsedAt)}</td>
+                        <td class="px-4 py-2 text-muted-foreground hidden lg:table-cell">{formatDate(token.expiresAt)}</td>
+                        <td class="px-4 py-2 text-right">
+                          {#if token.status.toLowerCase() === "active"}
+                            <button
+                              class="text-xs text-destructive hover:underline cursor-pointer"
+                              onclick={() => revokeAPIToken(token.id, token.tokenName)}
+                            >
+                              Revoke
+                            </button>
+                          {:else}
+                            <span class="text-xs text-muted-foreground">—</span>
+                          {/if}
+                        </td>
+                      </tr>
+                    {/each}
+                  </tbody>
+                </table>
+                {#if hasMoreTokens}
+                  <div class="px-4 py-2 border-t border-border/50 text-center">
+                    <button
+                      class="text-xs text-primary hover:underline"
+                      onclick={loadMoreTokens}
+                      disabled={loadingMore}
+                    >
+                      {loadingMore ? "Loading..." : "Load more tokens"}
+                    </button>
+                  </div>
+                {/if}
+              {/if}
+            </div>
+          {/if}
         </div>
 
-        <!-- Right: GraphQL Explorer (fills remaining space) -->
+        <!-- GraphQL Explorer (fills remaining space) -->
         <div class="flex-1 overflow-hidden">
           <GraphQLExplorer {authToken} />
         </div>

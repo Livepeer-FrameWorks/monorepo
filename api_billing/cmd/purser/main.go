@@ -151,6 +151,7 @@ func main() {
 		healthEndpoint := "/health"
 		httpPort, _ := strconv.Atoi(serverConfig.Port)
 		advertiseHost := config.GetEnv("PURSER_HOST", "purser")
+		clusterID := config.GetEnv("CLUSTER_ID", "")
 		if _, err := qc.BootstrapService(ctx, &pb.BootstrapServiceRequest{
 			Type:           "purser",
 			Version:        version.Version,
@@ -158,6 +159,7 @@ func main() {
 			HealthEndpoint: &healthEndpoint,
 			Port:           int32(httpPort),
 			AdvertiseHost:  &advertiseHost,
+			ClusterId:      func() *string { if clusterID != "" { return &clusterID }; return nil }(),
 		}); err != nil {
 			logger.WithError(err).Warn("Quartermaster bootstrap (purser) failed")
 		} else {

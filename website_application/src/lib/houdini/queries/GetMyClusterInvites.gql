@@ -1,0 +1,16 @@
+# Fetch cluster invitations sent to the current tenant
+# Returns pending invites with access level and expiration details
+query GetMyClusterInvites {
+  myClusterInvites {
+    id
+    clusterId
+    clusterName
+    invitedTenantId
+    invitedTenantName
+    inviteToken
+    accessLevel
+    status
+    expiresAt
+    createdAt
+  }
+}

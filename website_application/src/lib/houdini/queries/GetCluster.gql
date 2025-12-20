@@ -1,21 +1,47 @@
+# Fetch detailed cluster information including nodes and marketplace configuration
 query GetCluster($id: ID!) {
   cluster(id: $id) {
     id
+    clusterId
     clusterName
+    clusterType
+    deploymentModel
+    baseUrl
+    databaseUrl
+    periscopeUrl
+    kafkaBrokers
+    maxConcurrentStreams
+    maxConcurrentViewers
+    maxBandwidthMbps
+    currentStreamCount
+    currentViewerCount
+    currentBandwidthMbps
     healthStatus
+    isActive
+    isDefaultCluster
+    isSubscribed
     createdAt
-    nodes {
-      id
-      nodeName
-      clusterId
-      nodeType
-      status
-      region
-      externalIp
-      lastHeartbeat
-      createdAt
-      latitude
-      longitude
+    updatedAt
+    ownerTenantId
+    visibility
+    pricingModel
+    monthlyPriceCents
+    requiredBillingTier
+    requiresApproval
+    shortDescription
+    longDescription
+    isPlatformCluster
+    nodesConnection(first: 100) {
+      edges {
+        cursor
+        node {
+          ...NodeCoreFields
+        }
+      }
+      pageInfo {
+        ...PageInfoFields
+      }
+      totalCount
     }
   }
 }

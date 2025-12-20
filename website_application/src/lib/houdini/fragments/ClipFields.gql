@@ -1,0 +1,22 @@
+# All fields available on the Clip type
+fragment ClipFields on Clip {
+  id
+  clipHash
+  streamName
+  title
+  description
+  startTime
+  duration
+  nodeId
+  storagePath
+  sizeBytes
+  status
+  accessCount
+  createdAt
+  updatedAt
+  clipMode
+  requestedParams
+  storageLocation
+  isFrozen
+  expiresAt
+}

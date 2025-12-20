@@ -1,0 +1,16 @@
+# All fields available on BootstrapToken type
+fragment BootstrapTokenFields on BootstrapToken {
+  id
+  name
+  token
+  kind
+  clusterId
+  expectedIp
+  metadata
+  usageLimit
+  usageCount
+  expiresAt
+  usedAt
+  createdBy
+  createdAt
+}

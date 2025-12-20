@@ -15,13 +15,14 @@ import (
 
 // GRPCClient is the gRPC client for Purser
 type GRPCClient struct {
-	conn         *grpc.ClientConn
-	billing      pb.BillingServiceClient
-	subscription pb.SubscriptionServiceClient
-	invoice      pb.InvoiceServiceClient
-	payment      pb.PaymentServiceClient
-	usage        pb.UsageServiceClient
-	logger       logging.Logger
+	conn           *grpc.ClientConn
+	billing        pb.BillingServiceClient
+	subscription   pb.SubscriptionServiceClient
+	invoice        pb.InvoiceServiceClient
+	payment        pb.PaymentServiceClient
+	usage          pb.UsageServiceClient
+	clusterPricing pb.ClusterPricingServiceClient
+	logger         logging.Logger
 }
 
 // GRPCConfig represents the configuration for the gRPC client
@@ -87,13 +88,14 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 	}
 
 	return &GRPCClient{
-		conn:         conn,
-		billing:      pb.NewBillingServiceClient(conn),
-		subscription: pb.NewSubscriptionServiceClient(conn),
-		invoice:      pb.NewInvoiceServiceClient(conn),
-		payment:      pb.NewPaymentServiceClient(conn),
-		usage:        pb.NewUsageServiceClient(conn),
-		logger:       config.Logger,
+		conn:           conn,
+		billing:        pb.NewBillingServiceClient(conn),
+		subscription:   pb.NewSubscriptionServiceClient(conn),
+		invoice:        pb.NewInvoiceServiceClient(conn),
+		payment:        pb.NewPaymentServiceClient(conn),
+		usage:          pb.NewUsageServiceClient(conn),
+		clusterPricing: pb.NewClusterPricingServiceClient(conn),
+		logger:         config.Logger,
 	}, nil
 }
 
@@ -242,4 +244,68 @@ func (c *GRPCClient) GetTenantUsage(ctx context.Context, tenantID, startDate, en
 		StartDate: startDate,
 		EndDate:   endDate,
 	})
+}
+
+// ============================================================================
+// CLUSTER PRICING OPERATIONS
+// ============================================================================
+
+// GetClusterPricing returns pricing config for a cluster
+func (c *GRPCClient) GetClusterPricing(ctx context.Context, clusterID string) (*pb.ClusterPricing, error) {
+	return c.clusterPricing.GetClusterPricing(ctx, &pb.GetClusterPricingRequest{
+		ClusterId: clusterID,
+	})
+}
+
+// GetClustersPricingBatch returns pricing configs for multiple clusters
+func (c *GRPCClient) GetClustersPricingBatch(ctx context.Context, clusterIDs []string) (map[string]*pb.ClusterPricing, error) {
+	resp, err := c.clusterPricing.GetClustersPricingBatch(ctx, &pb.GetClustersPricingBatchRequest{
+		ClusterIds: clusterIDs,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Pricings, nil
+}
+
+// SetClusterPricing creates or updates pricing config for a cluster
+func (c *GRPCClient) SetClusterPricing(ctx context.Context, req *pb.SetClusterPricingRequest) (*pb.ClusterPricing, error) {
+	return c.clusterPricing.SetClusterPricing(ctx, req)
+}
+
+// ListClusterPricings returns pricing configs for clusters owned by a tenant
+func (c *GRPCClient) ListClusterPricings(ctx context.Context, ownerTenantID string, pagination *pb.CursorPaginationRequest) (*pb.ListClusterPricingsResponse, error) {
+	return c.clusterPricing.ListClusterPricings(ctx, &pb.ListClusterPricingsRequest{
+		OwnerTenantId: ownerTenantID,
+		Pagination:    pagination,
+	})
+}
+
+// CheckClusterAccess checks if a tenant can subscribe to a cluster
+func (c *GRPCClient) CheckClusterAccess(ctx context.Context, tenantID, clusterID string) (*pb.CheckClusterAccessResponse, error) {
+	return c.clusterPricing.CheckClusterAccess(ctx, &pb.CheckClusterAccessRequest{
+		TenantId:  tenantID,
+		ClusterId: clusterID,
+	})
+}
+
+// CreateClusterSubscription creates a subscription for a tenant to a cluster
+func (c *GRPCClient) CreateClusterSubscription(ctx context.Context, tenantID, clusterID, inviteToken string) (*pb.ClusterSubscriptionResponse, error) {
+	req := &pb.CreateClusterSubscriptionRequest{
+		TenantId:  tenantID,
+		ClusterId: clusterID,
+	}
+	if inviteToken != "" {
+		req.InviteToken = &inviteToken
+	}
+	return c.clusterPricing.CreateClusterSubscription(ctx, req)
+}
+
+// CancelClusterSubscription cancels a tenant's subscription to a cluster
+func (c *GRPCClient) CancelClusterSubscription(ctx context.Context, tenantID, clusterID string) error {
+	_, err := c.clusterPricing.CancelClusterSubscription(ctx, &pb.CancelClusterSubscriptionRequest{
+		TenantId:  tenantID,
+		ClusterId: clusterID,
+	})
+	return err
 }

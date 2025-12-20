@@ -1,3 +1,5 @@
+# Fetch paginated storage usage metrics broken down by content type (DVR, clips, VOD)
+# Returns time-series storage data including frozen/archived content
 query GetStorageUsage(
   $nodeId: String
   $timeRange: TimeRangeInput
@@ -18,9 +20,12 @@ query GetStorageUsage(
         nodeId
         dvrBytes
         clipBytes
-        recordingBytes
+        vodBytes
         totalBytes
         fileCount
+        frozenDvrBytes
+        frozenClipBytes
+        frozenVodBytes
       }
     }
     pageInfo {

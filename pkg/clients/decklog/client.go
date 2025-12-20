@@ -280,6 +280,33 @@ func (c *BatchedClient) SendDVRLifecycle(data *pb.DVRLifecycleData) error {
 	return nil
 }
 
+// SendVodLifecycle sends VOD lifecycle data to Decklog
+func (c *BatchedClient) SendVodLifecycle(data *pb.VodLifecycleData) error {
+	ctx := c.authContext()
+	trigger := &pb.MistTrigger{
+		TriggerType: "VOD_LIFECYCLE",
+		TriggerPayload: &pb.MistTrigger_VodLifecycleData{
+			VodLifecycleData: data,
+		},
+	}
+	_, err := c.client.SendEvent(ctx, trigger)
+	if err != nil {
+		c.logger.WithFields(logging.Fields{
+			"vod_hash": data.GetVodHash(),
+			"status":   data.GetStatus().String(),
+			"error":    err,
+		}).Error("Failed to send VOD lifecycle data to Decklog")
+		return fmt.Errorf("failed to send VOD lifecycle data: %w", err)
+	}
+
+	c.logger.WithFields(logging.Fields{
+		"vod_hash": data.GetVodHash(),
+		"status":   data.GetStatus().String(),
+	}).Debug("VOD lifecycle data sent to Decklog")
+
+	return nil
+}
+
 // Close gracefully shuts down the client
 func (c *BatchedClient) Close() error {
 	if c.conn != nil {

@@ -1,3 +1,4 @@
+# Create a new payment transaction
 mutation CreatePayment($input: CreatePaymentInput!) {
   createPayment(input: $input) {
     __typename

@@ -138,12 +138,16 @@ func main() {
 		defer cancel()
 		healthEndpoint := "/health"
 		httpPort, _ := strconv.Atoi(serverConfig.Port)
+		advertiseHost := config.GetEnv("QUARTERMASTER_HOST", "quartermaster")
+		clusterID := config.GetEnv("CLUSTER_ID", "")
 		_, _ = qc.BootstrapService(ctx, &pb.BootstrapServiceRequest{
 			Type:           "quartermaster",
 			Version:        version.Version,
 			Protocol:       "http",
 			HealthEndpoint: &healthEndpoint,
 			Port:           int32(httpPort),
+			AdvertiseHost:  &advertiseHost,
+			ClusterId:      func() *string { if clusterID != "" { return &clusterID }; return nil }(),
 		})
 	}()
 

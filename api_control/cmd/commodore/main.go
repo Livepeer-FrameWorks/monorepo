@@ -178,6 +178,7 @@ func main() {
 		healthEndpoint := "/health"
 		httpPort, _ := strconv.Atoi(serverConfig.Port)
 		advertiseHost := config.GetEnv("COMMODORE_HOST", "commodore")
+		clusterID := config.GetEnv("CLUSTER_ID", "")
 		if _, err := quartermasterGRPCClient.BootstrapService(ctx, &pb.BootstrapServiceRequest{
 			Type:           "commodore",
 			Version:        version.Version,
@@ -185,6 +186,7 @@ func main() {
 			HealthEndpoint: &healthEndpoint,
 			Port:           int32(httpPort),
 			AdvertiseHost:  &advertiseHost,
+			ClusterId:      func() *string { if clusterID != "" { return &clusterID }; return nil }(),
 		}); err != nil {
 			logger.WithError(err).Warn("Quartermaster bootstrap (commodore) failed")
 		} else {

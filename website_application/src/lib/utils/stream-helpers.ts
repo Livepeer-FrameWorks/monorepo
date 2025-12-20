@@ -30,14 +30,17 @@ export function getStatusIcon(status: string | undefined): string {
   }
 }
 
-export function formatDate(dateString: string): string {
-  return new Date(dateString).toLocaleString();
+export function formatDate(dateString: string | null | undefined): string {
+  if (!dateString) return "—";
+  const date = new Date(dateString);
+  return isNaN(date.getTime()) ? "—" : date.toLocaleString();
 }
 
-export function formatDuration(seconds: number): string {
-  if (!seconds) return "N/A";
+export function formatDuration(seconds: number | null | undefined): string {
+  if (seconds === null || seconds === undefined) return "N/A";
+  if (seconds === 0) return "00:00:00";
   const hours = Math.floor(seconds / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
-  const secs = seconds % 60;
+  const secs = Math.floor(seconds % 60);
   return `${hours.toString().padStart(2, "0")}:${minutes.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
 }

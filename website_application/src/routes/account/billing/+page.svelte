@@ -1,12 +1,14 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { get } from "svelte/store";
   import { resolve } from "$app/paths";
   import { auth } from "$lib/stores/auth";
-  import { GetBillingStatusStore, GetBillingTiersStore, GetInvoicesStore, CreatePaymentStore } from "$houdini";
+  import { fragment, GetBillingStatusStore, GetBillingTiersStore, GetInvoicesStore, CreatePaymentStore, BillingTierFieldsStore } from "$houdini";
   import { toast } from "$lib/stores/toast.js";
   import { Button } from "$lib/components/ui/button";
   import { GridSeam } from "$lib/components/layout";
   import DashboardMetricCard from "$lib/components/shared/DashboardMetricCard.svelte";
+  import EmptyState from "$lib/components/EmptyState.svelte";
   import { getIconComponent } from "$lib/iconUtils";
   import { PaymentMethod, type PaymentMethod$options } from "$houdini";
 
@@ -15,6 +17,9 @@
   const billingTiersStore = new GetBillingTiersStore();
   const invoicesStore = new GetInvoicesStore();
   const createPaymentMutation = new CreatePaymentStore();
+
+  // Fragment stores for unmasking nested data
+  const tierFragmentStore = new BillingTierFieldsStore();
 
   let isAuthenticated = false;
   let error = $state<string | null>(null);
@@ -27,7 +32,14 @@
   );
   let billingStatus = $derived($billingStatusStore.data?.billingStatus ?? null);
   let availableTiers = $derived($billingTiersStore.data?.billingTiers ?? []);
-  let invoices = $derived($invoicesStore.data?.invoices ?? []);
+  let invoices = $derived($invoicesStore.data?.invoicesConnection?.edges?.map(e => e.node) ?? []);
+
+  // Unmask fragment data for currentTier using get() pattern
+  let currentTier = $derived(
+    billingStatus?.currentTier
+      ? get(fragment(billingStatus.currentTier, tierFragmentStore))
+      : null
+  );
 
   // Subscribe to auth store
   auth.subscribe((authState) => {
@@ -208,7 +220,7 @@
             <DashboardMetricCard
               icon={CreditCardIcon}
               iconColor="text-primary"
-              value={billingStatus.currentTier?.name || 'Free'}
+              value={currentTier?.name || 'Free'}
               valueColor="text-foreground"
               label="Current Plan"
             />
@@ -231,12 +243,12 @@
               label="Next Billing"
             />
           </div>
-          {#if billingStatus.currentTier?.slaLevel}
+          {#if currentTier?.slaLevel}
             <div>
               <DashboardMetricCard
                 icon={ShieldIcon}
                 iconColor="text-success"
-                value={billingStatus.currentTier.slaLevel}
+                value={currentTier.slaLevel}
                 valueColor="text-success"
                 label="SLA Level"
               />
@@ -246,7 +258,7 @@
               <DashboardMetricCard
                 icon={CreditCardIcon}
                 iconColor="text-muted-foreground"
-                value={formatCurrency(billingStatus.currentTier?.basePrice || 0)}
+                value={formatCurrency(currentTier?.basePrice || 0)}
                 valueColor="text-foreground"
                 label="Monthly Cost"
               />
@@ -287,7 +299,7 @@
             <div class="slab-body--padded">
               <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
                 {#each availableTiers as tier (tier.id ?? tier.name)}
-                  <div class="p-4 border border-border/50 bg-muted/10 {billingStatus?.currentTier?.id === tier.id ? 'ring-2 ring-primary' : ''}">
+                  <div class="p-4 border border-border/50 bg-muted/10 {currentTier?.id === tier.id ? 'ring-2 ring-primary' : ''}">
                     <h4 class="text-lg font-semibold mb-2">{tier.name}</h4>
                     <div class="text-2xl font-bold text-primary mb-2">
                       {#if tier.isEnterprise}
@@ -325,7 +337,7 @@
                       </ul>
                     {/if}
 
-                    {#if billingStatus?.currentTier?.id === tier.id}
+                    {#if currentTier?.id === tier.id}
                       <div class="w-full text-center py-2 text-sm text-muted-foreground border-t border-border/30 mt-4">
                         Current Plan
                       </div>
@@ -424,6 +436,16 @@
                   {/each}
                 </tbody>
               </table>
+            </div>
+          </div>
+        {:else}
+          <div class="slab col-span-full">
+            <div class="slab-body--padded">
+              <EmptyState
+                iconName="Receipt"
+                title="No invoices yet"
+                description="Your invoices and payment history will appear here once you have billing activity."
+              />
             </div>
           </div>
         {/if}

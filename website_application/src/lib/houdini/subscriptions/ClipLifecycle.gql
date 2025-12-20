@@ -1,3 +1,5 @@
+# Real-time clip generation progress and completion updates
+# Monitors clip creation stages, upload progress, S3 URLs, and error states
 subscription ClipLifecycle($stream: String!) {
   clipLifecycle(stream: $stream) {
     stage

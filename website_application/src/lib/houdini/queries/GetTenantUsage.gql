@@ -1,3 +1,4 @@
+# Fetch tenant usage summary with resource consumption and costs for billing period
 query GetTenantUsage($timeRange: TimeRangeInput) {
   tenantUsage(timeRange: $timeRange) {
     billingPeriod

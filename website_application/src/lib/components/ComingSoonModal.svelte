@@ -85,10 +85,7 @@
           <div class="space-y-3">
             <h3 class="text-sm font-semibold text-foreground">What to expect</h3>
             <ul class="space-y-2 text-sm text-muted-foreground">
-              {#if item.name === "Go Live"}
-                <li class="flex gap-2"><span class="text-primary">•</span> One-click "Go Live" experience, directly in the dashboard.</li>
-                <li class="flex gap-2"><span class="text-primary">•</span> Hook directly into the stream composer.</li>
-              {:else if item.name === "Composer"}
+              {#if item.name === "Composer"}
                 <li class="flex gap-2"><span class="text-primary">•</span> Compose multiple input streams with picture-in-picture layouts.</li>
                 <li class="flex gap-2"><span class="text-primary">•</span> Visual editor for stream overlays and scenes.</li>
                 <li class="flex gap-2"><span class="text-primary">•</span> Compose on our processing nodes or on your own media node.</li>

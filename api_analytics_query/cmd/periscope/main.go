@@ -129,6 +129,7 @@ func main() {
 		healthEndpoint := "/health"
 		httpPort, _ := strconv.Atoi(serverConfig.Port)
 		advertiseHost := config.GetEnv("PERISCOPE_QUERY_HOST", "periscope-query")
+		clusterID := config.GetEnv("CLUSTER_ID", "")
 		if _, err := qc.BootstrapService(ctx, &pb.BootstrapServiceRequest{
 			Type:           "periscope_query",
 			Version:        version.Version,
@@ -136,6 +137,7 @@ func main() {
 			HealthEndpoint: &healthEndpoint,
 			Port:           int32(httpPort),
 			AdvertiseHost:  &advertiseHost,
+			ClusterId:      func() *string { if clusterID != "" { return &clusterID }; return nil }(),
 		}); err != nil {
 			logger.WithError(err).Warn("Quartermaster bootstrap (periscope_query) failed")
 		} else {

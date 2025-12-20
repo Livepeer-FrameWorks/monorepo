@@ -1,0 +1,10 @@
+# All fields available on ViewerEndpoint type
+fragment ViewerEndpointFields on ViewerEndpoint {
+  nodeId
+  baseUrl
+  protocol
+  url
+  geoDistance
+  loadScore
+  outputs
+}

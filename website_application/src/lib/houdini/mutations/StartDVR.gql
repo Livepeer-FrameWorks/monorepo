@@ -1,19 +1,13 @@
-mutation StartDVR($internalName: String!, $streamId: ID) {
-  startDVR(internalName: $internalName, streamId: $streamId) {
+# Start DVR recording for a stream with optional expiration
+mutation StartDVR($internalName: String!, $streamId: ID, $expiresAt: Int) {
+  startDVR(
+    internalName: $internalName
+    streamId: $streamId
+    expiresAt: $expiresAt
+  ) {
     __typename
     ... on DVRRequest {
-      dvrHash
-      internalName
-      storageNodeId
-      status
-      startedAt
-      endedAt
-      durationSeconds
-      sizeBytes
-      manifestPath
-      errorMessage
-      createdAt
-      updatedAt
+      ...DVRRequestFields
     }
     ... on ValidationError {
       ...ValidationErrorFields @mask_disable

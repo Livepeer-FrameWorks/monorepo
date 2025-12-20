@@ -1,3 +1,4 @@
+# Fetch cluster access permissions and resource limits for the current tenant
 query GetClustersAccess {
   clustersAccess {
     clusterId

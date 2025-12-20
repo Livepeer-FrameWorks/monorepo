@@ -1,15 +1,15 @@
-query GetPlatformOverview($timeRange: TimeRangeInput) {
+# Fetch platform-wide aggregate metrics and daily statistics for dashboard overview
+# Returns total streams, viewers, bandwidth, and time-series data
+query GetPlatformOverview($timeRange: TimeRangeInput, $days: Int = 7) {
   platformOverview(timeRange: $timeRange) {
     totalStreams
     totalViewers
     totalBandwidth
-    totalUsers
     streamHours
     egressGb
     peakViewers
     totalUploadBytes
     totalDownloadBytes
-    # Viewer consumption metrics
     viewerHours
     deliveredMinutes
     uniqueViewers
@@ -19,6 +19,15 @@ query GetPlatformOverview($timeRange: TimeRangeInput) {
     timeRange {
       start
       end
+    }
+    dailyStats(days: $days) {
+      id
+      date
+      egressGb
+      viewerHours
+      uniqueViewers
+      totalSessions
+      totalViews
     }
   }
 }

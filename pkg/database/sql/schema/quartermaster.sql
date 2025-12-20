@@ -358,3 +358,102 @@ CREATE TABLE IF NOT EXISTS quartermaster.bootstrap_tokens (
 
 CREATE INDEX IF NOT EXISTS idx_qm_bootstrap_tokens_token ON quartermaster.bootstrap_tokens(token);
 CREATE INDEX IF NOT EXISTS idx_qm_bootstrap_tokens_kind ON quartermaster.bootstrap_tokens(kind);
+
+-- ============================================================================
+-- CLUSTER MARKETPLACE (Multi-cluster provider network)
+-- ============================================================================
+-- Enables clusters to be discovered, subscribed to, and managed as a marketplace
+-- Supports visibility controls, pricing models, and invite-based access
+-- ============================================================================
+
+-- Marketplace columns for infrastructure_clusters
+ALTER TABLE quartermaster.infrastructure_clusters
+ADD COLUMN IF NOT EXISTS visibility VARCHAR(20) DEFAULT 'private',
+ADD COLUMN IF NOT EXISTS pricing_model VARCHAR(20) DEFAULT 'free_unmetered',
+ADD COLUMN IF NOT EXISTS monthly_price_cents INTEGER DEFAULT 0,
+ADD COLUMN IF NOT EXISTS metered_rate_config JSONB DEFAULT '{}',
+ADD COLUMN IF NOT EXISTS required_billing_tier VARCHAR(50),
+ADD COLUMN IF NOT EXISTS requires_approval BOOLEAN DEFAULT FALSE,
+ADD COLUMN IF NOT EXISTS short_description VARCHAR(500),
+ADD COLUMN IF NOT EXISTS long_description TEXT,
+ADD COLUMN IF NOT EXISTS is_platform_cluster BOOLEAN DEFAULT FALSE;
+
+-- Add check constraints for marketplace enums
+DO $$ BEGIN
+    ALTER TABLE quartermaster.infrastructure_clusters
+    ADD CONSTRAINT chk_cluster_visibility CHECK (visibility IN ('public', 'unlisted', 'private'));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+    ALTER TABLE quartermaster.infrastructure_clusters
+    ADD CONSTRAINT chk_cluster_pricing_model CHECK (pricing_model IN ('free_unmetered', 'metered', 'monthly', 'custom', 'tier_inherit'));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+-- Marketplace indexes for cluster discovery
+CREATE INDEX IF NOT EXISTS idx_qm_clusters_visibility ON quartermaster.infrastructure_clusters(visibility) WHERE is_active = true;
+CREATE INDEX IF NOT EXISTS idx_qm_clusters_pricing_model ON quartermaster.infrastructure_clusters(pricing_model) WHERE is_active = true;
+CREATE INDEX IF NOT EXISTS idx_qm_clusters_platform ON quartermaster.infrastructure_clusters(is_platform_cluster) WHERE is_active = true;
+
+-- ============================================================================
+-- CLUSTER SUBSCRIPTION STATUS (Approval workflow)
+-- ============================================================================
+
+-- Subscription status columns for tenant_cluster_access
+ALTER TABLE quartermaster.tenant_cluster_access
+ADD COLUMN IF NOT EXISTS subscription_status VARCHAR(20) DEFAULT 'active',
+ADD COLUMN IF NOT EXISTS requested_at TIMESTAMP,
+ADD COLUMN IF NOT EXISTS approved_at TIMESTAMP,
+ADD COLUMN IF NOT EXISTS approved_by UUID,
+ADD COLUMN IF NOT EXISTS rejection_reason TEXT,
+ADD COLUMN IF NOT EXISTS invite_token VARCHAR(128);
+
+-- Add check constraint for subscription status
+DO $$ BEGIN
+    ALTER TABLE quartermaster.tenant_cluster_access
+    ADD CONSTRAINT chk_subscription_status CHECK (subscription_status IN ('pending_approval', 'active', 'suspended', 'rejected'));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+-- Index for pending approval queries
+CREATE INDEX IF NOT EXISTS idx_qm_tca_pending_approval ON quartermaster.tenant_cluster_access(subscription_status)
+    WHERE subscription_status = 'pending_approval';
+
+-- ============================================================================
+-- CLUSTER INVITES (Tenant-to-tenant invitation system)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS quartermaster.cluster_invites (
+    -- ===== IDENTITY =====
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    cluster_id VARCHAR(100) NOT NULL REFERENCES quartermaster.infrastructure_clusters(cluster_id) ON DELETE CASCADE,
+    invited_tenant_id UUID NOT NULL REFERENCES quartermaster.tenants(id) ON DELETE CASCADE,
+
+    -- ===== INVITE CONFIGURATION =====
+    invite_token VARCHAR(128) UNIQUE NOT NULL DEFAULT quartermaster.generate_random_string(32),
+    access_level VARCHAR(50) DEFAULT 'subscriber',
+    resource_limits JSONB DEFAULT '{}',
+
+    -- ===== STATUS =====
+    status VARCHAR(20) DEFAULT 'pending',
+
+    -- ===== LIFECYCLE =====
+    created_by UUID NOT NULL,
+    created_at TIMESTAMP DEFAULT NOW(),
+    expires_at TIMESTAMP,
+    accepted_at TIMESTAMP,
+
+    CONSTRAINT chk_invite_status CHECK (status IN ('pending', 'accepted', 'expired', 'revoked')),
+    UNIQUE(cluster_id, invited_tenant_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_qm_cluster_invites_cluster ON quartermaster.cluster_invites(cluster_id);
+CREATE INDEX IF NOT EXISTS idx_qm_cluster_invites_tenant ON quartermaster.cluster_invites(invited_tenant_id);
+CREATE INDEX IF NOT EXISTS idx_qm_cluster_invites_token ON quartermaster.cluster_invites(invite_token);
+CREATE INDEX IF NOT EXISTS idx_qm_cluster_invites_pending ON quartermaster.cluster_invites(status) WHERE status = 'pending';
+
+-- ============================================================================
+-- TENANT CLUSTER OWNERSHIP LIMITS
+-- ============================================================================
+
+-- Add max_owned_clusters to tenants (non-providers limited to 1 private cluster)
+ALTER TABLE quartermaster.tenants
+ADD COLUMN IF NOT EXISTS max_owned_clusters INTEGER DEFAULT 1;

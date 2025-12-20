@@ -1,0 +1,20 @@
+# Get single marketplace cluster details
+query GetMarketplaceCluster($clusterId: String!) {
+  marketplaceCluster(clusterId: $clusterId) {
+    clusterId
+    clusterName
+    shortDescription
+    visibility
+    pricingModel
+    monthlyPriceCents
+    requiredBillingTier
+    requiresApproval
+    ownerName
+    isPlatformCluster
+    maxConcurrentStreams
+    maxConcurrentViewers
+    currentUtilization
+    isSubscribed
+    subscriptionStatus
+  }
+}

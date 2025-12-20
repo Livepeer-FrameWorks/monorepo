@@ -71,7 +71,41 @@ type UsageSummary struct {
 	ClipsDeleted         int       `json:"clips_deleted"`
 	ClipStorageAddedGB   float64   `json:"clip_storage_added_gb"`
 	ClipStorageDeletedGB float64   `json:"clip_storage_deleted_gb"`
-	TotalStreams         int       `json:"total_streams"`
+	DvrAdded             int       `json:"dvr_added"`
+	DvrDeleted           int       `json:"dvr_deleted"`
+	DvrStorageAddedGB    float64   `json:"dvr_storage_added_gb"`
+	DvrStorageDeletedGB  float64   `json:"dvr_storage_deleted_gb"`
+	VodAdded             int       `json:"vod_added"`
+	VodDeleted           int       `json:"vod_deleted"`
+	VodStorageAddedGB    float64   `json:"vod_storage_added_gb"`
+	VodStorageDeletedGB  float64   `json:"vod_storage_deleted_gb"`
+	// Processing/transcoding usage metrics for billing
+	LivepeerSeconds       float64 `json:"livepeer_seconds"`         // Total Livepeer Gateway transcode seconds
+	LivepeerSegmentCount  int     `json:"livepeer_segment_count"`   // Number of segments transcoded via Livepeer
+	LivepeerUniqueStreams int     `json:"livepeer_unique_streams"`  // Unique streams using Livepeer
+	NativeAvSeconds       float64 `json:"native_av_seconds"`        // Total local audio/video transcode seconds
+	NativeAvSegmentCount  int     `json:"native_av_segment_count"`  // Number of segments processed locally
+	NativeAvUniqueStreams int     `json:"native_av_unique_streams"` // Unique streams using local AV processing
+
+	// Per-codec breakdown: Livepeer (external gateway)
+	LivepeerH264Seconds float64 `json:"livepeer_h264_seconds"`
+	LivepeerVP9Seconds  float64 `json:"livepeer_vp9_seconds"`
+	LivepeerAV1Seconds  float64 `json:"livepeer_av1_seconds"`
+	LivepeerHEVCSeconds float64 `json:"livepeer_hevc_seconds"`
+
+	// Per-codec breakdown: Native AV (local processing)
+	NativeAvH264Seconds float64 `json:"native_av_h264_seconds"`
+	NativeAvVP9Seconds  float64 `json:"native_av_vp9_seconds"`
+	NativeAvAV1Seconds  float64 `json:"native_av_av1_seconds"`
+	NativeAvHEVCSeconds float64 `json:"native_av_hevc_seconds"`
+	NativeAvAACSeconds  float64 `json:"native_av_aac_seconds"`
+	NativeAvOpusSeconds float64 `json:"native_av_opus_seconds"`
+
+	// Track type aggregates (for billing: audio is free)
+	AudioSeconds float64 `json:"audio_seconds"`
+	VideoSeconds float64 `json:"video_seconds"`
+
+	TotalStreams int `json:"total_streams"`
 	TotalViewers         int       `json:"total_viewers"`
 	ViewerHours          float64   `json:"viewer_hours"`
 	PeakViewers          int       `json:"peak_viewers"`
@@ -85,9 +119,6 @@ type UsageSummary struct {
 	UniqueCountries int              `json:"unique_countries"`
 	UniqueCities    int              `json:"unique_cities"`
 	GeoBreakdown    []CountryMetrics `json:"geo_breakdown"` // Rich geo breakdown with viewers, hours, percentage
-	AvgBufferHealth float32          `json:"avg_buffer_health"`
-	AvgBitrate      int              `json:"avg_bitrate"`
-	PacketLossRate  float32          `json:"packet_loss_rate"`
 }
 
 // === COMMODORE SERVICE TYPES ===

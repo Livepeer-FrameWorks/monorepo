@@ -92,7 +92,6 @@ message StreamAnalytics {
   // Total viewer counts (for analytics display)
   int32 total_views = 49;               // json:"total_views" - Total view count (session starts)
   int32 unique_viewers = 50;            // json:"unique_viewers" - Unique viewer count (distinct sessions)
-  float avg_connection_quality = 51;    // json:"avg_connection_quality"
 }
 
 message GetStreamAnalyticsRequest {
@@ -105,15 +104,6 @@ message GetStreamAnalyticsRequest {
 message GetStreamAnalyticsResponse {
   common.CursorPaginationResponse pagination = 1;
   repeated StreamAnalytics streams = 2;
-}
-
-message GetStreamDetailsRequest {
-  string tenant_id = 1;
-  string internal_name = 2;
-}
-
-message GetStreamDetailsResponse {
-  StreamAnalytics stream = 1;
 }
 
 message StreamEvent {
@@ -160,6 +150,17 @@ message GetBufferEventsResponse {
   repeated BufferEvent events = 2;
 }
 
+// Single stream details (from live_streams table)
+message GetStreamDetailsRequest {
+  string tenant_id = 1;
+  string internal_name = 2;
+}
+
+message GetStreamDetailsResponse {
+  StreamAnalytics stream = 1;
+}
+
+// Stream end events (filtered stream_events where event_type = 'stream_end')
 message EndEvent {
   string event_id = 1;
   google.protobuf.Timestamp timestamp = 2;
@@ -483,6 +484,51 @@ message GetNodeMetrics1hResponse {
   repeated NodeMetricHourly metrics = 2;
 }
 
+// Live node state (from live_nodes ReplacingMergeTree - current state, not time-series)
+message LiveNode {
+  string node_id = 1;
+  string tenant_id = 2;
+
+  // Resources
+  float cpu_percent = 3;
+  uint64 ram_used_bytes = 4;
+  uint64 ram_total_bytes = 5;
+  uint64 disk_used_bytes = 6;
+  uint64 disk_total_bytes = 7;
+
+  // Network
+  uint64 up_speed = 8;
+  uint64 down_speed = 9;
+
+  // Streams
+  uint32 active_streams = 10;
+
+  // Health
+  bool is_healthy = 11;
+
+  // Location
+  double latitude = 12;
+  double longitude = 13;
+  string location = 14;
+
+  // Metadata
+  google.protobuf.Struct metadata = 15;
+
+  // Timing
+  google.protobuf.Timestamp updated_at = 16;
+}
+
+message GetLiveNodesRequest {
+  string tenant_id = 1;
+  optional string node_id = 2;  // Filter by specific node
+  repeated string related_tenant_ids = 3;  // Include nodes from subscribed clusters
+}
+
+message GetLiveNodesResponse {
+  repeated LiveNode nodes = 1;
+  int32 count = 2;
+}
+
 // ============================================================================
 // Routing Analytics
 // ============================================================================
@@ -493,7 +539,7 @@ message RoutingEvent {
   string stream = 3;  // internal_name/stream identifier
   string selected_node = 4;
   optional string node_id = 5;
-  // client_ip intentionally omitted (PII) 
+  // client_ip intentionally omitted (PII)
   // optional string client_ip = 6;
   optional string client_country = 7;
   optional double client_latitude = 8; // centroid
@@ -511,9 +557,12 @@ message RoutingEvent {
   // Field 19 removed (algorithm) - not implemented in Foghorn yet
   int32 candidates_count = 20;
   float latency_ms = 21;
-  string tenant_id = 22;
+  string tenant_id = 22;                    // Infra owner tenant (cluster operator)
   optional helmsmancontrol.GeoBucket client_bucket = 23;
   optional helmsmancontrol.GeoBucket node_bucket = 24;
+  // Dual-tenant attribution (RFC: routing-events-dual-tenant-attribution)
+  optional string stream_tenant_id = 25;    // Subject tenant (stream/customer owner)
+  optional string cluster_id = 26;          // Emitting cluster identifier
 }
 
 message GetRoutingEventsRequest {
@@ -522,6 +571,9 @@ message GetRoutingEventsRequest {
   common.TimeRange time_range = 3;
   common.CursorPaginationRequest pagination = 4;
   repeated string related_tenant_ids = 5;
+  // Dual-tenant filtering (RFC: routing-events-dual-tenant-attribution)
+  optional string stream_tenant_id = 6;     // Filter by subject tenant (stream owner)
+  optional string cluster_id = 7;           // Filter by cluster
 }
 
 message GetRoutingEventsResponse {
@@ -602,8 +654,7 @@ message GetPlatformOverviewRequest {
 
 message GetPlatformOverviewResponse {
   string tenant_id = 1;
-  int32 total_users = 2;
-  int32 active_users = 3;
+  reserved 2, 3;  // Removed: total_sessions, active_sessions (redundant with viewer metrics)
   int32 total_streams = 4;
   int32 active_streams = 5;
   int32 total_viewers = 6;
@@ -651,6 +702,7 @@ message ClipEvent {
   optional string file_path = 11;
   optional string s3_url = 12;
   optional uint64 size_bytes = 13;
+  optional int64 expires_at = 14;
 }
 
 message GetClipEventsRequest {
@@ -687,6 +739,7 @@ message ArtifactState {
   optional uint64 size_bytes = 17;
   optional string processing_node_id = 18;
   google.protobuf.Timestamp updated_at = 19;
+  optional google.protobuf.Timestamp expires_at = 20;
 }
 
 message GetArtifactStateRequest {
@@ -704,6 +757,7 @@ message GetArtifactStatesRequest {
   optional string content_type = 3;    // filter by 'clip' or 'dvr'
   optional string stage = 4;           // filter by stage
   common.CursorPaginationRequest pagination = 5;
+  repeated string request_ids = 6;     // batch lookup by artifact hash (for field resolvers)
 }
 
 message GetArtifactStatesResponse {
@@ -760,10 +814,8 @@ message StreamsStatusResponse {
 
 service StreamAnalyticsService {
   rpc GetStreamAnalytics(GetStreamAnalyticsRequest) returns (GetStreamAnalyticsResponse);
-  rpc GetStreamDetails(GetStreamDetailsRequest) returns (GetStreamDetailsResponse);
   rpc GetStreamEvents(GetStreamEventsRequest) returns (GetStreamEventsResponse);
   rpc GetBufferEvents(GetBufferEventsRequest) returns (GetBufferEventsResponse);
-  rpc GetEndEvents(GetEndEventsRequest) returns (GetEndEventsResponse);
   rpc GetStreamHealthMetrics(GetStreamHealthMetricsRequest) returns (GetStreamHealthMetricsResponse);
   // Stream status for Control/Data plane separation
   rpc GetStreamStatus(GetStreamStatusRequest) returns (StreamStatusResponse);
@@ -771,7 +823,6 @@ service StreamAnalyticsService {
 }
 
 service ViewerAnalyticsService {
-  rpc GetViewerStats(GetViewerStatsRequest) returns (GetViewerStatsResponse);
   rpc GetViewerMetrics(GetViewerMetricsRequest) returns (GetViewerMetricsResponse);
   rpc GetViewerCountTimeSeries(GetViewerCountTimeSeriesRequest) returns (GetViewerCountTimeSeriesResponse);
   rpc GetGeographicDistribution(GetGeographicDistributionRequest) returns (GetGeographicDistributionResponse);
@@ -788,16 +839,12 @@ service ConnectionAnalyticsService {
 service NodeAnalyticsService {
   rpc GetNodeMetrics(GetNodeMetricsRequest) returns (GetNodeMetricsResponse);
   rpc GetNodeMetrics1h(GetNodeMetrics1hRequest) returns (GetNodeMetrics1hResponse);
+  // Live node state queries (from live_nodes ReplacingMergeTree)
+  rpc GetLiveNodes(GetLiveNodesRequest) returns (GetLiveNodesResponse);
 }
 
 service RoutingAnalyticsService {
   rpc GetRoutingEvents(GetRoutingEventsRequest) returns (GetRoutingEventsResponse);
-}
-
-service RealtimeAnalyticsService {
-  rpc GetRealtimeStreams(GetRealtimeStreamsRequest) returns (GetRealtimeStreamsResponse);
-  rpc GetRealtimeViewers(GetRealtimeViewersRequest) returns (GetRealtimeViewersResponse);
-  rpc GetRealtimeEvents(GetRealtimeEventsRequest) returns (GetRealtimeEventsResponse);
 }
 
 service PlatformAnalyticsService {
@@ -850,7 +897,6 @@ message ClientMetrics5m {
   double avg_bandwidth_out = 8;
   float avg_connection_time = 9;
   optional float packet_loss_rate = 10;
-  optional float avg_connection_quality = 11;
 }
 
 message GetClientMetrics5mRequest {
@@ -906,7 +952,42 @@ message StorageUsageRecord {
   uint32 file_count = 6;
   uint64 dvr_bytes = 7;
   uint64 clip_bytes = 8;
-  uint64 recording_bytes = 9;
+  uint64 vod_bytes = 9;
+  // Frozen storage breakdown (cold storage in S3)
+  uint64 frozen_dvr_bytes = 10;
+  uint64 frozen_clip_bytes = 11;
+  uint64 frozen_vod_bytes = 12;
+}
+
+// Storage lifecycle event (freeze/defrost operations)
+message StorageEvent {
+  string id = 1;  // Unique ID for cursor pagination
+  google.protobuf.Timestamp timestamp = 2;
+  string tenant_id = 3;
+  string internal_name = 4;
+  string asset_hash = 5;           // clip_hash or dvr_hash
+  string action = 6;               // freeze_started, frozen, defrost_started, defrosted, freeze_failed, defrost_failed
+  string asset_type = 7;           // clip, dvr
+  uint64 size_bytes = 8;
+  optional string s3_url = 9;
+  optional string local_path = 10;
+  string node_id = 11;
+  optional int64 duration_ms = 12; // Time taken for operation
+  optional string error = 13;
+  optional int64 warm_duration_ms = 14;
+}
+
+message GetStorageEventsRequest {
+  string tenant_id = 1;
+  optional string internal_name = 2;
+  optional string asset_type = 3;   // filter: clip or dvr
+  common.TimeRange time_range = 4;
+  common.CursorPaginationRequest pagination = 5;
+}
+
+message GetStorageEventsResponse {
+  common.CursorPaginationResponse pagination = 1;
+  repeated StorageEvent events = 2;
 }
 
 message GetStorageUsageRequest {
@@ -927,4 +1008,353 @@ service AggregatedAnalyticsService {
   rpc GetClientMetrics5m(GetClientMetrics5mRequest) returns (GetClientMetrics5mResponse);
   rpc GetQualityTierDaily(GetQualityTierDailyRequest) returns (GetQualityTierDailyResponse);
   rpc GetStorageUsage(GetStorageUsageRequest) returns (GetStorageUsageResponse);
+  rpc GetStorageEvents(GetStorageEventsRequest) returns (GetStorageEventsResponse);
+  rpc GetStreamHealth5m(GetStreamHealth5mRequest) returns (GetStreamHealth5mResponse);
+  rpc GetNodePerformance5m(GetNodePerformance5mRequest) returns (GetNodePerformance5mResponse);
+  rpc GetViewerHoursHourly(GetViewerHoursHourlyRequest) returns (GetViewerHoursHourlyResponse);
+  rpc GetViewerGeoHourly(GetViewerGeoHourlyRequest) returns (GetViewerGeoHourlyResponse);
+  rpc GetTenantDailyStats(GetTenantDailyStatsRequest) returns (GetTenantDailyStatsResponse);
+  rpc GetProcessingUsage(GetProcessingUsageRequest) returns (GetProcessingUsageResponse);
+  // Newly exposed tables
+  rpc GetRebufferingEvents(GetRebufferingEventsRequest) returns (GetRebufferingEventsResponse);
+  rpc GetTenantAnalyticsDaily(GetTenantAnalyticsDailyRequest) returns (GetTenantAnalyticsDailyResponse);
+  rpc GetStreamAnalyticsDaily(GetStreamAnalyticsDailyRequest) returns (GetStreamAnalyticsDailyResponse);
+}
+
+// ============================================================================
+// Stream Health 5-Minute Aggregates (from stream_health_5m MV)
+// ============================================================================
+
+message StreamHealth5m {
+  string id = 1;
+  google.protobuf.Timestamp timestamp = 2;
+  string tenant_id = 3;
+  string internal_name = 4;
+  string node_id = 5;
+  int32 rebuffer_count = 6;
+  int32 issue_count = 7;
+  string sample_issues = 8;
+  int32 avg_bitrate = 9;
+  float avg_fps = 10;
+  int32 buffer_dry_count = 11;
+  string quality_tier = 12;
+}
+
+message GetStreamHealth5mRequest {
+  string tenant_id = 1;
+  string internal_name = 2;
+  common.TimeRange time_range = 3;
+  common.CursorPaginationRequest pagination = 4;
+}
+
+message GetStreamHealth5mResponse {
+  common.CursorPaginationResponse pagination = 1;
+  repeated StreamHealth5m records = 2;
+}
+
+// ============================================================================
+// Node Performance 5-Minute Aggregates (from node_performance_5m MV)
+// ============================================================================
+
+message NodePerformance5m {
+  string id = 1;
+  google.protobuf.Timestamp timestamp = 2;
+  string node_id = 3;
+  float avg_cpu = 4;
+  float max_cpu = 5;
+  float avg_memory = 6;
+  float max_memory = 7;
+  int64 total_bandwidth = 8;
+  int32 avg_streams = 9;
+  int32 max_streams = 10;
+}
+
+message GetNodePerformance5mRequest {
+  string tenant_id = 1;
+  optional string node_id = 2;
+  common.TimeRange time_range = 3;
+  common.CursorPaginationRequest pagination = 4;
+}
+
+message GetNodePerformance5mResponse {
+  common.CursorPaginationResponse pagination = 1;
+  repeated NodePerformance5m records = 2;
+}
+
+// ============================================================================
+// Viewer Hours Hourly Aggregates (from viewer_hours_hourly MV)
+// ============================================================================
+
+message ViewerHoursHourly {
+  string id = 1;
+  google.protobuf.Timestamp hour = 2;
+  string tenant_id = 3;
+  string internal_name = 4;
+  string country_code = 5;
+  int32 unique_viewers = 6;
+  int64 total_session_seconds = 7;
+  int64 total_bytes = 8;
+}
+
+message GetViewerHoursHourlyRequest {
+  string tenant_id = 1;
+  optional string stream = 2;
+  common.TimeRange time_range = 3;
+  common.CursorPaginationRequest pagination = 4;
+}
+
+message GetViewerHoursHourlyResponse {
+  common.CursorPaginationResponse pagination = 1;
+  repeated ViewerHoursHourly records = 2;
+}
+
+// ============================================================================
+// Viewer Geographic Hourly Aggregates (from viewer_geo_hourly MV)
+// ============================================================================
+
+message ViewerGeoHourly {
+  string id = 1;
+  google.protobuf.Timestamp hour = 2;
+  string tenant_id = 3;
+  string country_code = 4;
+  int32 viewer_count = 5;
+  double viewer_hours = 6;
+  double egress_gb = 7;
+}
+
+message GetViewerGeoHourlyRequest {
+  string tenant_id = 1;
+  optional string stream = 2;
+  common.TimeRange time_range = 3;
+  common.CursorPaginationRequest pagination = 4;
+}
+
+message GetViewerGeoHourlyResponse {
+  common.CursorPaginationResponse pagination = 1;
+  repeated ViewerGeoHourly records = 2;
+}
+
+// ============================================================================
+// Tenant Daily Stats (from tenant_viewer_daily for PlatformOverview.dailyStats)
+// ============================================================================
+
+message TenantDailyStat {
+  string id = 1;
+  google.protobuf.Timestamp date = 2;
+  string tenant_id = 3;
+  double egress_gb = 4;
+  double viewer_hours = 5;
+  int32 unique_viewers = 6;
+  int32 total_sessions = 7;
+  int64 total_views = 8;
+}
+
+message GetTenantDailyStatsRequest {
+  string tenant_id = 1;
+  int32 days = 2;
+}
+
+message GetTenantDailyStatsResponse {
+  repeated TenantDailyStat stats = 1;
+}
+
+// ============================================================================
+// Processing Usage (from process_billing and process_billing_daily tables)
+// ============================================================================
+
+// Individual processing billing record (from process_billing table)
+message ProcessingUsageRecord {
+  string id = 1;
+  google.protobuf.Timestamp timestamp = 2;
+  string tenant_id = 3;
+  string node_id = 4;
+  string stream_name = 5;
+  string process_type = 6;           // "Livepeer", "AV", "FFmpeg"
+  int64 duration_ms = 7;
+  optional string input_codec = 8;
+  optional string output_codec = 9;
+  optional string track_type = 10;   // "audio" or "video" - KEY FOR BILLING
+
+  // Livepeer-specific
+  optional int32 segment_number = 20;
+  optional int32 width = 21;              // source width
+  optional int32 height = 22;             // source height
+  optional int32 rendition_count = 23;
+  optional string broadcaster_url = 24;
+  optional int64 upload_time_us = 25;     // DEPRECATED: use turnaround_ms
+  optional string livepeer_session_id = 26;
+  optional int64 segment_start_ms = 27;
+  optional int64 input_bytes = 28;
+  optional int64 output_bytes_total = 29;
+  optional int32 attempt_count = 30;
+  optional int64 turnaround_ms = 31;
+  optional double speed_factor = 32;
+  optional string renditions_json = 33;   // JSON array: [{name, bytes}, ...]
+
+  // MistProcAV cumulative
+  optional int64 input_frames = 40;
+  optional int64 output_frames = 41;
+  optional int64 decode_us_per_frame = 42;
+  optional int64 transform_us_per_frame = 43;
+  optional int64 encode_us_per_frame = 44;
+  optional bool is_final = 45;
+
+  // MistProcAV delta values
+  optional int64 input_frames_delta = 50;
+  optional int64 output_frames_delta = 51;
+  optional int64 input_bytes_delta = 52;
+  optional int64 output_bytes_delta = 53;
+
+  // MistProcAV dimensions
+  optional int32 input_width = 54;
+  optional int32 input_height = 55;
+  optional int32 output_width = 56;
+  optional int32 output_height = 57;
+
+  // MistProcAV frame/audio info
+  optional int32 input_fpks = 58;
+  optional double output_fps_measured = 59;
+  optional int32 sample_rate = 60;
+  optional int32 channels = 61;
+
+  // MistProcAV timing
+  optional int64 source_timestamp_ms = 62;
+  optional int64 sink_timestamp_ms = 63;
+  optional int64 source_advanced_ms = 64;
+  optional int64 sink_advanced_ms = 65;
+
+  // MistProcAV performance
+  optional double rtf_in = 66;
+  optional double rtf_out = 67;
+  optional int64 pipeline_lag_ms = 68;
+  optional int64 output_bitrate_bps = 69;
+}
+
+// Daily processing usage summary (from process_billing_daily table)
+message ProcessingUsageSummary {
+  google.protobuf.Timestamp date = 1;
+  string tenant_id = 2;
+  // Livepeer (totals)
+  double livepeer_seconds = 3;
+  uint64 livepeer_segment_count = 4;
+  uint32 livepeer_unique_streams = 5;
+  // Livepeer per-codec breakdown
+  double livepeer_h264_seconds = 10;
+  double livepeer_vp9_seconds = 11;
+  double livepeer_av1_seconds = 12;
+  double livepeer_hevc_seconds = 13;
+  // Native AV (totals)
+  double native_av_seconds = 6;
+  uint64 native_av_segment_count = 7;
+  uint32 native_av_unique_streams = 8;
+  // Native AV per-codec breakdown
+  double native_av_h264_seconds = 14;
+  double native_av_vp9_seconds = 15;
+  double native_av_av1_seconds = 16;
+  double native_av_hevc_seconds = 17;
+  double native_av_aac_seconds = 18;
+  double native_av_opus_seconds = 19;
+  // Track type aggregates
+  double audio_seconds = 20;
+  double video_seconds = 21;
+}
+
+message GetProcessingUsageRequest {
+  string tenant_id = 1;
+  optional string stream_name = 2;      // Filter by stream
+  optional string process_type = 3;     // Filter by process type ("Livepeer", "AV", "FFmpeg")
+  common.TimeRange time_range = 4;
+  common.CursorPaginationRequest pagination = 5;
+  bool summary_only = 6;                // If true, return only daily summaries
+}
+
+message GetProcessingUsageResponse {
+  common.CursorPaginationResponse pagination = 1;
+  repeated ProcessingUsageRecord records = 2;           // Detailed records (when summary_only=false)
+  repeated ProcessingUsageSummary summaries = 3;        // Daily summaries
+}
+
+// ============================================================================
+// Rebuffering Events (from rebuffering_events table)
+// ============================================================================
+
+// Rebuffering event capturing buffer state transitions
+message RebufferingEvent {
+  string id = 1;                                         // Unique ID for cursor pagination
+  google.protobuf.Timestamp timestamp = 2;
+  string tenant_id = 3;
+  string internal_name = 4;
+  string node_id = 5;
+  string buffer_state = 6;                               // Current buffer state
+  string prev_state = 7;                                 // Previous buffer state
+  google.protobuf.Timestamp rebuffer_start = 8;          // When rebuffering started
+  google.protobuf.Timestamp rebuffer_end = 9;            // When rebuffering ended
+}
+
+message GetRebufferingEventsRequest {
+  string tenant_id = 1;
+  optional string internal_name = 2;                     // Filter by stream
+  optional string node_id = 3;                           // Filter by node
+  common.TimeRange time_range = 4;
+  common.CursorPaginationRequest pagination = 5;
+}
+
+message GetRebufferingEventsResponse {
+  common.CursorPaginationResponse pagination = 1;
+  repeated RebufferingEvent events = 2;
+}
+
+// ============================================================================
+// Tenant Analytics Daily (from tenant_analytics_daily table)
+// ============================================================================
+
+// Daily tenant-level analytics rollup
+message TenantAnalyticsDaily {
+  string id = 1;                                         // Unique ID for cursor pagination
+  google.protobuf.Timestamp day = 2;
+  string tenant_id = 3;
+  int32 total_streams = 4;                               // Unique streams with activity
+  int64 total_views = 5;                                 // Total view events
+  int32 unique_viewers = 6;                              // Unique viewer count
+  int64 egress_bytes = 7;                                // Total bytes delivered
+}
+
+message GetTenantAnalyticsDailyRequest {
+  string tenant_id = 1;
+  common.TimeRange time_range = 2;
+  common.CursorPaginationRequest pagination = 3;
+}
+
+message GetTenantAnalyticsDailyResponse {
+  common.CursorPaginationResponse pagination = 1;
+  repeated TenantAnalyticsDaily records = 2;
+}
+
+// ============================================================================
+// Stream Analytics Daily (from stream_analytics_daily table)
+// ============================================================================
+
+// Daily stream-level analytics rollup
+message StreamAnalyticsDaily {
+  string id = 1;                                         // Unique ID for cursor pagination
+  google.protobuf.Timestamp day = 2;
+  string tenant_id = 3;
+  string internal_name = 4;
+  int64 total_views = 5;                                 // Total view events
+  int32 unique_viewers = 6;                              // Unique viewer count
+  int32 unique_countries = 7;                            // Geographic diversity
+  int32 unique_cities = 8;                               // City-level diversity
+  int64 egress_bytes = 9;                                // Total bytes delivered
+}
+
+message GetStreamAnalyticsDailyRequest {
+  string tenant_id = 1;
+  optional string internal_name = 2;                     // Filter by stream
+  common.TimeRange time_range = 3;
+  common.CursorPaginationRequest pagination = 4;
+}
+
+message GetStreamAnalyticsDailyResponse {
+  common.CursorPaginationResponse pagination = 1;
+  repeated StreamAnalyticsDaily records = 2;
 }

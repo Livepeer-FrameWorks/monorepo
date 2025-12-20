@@ -17,13 +17,13 @@ type Tenant struct {
 	SecondaryColor string  `json:"secondary_color" db:"secondary_color"`
 
 	// Deployment routing
-	DeploymentTier        string  `json:"deployment_tier" db:"deployment_tier"`
-	DeploymentModel       string  `json:"deployment_model" db:"deployment_model"`
-	PrimaryDeploymentTier string  `json:"primary_deployment_tier" db:"primary_deployment_tier"`
-	PrimaryClusterID      *string `json:"primary_cluster_id,omitempty" db:"primary_cluster_id"`
-	KafkaTopicPrefix       *string  `json:"kafka_topic_prefix,omitempty" db:"kafka_topic_prefix"`
-	KafkaBrokers           []string `json:"kafka_brokers,omitempty" db:"kafka_brokers"`
-	DatabaseURL            *string  `json:"database_url,omitempty" db:"database_url"`
+	DeploymentTier        string   `json:"deployment_tier" db:"deployment_tier"`
+	DeploymentModel       string   `json:"deployment_model" db:"deployment_model"`
+	PrimaryDeploymentTier string   `json:"primary_deployment_tier" db:"primary_deployment_tier"`
+	PrimaryClusterID      *string  `json:"primary_cluster_id,omitempty" db:"primary_cluster_id"`
+	KafkaTopicPrefix      *string  `json:"kafka_topic_prefix,omitempty" db:"kafka_topic_prefix"`
+	KafkaBrokers          []string `json:"kafka_brokers,omitempty" db:"kafka_brokers"`
+	DatabaseURL           *string  `json:"database_url,omitempty" db:"database_url"`
 
 	// Status
 	IsActive bool `json:"is_active" db:"is_active"`

@@ -1,0 +1,25 @@
+# Accept a cluster invitation using an invite token
+mutation AcceptClusterInvite($inviteToken: String!) {
+  acceptClusterInvite(inviteToken: $inviteToken) {
+    ... on ClusterSubscription {
+      id
+      subscriptionStatus
+      approvedAt
+    }
+    ... on ValidationError {
+      message
+      code
+      field
+    }
+    ... on NotFoundError {
+      message
+      code
+      resourceType
+      resourceId
+    }
+    ... on AuthError {
+      message
+      code
+    }
+  }
+}

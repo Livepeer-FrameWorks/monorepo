@@ -1,0 +1,31 @@
+# Cluster invites (admin view)
+query GetClusterInvites($clusterId: ID!, $first: Int = 50, $after: String) {
+  clusterInvitesConnection(
+    clusterId: $clusterId
+    first: $first
+    after: $after
+  ) {
+    edges {
+      cursor
+      node {
+        id
+        clusterId
+        invitedTenantId
+        invitedTenantName
+        inviteToken
+        accessLevel
+        resourceLimits
+        status
+        createdBy
+        expiresAt
+        acceptedAt
+        createdAt
+        clusterName
+      }
+    }
+    pageInfo {
+      ...PageInfoFields
+    }
+    totalCount
+  }
+}

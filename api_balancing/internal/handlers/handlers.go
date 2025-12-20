@@ -45,15 +45,53 @@ var (
 	metrics             *FoghornMetrics
 	geoipReader         *geoip.Reader
 	geoipCache          *cache.Cache
+	// Dual-tenant attribution (RFC: routing-events-dual-tenant-attribution)
+	// clusterID = emitting cluster identifier
+	// ownerTenantID = cluster operator tenant (infra owner) for event storage
+	clusterID     string
+	ownerTenantID string
 )
+
+// GetClusterInfo returns cached cluster attribution info for dual-tenant routing events
+// Returns (clusterID, ownerTenantID) - used by gRPC server for event emission
+func GetClusterInfo() (string, string) {
+	return clusterID, ownerTenantID
+}
 
 func getClipContextByRequestID(requestID string) (string, string) {
 	if db == nil || requestID == "" {
 		return "", ""
 	}
-	var tenantID, internalName string
-	_ = db.QueryRow(`SELECT tenant_id::text, stream_name FROM foghorn.clips WHERE request_id = $1`, requestID).Scan(&tenantID, &internalName)
-	return tenantID, internalName
+
+	// Get clip_hash, internal_name, and fallback tenant_id from artifacts table
+	var clipHash, internalName string
+	var fallbackTenantID sql.NullString
+	err := db.QueryRow(`
+		SELECT artifact_hash, internal_name, tenant_id
+		FROM foghorn.artifacts
+		WHERE request_id = $1 AND artifact_type = 'clip'
+	`, requestID).Scan(&clipHash, &internalName, &fallbackTenantID)
+	if err != nil {
+		return "", ""
+	}
+
+	// Resolve tenant context from Commodore (uses cache)
+	if commodoreClient != nil && clipHash != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		resp, err := commodoreClient.ResolveClipHash(ctx, clipHash)
+		if err == nil && resp.Found {
+			return resp.TenantId, internalName
+		}
+		// Commodore unavailable - log and fall through to local fallback
+		logger.WithField("clip_hash", clipHash).Info("Commodore unavailable, using local tenant_id fallback")
+	}
+
+	// Fallback to denormalized tenant_id stored locally
+	if fallbackTenantID.Valid {
+		return fallbackTenantID.String, internalName
+	}
+	return "", internalName
 }
 
 // FoghornMetrics holds all Prometheus metrics for Foghorn
@@ -93,6 +131,8 @@ func Init(
 	quartermasterClient = qClient
 	geoipReader = geo
 	geoipCache = geoCache
+	// Initialize cluster ID for dual-tenant attribution
+	clusterID = config.GetEnv("CLUSTER_ID", "")
 
 	// Share database connection with control package for clip operations
 	control.SetDB(database)
@@ -103,19 +143,40 @@ func Init(
 	// Share Quartermaster client with control package
 	control.SetQuartermasterClient(qClient)
 
-	// Self-register Foghorn instance in Quartermaster (best-effort)
+	// Self-register Foghorn instance in Quartermaster and cache owner_tenant_id for dual-tenant attribution
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		advertiseHost := config.GetEnv("FOGHORN_HOST", "foghorn")
-		_, _ = quartermasterClient.BootstrapService(ctx, &pb.BootstrapServiceRequest{
+		reqClusterID := config.GetEnv("CLUSTER_ID", "")
+		resp, err := quartermasterClient.BootstrapService(ctx, &pb.BootstrapServiceRequest{
 			Type:           "foghorn",
 			Version:        version.Version,
 			Protocol:       "http",
 			HealthEndpoint: func() *string { s := "/health"; return &s }(),
 			Port:           18008,
 			AdvertiseHost:  &advertiseHost,
+			ClusterId: func() *string {
+				if reqClusterID != "" {
+					return &reqClusterID
+				}
+				return nil
+			}(),
 		})
+		if err == nil && resp != nil {
+			// Cache owner_tenant_id for routing event attribution
+			if resp.OwnerTenantId != nil && *resp.OwnerTenantId != "" {
+				ownerTenantID = *resp.OwnerTenantId
+				logger.WithFields(logging.Fields{
+					"cluster_id":      resp.ClusterId,
+					"owner_tenant_id": ownerTenantID,
+				}).Info("Cached cluster owner tenant for dual-tenant attribution")
+			}
+			// Also cache cluster_id from response if not set from env
+			if clusterID == "" && resp.ClusterId != "" {
+				clusterID = resp.ClusterId
+			}
+		}
 	}()
 
 	// Register clip progress/done handlers to emit analytics
@@ -151,7 +212,9 @@ func Init(
 				clipData.ProgressPercent = &percent
 			}
 			go func() {
-				_ = decklogClient.SendClipLifecycle(clipData)
+				if err := decklogClient.SendClipLifecycle(clipData); err != nil {
+					logger.WithError(err).WithField("request_id", clipData.GetRequestId()).Warn("Failed to send clip progress to Decklog")
+				}
 			}()
 		},
 		func(dn *pb.ClipDone) {
@@ -197,7 +260,9 @@ func Init(
 				clipData.Error = &er
 			}
 			go func() {
-				_ = decklogClient.SendClipLifecycle(clipData)
+				if err := decklogClient.SendClipLifecycle(clipData); err != nil {
+					logger.WithError(err).WithField("request_id", clipData.GetRequestId()).Warn("Failed to send clip done to Decklog")
+				}
 			}()
 		},
 		func(del *pb.ArtifactDeleted) {
@@ -205,23 +270,30 @@ func Init(
 			clipHash := del.GetClipHash()
 			nodeID := del.GetNodeId()
 
-			// 1. Update clips table
-			_, err := db.Exec(`UPDATE foghorn.clips SET status = 'deleted', updated_at = NOW() WHERE clip_hash = $1`, clipHash)
+			// 1. Update artifacts table
+			_, err := db.Exec(`UPDATE foghorn.artifacts SET status = 'deleted', updated_at = NOW() WHERE artifact_hash = $1`, clipHash)
 			if err != nil {
-				logger.WithError(err).WithField("clip_hash", clipHash).Error("Failed to mark clip as deleted in DB")
+				logger.WithError(err).WithField("clip_hash", clipHash).Error("Failed to mark artifact as deleted in DB")
 			}
 
-			// 2. Update artifact registry (orphaned/deleted)
-			_, err = db.Exec(`DELETE FROM foghorn.artifact_registry WHERE clip_hash = $1 AND node_id = $2`, clipHash, nodeID)
+			// 2. Remove from artifact_nodes
+			_, err = db.Exec(`DELETE FROM foghorn.artifact_nodes WHERE artifact_hash = $1 AND node_id = $2`, clipHash, nodeID)
 			if err != nil {
-				logger.WithError(err).WithField("clip_hash", clipHash).Error("Failed to remove artifact from registry")
+				logger.WithError(err).WithField("clip_hash", clipHash).Error("Failed to remove artifact node assignment")
 			}
 
 			// 3. Send Decklog event
 			if decklogClient != nil {
-				// Resolve tenant context if possible
+				// Resolve tenant context from Commodore
 				var tenantID, internalName string
-				_ = db.QueryRow(`SELECT tenant_id::text, stream_name FROM foghorn.clips WHERE clip_hash = $1`, clipHash).Scan(&tenantID, &internalName)
+				if commodoreClient != nil {
+					ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+					defer cancel()
+					if resp, err := commodoreClient.ResolveClipHash(ctx, clipHash); err == nil && resp.Found {
+						tenantID = resp.TenantId
+						internalName = resp.InternalName
+					}
+				}
 
 				clipData := &pb.ClipLifecycleData{
 					Stage:     pb.ClipLifecycleData_STAGE_DELETED,
@@ -242,28 +314,88 @@ func Init(
 					}(),
 				}
 				go func() {
-					_ = decklogClient.SendClipLifecycle(clipData)
+					if err := decklogClient.SendClipLifecycle(clipData); err != nil {
+						logger.WithError(err).WithField("clip_hash", clipData.ClipHash).Warn("Failed to send clip deleted to Decklog")
+					}
 				}()
 			}
 		},
 	)
 
-	// Set clip hash resolver
-	control.SetClipHashResolver(func(clipHash string) (string, string, error) {
-		var tenantID, name string
-		// Try clips first
-		err := db.QueryRow(`SELECT tenant_id, stream_name FROM foghorn.clips WHERE clip_hash = $1 AND status != 'deleted' LIMIT 1`, clipHash).Scan(&tenantID, &name)
-		if err == sql.ErrNoRows {
-			// Fallback to DVR by request_hash; use internal_name as returned name
-			err = db.QueryRow(`SELECT tenant_id, internal_name FROM foghorn.dvr_requests WHERE request_hash = $1 LIMIT 1`, clipHash).Scan(&tenantID, &name)
-			if err == sql.ErrNoRows {
-				return "", "", nil
+	// Set DVR deleted handler for analytics (called after Helmsman confirms deletion)
+	control.SetDVRDeletedHandler(func(dvrHash string, sizeBytes uint64, nodeID string) {
+		if decklogClient == nil {
+			return
+		}
+
+		// Resolve tenant context from Commodore
+		var tenantID, internalName string
+		if commodoreClient != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			if resp, err := commodoreClient.ResolveDVRHash(ctx, dvrHash); err == nil && resp.Found {
+				tenantID = resp.TenantId
+				internalName = resp.InternalName
 			}
 		}
-		if err != nil {
-			return "", "", err
+
+		dvrData := &pb.DVRLifecycleData{
+			Status:  pb.DVRLifecycleData_STATUS_DELETED,
+			DvrHash: dvrHash,
+			TenantId: func() *string {
+				if tenantID != "" {
+					return &tenantID
+				}
+				return nil
+			}(),
+			InternalName: func() *string {
+				if internalName != "" {
+					return &internalName
+				}
+				return nil
+			}(),
+			NodeId: func() *string {
+				if nodeID != "" {
+					return &nodeID
+				}
+				return nil
+			}(),
+			SizeBytes: func() *uint64 {
+				if sizeBytes > 0 {
+					return &sizeBytes
+				}
+				return nil
+			}(),
 		}
-		return tenantID, name, nil
+		if err := decklogClient.SendDVRLifecycle(dvrData); err != nil {
+			logger.WithError(err).WithField("dvr_hash", dvrHash).Warn("Failed to send DVR deleted to Decklog")
+		}
+	})
+
+	// Set dtsh sync handler for incremental .dtsh uploads
+	// Called when periodic artifact scan detects .dtsh exists locally but wasn't synced
+	state.SetDtshSyncHandler(control.TriggerDtshSync)
+
+	// Set clip hash resolver - uses Commodore for tenant context
+	control.SetClipHashResolver(func(clipHash string) (string, string, error) {
+		if commodoreClient == nil {
+			return "", "", nil
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+
+		// Try clip first
+		if resp, err := commodoreClient.ResolveClipHash(ctx, clipHash); err == nil && resp.Found {
+			return resp.TenantId, resp.InternalName, nil
+		}
+
+		// Fallback to DVR
+		if resp, err := commodoreClient.ResolveDVRHash(ctx, clipHash); err == nil && resp.Found {
+			return resp.TenantId, resp.InternalName, nil
+		}
+
+		return "", "", nil
 	})
 
 }
@@ -310,10 +442,12 @@ func MistServerCompatibilityHandler(c *gin.Context) {
 }
 
 // HandleNodesOverview receives a request for an overview of all nodes with capabilities, limits, and artifacts.
+// When ?full=true is passed, includes full Foghorn state: DB artifacts, processing jobs, and stream instances.
 func HandleNodesOverview(c *gin.Context) {
 	capFilter := c.Query("cap")
 	offsetStr := c.Query("offset")
 	limitStr := c.Query("limit")
+	fullState := c.Query("full") == "true"
 	var offset, limit int
 	if v, err := strconv.Atoi(offsetStr); err == nil {
 		offset = v
@@ -368,8 +502,9 @@ func HandleNodesOverview(c *gin.Context) {
 			}
 
 			entry := map[string]interface{}{
-				"host":  n.Host,
-				"roles": n.Roles,
+				"node_id": n.NodeID,
+				"host":    n.Host,
+				"roles":   n.Roles,
 				// capabilities
 				"cap_ingest":     n.CapIngest,
 				"cap_edge":       n.CapEdge,
@@ -400,13 +535,20 @@ func HandleNodesOverview(c *gin.Context) {
 				}(),
 				"up_speed":        n.UpSpeed,
 				"down_speed":      n.DownSpeed,
+				"bw_limit":        n.BWLimit,
 				"avail_bandwidth": n.AvailBandwidth,
 				"add_bandwidth":   n.AddBandwidth,
 				"tags":            n.Tags,
+				// networking
+				"port":           n.Port,
+				"dtsc_port":      n.DTSCPort,
+				"config_streams": n.ConfigStreams,
 				// storage
-				"storage_local":  n.StorageLocal,
-				"storage_bucket": n.StorageBucket,
-				"storage_prefix": n.StoragePrefix,
+				"storage_local":    n.StorageLocal,
+				"storage_bucket":   n.StorageBucket,
+				"storage_prefix":   n.StoragePrefix,
+				"disk_total_bytes": n.DiskTotalBytes,
+				"disk_used_bytes":  n.DiskUsedBytes,
 				// limits and artifacts
 				"max_transcodes":         n.MaxTranscodes,
 				"current_transcodes":     n.CurrentTranscodes,
@@ -434,7 +576,250 @@ func HandleNodesOverview(c *gin.Context) {
 		}
 		out = out[start:end]
 	}
-	c.JSON(http.StatusOK, out)
+
+	// If not full state, return just the nodes array (backwards compatible)
+	if !fullState {
+		c.JSON(http.StatusOK, out)
+		return
+	}
+
+	// Full state mode: include DB artifacts, processing jobs, and stream instances
+	response := map[string]interface{}{
+		"nodes":      out,
+		"node_count": len(out),
+	}
+
+	// Query DB artifacts with vod_metadata
+	if db != nil {
+		artifactRows, err := db.Query(`
+			SELECT
+				a.artifact_hash, a.artifact_type, a.status, a.internal_name, a.tenant_id,
+				a.storage_location, a.sync_status, a.s3_url, a.format, a.size_bytes,
+				a.manifest_path, a.duration_seconds, a.dtsh_synced, a.retention_until,
+				a.created_at, a.updated_at,
+				v.video_codec, v.audio_codec, v.resolution, v.duration_ms, v.bitrate_kbps,
+				v.filename, v.title
+			FROM foghorn.artifacts a
+			LEFT JOIN foghorn.vod_metadata v ON a.artifact_hash = v.artifact_hash
+			WHERE a.status != 'deleted'
+			ORDER BY a.created_at DESC
+			LIMIT 500
+		`)
+		if err == nil {
+			defer artifactRows.Close()
+			artifacts := []map[string]interface{}{}
+			for artifactRows.Next() {
+				var hash, artType, status, storageLocation, syncStatus string
+				var internalName, tenantID, s3URL, format, manifestPath, retentionUntil sql.NullString
+				var sizeBytes sql.NullInt64
+				var durationSeconds sql.NullInt32
+				var dtshSynced sql.NullBool
+				var createdAt, updatedAt time.Time
+				var videoCodec, audioCodec, resolution, filename, title sql.NullString
+				var durationMs, bitrateKbps sql.NullInt32
+
+				err := artifactRows.Scan(
+					&hash, &artType, &status, &internalName, &tenantID,
+					&storageLocation, &syncStatus, &s3URL, &format, &sizeBytes,
+					&manifestPath, &durationSeconds, &dtshSynced, &retentionUntil,
+					&createdAt, &updatedAt,
+					&videoCodec, &audioCodec, &resolution, &durationMs, &bitrateKbps,
+					&filename, &title,
+				)
+				if err != nil {
+					continue
+				}
+
+				art := map[string]interface{}{
+					"artifact_hash":    hash,
+					"artifact_type":    artType,
+					"status":           status,
+					"storage_location": storageLocation,
+					"sync_status":      syncStatus,
+					"dtsh_synced":      dtshSynced.Bool,
+					"created_at":       createdAt.Format(time.RFC3339),
+					"updated_at":       updatedAt.Format(time.RFC3339),
+				}
+				if internalName.Valid {
+					art["internal_name"] = internalName.String
+				}
+				if tenantID.Valid {
+					art["tenant_id"] = tenantID.String
+				}
+				if s3URL.Valid {
+					art["s3_url"] = s3URL.String
+				}
+				if format.Valid {
+					art["format"] = format.String
+				}
+				if sizeBytes.Valid {
+					art["size_bytes"] = sizeBytes.Int64
+				}
+				if manifestPath.Valid {
+					art["manifest_path"] = manifestPath.String
+				}
+				if durationSeconds.Valid {
+					art["duration_seconds"] = durationSeconds.Int32
+				}
+				if retentionUntil.Valid {
+					art["retention_until"] = retentionUntil.String
+				}
+				// VOD metadata
+				if videoCodec.Valid {
+					art["video_codec"] = videoCodec.String
+				}
+				if audioCodec.Valid {
+					art["audio_codec"] = audioCodec.String
+				}
+				if resolution.Valid {
+					art["resolution"] = resolution.String
+				}
+				if durationMs.Valid {
+					art["duration_ms"] = durationMs.Int32
+				}
+				if bitrateKbps.Valid {
+					art["bitrate_kbps"] = bitrateKbps.Int32
+				}
+				if filename.Valid {
+					art["filename"] = filename.String
+				}
+				if title.Valid {
+					art["title"] = title.String
+				}
+
+				// Query nodes hosting this artifact
+				nodeRows, err := db.Query(`
+					SELECT node_id FROM foghorn.artifact_nodes
+					WHERE artifact_hash = $1 AND NOT is_orphaned
+				`, hash)
+				if err == nil {
+					nodeIDs := []string{}
+					for nodeRows.Next() {
+						var nodeID string
+						if err := nodeRows.Scan(&nodeID); err == nil {
+							nodeIDs = append(nodeIDs, nodeID)
+						}
+					}
+					nodeRows.Close()
+					art["nodes"] = nodeIDs
+				}
+
+				artifacts = append(artifacts, art)
+			}
+			response["artifacts"] = artifacts
+			response["artifact_count"] = len(artifacts)
+		} else {
+			response["artifacts_error"] = err.Error()
+		}
+
+		// Query processing jobs
+		jobRows, err := db.Query(`
+			SELECT
+				job_id, tenant_id, artifact_hash, job_type, status, progress,
+				use_gateway, processing_node_id, routing_reason, error_message, retry_count,
+				created_at, started_at, completed_at
+			FROM foghorn.processing_jobs
+			WHERE status NOT IN ('completed', 'failed') OR created_at > NOW() - INTERVAL '1 hour'
+			ORDER BY created_at DESC
+			LIMIT 100
+		`)
+		if err == nil {
+			defer jobRows.Close()
+			jobs := []map[string]interface{}{}
+			for jobRows.Next() {
+				var jobID, tenantID, jobType, status string
+				var artifactHash, processingNode, routingReason, errorMessage sql.NullString
+				var progress, retryCount int
+				var useGateway bool
+				var createdAt time.Time
+				var startedAt, completedAt sql.NullTime
+
+				err := jobRows.Scan(
+					&jobID, &tenantID, &artifactHash, &jobType, &status, &progress,
+					&useGateway, &processingNode, &routingReason, &errorMessage, &retryCount,
+					&createdAt, &startedAt, &completedAt,
+				)
+				if err != nil {
+					continue
+				}
+
+				job := map[string]interface{}{
+					"job_id":      jobID,
+					"tenant_id":   tenantID,
+					"job_type":    jobType,
+					"status":      status,
+					"progress":    progress,
+					"use_gateway": useGateway,
+					"retry_count": retryCount,
+					"created_at":  createdAt.Format(time.RFC3339),
+				}
+				if artifactHash.Valid {
+					job["artifact_hash"] = artifactHash.String
+				}
+				if processingNode.Valid {
+					job["processing_node"] = processingNode.String
+				}
+				if routingReason.Valid {
+					job["routing_reason"] = routingReason.String
+				}
+				if errorMessage.Valid {
+					job["error_message"] = errorMessage.String
+				}
+				if startedAt.Valid {
+					job["started_at"] = startedAt.Time.Format(time.RFC3339)
+				}
+				if completedAt.Valid {
+					job["completed_at"] = completedAt.Time.Format(time.RFC3339)
+				}
+
+				jobs = append(jobs, job)
+			}
+			response["processing_jobs"] = jobs
+			response["processing_job_count"] = len(jobs)
+		} else {
+			response["processing_jobs_error"] = err.Error()
+		}
+	}
+
+	// Get in-memory stream state with instances
+	sm := state.DefaultManager()
+	if sm != nil {
+		allStreams := sm.GetAllStreamStates()
+		streamInfos := []map[string]interface{}{}
+		for _, s := range allStreams {
+			info := map[string]interface{}{
+				"internal_name": s.InternalName,
+				"status":        s.Status,
+				"viewers":       s.Viewers,
+				"tenant_id":     s.TenantID,
+				"buffer_state":  s.BufferState,
+				"inputs":        s.Inputs,
+				"bytes_up":      s.BytesUp,
+				"bytes_down":    s.BytesDown,
+			}
+			// Get per-node instances
+			instances := sm.GetStreamInstances(s.InternalName)
+			if len(instances) > 0 {
+				instMap := make(map[string]interface{})
+				for nodeID, inst := range instances {
+					instMap[nodeID] = map[string]interface{}{
+						"viewers":      inst.Viewers,
+						"buffer_state": inst.BufferState,
+						"bytes_up":     inst.BytesUp,
+						"bytes_down":   inst.BytesDown,
+						"inputs":       inst.Inputs,
+						"last_update":  inst.LastUpdate,
+					}
+				}
+				info["instances"] = instMap
+			}
+			streamInfos = append(streamInfos, info)
+		}
+		response["streams"] = streamInfos
+		response["stream_count"] = len(streamInfos)
+	}
+
+	c.JSON(http.StatusOK, response)
 }
 
 // handleRootQueries handles the admin API endpoints (EXACT C++ implementation)
@@ -565,11 +950,12 @@ func handleGetSource(c *gin.Context, streamName string, query url.Values) {
 	// Source selection (Mist pull) -> isSourceSelection=true (exclude replicated)
 	bestNode, score, nodeLat, nodeLon, nodeName, err = lb.GetBestNodeWithScore(ctx, streamName, lat, lon, tagAdjust, clientIP, true)
 	if err != nil {
+		durationMs := float32(time.Since(start).Milliseconds())
 		if metrics != nil {
 			metrics.RoutingDecisions.WithLabelValues("source", "failed").Inc()
 		}
 		// Post failed event
-		go postBalancingEvent(c, streamName, "", 0, lat, lon, "failed", err.Error(), 0, 0, "")
+		go postBalancingEvent(c, streamName, "", 0, lat, lon, "failed", err.Error(), 0, 0, "", durationMs)
 
 		fallback := query.Get("fallback")
 		if fallback == "" {
@@ -587,13 +973,14 @@ func handleGetSource(c *gin.Context, streamName string, query url.Values) {
 	dtscURL := fmt.Sprintf("dtsc://%s:4200", hostname)
 
 	// Check if this is a redirect or direct response
+	durationMs := float32(time.Since(start).Milliseconds())
 	if query.Get("redirect") == "1" {
 		if metrics != nil {
 			metrics.RoutingDecisions.WithLabelValues("source", bestNode).Inc()
 			metrics.NodeSelectionDuration.WithLabelValues().Observe(time.Since(start).Seconds())
 		}
 		// Post redirect event
-		go postBalancingEvent(c, streamName, bestNode, score, lat, lon, "redirect", dtscURL, nodeLat, nodeLon, nodeName)
+		go postBalancingEvent(c, streamName, bestNode, score, lat, lon, "redirect", dtscURL, nodeLat, nodeLon, nodeName, durationMs)
 		c.Redirect(http.StatusFound, dtscURL)
 	} else {
 		if metrics != nil {
@@ -601,13 +988,14 @@ func handleGetSource(c *gin.Context, streamName string, query url.Values) {
 			metrics.NodeSelectionDuration.WithLabelValues().Observe(time.Since(start).Seconds())
 		}
 		// Post success event
-		go postBalancingEvent(c, streamName, bestNode, score, lat, lon, "success", "", nodeLat, nodeLon, nodeName)
+		go postBalancingEvent(c, streamName, bestNode, score, lat, lon, "success", "", nodeLat, nodeLon, nodeName, durationMs)
 		c.String(http.StatusOK, dtscURL)
 	}
 }
 
 // handleFindIngest implements /?ingest=<cpu> (EXACT C++ implementation)
 func handleFindIngest(c *gin.Context, cpuUsage string, query url.Values) {
+	start := time.Now()
 	lat := getLatLon(c, query, "lat", "X-Latitude")
 	lon := getLatLon(c, query, "lon", "X-Longitude")
 	tagAdjust := getTagAdjustments(c, query)
@@ -631,8 +1019,9 @@ func handleFindIngest(c *gin.Context, cpuUsage string, query url.Values) {
 	// Ingest -> isSourceSelection=true (though less relevant without streamName)
 	bestNode, score, nodeLat, nodeLon, nodeName, err := lb.GetBestNodeWithScore(ctx, "", lat, lon, tagAdjust, "", true)
 	if err != nil {
+		durationMs := float32(time.Since(start).Milliseconds())
 		// Post failed ingest event
-		go postBalancingEvent(c, "ingest", "", 0, lat, lon, "failed", err.Error(), 0, 0, "")
+		go postBalancingEvent(c, "ingest", "", 0, lat, lon, "failed", err.Error(), 0, 0, "", durationMs)
 		c.String(http.StatusOK, "FULL") // C++ fallback for no ingest point
 		return
 	}
@@ -644,8 +1033,9 @@ func handleFindIngest(c *gin.Context, cpuUsage string, query url.Values) {
 		for _, node := range nodes {
 			if node.Host == bestNode {
 				if uint64(node.CPU*10)+uint64(minCpu) >= 1000 {
+					durationMs := float32(time.Since(start).Milliseconds())
 					// Node would be overloaded, return fallback (like C++ FAIL_MSG("No ingest point found!"))
-					go postBalancingEvent(c, "ingest", "", 0, lat, lon, "failed", "CPU overload", 0, 0, "")
+					go postBalancingEvent(c, "ingest", "", 0, lat, lon, "failed", "CPU overload", 0, 0, "", durationMs)
 					c.String(http.StatusOK, "FULL") // C++ fallback for CPU overload
 					return
 				}
@@ -654,8 +1044,9 @@ func handleFindIngest(c *gin.Context, cpuUsage string, query url.Values) {
 		}
 	}
 
+	durationMs := float32(time.Since(start).Milliseconds())
 	// Post successful ingest event
-	go postBalancingEvent(c, "ingest", bestNode, score, lat, lon, "success", "", nodeLat, nodeLon, nodeName)
+	go postBalancingEvent(c, "ingest", bestNode, score, lat, lon, "success", "", nodeLat, nodeLon, nodeName, durationMs)
 	c.String(http.StatusOK, bestNode)
 }
 
@@ -777,12 +1168,14 @@ func handleStreamBalancing(c *gin.Context, streamName string) {
 			c.Header("Location", redirectURL)
 			c.String(http.StatusTemporaryRedirect, redirectURL)
 
-			go postBalancingEvent(c, target.InternalName, bestNode, 0, lat, lon, "redirect", redirectURL, 0, 0, "")
+			durationMs := float32(time.Since(start).Milliseconds())
+			go postBalancingEvent(c, target.InternalName, bestNode, 0, lat, lon, "redirect", redirectURL, 0, 0, "", durationMs)
 			return
 		}
 
+		durationMs := float32(time.Since(start).Milliseconds())
 		c.String(http.StatusOK, bestNode)
-		go postBalancingEvent(c, target.InternalName, bestNode, 0, lat, lon, "success", "", 0, 0, "")
+		go postBalancingEvent(c, target.InternalName, bestNode, 0, lat, lon, "success", "", 0, 0, "", durationMs)
 		return
 	}
 
@@ -805,15 +1198,23 @@ func handleStreamBalancing(c *gin.Context, streamName string) {
 	// Viewer selection -> isSourceSelection=false (allow replicated)
 	bestNode, score, nodeLat, nodeLon, nodeName, err = lb.GetBestNodeWithScore(ctx, internalName, lat, lon, tagAdjust, "", false)
 	if err != nil {
-		logger.WithError(err).Error("All servers seem to be out of bandwidth!")
+		durationMs := float32(time.Since(start).Milliseconds())
+		logger.WithError(err).Error("Load balancer failed to select a node")
 		if metrics != nil {
 			metrics.RoutingDecisions.WithLabelValues("load_balancer", "failed").Inc()
 		}
 		c.String(http.StatusOK, "localhost") // fallback like C++
 
 		// Post failure event to Firehose
-		go postBalancingEvent(c, streamName, "", 0, lat, lon, "failed", err.Error(), 0, 0, "")
+		go postBalancingEvent(c, streamName, "", 0, lat, lon, "failed", err.Error(), 0, 0, "", durationMs)
 		return
+	}
+
+	// Create virtual viewer to track this redirect
+	// This adds a bandwidth penalty immediately, before USER_NEW confirms the connection
+	if nodeID := lb.GetNodeIDByHost(bestNode); nodeID != "" {
+		clientIP := c.ClientIP()
+		state.DefaultManager().CreateVirtualViewer(nodeID, internalName, clientIP)
 	}
 
 	// Check if redirect is requested (like C++)
@@ -827,16 +1228,18 @@ func handleStreamBalancing(c *gin.Context, streamName string) {
 		c.Header("Location", redirectURL)
 		c.String(http.StatusTemporaryRedirect, redirectURL)
 
+		durationMs := float32(time.Since(start).Milliseconds())
 		if metrics != nil {
 			metrics.RoutingDecisions.WithLabelValues("load_balancer", bestNode).Inc()
 			metrics.NodeSelectionDuration.WithLabelValues().Observe(time.Since(start).Seconds())
 		}
 
 		// Post redirect event to Firehose
-		go postBalancingEvent(c, internalName, bestNode, score, lat, lon, "redirect", redirectURL, nodeLat, nodeLon, nodeName)
+		go postBalancingEvent(c, internalName, bestNode, score, lat, lon, "redirect", redirectURL, nodeLat, nodeLon, nodeName, durationMs)
 		return
 	}
 
+	durationMs := float32(time.Since(start).Milliseconds())
 	c.String(http.StatusOK, bestNode)
 
 	if metrics != nil {
@@ -845,7 +1248,7 @@ func handleStreamBalancing(c *gin.Context, streamName string) {
 	}
 
 	// Post successful balancing event to Firehose
-	go postBalancingEvent(c, internalName, bestNode, score, lat, lon, "success", "", nodeLat, nodeLon, nodeName)
+	go postBalancingEvent(c, internalName, bestNode, score, lat, lon, "success", "", nodeLat, nodeLon, nodeName, durationMs)
 }
 
 // Orchestrate clip creation: select ingest and storage, then call Helmsman on storage to pull clip from Mist
@@ -883,7 +1286,8 @@ func deriveHelmsmanBase(base string) string {
 }
 
 // postBalancingEvent posts load balancing decisions to Decklog via gRPC
-func postBalancingEvent(c *gin.Context, streamName, selectedNode string, score uint64, lat, lon float64, status, details string, nodeLat, nodeLon float64, nodeName string) {
+// durationMs is the time taken to resolve the routing decision (request processing latency)
+func postBalancingEvent(c *gin.Context, streamName, selectedNode string, score uint64, lat, lon float64, status, details string, nodeLat, nodeLon float64, nodeName string, durationMs float32) {
 
 	// Extract client IP (check X-Forwarded-For first, then X-Real-IP, then RemoteAddr)
 	clientIP := c.GetHeader("X-Forwarded-For")
@@ -910,7 +1314,7 @@ func postBalancingEvent(c *gin.Context, streamName, selectedNode string, score u
 				"city":         geoData.City,
 				"latitude":     geoData.Latitude,
 				"longitude":    geoData.Longitude,
-			}).Debug("Used GeoIP fallback for load balancing event")
+			}).Info("Used GeoIP fallback for load balancing event")
 		}
 	}
 
@@ -955,7 +1359,7 @@ func postBalancingEvent(c *gin.Context, streamName, selectedNode string, score u
 			tenantID = resolveResp.TenantId
 			internalName = resolveResp.InternalName
 		} else {
-			logger.WithError(err).WithField("stream_name", streamName).Debug("Failed to resolve tenant via Commodore")
+			logger.WithError(err).WithField("stream_name", streamName).Info("Failed to resolve tenant via Commodore")
 		}
 	}
 
@@ -1007,16 +1411,37 @@ func postBalancingEvent(c *gin.Context, streamName, selectedNode string, score u
 		}(),
 		ClientBucket: clientBucket,
 		NodeBucket:   nodeBucket,
-		// Enrichment fields added by Foghorn
+		InternalName: func() *string {
+			if internalName != "" {
+				return &internalName
+			}
+			return nil
+		}(),
+		// Dual-tenant attribution (RFC: routing-events-dual-tenant-attribution)
+		// TenantId = infra owner (cluster operator) for event storage
+		// StreamTenantId = stream owner (customer) for filtering
+		// ClusterId = emitting cluster identifier
 		TenantId: func() *string {
+			if ownerTenantID != "" {
+				return &ownerTenantID
+			}
+			return nil
+		}(),
+		StreamTenantId: func() *string {
 			if tenantID != "" {
 				return &tenantID
 			}
 			return nil
 		}(),
-		InternalName: func() *string {
-			if internalName != "" {
-				return &internalName
+		ClusterId: func() *string {
+			if clusterID != "" {
+				return &clusterID
+			}
+			return nil
+		}(),
+		LatencyMs: func() *float32 {
+			if durationMs > 0 {
+				return &durationMs
 			}
 			return nil
 		}(),
@@ -1042,12 +1467,13 @@ func postBalancingEvent(c *gin.Context, streamName, selectedNode string, score u
 		"stream_name": streamName,
 		"node":        selectedNode,
 		"status":      status,
-	}).Debug("Successfully sent balancing event to Decklog")
+	}).Info("Successfully sent balancing event to Decklog")
 }
 
 // emitViewerRoutingEvent posts a routing decision for viewer playback (used by gRPC + generic HTTP helpers)
 // Keeps it minimal to avoid duplicating the legacy postBalancingEvent gin-specific code.
-func emitViewerRoutingEvent(req *pb.ViewerEndpointRequest, primary *pb.ViewerEndpoint, viewerLat, viewerLon, nodeLat, nodeLon float64, internalName string) {
+// durationMs is the time taken to resolve the routing decision (request processing latency)
+func emitViewerRoutingEvent(req *pb.ViewerEndpointRequest, primary *pb.ViewerEndpoint, viewerLat, viewerLon, nodeLat, nodeLon float64, internalName, streamTenantID string, durationMs float32) {
 	if decklogClient == nil || primary == nil {
 		return
 	}
@@ -1131,10 +1557,40 @@ func emitViewerRoutingEvent(req *pb.ViewerEndpointRequest, primary *pb.ViewerEnd
 		InternalName: internalNamePtr,
 		ClientBucket: clientBucket,
 		NodeBucket:   nodeBucket,
+		// Dual-tenant attribution (RFC: routing-events-dual-tenant-attribution)
+		// TenantId = infra owner (cluster operator) for event storage
+		// StreamTenantId = stream owner (customer) for filtering
+		// ClusterId = emitting cluster identifier
+		TenantId: func() *string {
+			if ownerTenantID != "" {
+				return &ownerTenantID
+			}
+			return nil
+		}(),
+		StreamTenantId: func() *string {
+			if streamTenantID != "" {
+				return &streamTenantID
+			}
+			return nil
+		}(),
+		ClusterId: func() *string {
+			if clusterID != "" {
+				return &clusterID
+			}
+			return nil
+		}(),
+		LatencyMs: func() *float32 {
+			if durationMs > 0 {
+				return &durationMs
+			}
+			return nil
+		}(),
 	}
 
 	go func() {
-		_ = decklogClient.SendLoadBalancing(event)
+		if err := decklogClient.SendLoadBalancing(event); err != nil {
+			logger.WithError(err).WithField("content_id", req.GetContentId()).Warn("Failed to send viewer routing event to Decklog")
+		}
 	}()
 }
 
@@ -1217,9 +1673,36 @@ func getDVRContextByRequestID(requestID string) (string, string) {
 	if db == nil || requestID == "" {
 		return "", ""
 	}
-	var tenantID, internalName string
-	_ = db.QueryRow(`SELECT tenant_id::text, internal_name FROM foghorn.dvr_requests WHERE request_hash = $1`, requestID).Scan(&tenantID, &internalName)
-	return tenantID, internalName
+
+	// Get dvr_hash, internal_name, and fallback tenant_id from artifacts table
+	var dvrHash, internalName string
+	var fallbackTenantID sql.NullString
+	err := db.QueryRow(`
+		SELECT artifact_hash, internal_name, tenant_id
+		FROM foghorn.artifacts
+		WHERE artifact_hash = $1 AND artifact_type = 'dvr'
+	`, requestID).Scan(&dvrHash, &internalName, &fallbackTenantID)
+	if err != nil {
+		return "", ""
+	}
+
+	// Resolve tenant context from Commodore (uses cache)
+	if commodoreClient != nil && dvrHash != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		resp, err := commodoreClient.ResolveDVRHash(ctx, dvrHash)
+		if err == nil && resp.Found {
+			return resp.TenantId, internalName
+		}
+		// Commodore unavailable - log and fall through to local fallback
+		logger.WithField("dvr_hash", dvrHash).Info("Commodore unavailable, using local tenant_id fallback")
+	}
+
+	// Fallback to denormalized tenant_id stored locally
+	if fallbackTenantID.Valid {
+		return fallbackTenantID.String, internalName
+	}
+	return "", internalName
 }
 
 // HandleStartDVRRecording - DELETED: migrated to gRPC StartDVR in internal/grpc/server.go
@@ -1495,6 +1978,7 @@ func toInt64(v interface{}) (int64, bool) {
 
 // resolveLiveViewerEndpoint uses load balancer to find optimal edge nodes with fallbacks
 func resolveLiveViewerEndpoint(req *pb.ViewerEndpointRequest, lat, lon float64) (*pb.ViewerEndpointResponse, error) {
+	start := time.Now()
 	// Delegate to consolidated control package function
 	deps := &control.PlaybackDependencies{
 		DB:     db,
@@ -1521,7 +2005,8 @@ func resolveLiveViewerEndpoint(req *pb.ViewerEndpointRequest, lat, lon float64) 
 
 	// Emit routing event for analytics
 	if response.Primary != nil {
-		emitViewerRoutingEvent(req, response.Primary, lat, lon, 0, 0, target.InternalName)
+		durationMs := float32(time.Since(start).Milliseconds())
+		emitViewerRoutingEvent(req, response.Primary, lat, lon, 0, 0, target.InternalName, target.TenantID, durationMs)
 	}
 
 	return response, nil
@@ -1529,6 +2014,7 @@ func resolveLiveViewerEndpoint(req *pb.ViewerEndpointRequest, lat, lon float64) 
 
 // resolveDVRViewerEndpoint queries database for DVR storage node
 func resolveDVRViewerEndpoint(req *pb.ViewerEndpointRequest) (*pb.ViewerEndpointResponse, error) {
+	start := time.Now()
 	// Delegate to consolidated control package function
 	deps := &control.PlaybackDependencies{
 		DB: db,
@@ -1543,7 +2029,8 @@ func resolveDVRViewerEndpoint(req *pb.ViewerEndpointRequest) (*pb.ViewerEndpoint
 
 	// Emit routing event for analytics
 	if response.Primary != nil && response.Metadata != nil {
-		emitViewerRoutingEvent(req, response.Primary, 0, 0, 0, 0, response.Metadata.GetClipSource())
+		durationMs := float32(time.Since(start).Milliseconds())
+		emitViewerRoutingEvent(req, response.Primary, 0, 0, 0, 0, response.Metadata.GetClipSource(), response.Metadata.GetTenantId(), durationMs)
 	}
 
 	return response, nil
@@ -1551,6 +2038,7 @@ func resolveDVRViewerEndpoint(req *pb.ViewerEndpointRequest) (*pb.ViewerEndpoint
 
 // resolveClipViewerEndpoint queries database for clip storage node
 func resolveClipViewerEndpoint(req *pb.ViewerEndpointRequest) (*pb.ViewerEndpointResponse, error) {
+	start := time.Now()
 	// Delegate to consolidated control package function
 	deps := &control.PlaybackDependencies{
 		DB: db,
@@ -1565,7 +2053,8 @@ func resolveClipViewerEndpoint(req *pb.ViewerEndpointRequest) (*pb.ViewerEndpoin
 
 	// Emit routing event for analytics
 	if response.Primary != nil && response.Metadata != nil {
-		emitViewerRoutingEvent(req, response.Primary, 0, 0, 0, 0, response.Metadata.GetClipSource())
+		durationMs := float32(time.Since(start).Milliseconds())
+		emitViewerRoutingEvent(req, response.Primary, 0, 0, 0, 0, response.Metadata.GetClipSource(), response.Metadata.GetTenantId(), durationMs)
 	}
 
 	return response, nil
@@ -1663,7 +2152,7 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 		"content_type": contentType,
 		"content_id":   contentID,
 		"fixed_node":   resolution.FixedNode,
-	}).Debug("Resolved content via unified resolution")
+	}).Info("Resolved content via unified resolution")
 
 	// Normalize protocol
 	protocol = normalizeProtocol(protocol)
@@ -1707,6 +2196,12 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 		}).Error("Failed to resolve viewer endpoint")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to resolve playback endpoint"})
 		return
+	}
+
+	// Create virtual viewer for live streams to track this redirect
+	// This adds a bandwidth penalty immediately, before USER_NEW confirms the connection
+	if contentType == "live" && response.Primary != nil && response.Primary.NodeId != "" {
+		state.DefaultManager().CreateVirtualViewer(response.Primary.NodeId, contentID, viewerIP)
 	}
 
 	// If no protocol or "any", return full JSON response

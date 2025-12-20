@@ -44,6 +44,5 @@ type AnalyticsViewerSession5m struct {
 	AvgViewers           float64   `json:"avg_viewers"`
 	UniqueCountries      int       `json:"unique_countries"`
 	UniqueCities         int       `json:"unique_cities"`
-	AvgConnectionQuality float32   `json:"avg_connection_quality"`
 	AvgBufferHealth      float32   `json:"avg_buffer_health"`
 }

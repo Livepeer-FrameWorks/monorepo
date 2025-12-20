@@ -4,8 +4,8 @@ Thumbs.db
 Desktop.ini
 *~
 .Trash*
+.cache
 .directory
-docs
 
 # IDE & Editor
 .vscode/*

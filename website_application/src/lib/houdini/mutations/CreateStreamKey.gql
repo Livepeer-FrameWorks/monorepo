@@ -1,3 +1,4 @@
+# Create a new stream key for a stream
 mutation CreateStreamKey($streamId: ID!, $input: CreateStreamKeyInput!) {
   createStreamKey(streamId: $streamId, input: $input) {
     __typename
@@ -9,7 +10,6 @@ mutation CreateStreamKey($streamId: ID!, $input: CreateStreamKeyInput!) {
       isActive
       lastUsedAt
       createdAt
-      ...StreamKeys_insert @prepend
     }
     ... on ValidationError {
       ...ValidationErrorFields @mask_disable

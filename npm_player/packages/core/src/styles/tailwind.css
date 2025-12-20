@@ -1,0 +1,1015 @@
+/*
+ * FrameWorks Player CSS
+ * Wrapped in @layer fw-player for cascade isolation.
+ * Host app unlayered styles will always take precedence.
+ */
+
+/* Declare layer upfront for lowest priority */
+@layer fw-player;
+
+/* Import Tailwind utilities - NO theme (avoids :root pollution) */
+@import "tailwindcss/utilities" layer(fw-player);
+@import "./animations.css" layer(fw-player);
+
+/* Tailwind v4 source scanning - absolute paths from monorepo */
+@source "../../../../packages/react/src/**/*.tsx";
+@source "../../../../packages/svelte/src/**/*.svelte";
+@source "../../../../playground/src/**/*.tsx";
+@source "../**/*.ts";
+
+/* All custom styles in the fw-player layer */
+@layer fw-player {
+  /*
+   * Player-scoped CSS variables - on .fw-player-surface to avoid :root pollution.
+   * All player components must be wrapped in .fw-player-surface to inherit these.
+   */
+  .fw-player-surface {
+    /* Tokyo Night color palette */
+    --tn-bg-dark: 235 21% 11%;      /* #1a1b26 - Darkest (slab backgrounds) */
+    --tn-bg: 233 23% 17%;            /* #24283b - Main background */
+    --tn-bg-highlight: 233 23% 21%;  /* #292e42 - Elevated surfaces */
+    --tn-bg-visual: 232 27% 25%;     /* #33395e - Selection/active states */
+
+    /* Text hierarchy */
+    --tn-fg: 223 27% 76%;            /* #a9b1d6 - Primary text */
+    --tn-fg-dark: 224 16% 53%;       /* #787c99 - Secondary text (muted) */
+    --tn-fg-gutter: 228 15% 45%;     /* #5a607f - Borders, seams */
+
+    /* Accent colors (semantic) */
+    --tn-blue: 218 79% 73%;          /* #7aa2f7 - Primary actions */
+    --tn-green: 95 53% 55%;          /* #9ece6a - Success */
+    --tn-red: 348 74% 64%;           /* #f7768e - Destructive, live */
+    --tn-yellow: 35 79% 64%;         /* #e0af68 - Warnings */
+    --tn-purple: 267 82% 77%;        /* #bb9af7 - Secondary accent */
+    --tn-cyan: 178 64% 63%;          /* #7dcfff - Info */
+    --tn-teal: 162 66% 62%;          /* #73daca - Terminal green */
+
+    /* Player-internal variables (not shared with host) */
+    --fw-background: var(--tn-bg);
+    --fw-foreground: var(--tn-fg);
+    --fw-card: var(--tn-bg-highlight);
+    --fw-card-foreground: var(--tn-fg);
+    --fw-popover: var(--tn-bg-highlight);
+    --fw-popover-foreground: var(--tn-fg);
+    --fw-primary: var(--tn-blue);
+    --fw-primary-foreground: var(--tn-bg-dark);
+    --fw-secondary: var(--tn-bg-visual);
+    --fw-secondary-foreground: var(--tn-fg);
+    --fw-muted: var(--tn-bg-highlight);
+    --fw-muted-foreground: var(--tn-fg-dark);
+    --fw-accent: var(--tn-bg-visual);
+    --fw-accent-foreground: var(--tn-fg);
+    --fw-destructive: var(--tn-red);
+    --fw-destructive-foreground: var(--tn-bg-dark);
+    --fw-border: var(--tn-fg-gutter);
+    --fw-input: var(--tn-bg-highlight);
+    --fw-ring: var(--tn-blue);
+    --fw-radius: 0;
+
+    /* Controls-specific variables */
+    --fw-controls-bg: hsl(var(--tn-bg-dark) / 0.85);
+    --fw-controls-fg: hsl(var(--tn-fg));
+    --fw-seam: hsl(var(--tn-fg-gutter) / 0.3);
+    color: var(--fw-controls-fg);
+  }
+
+  /* =====================================================
+     SLAB SYSTEM - Player Controls & Overlays
+     ===================================================== */
+
+  .fw-player-surface button {
+    font: inherit;
+  }
+
+  /* Slab base - solid structural block */
+  .fw-slab {
+    background: var(--fw-controls-bg);
+    border: 1px solid var(--fw-seam);
+  }
+
+  /* Slab header - uppercase, padded */
+  .fw-slab-header {
+    padding: 0.5rem 1rem;
+    border-bottom: 1px solid var(--fw-seam);
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: hsl(var(--tn-fg-dark));
+  }
+
+  /* Slab body - padded content area */
+  .fw-slab-body {
+    padding: 1rem;
+  }
+
+  /* Slab actions - flush buttons, seams between */
+  .fw-slab-actions {
+    display: flex;
+    border-top: 1px solid var(--fw-seam);
+  }
+
+  .fw-slab-actions > * {
+    flex: 1;
+    border-radius: 0 !important;
+  }
+
+  .fw-slab-actions > * + * {
+    border-left: 1px solid var(--fw-seam);
+  }
+
+  /* Control bar - horizontal slab */
+  .fw-control-bar {
+    display: flex;
+    align-items: center;
+    background: var(--fw-controls-bg);
+    border-top: 1px solid var(--fw-seam);
+    backdrop-filter: blur(8px);
+  }
+
+  /* Control group - seamed sections within bar */
+  .fw-control-group {
+    display: flex;
+    align-items: center;
+    padding: 0.5rem;
+  }
+
+  .fw-control-group + .fw-control-group {
+    border-left: 1px solid var(--fw-seam);
+  }
+
+  /* Flush button - fills space, no radius */
+  .fw-btn-flush {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.5rem 0.75rem;
+    border-radius: 0;
+    background: transparent;
+    color: hsl(var(--tn-fg));
+    transition: background-color 0.15s, color 0.15s;
+    cursor: pointer;
+  }
+
+  .fw-btn-flush:hover {
+    background: hsl(var(--tn-bg-visual) / 0.5);
+  }
+
+  .fw-btn-flush:active {
+    background: hsl(var(--tn-bg-visual));
+  }
+
+  /* Status indicators */
+  .fw-status-online { color: hsl(var(--tn-green)); }
+  .fw-status-offline { color: hsl(var(--tn-red)); }
+  .fw-status-warning { color: hsl(var(--tn-yellow)); }
+  .fw-status-info { color: hsl(var(--tn-cyan)); }
+
+  .animate-spin-slow {
+    animation: spin-slow 18s linear infinite;
+  }
+
+  /* =====================================================
+     PLAYER CONTAINER STYLES (Slab-based)
+     ===================================================== */
+
+  .fw-player-root {
+    position: relative;
+    height: 100%;
+    width: 100%;
+    overflow: hidden;
+    border-radius: 0;  /* Slabs don't have rounded corners */
+    background-color: hsl(var(--tn-bg-dark));
+    border: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
+  }
+
+  .fw-player-container {
+    height: 100%;
+    width: 100%;
+    overflow: hidden;
+    border-radius: 0;
+    background-color: hsl(var(--tn-bg-dark));
+  }
+
+  .fw-player-video {
+    height: 100%;
+    width: 100%;
+    border-radius: 0;
+    object-fit: contain;
+    background-color: hsl(var(--tn-bg-dark));
+  }
+
+  .fw-player-embed {
+    height: 100%;
+    width: 100%;
+    min-height: 300px;
+    border-radius: 0;
+    border-width: 0;
+    background-color: hsl(var(--tn-bg-dark));
+  }
+
+  .fw-player-dvd {
+    position: absolute;
+    pointer-events: none;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  /* =====================================================
+     UTILITY FALLBACKS - Tailwind v4 @source partial coverage
+     These ensure critical classes are always available
+     ===================================================== */
+
+  /* Positioning */
+  .inset-0 { inset: 0; }
+  .inset-x-0 { left: 0; right: 0; }
+  .inset-y-0 { top: 0; bottom: 0; }
+  .top-0 { top: 0; }
+  .top-2 { top: 0.5rem; }
+  .right-0 { right: 0; }
+  .right-2 { right: 0.5rem; }
+  .bottom-0 { bottom: 0; }
+  .bottom-2 { bottom: 0.5rem; }
+  .left-0 { left: 0; }
+  .left-2 { left: 0.5rem; }
+
+  /* Sizing */
+  .w-2 { width: 0.5rem; }
+  .w-2\.5 { width: 0.625rem; }
+  .w-4 { width: 1rem; }
+  .w-5 { width: 1.25rem; }
+  .w-6 { width: 1.5rem; }
+  .w-8 { width: 2rem; }
+  .w-10 { width: 2.5rem; }
+  .w-12 { width: 3rem; }
+  .w-24 { width: 6rem; }
+  .w-28 { width: 7rem; }
+  .w-48 { width: 12rem; }
+  .w-full { width: 100%; }
+  .h-1 { height: 0.25rem; }
+  .h-1\.5 { height: 0.375rem; }
+  .h-2 { height: 0.5rem; }
+  .h-2\.5 { height: 0.625rem; }
+  .h-4 { height: 1rem; }
+  .h-5 { height: 1.25rem; }
+  .h-6 { height: 1.5rem; }
+  .h-8 { height: 2rem; }
+  .h-10 { height: 2.5rem; }
+  .h-12 { height: 3rem; }
+  .h-full { height: 100%; }
+  .min-w-0 { min-width: 0; }
+  .max-w-xs { max-width: 20rem; }
+  .max-w-sm { max-width: 24rem; }
+  .max-h-\[80\%\] { max-height: 80%; }
+  .max-w-\[320px\] { max-width: 320px; }
+
+  /* Spacing */
+  .gap-1 { gap: 0.25rem; }
+  .gap-2 { gap: 0.5rem; }
+  .gap-4 { gap: 1rem; }
+  .space-x-1 > * + * { margin-left: 0.25rem; }
+  .space-x-2 > * + * { margin-left: 0.5rem; }
+  .space-y-1 > * + * { margin-top: 0.25rem; }
+  .p-1 { padding: 0.25rem; }
+  .p-2 { padding: 0.5rem; }
+  .p-3 { padding: 0.75rem; }
+  .pr-2 { padding-right: 0.5rem; }
+  .pr-5 { padding-right: 1.25rem; }
+  .px-1 { padding-left: 0.25rem; padding-right: 0.25rem; }
+  .px-2 { padding-left: 0.5rem; padding-right: 0.5rem; }
+  .px-3 { padding-left: 0.75rem; padding-right: 0.75rem; }
+  .py-1 { padding-top: 0.25rem; padding-bottom: 0.25rem; }
+  .py-2 { padding-top: 0.5rem; padding-bottom: 0.5rem; }
+  .m-0 { margin: 0; }
+  .mx-auto { margin-left: auto; margin-right: auto; }
+  .mt-1 { margin-top: 0.25rem; }
+  .mt-2 { margin-top: 0.5rem; }
+  .mb-1 { margin-bottom: 0.25rem; }
+  .mb-2 { margin-bottom: 0.5rem; }
+  .-mb-1 { margin-bottom: -0.25rem; }
+  .-ml-4 { margin-left: -1rem; }
+  .ml-0\.5 { margin-left: 0.125rem; }
+
+  /* Typography */
+  .text-\[10px\] { font-size: 10px; }
+  .text-\[11px\] { font-size: 11px; }
+  .text-xs { font-size: 0.75rem; line-height: 1rem; }
+  .text-sm { font-size: 0.875rem; line-height: 1.25rem; }
+  .text-center { text-align: center; }
+  .text-right { text-align: right; }
+  .font-medium { font-weight: 500; }
+  .font-semibold { font-weight: 600; }
+  .font-mono { font-family: ui-monospace, monospace; }
+  .uppercase { text-transform: uppercase; }
+  .leading-none { line-height: 1; }
+  .tracking-wider { letter-spacing: 0.05em; }
+  .whitespace-nowrap { white-space: nowrap; }
+  .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* Colors */
+  .text-white { color: white; }
+  .text-white\/50 { color: rgb(255 255 255 / 0.5); }
+  .text-white\/70 { color: rgb(255 255 255 / 0.7); }
+  .text-white\/80 { color: rgb(255 255 255 / 0.8); }
+  .text-white\/90 { color: rgb(255 255 255 / 0.9); }
+  .bg-black { background-color: black; }
+  .bg-black\/40 { background-color: rgb(0 0 0 / 0.4); }
+  .bg-black\/50 { background-color: rgb(0 0 0 / 0.5); }
+  .bg-black\/80 { background-color: rgb(0 0 0 / 0.8); }
+  .bg-black\/90 { background-color: rgb(0 0 0 / 0.9); }
+  .bg-white { background-color: white; }
+  .bg-white\/5 { background-color: rgb(255 255 255 / 0.05); }
+  .bg-white\/10 { background-color: rgb(255 255 255 / 0.1); }
+  .bg-white\/20 { background-color: rgb(255 255 255 / 0.2); }
+  .bg-white\/30 { background-color: rgb(255 255 255 / 0.3); }
+  .bg-white\/50 { background-color: rgb(255 255 255 / 0.5); }
+  .border-white\/10 { border-color: rgb(255 255 255 / 0.1); }
+  .hover\:text-white:hover { color: white; }
+  .hover\:bg-white\/5:hover { background-color: rgb(255 255 255 / 0.05); }
+  .hover\:bg-white\/10:hover { background-color: rgb(255 255 255 / 0.1); }
+
+  /* Borders & Rounded */
+  .border { border-width: 1px; }
+  .border-b { border-bottom-width: 1px; }
+  .rounded { border-radius: 0.25rem; }
+  .rounded-md { border-radius: 0.375rem; }
+  .rounded-lg { border-radius: 0.5rem; }
+  .rounded-full { border-radius: 9999px; }
+
+  /* Effects */
+  .shadow-lg { box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1); }
+  .backdrop-blur-sm { backdrop-filter: blur(4px); }
+
+  /* Tokyo Night Utilities */
+  .bg-tn-bg-dark { background-color: hsl(var(--tn-bg-dark)); }
+  .bg-tn-bg { background-color: hsl(var(--tn-bg)); }
+  .bg-tn-bg-highlight { background-color: hsl(var(--tn-bg-highlight)); }
+  .text-tn-fg { color: hsl(var(--tn-fg)); }
+  .text-tn-fg-dark { color: hsl(var(--tn-fg-dark)); }
+  .text-tn-blue { color: hsl(var(--tn-blue)); }
+  .text-tn-accent { color: hsl(var(--tn-bg-visual)); }
+  .bg-tn-blue { background-color: hsl(var(--tn-blue)); }
+  .bg-tn-accent { background-color: hsl(var(--tn-bg-visual)); }
+  .border-tn-seam { border-color: hsl(var(--tn-fg-gutter) / 0.3); }
+
+  /* Opacity */
+  .opacity-0 { opacity: 0; }
+  .opacity-40 { opacity: 0.4; }
+  .opacity-50 { opacity: 0.5; }
+  .opacity-100 { opacity: 1; }
+
+  /* Transitions */
+  .transition { transition-property: color, background-color, border-color, fill, stroke, opacity, box-shadow, transform, filter, width; transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1); transition-duration: 150ms; }
+  .transition-opacity { transition-property: opacity; transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1); transition-duration: 150ms; }
+  .transition-colors { transition-property: color, background-color, border-color, fill, stroke; transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1); transition-duration: 150ms; }
+  .transition-transform { transition-property: transform; transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1); transition-duration: 150ms; }
+  .duration-200 { transition-duration: 200ms; }
+
+  /* Interactive */
+  .cursor-pointer { cursor: pointer; }
+  .cursor-not-allowed { cursor: not-allowed; }
+  .select-none { user-select: none; }
+  .touch-none { touch-action: none; }
+  .group:hover .group-hover\:rotate-90 { transform: rotate(90deg); }
+  .group:hover .group-hover\:h-1\.5 { height: 0.375rem; }
+
+  /* Overflow */
+  .overflow-hidden { overflow: hidden; }
+  .overflow-auto { overflow: auto; }
+
+  /* Responsive - sm: breakpoint (640px) */
+  @media (min-width: 640px) {
+    .sm\:flex { display: flex; }
+  }
+
+  /* =====================================================
+     DEV MODE PANEL - Advanced Settings Sidebar
+     ===================================================== */
+
+  /* Button reset for all dev panel buttons */
+  .fw-dev-toggle,
+  .fw-dev-tab,
+  .fw-dev-close,
+  .fw-dev-mode-btn,
+  .fw-dev-action-btn,
+  .fw-dev-combo-btn,
+  .fw-dev-list-toggle {
+    border: none;
+    outline: none;
+    font: inherit;
+    line-height: inherit;
+  }
+
+  /* Toggle button (shown when panel is closed) */
+  .fw-dev-toggle {
+    position: absolute;
+    bottom: 3.5rem;
+    right: 0.5rem;
+    z-index: 40;
+    width: 2rem;
+    height: 2rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: hsl(var(--tn-bg-dark));
+    border: 1px solid hsl(var(--tn-fg-gutter) / 0.5) !important; /* Override reset */
+    color: hsl(var(--tn-fg-dark));
+    cursor: pointer;
+    transition: opacity 200ms, background-color 150ms, border-color 150ms, color 150ms;
+  }
+
+  .fw-dev-toggle:hover {
+    background: hsl(var(--tn-bg));
+    border-color: hsl(var(--tn-fg-gutter));
+    color: hsl(var(--tn-fg));
+  }
+
+  .fw-dev-toggle--hidden {
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  /* Panel container */
+  .fw-dev-panel {
+    z-index: 40;
+    pointer-events: auto;
+    background: hsl(var(--tn-bg-dark));
+    border-left: 1px solid hsl(var(--tn-fg-gutter) / 0.5);
+    color: hsl(var(--tn-fg));
+    font-size: 0.75rem;
+    font-family: ui-monospace, monospace;
+    width: 280px;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    flex-shrink: 0;
+  }
+
+  /* Panel header with tabs */
+  .fw-dev-header {
+    display: flex;
+    align-items: center;
+    border-bottom: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
+    background: hsl(235 21% 9%);
+  }
+
+  .fw-dev-tab {
+    padding: 0.5rem 0.75rem;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: 600;
+    transition: color 150ms, background-color 150ms;
+    border-right: 1px solid hsl(var(--tn-fg-gutter) / 0.3) !important; /* Override reset */
+    background: transparent;
+    cursor: pointer;
+    color: hsl(var(--tn-fg-dark));
+  }
+
+  .fw-dev-tab:hover {
+    color: hsl(var(--tn-fg));
+    background: hsl(var(--tn-bg-dark) / 0.5);
+  }
+
+  .fw-dev-tab--active {
+    color: hsl(220 28% 87%);
+    background: hsl(var(--tn-bg-dark));
+  }
+
+  .fw-dev-close {
+    color: hsl(var(--tn-fg-dark));
+    transition: color 150ms;
+    padding: 0.5rem;
+    background: transparent;
+    cursor: pointer;
+  }
+
+  .fw-dev-close:hover {
+    color: hsl(var(--tn-fg));
+  }
+
+  /* Panel body (scrollable content area) */
+  .fw-dev-body {
+    flex: 1;
+    min-height: 0; /* Required for overflow in flex child */
+    overflow-y: auto;
+  }
+
+  /* Section within panel */
+  .fw-dev-section {
+    padding: 0.75rem;
+    border-bottom: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
+  }
+
+  .fw-dev-section-header {
+    background: hsl(235 21% 9%);
+  }
+
+  .fw-dev-label {
+    font-size: 10px;
+    color: hsl(var(--tn-fg-dark));
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: 600;
+    margin-bottom: 0.25rem;
+  }
+
+  .fw-dev-value {
+    color: hsl(220 28% 87%);
+    font-size: 0.875rem;
+  }
+
+  .fw-dev-value-arrow {
+    color: hsl(var(--tn-blue));
+  }
+
+  .fw-dev-value-muted {
+    color: hsl(var(--tn-fg-dark));
+    font-size: 10px;
+    margin-top: 0.25rem;
+  }
+
+  /* Mode buttons (Auto/Low Lat/Quality) */
+  .fw-dev-mode-group {
+    display: flex;
+    gap: 0.25rem;
+  }
+
+  .fw-dev-mode-btn {
+    flex: 1;
+    padding: 0.375rem 0.5rem;
+    font-size: 10px;
+    font-weight: 500;
+    transition: color 150ms, background-color 150ms;
+    background: hsl(var(--tn-bg));
+    color: hsl(var(--tn-fg-dark));
+    cursor: pointer;
+  }
+
+  .fw-dev-mode-btn:hover {
+    color: hsl(var(--tn-fg));
+    background: hsl(var(--tn-bg-highlight));
+  }
+
+  .fw-dev-mode-btn--active {
+    background: hsl(var(--tn-blue));
+    color: hsl(var(--tn-bg-dark));
+  }
+
+  .fw-dev-mode-desc {
+    font-size: 10px;
+    color: hsl(var(--tn-fg-dark));
+    margin-top: 0.375rem;
+  }
+
+  /* Action buttons row */
+  .fw-dev-actions {
+    display: flex;
+    border-bottom: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
+  }
+
+  .fw-dev-action-btn {
+    flex: 1;
+    padding: 0.5rem 0.75rem;
+    background: hsl(var(--tn-bg));
+    color: hsl(var(--tn-fg));
+    font-size: 0.75rem;
+    transition: color 150ms, background-color 150ms;
+    cursor: pointer;
+  }
+
+  .fw-dev-action-btn:hover {
+    background: hsl(var(--tn-bg-highlight));
+    color: hsl(220 28% 87%);
+  }
+
+  .fw-dev-action-btn + .fw-dev-action-btn {
+    border-left: 1px solid hsl(var(--tn-fg-gutter) / 0.3) !important; /* Override reset */
+  }
+
+  /* Combo list header */
+  .fw-dev-list-header {
+    padding: 0.5rem 0.75rem;
+    background: hsl(235 21% 9%);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .fw-dev-list-title {
+    font-size: 10px;
+    color: hsl(var(--tn-fg-dark));
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: 600;
+  }
+
+  .fw-dev-list-toggle {
+    font-size: 10px;
+    color: hsl(var(--tn-fg-dark));
+    transition: color 150ms;
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    background: transparent;
+    cursor: pointer;
+  }
+
+  .fw-dev-list-toggle:hover {
+    color: hsl(var(--tn-fg));
+  }
+
+  .fw-dev-list-empty {
+    padding: 1rem 0.75rem;
+    color: hsl(var(--tn-fg-dark));
+    text-align: center;
+    font-size: 0.75rem;
+  }
+
+  /* Combo list items */
+  .fw-dev-combo {
+    position: relative;
+  }
+
+  .fw-dev-combo-btn {
+    width: 100%;
+    padding: 0.5rem 0.75rem;
+    text-align: left;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    transition: background-color 150ms, color 150ms;
+    background: transparent;
+    color: hsl(var(--tn-fg));
+    cursor: pointer;
+    border-bottom: 1px solid hsl(var(--tn-fg-gutter) / 0.2) !important; /* Override reset */
+  }
+
+  .fw-dev-combo-btn:hover {
+    background: hsl(233 23% 15%);
+  }
+
+  .fw-dev-combo-btn--active {
+    background: hsl(var(--tn-bg-highlight));
+    color: hsl(220 28% 87%);
+    box-shadow: inset 0 0 0 1px hsl(var(--tn-blue));
+  }
+
+  .fw-dev-combo-btn--disabled {
+    opacity: 0.4;
+  }
+
+  .fw-dev-combo-btn--codec-warn {
+    background: hsl(var(--tn-yellow) / 0.05);
+  }
+
+  .fw-dev-combo-btn--codec-warn:hover {
+    background: hsl(var(--tn-yellow) / 0.1);
+  }
+
+  .fw-dev-combo-rank {
+    width: 1.25rem;
+    height: 1.25rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    font-weight: 700;
+    flex-shrink: 0;
+    background: hsl(var(--tn-fg-gutter) / 0.5);
+    color: hsl(var(--tn-fg-dark));
+  }
+
+  .fw-dev-combo-rank--active {
+    background: hsl(var(--tn-blue));
+    color: hsl(var(--tn-bg-dark));
+  }
+
+  .fw-dev-combo-rank--disabled {
+    background: hsl(var(--tn-fg-gutter) / 0.3);
+    color: hsl(var(--tn-fg-gutter));
+  }
+
+  .fw-dev-combo-rank--warn {
+    background: hsl(var(--tn-yellow) / 0.3);
+    color: hsl(var(--tn-yellow));
+  }
+
+  .fw-dev-combo-name {
+    flex: 1;
+    font-size: 0.75rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .fw-dev-combo-arrow {
+    color: hsl(var(--tn-fg-dark));
+  }
+
+  .fw-dev-combo-type {
+    color: hsl(var(--tn-cyan));
+  }
+
+  .fw-dev-combo-type--warn {
+    color: hsl(var(--tn-yellow));
+  }
+
+  .fw-dev-combo-type--disabled {
+    color: hsl(var(--tn-fg-dark));
+  }
+
+  .fw-dev-combo-score {
+    font-size: 10px;
+    font-family: ui-monospace, monospace;
+    font-variant-numeric: tabular-nums;
+    padding: 0.125rem 0.375rem;
+    flex-shrink: 0;
+  }
+
+  .fw-dev-combo-score--high {
+    background: hsl(var(--tn-green) / 0.2);
+    color: hsl(var(--tn-green));
+  }
+
+  .fw-dev-combo-score--mid {
+    background: hsl(var(--tn-blue) / 0.2);
+    color: hsl(var(--tn-blue));
+  }
+
+  .fw-dev-combo-score--low {
+    background: hsl(var(--tn-yellow) / 0.2);
+    color: hsl(var(--tn-yellow));
+  }
+
+  .fw-dev-combo-score--disabled {
+    background: hsl(var(--tn-fg-gutter) / 0.2);
+    color: hsl(var(--tn-fg-gutter));
+  }
+
+  /* Tooltip/popover for score breakdown */
+  .fw-dev-tooltip {
+    position: absolute;
+    left: 0;
+    z-index: 50;
+    background: hsl(var(--tn-bg-dark));
+    border: 1px solid hsl(var(--tn-fg-gutter));
+    box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1);
+    padding: 0.5rem;
+    font-size: 10px;
+    white-space: nowrap;
+    pointer-events: none;
+    min-width: 220px;
+  }
+
+  .fw-dev-tooltip--above {
+    bottom: 100%;
+    margin-bottom: 0.25rem;
+  }
+
+  .fw-dev-tooltip--below {
+    top: 100%;
+    margin-top: 0.25rem;
+  }
+
+  .fw-dev-tooltip-header {
+    margin-bottom: 0.5rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid hsl(var(--tn-fg-gutter) / 0.5);
+  }
+
+  .fw-dev-tooltip-title {
+    color: hsl(220 28% 87%);
+    font-weight: 700;
+  }
+
+  .fw-dev-tooltip-subtitle {
+    color: hsl(var(--tn-cyan));
+  }
+
+  .fw-dev-tooltip-tracks {
+    color: hsl(var(--tn-fg-dark));
+    margin-top: 0.125rem;
+  }
+
+  .fw-dev-tooltip-score {
+    color: hsl(220 28% 87%);
+    font-weight: 700;
+    margin-bottom: 0.25rem;
+  }
+
+  .fw-dev-tooltip-row {
+    color: hsl(var(--tn-fg-dark));
+  }
+
+  .fw-dev-tooltip-value {
+    color: hsl(var(--tn-fg));
+  }
+
+  .fw-dev-tooltip-weight {
+    color: hsl(var(--tn-fg-gutter));
+  }
+
+  .fw-dev-tooltip-bonus {
+    color: hsl(var(--tn-green));
+  }
+
+  .fw-dev-tooltip-penalty {
+    color: hsl(var(--tn-red));
+  }
+
+  .fw-dev-tooltip-error {
+    color: hsl(var(--tn-red));
+  }
+
+  /* Stats tab */
+  .fw-dev-stat {
+    display: flex;
+    justify-content: space-between;
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid hsl(var(--tn-fg-gutter) / 0.2);
+  }
+
+  .fw-dev-stat-label {
+    color: hsl(var(--tn-fg-dark));
+  }
+
+  .fw-dev-stat-value {
+    color: hsl(220 28% 87%);
+  }
+
+  .fw-dev-stat-value--good {
+    color: hsl(var(--tn-green));
+  }
+
+  .fw-dev-stat-value--warn {
+    color: hsl(var(--tn-yellow));
+  }
+
+  .fw-dev-stat-value--bad {
+    color: hsl(var(--tn-red));
+  }
+
+  .fw-dev-stat-value--accent {
+    color: hsl(var(--tn-blue));
+  }
+
+  /* Playback rate display */
+  .fw-dev-rate {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .fw-dev-rate-value {
+    font-size: 1.5rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .fw-dev-rate-status {
+    color: hsl(var(--tn-fg-dark));
+    font-size: 10px;
+  }
+
+  .fw-dev-rate-stats {
+    display: flex;
+    gap: 1rem;
+    margin-top: 0.5rem;
+    font-size: 10px;
+  }
+
+  /* Track badges */
+  .fw-dev-track {
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid hsl(var(--tn-fg-gutter) / 0.2);
+  }
+
+  .fw-dev-track-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.25rem;
+  }
+
+  .fw-dev-track-badge {
+    font-size: 10px;
+    font-family: ui-monospace, monospace;
+    padding: 0.125rem 0.375rem;
+    text-transform: uppercase;
+  }
+
+  .fw-dev-track-badge--video {
+    background: hsl(var(--tn-blue) / 0.2);
+    color: hsl(var(--tn-blue));
+  }
+
+  .fw-dev-track-badge--audio {
+    background: hsl(var(--tn-green) / 0.2);
+    color: hsl(var(--tn-green));
+  }
+
+  .fw-dev-track-badge--other {
+    background: hsl(var(--tn-yellow) / 0.2);
+    color: hsl(var(--tn-yellow));
+  }
+
+  .fw-dev-track-codec {
+    color: hsl(220 28% 87%);
+    font-size: 0.75rem;
+    font-family: ui-monospace, monospace;
+  }
+
+  .fw-dev-track-id {
+    color: hsl(var(--tn-fg-dark));
+    font-size: 10px;
+  }
+
+  .fw-dev-track-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    row-gap: 0.125rem;
+    font-size: 10px;
+    color: hsl(var(--tn-fg-dark));
+  }
+
+  .fw-dev-no-tracks {
+    border-top: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
+    padding: 0.75rem;
+  }
+
+  .fw-dev-no-tracks-text {
+    font-size: 10px;
+    color: hsl(var(--tn-fg-dark));
+  }
+
+  .fw-dev-no-tracks-type {
+    margin-left: 0.5rem;
+    color: hsl(var(--tn-blue));
+  }
+
+  /* Chevron rotation */
+  .fw-dev-chevron {
+    transition: transform 150ms;
+  }
+
+  .fw-dev-chevron--open {
+    transform: rotate(180deg);
+  }
+
+  /* Spacer for flex-grow */
+  .fw-dev-spacer {
+    flex: 1;
+  }
+
+  /* =====================================================
+     VIDEO.JS CONTAINER CONSTRAINTS
+     ===================================================== */
+
+  /* VideoJS wrapper must respect container bounds */
+  .fw-player-container .video-js {
+    width: 100% !important;
+    height: 100% !important;
+    max-width: 100% !important;
+    max-height: 100% !important;
+    min-width: 0 !important;
+    min-height: 0 !important;
+    padding: 0 !important;
+    background: black;
+  }
+
+  /* Ensure video tech fills the wrapper with letterboxing */
+  .fw-player-container .video-js .vjs-tech {
+    width: 100% !important;
+    height: 100% !important;
+    object-fit: contain !important;
+  }
+
+  /* =====================================================
+     VIDEO.JS UI HIDING (when using custom controls)
+     ===================================================== */
+
+  /* Hide all VideoJS chrome when using our custom controls */
+  .vjs-fw-custom-controls .vjs-control-bar,
+  .vjs-fw-custom-controls .vjs-big-play-button,
+  .vjs-fw-custom-controls .vjs-loading-spinner,
+  .vjs-fw-custom-controls .vjs-text-track-display,
+  .vjs-fw-custom-controls .vjs-error-display,
+  .vjs-fw-custom-controls .vjs-modal-dialog,
+  .vjs-fw-custom-controls .vjs-poster,
+  .vjs-fw-custom-controls .vjs-live-control,
+  .vjs-fw-custom-controls .vjs-title-bar {
+    display: none !important;
+  }
+
+  /* Ensure video element fills container (absolute positioning) */
+  .vjs-fw-custom-controls .vjs-tech {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+  }
+}

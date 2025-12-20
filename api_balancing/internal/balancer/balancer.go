@@ -154,6 +154,18 @@ type NodeWithScore struct {
 	LocationName string
 }
 
+type nodeRejectionReason string
+
+const (
+	rejectHostInvalid      nodeRejectionReason = "node metrics not ready"
+	rejectBandwidthExhaust nodeRejectionReason = "node out of bandwidth"
+	rejectStreamMissing    nodeRejectionReason = "stream missing on node"
+	rejectStreamNoInputs   nodeRejectionReason = "stream has no inputs on node"
+	rejectStreamReplicated nodeRejectionReason = "stream is replicated on node (excluded for source selection)"
+	rejectConfigStreams    nodeRejectionReason = "stream not allowed by node config"
+	rejectAdjustedToZero   nodeRejectionReason = "score adjusted to zero"
+)
+
 // GetBestNodeWithScore finds the best node and returns both node and score
 func (lb *LoadBalancer) GetBestNodeWithScore(ctx context.Context, streamName string, lat, lon float64, tagAdjust map[string]int, clientIP string, isSourceSelection bool) (string, uint64, float64, float64, string, error) {
 	nodes, err := lb.GetTopNodesWithScores(ctx, streamName, lat, lon, tagAdjust, clientIP, 1, isSourceSelection)
@@ -233,20 +245,32 @@ func (lb *LoadBalancer) GetTopNodesWithScores(ctx context.Context, streamName st
 		clientBinHost = lb.hostToBinary(clientIP)
 	}
 
+	rejections := map[nodeRejectionReason]int{}
+	seenCandidates := 0
+	skippedForCapCount := 0
+
 	for _, snap := range snapshot.Nodes {
 		if !snap.IsActive || skipForCap(snap) {
+			if snap.IsActive {
+				skippedForCapCount++
+			}
 			continue
 		}
+
+		seenCandidates++
 
 		if streamName != "" && clientIP != "" && state.CompareBinaryHosts(snap.BinHost, clientBinHost) {
 			lb.logger.WithFields(logging.Fields{
 				"stream": streamName, "host": snap.Host, "client_ip": clientIP,
-			}).Debug("Ignoring same-host entry for source selection")
+			}).Info("Ignoring same-host entry for source selection")
 			continue
 		}
 
-		score := lb.rateNode(snap, streamName, lat, lon, tagAdjust, isSourceSelection)
+		score, reason := lb.rateNodeWithReason(snap, streamName, lat, lon, tagAdjust, isSourceSelection)
 		if score == 0 {
+			if reason != "" {
+				rejections[reason]++
+			}
 			continue
 		}
 
@@ -258,7 +282,37 @@ func (lb *LoadBalancer) GetTopNodesWithScores(ctx context.Context, streamName st
 	}
 
 	if len(scoredNodes) == 0 {
-		return nil, fmt.Errorf("all servers seem to be out of bandwidth")
+		// More actionable error reporting than the old generic "out of bandwidth" message.
+		if seenCandidates == 0 && skippedForCapCount > 0 {
+			if requireCap, _ := ctx.Value("cap").(string); strings.TrimSpace(requireCap) != "" {
+				return nil, fmt.Errorf("no nodes match required capabilities (%s)", strings.TrimSpace(requireCap))
+			}
+			return nil, fmt.Errorf("no nodes match required capabilities")
+		}
+		if streamName != "" {
+			missing := rejections[rejectStreamMissing]
+			noInputs := rejections[rejectStreamNoInputs]
+			if missing > 0 || noInputs > 0 {
+				switch {
+				case missing > 0 && noInputs == 0:
+					return nil, fmt.Errorf("can't find origin for stream %q (not present on any active node)", streamName)
+				case noInputs > 0 && missing == 0:
+					return nil, fmt.Errorf("can't find origin for stream %q (no active inputs on any node)", streamName)
+				default:
+					return nil, fmt.Errorf("can't find origin for stream %q (missing or no inputs)", streamName)
+				}
+			}
+		}
+		if rejections[rejectBandwidthExhaust] > 0 && len(rejections) == 1 {
+			return nil, fmt.Errorf("all suitable nodes are out of bandwidth")
+		}
+		if rejections[rejectHostInvalid] > 0 && len(rejections) == 1 {
+			return nil, fmt.Errorf("node metrics not ready (missing ram_max/bw_limit)")
+		}
+		if rejections[rejectConfigStreams] > 0 && len(rejections) == 1 {
+			return nil, fmt.Errorf("stream %q not allowed by node configuration", streamName)
+		}
+		return nil, fmt.Errorf("no suitable nodes available")
 	}
 
 	// Sort by score (highest first)
@@ -291,12 +345,17 @@ func (lb *LoadBalancer) GetTopNodesWithScores(ctx context.Context, streamName st
 }
 
 func (lb *LoadBalancer) rateNode(snap state.EnhancedBalancerNodeSnapshot, streamName string, lat, lon float64, tagAdjust map[string]int, isSourceSelection bool) uint64 {
+	score, _ := lb.rateNodeWithReason(snap, streamName, lat, lon, tagAdjust, isSourceSelection)
+	return score
+}
+
+func (lb *LoadBalancer) rateNodeWithReason(snap state.EnhancedBalancerNodeSnapshot, streamName string, lat, lon float64, tagAdjust map[string]int, isSourceSelection bool) (uint64, nodeRejectionReason) {
 	// Check if host is valid
 	if snap.RAMMax == 0 || snap.BWLimit == 0 {
 		lb.logger.WithFields(logging.Fields{
 			"host": snap.Host, "ram_max": snap.RAMMax, "bw_limit": snap.BWLimit,
 		}).Warn("Host invalid")
-		return 0
+		return 0, rejectHostInvalid
 	}
 
 	// Check bandwidth limits using pre-computed available bandwidth
@@ -305,7 +364,7 @@ func (lb *LoadBalancer) rateNode(snap state.EnhancedBalancerNodeSnapshot, stream
 			"host": snap.Host, "up_speed": snap.UpSpeed, "add_bandwidth": snap.AddBandwidth,
 			"bw_limit": snap.BWLimit, "bw_available": snap.BWAvailable,
 		}).Info("Host over bandwidth")
-		return 0
+		return 0, rejectBandwidthExhaust
 	}
 
 	// Check stream exists, has inputs, not replicated
@@ -320,16 +379,19 @@ func (lb *LoadBalancer) rateNode(snap state.EnhancedBalancerNodeSnapshot, stream
 					}
 					return 0
 				}(),
-			}).Debug("Stream not suitable for source: missing or no inputs")
-			return 0
+			}).Info("Stream not suitable for source: missing or no inputs")
+			if !exists {
+				return 0, rejectStreamMissing
+			}
+			return 0, rejectStreamNoInputs
 		}
 
 		// If selecting a source (Mist pulling), prevent pulling from a replicated stream
 		if isSourceSelection && stream.Replicated {
 			lb.logger.WithFields(logging.Fields{
 				"stream": streamName, "host": snap.Host, "replicated": true,
-			}).Debug("Stream excluded: replicated node cannot serve as source")
-			return 0
+			}).Info("Stream excluded: replicated node cannot serve as source")
+			return 0, rejectStreamReplicated
 		}
 	}
 
@@ -345,8 +407,8 @@ func (lb *LoadBalancer) rateNode(snap state.EnhancedBalancerNodeSnapshot, stream
 		if !allowed {
 			lb.logger.WithFields(logging.Fields{
 				"stream": streamName, "host": snap.Host,
-			}).Debug("Stream not available from host")
-			return 0
+			}).Info("Stream not available from host")
+			return 0, rejectConfigStreams
 		}
 	}
 
@@ -393,9 +455,12 @@ func (lb *LoadBalancer) rateNode(snap state.EnhancedBalancerNodeSnapshot, stream
 		"host": snap.Host, "cpu_score": cpuScore, "ram_score": ramScore, "stream_bonus": streamBonus,
 		"bw_score": bwScore, "bw_max_mbps": uint64(snap.BWLimit) / 1024 / 1024, "geo_score": geoScore,
 		"tag_adjustment": adjustment, "final_score": score,
-	}).Debug("Host scoring details")
+	}).Info("Host scoring details")
 
-	return score
+	if score == 0 {
+		return 0, rejectAdjustedToZero
+	}
+	return score, ""
 }
 
 // geoDist implements EXACT C++ geoDist function

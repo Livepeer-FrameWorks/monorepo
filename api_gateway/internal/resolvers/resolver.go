@@ -126,6 +126,17 @@ func (r *Resolver) normalizeTimeRange(p TimeRangeParams) (start *time.Time, end 
 
 // DoResolveViewerEndpoint calls Commodore to resolve viewer endpoints (which then calls Foghorn)
 func (r *Resolver) DoResolveViewerEndpoint(ctx context.Context, contentType, contentID string, viewerIP *string) (*pb.ViewerEndpointResponse, error) {
+	// Diagnostic checks for panic root cause
+	if r == nil {
+		return nil, fmt.Errorf("CRITICAL: Resolver (r) is nil")
+	}
+	if r.Clients == nil {
+		return nil, fmt.Errorf("CRITICAL: Resolver.Clients is nil")
+	}
+	if r.Clients.Commodore == nil {
+		return nil, fmt.Errorf("CRITICAL: Resolver.Clients.Commodore is nil - ServiceClients initialization failed silently?")
+	}
+
 	if middleware.IsDemoMode(ctx) {
 		return demo.GenerateViewerEndpointResponse(contentType, contentID), nil
 	}
@@ -138,6 +149,32 @@ func (r *Resolver) DoResolveViewerEndpoint(ctx context.Context, contentType, con
 	resp, err := r.Clients.Commodore.ResolveViewerEndpoint(ctx, contentType, contentID, ip)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve viewer endpoints: %v", err)
+	}
+	return resp, nil
+}
+
+func (r *Resolver) DoResolveIngestEndpoint(ctx context.Context, streamKey string, viewerIP *string) (*pb.IngestEndpointResponse, error) {
+	if r == nil {
+		return nil, fmt.Errorf("CRITICAL: Resolver (r) is nil")
+	}
+	if r.Clients == nil {
+		return nil, fmt.Errorf("CRITICAL: Resolver.Clients is nil")
+	}
+	if r.Clients.Commodore == nil {
+		return nil, fmt.Errorf("CRITICAL: Resolver.Clients.Commodore is nil")
+	}
+
+	if middleware.IsDemoMode(ctx) {
+		return demo.GenerateIngestEndpointResponse(streamKey), nil
+	}
+
+	ip := ""
+	if viewerIP != nil {
+		ip = *viewerIP
+	}
+	resp, err := r.Clients.Commodore.ResolveIngestEndpoint(ctx, streamKey, ip)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve ingest endpoints: %v", err)
 	}
 	return resp, nil
 }

@@ -1,0 +1,33 @@
+# Hourly viewer hours aggregates (from viewer_hours_hourly MV)
+query GetViewerHoursHourly(
+  $stream: String
+  $timeRange: TimeRangeInput
+  $first: Int = 100
+  $after: String
+) {
+  viewerHoursHourlyConnection(
+    stream: $stream
+    timeRange: $timeRange
+    first: $first
+    after: $after
+  ) {
+    edges {
+      cursor
+      node {
+        id
+        hour
+        internalName
+        countryCode
+        uniqueViewers
+        totalSessionSeconds
+        totalBytes
+        viewerHours
+        egressGb
+      }
+    }
+    pageInfo {
+      ...PageInfoFields
+    }
+    totalCount
+  }
+}

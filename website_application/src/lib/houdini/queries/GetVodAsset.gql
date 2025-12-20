@@ -1,0 +1,21 @@
+query GetVodAsset($id: ID!) {
+  vodAsset(id: $id) {
+    id
+    artifactHash
+    title
+    description
+    filename
+    status
+    storageLocation
+    sizeBytes
+    durationMs
+    resolution
+    videoCodec
+    audioCodec
+    bitrateKbps
+    createdAt
+    updatedAt
+    expiresAt
+    errorMessage
+  }
+}

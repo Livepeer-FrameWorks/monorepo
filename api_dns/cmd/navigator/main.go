@@ -248,11 +248,11 @@ func (s *NavigatorServer) GetCertificate(ctx context.Context, req *pb.GetCertifi
 	if tenantID != "" {
 		log = log.WithField("tenant_id", tenantID)
 	}
-	log.Debug("Received GetCertificate request")
+	log.Info("Received GetCertificate request")
 
 	cert, err := s.CertManager.GetCertificate(ctx, tenantID, req.GetDomain())
 	if err != nil {
-		log.WithError(err).Debug("Certificate not found")
+		log.WithError(err).Info("Certificate not found")
 		return &pb.GetCertificateResponse{
 			Found: false,
 			Error: err.Error(),

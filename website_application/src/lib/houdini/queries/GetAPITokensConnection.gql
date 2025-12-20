@@ -1,3 +1,4 @@
+# Fetch paginated list of developer API tokens with permissions and usage timestamps
 query GetAPITokensConnection($first: Int = 50, $after: String) {
   developerTokensConnection(first: $first, after: $after) @paginate {
     edges {

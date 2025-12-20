@@ -1,16 +1,18 @@
 <script lang="ts">
   import { onMount, onDestroy, untrack } from "svelte";
+  import { get } from "svelte/store";
   import { goto } from "$app/navigation";
   import { resolve } from "$app/paths";
   import { auth } from "$lib/stores/auth";
   import {
+    fragment,
     GetStreamsConnectionStore,
-    GetCurrentStreamHealthStore,
     CreateStreamStore,
     DeleteStreamStore,
     StreamEventsStore,
-    StreamStatus,
-    StreamEventType
+    StreamCoreFieldsStore,
+    StreamMetricsFieldsStore,
+    PageInfoFieldsStore
   } from "$houdini";
   import type { StreamEvents$result } from "$houdini";
   import { toast } from "$lib/stores/toast.js";
@@ -38,6 +40,7 @@
   } from "$lib/components/ui/select";
   import { formatDuration } from "$lib/utils/formatters.js";
   import PlaybackProtocols from "$lib/components/PlaybackProtocols.svelte";
+  import EmptyState from "$lib/components/EmptyState.svelte";
 
   // Houdini stores
   const streamsConnectionStore = new GetStreamsConnectionStore();
@@ -45,23 +48,60 @@
   const deleteStreamMutation = new DeleteStreamStore();
   const streamEventsSub = new StreamEventsStore();
 
+  // Fragment stores for unmasking nested data
+  const streamCoreStore = new StreamCoreFieldsStore();
+  const metricsStore = new StreamMetricsFieldsStore();
+  const pageInfoStore = new PageInfoFieldsStore();
+
   // Types from Houdini
-  type StreamData = NonNullable<NonNullable<NonNullable<typeof $streamsConnectionStore.data>["streamsConnection"]>["edges"]>[0]["node"];
   type StreamEventData = NonNullable<StreamEvents$result["streamEvents"]>;
+  // StreamData type will be inferred from unmaskedStreams after unmasking
 
   let isAuthenticated = false;
 
   // Derived state from Houdini stores
   let streamsEdges = $derived($streamsConnectionStore.data?.streamsConnection?.edges ?? []);
-  let streams = $state<StreamData[]>([]);
+
+  // Get masked nodes from edges - guard against null nodes
+  let maskedNodes = $derived(
+    streamsEdges
+      .map(e => e.node)
+      .filter((node): node is NonNullable<typeof node> => node != null)
+  );
+
+  // Unmask streams with fragment() and get() pattern
+  // Fragment stores can return undefined during store transitions, so guard robustly
+  let unmaskedStreams = $derived(
+    maskedNodes
+      .map(node => {
+        try {
+          const core = get(fragment(node, streamCoreStore));
+          // Guard: must have core object with required fields
+          if (!core || typeof core !== 'object' || !core.id || !core.name) {
+            return null;
+          }
+          const metrics = node.metrics ? get(fragment(node.metrics, metricsStore)) : null;
+          return { ...core, metrics };
+        } catch {
+          // Fragment access can throw during store updates
+          return null;
+        }
+      })
+      .filter((s): s is NonNullable<typeof s> => s !== null)
+  );
+
+  // Local state for streams (can be updated by events)
+  let streams = $state<typeof unmaskedStreams>([]);
   let loading = $derived($streamsConnectionStore.fetching);
-  let hasMoreStreams = $derived($streamsConnectionStore.data?.streamsConnection?.pageInfo?.hasNextPage ?? false);
+  // Unmask pageInfo to access hasNextPage
+  let pageInfo = $derived.by(() => {
+    const masked = $streamsConnectionStore.data?.streamsConnection?.pageInfo;
+    return masked ? get(fragment(masked, pageInfoStore)) : null;
+  });
+  let hasMoreStreams = $derived(pageInfo?.hasNextPage ?? false);
   let totalStreamCount = $derived($streamsConnectionStore.data?.streamsConnection?.totalCount ?? 0);
 
   let loadingMoreStreams = $state(false);
-
-  // Stream health data for all streams
-  let streamHealthData = $state(new Map());
 
   // Search/filter
   let searchQuery = $state("");
@@ -77,14 +117,15 @@
   // Stream deletion
   let deletingStreamId = $state("");
   let showDeleteModal = $state(false);
-  let streamToDelete = $state<StreamData | null>(null);
+  let streamToDelete = $state<(typeof unmaskedStreams)[number] | null>(null);
 
   // Expanded row tracking
   let expandedStreamId = $state<string | null>(null);
 
   // Filtered streams
   let filteredStreams = $derived.by(() => {
-    let result = streams;
+    // Filter out any streams with missing required fields
+    let result = streams.filter(s => s && s.id && s.name);
 
     // Filter by search query
     if (searchQuery.trim()) {
@@ -106,20 +147,20 @@
     return result;
   });
 
-  // Stats
-  let liveStreamCount = $derived(streams.filter(s => s.metrics?.isLive).length);
+  // Stats - guard against undefined entries
+  let liveStreamCount = $derived(streams.filter(s => s?.metrics?.isLive).length);
   let offlineStreamCount = $derived(streams.length - liveStreamCount);
-  let totalViewers = $derived(streams.reduce((acc, s) => acc + (s.metrics?.currentViewers || 0), 0));
+  let totalViewers = $derived(streams.reduce((acc, s) => acc + (s?.metrics?.currentViewers || 0), 0));
 
   // Subscribe to auth store
   auth.subscribe((authState) => {
     isAuthenticated = authState.isAuthenticated;
   });
 
-  // Effect to sync derived streams edges to local state
+  // Effect to sync unmasked streams to local state
   $effect(() => {
-    if (streamsEdges.length > 0) {
-      streams = streamsEdges.map(e => e.node);
+    if (unmaskedStreams.length > 0) {
+      streams = unmaskedStreams;
     }
   });
 
@@ -156,29 +197,51 @@
   });
 
   function handleStreamEvent(event: StreamEventData) {
-    // Find and update the stream in our list
-    const streamIndex = streams.findIndex(s => s.name === event.stream || s.id === event.stream);
+    // Extract stream name from the appropriate payload
+    const streamName = event.lifecycleUpdate?.internalName || event.endEvent?.streamName;
+    if (!streamName) return;
+
+    // Find and update the stream in our list (safely handle potentially undefined fields)
+    const streamIndex = streams.findIndex(s => s?.name === streamName || s?.id === streamName);
 
     if (streamIndex >= 0) {
       // Update stream status based on event
       const updatedStream = { ...streams[streamIndex] };
 
-      if (event.status && updatedStream.metrics) {
-        updatedStream.metrics = {
-          ...updatedStream.metrics,
-          status: event.status as typeof updatedStream.metrics.status,
-          isLive: event.status === "LIVE",
-        };
-      } else if (event.status) {
-        // Initialize metrics if missing
-        updatedStream.metrics = {
-          status: event.status,
-          isLive: event.status === "LIVE",
-          currentViewers: 0,
-          peakViewers: 0,
-          totalViews: 0,
-          duration: 0,
-        } as typeof updatedStream.metrics;
+      // Handle lifecycle update (stream going live/offline)
+      if (event.lifecycleUpdate) {
+        const isLive = event.lifecycleUpdate.status === "live";
+        const status = isLive ? "LIVE" : "OFFLINE";
+
+        if (updatedStream.metrics) {
+          updatedStream.metrics = {
+            ...updatedStream.metrics,
+            status: status as typeof updatedStream.metrics.status,
+            isLive,
+            currentViewers: event.lifecycleUpdate.totalViewers ?? updatedStream.metrics.currentViewers,
+          };
+        } else {
+          // Initialize metrics when missing
+          updatedStream.metrics = {
+            status,
+            isLive,
+            currentViewers: event.lifecycleUpdate.totalViewers ?? 0,
+            peakViewers: 0,
+            totalViews: 0,
+            duration: 0,
+          } as NonNullable<typeof updatedStream.metrics>;
+        }
+      }
+
+      // Handle stream end event
+      if (event.endEvent) {
+        if (updatedStream.metrics) {
+          updatedStream.metrics = {
+            ...updatedStream.metrics,
+            status: "OFFLINE" as typeof updatedStream.metrics.status,
+            isLive: false,
+          };
+        }
       }
 
       streams = [
@@ -188,10 +251,15 @@
       ];
 
       // Show toast for significant events
-      if (event.type === StreamEventType.STREAM_START || event.status === StreamStatus.LIVE) {
-        toast.success(`Stream "${event.stream}" is now live!`);
-      } else if (event.type === StreamEventType.STREAM_END || event.status === StreamStatus.OFFLINE) {
-        toast.info(`Stream "${event.stream}" went offline`);
+      const isStreamLive = event.eventType === "EVENT_TYPE_STREAM_LIFECYCLE_UPDATE" &&
+                           event.lifecycleUpdate?.status === "live";
+      const isStreamEnd = event.eventType === "EVENT_TYPE_STREAM_END" ||
+                          (event.lifecycleUpdate?.status === "offline");
+
+      if (isStreamLive) {
+        toast.success(`Stream "${streamName}" is now live!`);
+      } else if (isStreamEnd) {
+        toast.info(`Stream "${streamName}" went offline`);
       }
     }
   }
@@ -202,9 +270,6 @@
         variables: { first: 50 },
         policy: "NetworkOnly",
       });
-
-      // Load health data for all streams
-      await loadStreamsHealthData();
     } catch (error) {
       console.error("Failed to load streams:", error);
     }
@@ -216,38 +281,11 @@
     try {
       loadingMoreStreams = true;
       await streamsConnectionStore.loadNextPage();
-
-      // Load health data for new streams
-      await loadStreamsHealthData();
     } catch (error) {
       console.error("Failed to load more streams:", error);
     } finally {
       loadingMoreStreams = false;
     }
-  }
-
-  // Load health data for all streams
-  async function loadStreamsHealthData() {
-    const healthPromises = streams.map(async (stream) => {
-      try {
-        const healthStore = new GetCurrentStreamHealthStore();
-        // Use stream.id (internal UUID) for analytics queries - this is the canonical identifier
-        const result = await healthStore.fetch({ variables: { stream: stream.id } });
-        const health = result.data?.currentStreamHealth;
-        if (health) {
-          streamHealthData.set(stream.id, health);
-        }
-      } catch (error) {
-        console.warn(
-          `Failed to load health data for stream ${stream.id}:`,
-          error,
-        );
-      }
-    });
-
-    await Promise.allSettled(healthPromises);
-    // Trigger reactive update
-    streamHealthData = streamHealthData;
   }
 
   // Create new stream
@@ -268,9 +306,12 @@
       });
 
       const createResult = result.data?.createStream;
-      if (createResult?.__typename === "Stream") {
-        // Add new stream to list
-        const newStream = createResult as StreamData;
+      // Houdini types unions with error types only in the discriminator, so check for non-error
+      const isError = createResult?.__typename === "ValidationError" ||
+                      createResult?.__typename === "AuthError";
+      if (createResult && !isError) {
+        // Add new stream to list (cast through unknown since mutation result has union type)
+        const newStream = createResult as unknown as (typeof unmaskedStreams)[number];
         streams = [...streams, newStream];
 
         // Close modal and reset form
@@ -356,11 +397,11 @@
   
   // Navigate to watch page
   function watchStream(streamId: string) {
-    goto(resolve(`/view?type=live&id=${streamId}`));
+    goto(`/view?type=live&id=${streamId}`);
   }
 
   // Show delete confirmation
-  function confirmDeleteStream(stream: StreamData) {
+  function confirmDeleteStream(stream: (typeof unmaskedStreams)[number]) {
     streamToDelete = stream;
     showDeleteModal = true;
   }
@@ -548,36 +589,30 @@
           </div>
           <div class="slab-body--flush">
             {#if filteredStreams.length === 0}
-              <div class="flex flex-col items-center justify-center py-16 m-4 border-2 border-dashed border-border/50 rounded-lg bg-muted/5">
-                <div class="w-16 h-16 rounded-full bg-muted/30 flex items-center justify-center mb-6">
-                  <VideoIcon class="w-8 h-8 text-muted-foreground" />
-                </div>
-                <h3 class="text-xl font-semibold mb-3">No streams found</h3>
-                <p class="text-muted-foreground mb-8 max-w-sm text-lg text-center">
-                  {#if searchQuery || statusFilter !== "all"}
-                    Try adjusting your search query or changing the status filters.
-                  {:else}
-                    Create your first stream to get started with broadcasting.
-                  {/if}
-                </p>
-                {#if searchQuery || statusFilter !== "all"}
-                  <Button
-                    variant="outline"
-                    size="lg"
-                    onclick={() => {
+              {#if searchQuery || statusFilter !== "all"}
+                <div class="p-8">
+                  <EmptyState
+                    iconName="Video"
+                    title="No streams found"
+                    description="Try adjusting your search query or changing the status filters."
+                    actionText="Clear Filters"
+                    onAction={() => {
                       searchQuery = "";
                       statusFilter = "all";
                     }}
-                  >
-                    Clear Filters
-                  </Button>
-                {:else}
-                  <Button variant="default" onclick={() => (showCreateModal = true)}>
-                    <PlusIcon class="w-4 h-4 mr-2" />
-                    Create Stream
-                  </Button>
-                {/if}
-              </div>
+                  />
+                </div>
+              {:else}
+                <div class="p-8">
+                  <EmptyState
+                    iconName="Video"
+                    title="No streams found"
+                    description="Create your first stream to get started with broadcasting."
+                    actionText="Create Stream"
+                    onAction={() => (showCreateModal = true)}
+                  />
+                </div>
+              {/if}
             {:else}
               <div class="overflow-x-auto">
                 <Table class="w-full">
@@ -635,7 +670,7 @@
                               disabled={!stream.metrics?.isLive}
                               onclick={(e) => {
                                 e.stopPropagation();
-                                watchStream(stream.id);
+                                watchStream(stream.playbackId);
                               }}
                             >
                               <PlayIcon class="w-3.5 h-3.5" />
@@ -698,22 +733,20 @@
                         </TableCell>
 
                         <TableCell class="px-4 py-2">
-                           {#if stream.metrics?.isLive || streamHealthData.get(stream.id)}
-                            {@const health = streamHealthData.get(stream.id)}
-                            {@const metrics = stream.metrics}
+                           {#if stream.metrics?.isLive}
                             <div class="flex flex-col gap-0.5">
                               <div class="flex items-center gap-1.5">
                                 <BufferStateIndicator
-                                  bufferState={health?.bufferState || metrics?.bufferState || undefined}
+                                  bufferState={stream.metrics?.bufferState || undefined}
                                   compact
                                 />
                                 <span class="text-xs font-medium capitalize text-foreground">
-                                  {(health?.bufferState || metrics?.bufferState || "unknown").toLowerCase()}
+                                  {(stream.metrics?.bufferState || "unknown").toLowerCase()}
                                 </span>
                               </div>
-                              {#if metrics?.qualityTier || health?.qualityTier}
+                              {#if stream.metrics?.qualityTier}
                                 <span class="text-[10px] px-1 py-0 bg-accent/10 text-accent border border-accent/20 rounded-sm w-fit">
-                                  {metrics?.qualityTier || health?.qualityTier}
+                                  {stream.metrics.qualityTier}
                                 </span>
                               {/if}
                             </div>
@@ -723,7 +756,7 @@
                         </TableCell>
 
                         <TableCell class="px-4 py-2 text-sm text-foreground">
-                          {stream.metrics?.currentViewers || stream.viewers || 0}
+                          {stream.metrics?.currentViewers || 0}
                         </TableCell>
                         
                         <TableCell class="px-4 py-2 text-sm text-foreground">
@@ -738,8 +771,8 @@
                       <!-- Expanded Share Row -->
                       {#if expandedStreamId === stream.id}
                         <TableRow class="bg-muted/5 hover:bg-muted/5 border-t-0">
-                          <TableCell colspan={6} class="px-4 py-4 cursor-default">
-                            <div class="pl-4 border-l-2 border-primary/20" onclick={(e) => e.stopPropagation()}>
+                          <TableCell colspan={6} class="px-4 py-4 cursor-default" onclick={(e) => e.stopPropagation()}>
+                            <div class="pl-4 border-l-2 border-primary/20">
                               <PlaybackProtocols
                                 contentId={stream.id}
                                 contentType="live"

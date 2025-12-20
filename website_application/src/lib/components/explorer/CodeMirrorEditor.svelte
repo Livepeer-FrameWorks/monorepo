@@ -218,13 +218,19 @@
 <style>
   .codemirror-container {
     width: 100%;
+    height: 100%;
     overflow: hidden;
   }
 
   .codemirror-container :global(.cm-editor) {
     height: 100%;
+    max-height: 100%;
     border: none;
     outline: none;
+  }
+
+  .codemirror-container :global(.cm-scroller) {
+    overflow: auto !important;
   }
 
   .codemirror-container :global(.cm-editor.cm-focused) {

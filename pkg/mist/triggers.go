@@ -15,18 +15,21 @@ import (
 type TriggerType string
 
 const (
-	TriggerPushRewrite   TriggerType = "PUSH_REWRITE"
-	TriggerPlayRewrite   TriggerType = "PLAY_REWRITE"
-	TriggerStreamSource  TriggerType = "STREAM_SOURCE"
-	TriggerPushOutStart  TriggerType = "PUSH_OUT_START"
-	TriggerPushEnd       TriggerType = "PUSH_END"
-	TriggerStreamBuffer  TriggerType = "STREAM_BUFFER"
-	TriggerStreamEnd     TriggerType = "STREAM_END"
-	TriggerUserNew       TriggerType = "USER_NEW"
-	TriggerUserEnd       TriggerType = "USER_END"
-	TriggerLiveTrackList TriggerType = "LIVE_TRACK_LIST"
-	TriggerLiveBandwidth TriggerType = "LIVE_BANDWIDTH"
-	TriggerRecordingEnd  TriggerType = "RECORDING_END"
+	TriggerPushRewrite      TriggerType = "PUSH_REWRITE"
+	TriggerPlayRewrite      TriggerType = "PLAY_REWRITE"
+	TriggerStreamSource     TriggerType = "STREAM_SOURCE"
+	TriggerPushOutStart     TriggerType = "PUSH_OUT_START"
+	TriggerPushEnd          TriggerType = "PUSH_END"
+	TriggerStreamBuffer     TriggerType = "STREAM_BUFFER"
+	TriggerStreamEnd        TriggerType = "STREAM_END"
+	TriggerUserNew          TriggerType = "USER_NEW"
+	TriggerUserEnd          TriggerType = "USER_END"
+	TriggerLiveTrackList    TriggerType = "LIVE_TRACK_LIST"
+	TriggerRecordingEnd     TriggerType = "RECORDING_END"
+	TriggerRecordingSegment TriggerType = "RECORDING_SEGMENT"
+	// Processing billing triggers (from MistProcLivepeer and MistProcAV)
+	TriggerLivepeerSegmentComplete  TriggerType = "LIVEPEER_SEGMENT_COMPLETE"
+	TriggerProcessAVSegmentComplete TriggerType = "PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE"
 	// Polled-from-Helmsman trigger types.
 	TriggerStreamLifecycle TriggerType = "STREAM_LIFECYCLE_UPDATE"
 	TriggerClientLifecycle TriggerType = "CLIENT_LIFECYCLE_UPDATE"
@@ -36,7 +39,10 @@ const (
 // ParseTriggerToProtobuf parses raw MistServer trigger payload and returns a protobuf MistTrigger
 func ParseTriggerToProtobuf(triggerType TriggerType, rawPayload []byte, nodeID string, logger logging.Logger) (*pb.MistTrigger, error) {
 	// Parse parameters from newline-separated format
+	// Handle both \n and \r\n line endings
 	payloadStr := strings.TrimSpace(string(rawPayload))
+	payloadStr = strings.ReplaceAll(payloadStr, "\r\n", "\n")
+	payloadStr = strings.ReplaceAll(payloadStr, "\r", "\n")
 	params := []string{}
 	if payloadStr != "" {
 		params = strings.Split(payloadStr, "\n")
@@ -266,20 +272,6 @@ func ParseTriggerToProtobuf(triggerType TriggerType, rawPayload []byte, nodeID s
 			TrackList: trigger,
 		}
 
-	case TriggerLiveBandwidth:
-		if len(params) < 2 {
-			return nil, fmt.Errorf("LIVE_BANDWIDTH requires 2 parameters, got %d", len(params))
-		}
-		trigger := &pb.StreamBandwidthTrigger{
-			StreamName: params[0],
-		}
-		if currentBytesPerSecond, err := strconv.ParseInt(params[1], 10, 64); err == nil {
-			trigger.CurrentBytesPerSecond = currentBytesPerSecond
-		}
-		mistTrigger.TriggerPayload = &pb.MistTrigger_StreamBandwidth{
-			StreamBandwidth: trigger,
-		}
-
 	case TriggerRecordingEnd:
 		if len(params) < 8 {
 			return nil, fmt.Errorf("RECORDING_END requires at least 8 parameters, got %d", len(params))
@@ -309,6 +301,29 @@ func ParseTriggerToProtobuf(triggerType TriggerType, rawPayload []byte, nodeID s
 		}
 		mistTrigger.TriggerPayload = &pb.MistTrigger_RecordingComplete{
 			RecordingComplete: trigger,
+		}
+
+	case TriggerRecordingSegment:
+		if len(params) < 5 {
+			return nil, fmt.Errorf("RECORDING_SEGMENT requires 5 parameters, got %d", len(params))
+		}
+		trigger := &pb.RecordingSegmentTrigger{
+			StreamName: params[0],
+			FilePath:   params[1],
+		}
+
+		if duration, err := strconv.ParseInt(params[2], 10, 64); err == nil {
+			trigger.DurationMs = duration
+		}
+		if start, err := strconv.ParseInt(params[3], 10, 64); err == nil {
+			trigger.TimeStarted = start
+		}
+		if end, err := strconv.ParseInt(params[4], 10, 64); err == nil {
+			trigger.TimeEnded = end
+		}
+
+		mistTrigger.TriggerPayload = &pb.MistTrigger_RecordingSegment{
+			RecordingSegment: trigger,
 		}
 
 	case TriggerStreamLifecycle:

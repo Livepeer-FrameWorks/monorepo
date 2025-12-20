@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"fmt"
 
 	"frameworks/api_gateway/graph"
 	"frameworks/api_gateway/graph/generated"
@@ -21,12 +22,14 @@ import (
 	"frameworks/pkg/server"
 	"frameworks/pkg/version"
 
+	"github.com/99designs/gqlgen/graphql"
 	"github.com/99designs/gqlgen/graphql/handler"
 	"github.com/99designs/gqlgen/graphql/handler/extension"
 	"github.com/99designs/gqlgen/graphql/handler/transport"
 	"github.com/99designs/gqlgen/graphql/playground"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"github.com/vektah/gqlparser/v2/ast"
 )
 
 func main() {
@@ -85,6 +88,22 @@ func main() {
 	if complexityLimit > 0 {
 		gqlHandler.Use(extension.FixedComplexityLimit(complexityLimit))
 		logger.WithField("limit", complexityLimit).Info("GraphQL complexity limit enabled")
+	}
+
+	// Add query depth limit to prevent deeply nested queries
+	maxDepth := config.GetEnvInt("GRAPHQL_MAX_DEPTH", 10)
+	if maxDepth > 0 {
+		gqlHandler.AroundOperations(func(ctx context.Context, next graphql.OperationHandler) graphql.ResponseHandler {
+			opCtx := graphql.GetOperationContext(ctx)
+			depth := calculateQueryDepth(opCtx.Doc.Operations)
+			if depth > maxDepth {
+				return func(ctx context.Context) *graphql.Response {
+					return graphql.ErrorResponse(ctx, "query exceeds maximum depth of %d (got %d)", maxDepth, depth)
+				}
+			}
+			return next(ctx)
+		})
+		logger.WithField("max_depth", maxDepth).Info("GraphQL depth limit enabled")
 	}
 
 	// Add transport options
@@ -196,8 +215,11 @@ func main() {
 	// Token validator for API tokens (calls Commodore)
 	tokenValidator := func(token string) (*middleware.UserContext, error) {
 		resp, err := serviceClients.Commodore.ValidateAPIToken(context.Background(), token)
-		if err != nil || !resp.Valid {
+		if err != nil {
 			return nil, err
+		}
+		if resp == nil || !resp.Valid {
+			return nil, fmt.Errorf("invalid API token")
 		}
 		return &middleware.UserContext{
 			UserID:   resp.UserId,
@@ -247,6 +269,7 @@ func main() {
 		port, _ := strconv.Atoi(serverConfig.Port)
 		healthEndpoint := "/health"
 		advertiseHost := config.GetEnv("BRIDGE_HOST", "bridge")
+		clusterID := config.GetEnv("CLUSTER_ID", "")
 		if _, err := serviceClients.Quartermaster.BootstrapService(ctx, &pb.BootstrapServiceRequest{
 			Type:           "gateway",
 			Version:        version.Version,
@@ -254,6 +277,7 @@ func main() {
 			HealthEndpoint: &healthEndpoint,
 			Port:           int32(port),
 			AdvertiseHost:  &advertiseHost,
+			ClusterId:      func() *string { if clusterID != "" { return &clusterID }; return nil }(),
 		}); err != nil {
 			logger.WithError(err).Warn("Quartermaster bootstrap (gateway) failed")
 		} else {
@@ -270,4 +294,40 @@ func main() {
 	if err := resolver.Shutdown(); err != nil {
 		logger.Error("Error shutting down resolver: " + err.Error())
 	}
+}
+
+// calculateQueryDepth walks the GraphQL AST and returns the maximum selection depth.
+// Depth is counted from field selections (not from operation root).
+func calculateQueryDepth(operations ast.OperationList) int {
+	maxDepth := 0
+	for _, op := range operations {
+		if d := selectionSetDepth(op.SelectionSet); d > maxDepth {
+			maxDepth = d
+		}
+	}
+	return maxDepth
+}
+
+func selectionSetDepth(set ast.SelectionSet) int {
+	maxDepth := 0
+	for _, sel := range set {
+		var childDepth int
+		switch s := sel.(type) {
+		case *ast.Field:
+			if s.SelectionSet != nil {
+				childDepth = 1 + selectionSetDepth(s.SelectionSet)
+			} else {
+				childDepth = 1
+			}
+		case *ast.InlineFragment:
+			childDepth = selectionSetDepth(s.SelectionSet)
+		case *ast.FragmentSpread:
+			// Fragment spreads are resolved during execution; count as 0 additional depth
+			childDepth = 0
+		}
+		if childDepth > maxDepth {
+			maxDepth = childDepth
+		}
+	}
+	return maxDepth
 }

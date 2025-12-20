@@ -1,0 +1,42 @@
+# Get stream metadata from MistServer
+# Returns buffer/timing info and track details
+query GetStreamMeta(
+  $streamKey: String!
+  $targetBaseUrl: String
+  $targetNodeId: String
+  $includeRaw: Boolean
+) {
+  streamMeta(
+    streamKey: $streamKey
+    targetBaseUrl: $targetBaseUrl
+    targetNodeId: $targetNodeId
+    includeRaw: $includeRaw
+  ) {
+    metaSummary {
+      isLive
+      bufferWindowMs
+      jitterMs
+      unixOffsetMs
+      nowMs
+      lastMs
+      width
+      height
+      version
+      type
+      tracks {
+        id
+        type
+        codec
+        channels
+        rate
+        width
+        height
+        bitrateBps
+        nowMs
+        lastMs
+        firstMs
+      }
+    }
+    raw
+  }
+}

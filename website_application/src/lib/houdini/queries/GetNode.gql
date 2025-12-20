@@ -1,3 +1,4 @@
+# Fetch detailed node information by ID including hardware specs and network configuration
 query GetNode($id: ID!) {
   node(id: $id) {
     id
@@ -17,5 +18,20 @@ query GetNode($id: ID!) {
     createdAt
     latitude
     longitude
+    # Real-time state from live_nodes (ClickHouse ReplacingMergeTree)
+    liveState {
+      nodeId
+      cpuPercent
+      ramUsedBytes
+      ramTotalBytes
+      diskUsedBytes
+      diskTotalBytes
+      upSpeed
+      downSpeed
+      activeStreams
+      isHealthy
+      location
+      updatedAt
+    }
   }
 }

@@ -1,11 +1,25 @@
-query GetStreamKeys($streamId: ID!) {
-  streamKeys(streamId: $streamId) @list(name: "StreamKeys") {
-    id
-    streamId
-    keyValue
-    keyName
-    isActive
-    lastUsedAt
-    createdAt
+# Fetch paginated list of stream keys for a specific stream
+# Returns active/inactive keys with usage timestamps for credential management
+query GetStreamKeys($streamId: ID!, $first: Int = 50, $after: String) {
+  streamKeysConnection(streamId: $streamId, first: $first, after: $after) {
+    edges {
+      cursor
+      node {
+        id
+        streamId
+        keyValue
+        keyName
+        isActive
+        lastUsedAt
+        createdAt
+      }
+    }
+    pageInfo {
+      hasNextPage
+      hasPreviousPage
+      startCursor
+      endCursor
+    }
+    totalCount
   }
 }

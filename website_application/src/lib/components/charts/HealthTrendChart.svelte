@@ -32,6 +32,7 @@
     timestamp: string;
     bufferHealth?: number | null;
     bitrate?: number | null;
+    packetLoss?: number | null;  // 0.0-1.0 ratio
   }
 
   interface Props {
@@ -39,6 +40,7 @@
     height?: number;
     showBufferHealth?: boolean;
     showBitrate?: boolean;
+    showPacketLoss?: boolean;
   }
 
   let {
@@ -46,6 +48,7 @@
     height = 300,
     showBufferHealth = true,
     showBitrate = true,
+    showPacketLoss = false,
   }: Props = $props();
 
   let canvas: HTMLCanvasElement;
@@ -91,7 +94,7 @@
       datasets.push({
         label: "Bitrate (Mbps)",
         data: sortedData.map((d) =>
-          d.bitrate != null ? d.bitrate / 1000000 : null
+          d.bitrate != null ? d.bitrate / 1000 : null  // bitrate stored in kbps
         ),
         borderColor: "rgb(59, 130, 246)", // blue
         backgroundColor: "transparent",
@@ -101,6 +104,23 @@
         pointHoverRadius: 4,
         borderWidth: 1.5,
         yAxisID: "y1",
+      });
+    }
+
+    if (showPacketLoss) {
+      datasets.push({
+        label: "Packet Loss (%)",
+        data: sortedData.map((d) =>
+          d.packetLoss != null ? d.packetLoss * 100 : null  // 0-1 → 0-100%
+        ),
+        borderColor: "rgb(239, 68, 68)", // red
+        backgroundColor: "transparent",
+        fill: false,
+        tension: 0.4,
+        pointRadius: 2,
+        pointHoverRadius: 5,
+        borderWidth: 2,
+        yAxisID: "y2",
       });
     }
 
@@ -147,6 +167,8 @@
                   return `${label}: ${value.toFixed(0)}%`;
                 } else if (label.includes("Bitrate")) {
                   return `${label}: ${value.toFixed(2)} Mbps`;
+                } else if (label.includes("Packet Loss")) {
+                  return `${label}: ${value.toFixed(2)}%`;
                 }
                 return `${label}: ${value}`;
               },
@@ -218,6 +240,28 @@
               display: true,
               text: "Bitrate (Mbps)",
               color: "rgb(148, 163, 184)",
+            },
+          },
+          y2: {
+            type: "linear",
+            display: showPacketLoss,
+            position: "right",
+            min: 0,
+            max: 5,  // 0-5% scale (packet loss rarely exceeds this)
+            grid: {
+              drawOnChartArea: false,
+            },
+            ticks: {
+              color: "rgb(239, 68, 68)",
+              callback: (value) => `${value}%`,
+            },
+            border: {
+              display: false,
+            },
+            title: {
+              display: true,
+              text: "Packet Loss %",
+              color: "rgb(239, 68, 68)",
             },
           },
         },

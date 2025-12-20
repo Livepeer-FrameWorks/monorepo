@@ -1,3 +1,4 @@
+# Create a new developer API token for programmatic access
 mutation CreateAPIToken($input: CreateDeveloperTokenInput!) {
   createDeveloperToken(input: $input) {
     __typename
@@ -10,7 +11,6 @@ mutation CreateAPIToken($input: CreateDeveloperTokenInput!) {
       expiresAt
       lastUsedAt
       createdAt
-      ...AllAPITokens_insert @prepend
     }
     ... on ValidationError {
       ...ValidationErrorFields @mask_disable

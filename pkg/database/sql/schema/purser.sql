@@ -268,7 +268,7 @@ INSERT INTO purser.billing_tiers (tier_name, display_name, description, base_pri
 '{"limit": 0, "unit": "gpu_hours", "unit_price": 0}',
 '{"recording": false, "analytics": true, "api_access": true, "support_level": "community"}',
 'community', 'none', false,
-'{"bandwidth": {"limit": null, "unit": "delivered_minutes", "unit_price": 0}, "storage": {"limit": null, "unit": "gb", "unit_price": 0}, "compute": {"limit": null, "unit": "gpu_hours", "unit_price": 0}}',
+'{"bandwidth": {"limit": null, "unit": "delivered_minutes", "unit_price": 0}, "storage": {"limit": null, "unit": "gb", "unit_price": 0}, "compute": {"limit": null, "unit": "gpu_hours", "unit_price": 0}, "processing": {"h264_rate_per_min": 0, "codec_multipliers": {"h264": 1.0, "hevc": 1.5, "vp9": 1.5, "av1": 2.0, "aac": 0.0, "opus": 0.0, "mp3": 0.0}}}',
 1, false),
 
 -- Supporter Tier (€79/mo)
@@ -278,7 +278,7 @@ INSERT INTO purser.billing_tiers (tier_name, display_name, description, base_pri
 '{"limit": 10, "unit": "gpu_hours", "unit_price": 0.50}',
 '{"recording": true, "analytics": true, "api_access": true, "support_level": "basic"}',
 'basic', 'none', true,
-'{"bandwidth": {"limit": null, "unit": "delivered_minutes", "unit_price": 0.00049}, "storage": {"limit": null, "unit": "gb", "unit_price": 0.01}, "compute": {"limit": null, "unit": "gpu_hours", "unit_price": 0.50}}',
+'{"bandwidth": {"limit": null, "unit": "delivered_minutes", "unit_price": 0.00049}, "storage": {"limit": null, "unit": "gb", "unit_price": 0.01}, "compute": {"limit": null, "unit": "gpu_hours", "unit_price": 0.50}, "processing": {"h264_rate_per_min": 0.00049, "codec_multipliers": {"h264": 1.0, "hevc": 1.5, "vp9": 1.5, "av1": 2.0, "aac": 0.0, "opus": 0.0, "mp3": 0.0}}}',
 2, false),
 
 -- Developer Tier (€249/mo)
@@ -288,7 +288,7 @@ INSERT INTO purser.billing_tiers (tier_name, display_name, description, base_pri
 '{"limit": 50, "unit": "gpu_hours", "unit_price": 0.50}',
 '{"recording": true, "analytics": true, "api_access": true, "support_level": "priority"}',
 'priority', 'standard', true,
-'{"bandwidth": {"limit": null, "unit": "delivered_minutes", "unit_price": 0.00047}, "storage": {"limit": null, "unit": "gb", "unit_price": 0.008}, "compute": {"limit": null, "unit": "gpu_hours", "unit_price": 0.50}}',
+'{"bandwidth": {"limit": null, "unit": "delivered_minutes", "unit_price": 0.00047}, "storage": {"limit": null, "unit": "gb", "unit_price": 0.008}, "compute": {"limit": null, "unit": "gpu_hours", "unit_price": 0.50}, "processing": {"h264_rate_per_min": 0.00047, "codec_multipliers": {"h264": 1.0, "hevc": 1.5, "vp9": 1.5, "av1": 2.0, "aac": 0.0, "opus": 0.0, "mp3": 0.0}}}',
 3, false),
 
 -- Production Tier (€999/mo)
@@ -298,7 +298,7 @@ INSERT INTO purser.billing_tiers (tier_name, display_name, description, base_pri
 '{"limit": 250, "unit": "gpu_hours", "unit_price": 0.50}',
 '{"recording": true, "analytics": true, "api_access": true, "custom_branding": true, "sla": true, "support_level": "enterprise"}',
 'enterprise', 'premium', true,
-'{"bandwidth": {"limit": null, "unit": "delivered_minutes", "unit_price": 0.00045}, "storage": {"limit": null, "unit": "gb", "unit_price": 0.005}, "compute": {"limit": null, "unit": "gpu_hours", "unit_price": 0.50}}',
+'{"bandwidth": {"limit": null, "unit": "delivered_minutes", "unit_price": 0.00045}, "storage": {"limit": null, "unit": "gb", "unit_price": 0.005}, "compute": {"limit": null, "unit": "gpu_hours", "unit_price": 0.50}, "processing": {"h264_rate_per_min": 0.00045, "codec_multipliers": {"h264": 1.0, "hevc": 1.5, "vp9": 1.5, "av1": 2.0, "aac": 0.0, "opus": 0.0, "mp3": 0.0}}}',
 4, false),
 
 -- Enterprise Tier (custom pricing)
@@ -308,7 +308,7 @@ INSERT INTO purser.billing_tiers (tier_name, display_name, description, base_pri
 '{"limit": null, "unit": "gpu_hours", "unit_price": 0}',
 '{"recording": true, "analytics": true, "api_access": true, "custom_branding": true, "sla": true, "support_level": "dedicated"}',
 'dedicated', 'custom', true,
-'{"bandwidth": {"limit": null, "unit": "delivered_minutes", "unit_price": 0}, "storage": {"limit": null, "unit": "gb", "unit_price": 0}, "compute": {"limit": null, "unit": "gpu_hours", "unit_price": 0}}',
+'{"bandwidth": {"limit": null, "unit": "delivered_minutes", "unit_price": 0}, "storage": {"limit": null, "unit": "gb", "unit_price": 0}, "compute": {"limit": null, "unit": "gpu_hours", "unit_price": 0}, "processing": {"h264_rate_per_min": 0, "codec_multipliers": {"h264": 1.0, "hevc": 1.5, "vp9": 1.5, "av1": 2.0, "aac": 0.0, "opus": 0.0, "mp3": 0.0}}}',
 5, true)
 
 ON CONFLICT (tier_name) DO UPDATE SET
@@ -339,3 +339,58 @@ CREATE INDEX IF NOT EXISTS idx_purser_tenant_subscriptions_tenant ON purser.tena
 CREATE INDEX IF NOT EXISTS idx_purser_tenant_subscriptions_tier ON purser.tenant_subscriptions(tier_id);
 CREATE INDEX IF NOT EXISTS idx_purser_tenant_subscriptions_status ON purser.tenant_subscriptions(status);
 CREATE INDEX IF NOT EXISTS idx_purser_tenant_subscriptions_billing_date ON purser.tenant_subscriptions(next_billing_date);
+
+-- ============================================================================
+-- CLUSTER MARKETPLACE PRICING
+-- ============================================================================
+-- Per-cluster pricing configuration for marketplace clusters
+-- Supports independent pricing models, Stripe integration, and tier requirements
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS purser.cluster_pricing (
+    -- ===== IDENTITY =====
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    cluster_id VARCHAR(100) NOT NULL UNIQUE,
+
+    -- ===== PRICING MODEL =====
+    -- Determines how this cluster bills subscribers:
+    --   'free_unmetered'  - No charge, quota enforcement only
+    --   'metered'         - Usage-based billing (bandwidth/minutes/storage)
+    --   'monthly'         - Fixed monthly subscription fee
+    --   'tier_inherit'    - Inherits pricing from subscriber's billing tier (default)
+    --   'custom'          - Per-agreement enterprise pricing
+    pricing_model VARCHAR(20) NOT NULL DEFAULT 'tier_inherit',
+
+    -- ===== STRIPE INTEGRATION =====
+    stripe_product_id VARCHAR(255),        -- Stripe Product ID for this cluster
+    stripe_price_id_monthly VARCHAR(255),  -- Stripe Price ID for monthly model
+    stripe_meter_id VARCHAR(255),          -- Stripe Billing Meter ID for metered model
+
+    -- ===== BASE PRICING (for 'monthly' model) =====
+    base_price DECIMAL(10,2) DEFAULT 0.00,
+    currency VARCHAR(3) DEFAULT 'EUR',
+
+    -- ===== METERED RATES (override tenant tier rates) =====
+    -- Format: {"delivered_minutes": 0.0005, "storage_gb": 0.01, "egress_gb": 0.02}
+    metered_rates JSONB DEFAULT '{}',
+
+    -- ===== VISIBILITY & ACCESS RULES =====
+    -- Minimum tier level required to see/subscribe to this cluster
+    -- 0=free, 1=supporter, 2=developer, 3=production, 4=enterprise
+    required_tier_level INT DEFAULT 0,
+    is_platform_official BOOLEAN DEFAULT FALSE,  -- Platform-operated cluster
+    allow_free_tier BOOLEAN DEFAULT FALSE,       -- If platform_official, allow free tier access
+
+    -- ===== DEFAULT QUOTAS (for free_unmetered or as caps) =====
+    -- Format: {"max_streams": 2, "max_viewers": 50, "max_bandwidth_mbps": 100, "retention_days": 7}
+    default_quotas JSONB DEFAULT '{}',
+
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW(),
+
+    CONSTRAINT chk_cluster_pricing_model CHECK (pricing_model IN ('free_unmetered', 'metered', 'monthly', 'tier_inherit', 'custom'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_purser_cluster_pricing_model ON purser.cluster_pricing(pricing_model);
+CREATE INDEX IF NOT EXISTS idx_purser_cluster_pricing_platform ON purser.cluster_pricing(is_platform_official);
+CREATE INDEX IF NOT EXISTS idx_purser_cluster_pricing_tier_level ON purser.cluster_pricing(required_tier_level);

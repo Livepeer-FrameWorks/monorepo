@@ -1,19 +1,25 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
+  import { get } from "svelte/store";
   import { goto } from "$app/navigation";
+  import { resolve } from "$app/paths";
   import { auth } from "$lib/stores/auth";
   import {
-    GetStreamsStore,
+    fragment,
+    GetStreamsConnectionStore,
     GetClipsConnectionStore,
     CreateClipStore,
+    DeleteClipStore,
     ClipLifecycleStore,
-    ClipCreationMode
+    ClipCreationMode,
+    StreamCoreFieldsStore
   } from "$houdini";
   import type { ClipLifecycle$result } from "$houdini";
   import { toast } from "$lib/stores/toast.js";
   import { Button } from "$lib/components/ui/button";
   import { GridSeam } from "$lib/components/layout";
   import DashboardMetricCard from "$lib/components/shared/DashboardMetricCard.svelte";
+  import DeleteClipModal from "$lib/components/clips/DeleteClipModal.svelte";
   import {
     Dialog,
     DialogContent,
@@ -40,17 +46,22 @@
   } from "$lib/components/ui/table";
   import { getIconComponent } from "$lib/iconUtils";
   import { getContentDeliveryUrls } from "$lib/config";
-  import { formatBytes } from "$lib/utils/formatters.js";
+  import { formatBytes, formatExpiry } from "$lib/utils/formatters.js";
   import PlaybackProtocols from "$lib/components/PlaybackProtocols.svelte";
+  import EmptyState from "$lib/components/EmptyState.svelte";
 
   // Houdini stores
-  const streamsStore = new GetStreamsStore();
+  const streamsStore = new GetStreamsConnectionStore();
   const clipsConnectionStore = new GetClipsConnectionStore();
   const createClipMutation = new CreateClipStore();
+  const deleteClipMutation = new DeleteClipStore();
   const clipLifecycleSub = new ClipLifecycleStore();
 
+  // Fragment stores for unmasking
+  const streamCoreStore = new StreamCoreFieldsStore();
+
   // Types from Houdini
-  type StreamData = NonNullable<NonNullable<typeof $streamsStore.data>["streams"]>[0];
+  type StreamData = NonNullable<NonNullable<NonNullable<typeof $streamsStore.data>["streamsConnection"]>["edges"]>[0]["node"];
   type ClipData = NonNullable<NonNullable<NonNullable<typeof $clipsConnectionStore.data>["clipsConnection"]>["edges"]>[0]["node"];
   type ClipLifecycleEvent = NonNullable<ClipLifecycle$result["clipLifecycle"]>;
 
@@ -69,7 +80,11 @@
 
   // Derived state from Houdini stores
   let loading = $derived($streamsStore.fetching || $clipsConnectionStore.fetching);
-  let streams = $derived($streamsStore.data?.streams ?? []);
+  let maskedStreams = $derived($streamsStore.data?.streamsConnection?.edges?.map(e => e.node) ?? []);
+  // Unmask stream core fields to access id/name properties
+  let streams = $derived(
+    maskedStreams.map(node => get(fragment(node, streamCoreStore)))
+  );
   let clipsEdges = $derived($clipsConnectionStore.data?.clipsConnection?.edges ?? []);
   let clips = $derived(clipsEdges.map(e => e.node));
   let hasMoreClips = $derived($clipsConnectionStore.data?.clipsConnection?.pageInfo?.hasNextPage ?? false);
@@ -97,6 +112,11 @@
   let duration = $state(60);  // Default 60 seconds for Clip Now
   let startTime = $state(0);
   let endTime = $state(300); // 5 minutes default for Absolute mode
+
+  // Clip deletion
+  let deletingClipId = $state("");
+  let showDeleteModal = $state(false);
+  let clipToDelete = $state<ClipData | null>(null);
 
   // Track active stream for clip lifecycle subscription
   let activeClipStream = $state<string | null>(null);
@@ -314,13 +334,16 @@
 
       // Check for errors in the union type response using __typename
       const createResult = result.data?.createClip;
-      if (createResult?.__typename === "Clip") {
+      // Houdini types unions with error types only in the discriminator, so check for non-error
+      const isError = createResult?.__typename === "ValidationError" ||
+                      createResult?.__typename === "NotFoundError" ||
+                      createResult?.__typename === "AuthError";
+      if (createResult && !isError) {
         // Success - Houdini's @list directive will auto-update the list
         const modeLabel = clipMode === 'CLIP_NOW' ? ' (from live)' : '';
         toast.success(`Clip created successfully${modeLabel}!`);
       } else if (createResult) {
         // Error response - access message from the error types
-        // Houdini types error variants with a "non-exhaustive" pattern, so we cast
         const errorResult = createResult as unknown as { message?: string };
         toast.error(errorResult.message || "Failed to create clip");
       }
@@ -344,6 +367,42 @@
     duration = 60;
     startTime = 0;
     endTime = 300;
+  }
+
+  // Delete clip
+  async function deleteClip() {
+    if (!clipToDelete) return;
+    const idToDelete = clipToDelete.id;
+
+    try {
+      deletingClipId = idToDelete;
+      const result = await deleteClipMutation.mutate({ id: idToDelete });
+
+      const deleteResult = result.data?.deleteClip;
+      if (deleteResult?.__typename === "DeleteSuccess") {
+        // Refresh list to remove clip
+        clipsConnectionStore.fetch({ policy: "NetworkOnly", variables: { first: 50 } });
+
+        // Close modal
+        showDeleteModal = false;
+        clipToDelete = null;
+
+        toast.success("Clip deleted successfully!");
+      } else if (deleteResult) {
+        const errorResult = deleteResult as unknown as { message?: string };
+        toast.error(errorResult.message || "Failed to delete clip");
+      }
+    } catch (error) {
+      console.error("Failed to delete clip:", error);
+      toast.error("Failed to delete clip. Please try again.");
+    } finally {
+      deletingClipId = "";
+    }
+  }
+
+  function confirmDeleteClip(clip: ClipData) {
+    clipToDelete = clip;
+    showDeleteModal = true;
   }
 
   function formatDurationSeconds(seconds: number) {
@@ -371,6 +430,8 @@
         return "text-warning bg-warning/10 border-warning/20";
       case "failed":
         return "text-destructive bg-destructive/10 border-destructive/20";
+      case "deleted":
+        return "text-muted-foreground bg-muted border-border opacity-70";
       default:
         return "text-muted-foreground bg-muted border-border";
     }
@@ -378,7 +439,32 @@
 
   function isClipReady(status: string | null | undefined): boolean {
     const s = status?.toLowerCase();
-    return s === "available" || s === "completed" || s === "ready";
+    // Status may be null when lifecycle data isn't populated from Periscope
+    // Consider ready if status indicates completion or if status is not set (assume ready)
+    return s === "available" || s === "completed" || s === "ready" || s === undefined || s === null || s === "";
+  }
+
+  function isClipProcessing(status: string | null | undefined): boolean {
+    const s = status?.toLowerCase();
+    return s === "processing" || s === "requested" || s === "queued";
+  }
+
+  function isClipFailed(status: string | null | undefined): boolean {
+    const s = status?.toLowerCase();
+    return s === "failed" || s === "error";
+  }
+
+  function isClipDeleted(status: string | null | undefined): boolean {
+    return status?.toLowerCase() === "deleted";
+  }
+
+  // Check if clip can be played - has hash and isn't actively processing or failed
+  function canPlayClip(clip: ClipData): boolean {
+    if (!clip.clipHash) return false;
+    if (isClipFailed(clip.status)) return false;
+    if (isClipProcessing(clip.status)) return false;
+    if (isClipDeleted(clip.status)) return false;
+    return true; // Has hash and not in a bad state
   }
 
   // Icons
@@ -394,6 +480,7 @@
   const FilterIcon = getIconComponent("Filter");
   const SearchIcon = getIconComponent("Search");
   const ChevronUpIcon = getIconComponent("ChevronUp");
+  const SnowflakeIcon = getIconComponent("Snowflake");
 </script>
 
 <svelte:head>
@@ -578,27 +665,31 @@
             </div>
             <div class="slab-body--flush">
               {#if filteredClips.length === 0}
-                <div class="flex flex-col items-center justify-center py-16 m-4 border-2 border-dashed border-border/50 rounded-lg bg-muted/5">
-                  <div class="w-16 h-16 rounded-full bg-muted/30 flex items-center justify-center mb-6">
-                    <ScissorsIcon class="w-8 h-8 text-muted-foreground" />
-                  </div>
-                  <h3 class="text-xl font-semibold mb-3">No clips found</h3>
-                  <p class="text-muted-foreground mb-8 max-w-sm text-lg text-center">
-                    {#if searchQuery}
-                      Try adjusting your search query.
-                    {:else}
-                      Create your first clip from a stream to get started
-                    {/if}
-                  </p>
-                  {#if streams.length > 0}
-                    <Button variant="default" onclick={() => (showCreateModal = true)}>
-                      <PlusIcon class="w-4 h-4 mr-2" />
-                      Create Your First Clip
-                    </Button>
+                <div class="p-8">
+                  {#if searchQuery}
+                    <EmptyState
+                      iconName="Scissors"
+                      title="No clips found"
+                      description="Try adjusting your search query."
+                      actionText="Clear Search"
+                      onAction={() => (searchQuery = "")}
+                    />
+                  {:else if streams.length > 0}
+                    <EmptyState
+                      iconName="Scissors"
+                      title="No clips yet"
+                      description="Create your first clip from a stream to get started."
+                      actionText="Create Clip"
+                      onAction={() => (showCreateModal = true)}
+                    />
                   {:else}
-                    <p class="text-muted-foreground text-sm mt-2">
-                      You need at least one stream to create clips
-                    </p>
+                    <EmptyState
+                      iconName="Scissors"
+                      title="No clips yet"
+                      description="You need at least one stream to create clips."
+                      actionText="Create Stream"
+                      onAction={() => goto(resolve("/streams"))}
+                    />
                   {/if}
                 </div>
               {:else}
@@ -629,13 +720,17 @@
                         <TableHead class="px-4 py-2 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
                           Created
                         </TableHead>
+                        <TableHead class="px-4 py-2 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                          Expires
+                        </TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody class="divide-y divide-border">
                       {#each filteredClips as clip (clip.id)}
+                        {@const isDeleted = isClipDeleted(clip.status)}
                         <TableRow
-                          class="hover:bg-muted/50 transition-colors cursor-pointer group"
-                          onclick={() => isClipReady(clip.status) && playClip(clip.clipHash || "")}
+                          class="transition-colors group {isDeleted ? 'opacity-60 bg-muted/30 cursor-not-allowed' : 'hover:bg-muted/50 cursor-pointer'}"
+                          onclick={() => !isDeleted && canPlayClip(clip) && playClip(clip.clipHash || "")}
                         >
                           <!-- Actions Column (Left, Horizontal) -->
                           <TableCell
@@ -643,7 +738,9 @@
                             onclick={(e) => e.stopPropagation()}
                           >
                             <div class="flex items-center gap-1">
-                              {#if isClipReady(clip.status) && clip.clipHash}
+                              {#if isDeleted}
+                                <span class="text-[10px] text-muted-foreground px-2 italic">Deleted</span>
+                              {:else if canPlayClip(clip)}
                                 {@const urls = getContentDeliveryUrls(clip.clipHash, "clip")}
                                 
                                 <Button
@@ -674,8 +771,8 @@
                                   variant="ghost"
                                   size="sm"
                                   class="h-7 w-7 p-0 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity focus:opacity-100"
-                                  title="Delete Clip (Not implemented)"
-                                  disabled
+                                  title="Delete Clip"
+                                  onclick={() => confirmDeleteClip(clip)}
                                 >
                                   <Trash2Icon class="w-3.5 h-3.5" />
                                 </Button>
@@ -708,9 +805,26 @@
                             </div>
                           </TableCell>
                           <TableCell class="px-4 py-2">
-                            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border {getStatusColor(clip.status)}">
-                              {clip.status || "Unknown"}
-                            </span>
+                            <div class="flex flex-col gap-1.5 min-w-[120px]">
+                              <div class="flex items-center gap-2">
+                                <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border {getStatusColor(clip.status)}">
+                                  {clip.status || "Unknown"}
+                                </span>
+                              </div>
+                              
+                              {#if (clip.status === "Processing" || clip.status === "processing" || clip.status === "requested" || clipProgress[clip.id]) && !isClipReady(clip.status) && clip.status !== 'failed'}
+                                {@const progress = clipProgress[clip.id]?.percent ?? 0}
+                                <div class="w-full bg-muted rounded-full h-1.5 overflow-hidden">
+                                  <div 
+                                    class="bg-primary h-full transition-all duration-300 ease-out" 
+                                    style="width: {progress}%"
+                                  ></div>
+                                </div>
+                                {#if progress > 0}
+                                  <span class="text-[10px] text-muted-foreground">{progress}%</span>
+                                {/if}
+                              {/if}
+                            </div>
                           </TableCell>
                           <TableCell class="px-4 py-2 text-sm text-foreground">
                             {clip.duration ? formatDurationSeconds(clip.duration) : "N/A"}
@@ -721,13 +835,16 @@
                           <TableCell class="px-4 py-2 text-sm text-foreground">
                             {clip.createdAt ? formatDate(clip.createdAt) : "N/A"}
                           </TableCell>
+                          <TableCell class="px-4 py-2 text-sm text-foreground">
+                            {formatExpiry(clip.expiresAt)}
+                          </TableCell>
                         </TableRow>
 
                         <!-- Expanded Share Row -->
                         {#if expandedClip === clip.id && isClipReady(clip.status) && clip.clipHash}
                           <TableRow class="bg-muted/5 border-t-0">
-                            <TableCell colspan={7} class="px-4 py-4 cursor-default">
-                              <div class="pl-4 border-l-2 border-primary/20" onclick={(e) => e.stopPropagation()}>
+                            <TableCell colspan={8} class="px-4 py-4 cursor-default" onclick={(e) => e.stopPropagation()}>
+                              <div class="pl-4 border-l-2 border-primary/20">
                                 <PlaybackProtocols
                                   contentId={clip.clipHash}
                                   contentType="clip"
@@ -766,6 +883,17 @@
     {/if}
   </div>
 </div>
+
+<DeleteClipModal
+  open={showDeleteModal && !!clipToDelete}
+  clip={clipToDelete}
+  deleting={!!deletingClipId}
+  onConfirm={deleteClip}
+  onCancel={() => {
+    showDeleteModal = false;
+    clipToDelete = null;
+  }}
+/>
 
 <!-- Create Clip Modal -->
 <Dialog

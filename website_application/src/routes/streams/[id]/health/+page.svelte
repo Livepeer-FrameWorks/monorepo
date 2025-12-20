@@ -4,17 +4,16 @@
   import { goto } from "$app/navigation";
   import { resolve } from "$app/paths";
   import {
+    fragment,
     GetStreamStore,
-    GetCurrentStreamHealthStore,
-    GetStreamHealthMetricsStore,
-    GetTrackListEventsStore,
-    GetRebufferingEventsStore,
+    GetStreamHealthStore,
     TrackListUpdatesStore,
-    GetClientMetrics5mStore,
-    GetStreamAnalyticsStore,
+    StreamCoreFieldsStore,
+    StreamMetricsFieldsStore,
   } from "$houdini";
   import type { TrackListUpdates$result } from "$houdini";
   import { toast } from "$lib/stores/toast.js";
+  import { streamMetrics as realtimeStreamMetrics } from "$lib/stores/realtime";
   import BufferStateIndicator from "$lib/components/health/BufferStateIndicator.svelte";
   import HealthTrendChart from "$lib/components/charts/HealthTrendChart.svelte";
   import BufferHealthHistogram from "$lib/components/charts/BufferHealthHistogram.svelte";
@@ -25,56 +24,78 @@
 
   // Houdini stores
   const streamStore = new GetStreamStore();
-  const currentHealthStore = new GetCurrentStreamHealthStore();
-  const healthMetricsStore = new GetStreamHealthMetricsStore();
-  const trackListEventsStore = new GetTrackListEventsStore();
-  const rebufferingEventsStore = new GetRebufferingEventsStore();
+  const healthStore = new GetStreamHealthStore();
   const trackListSub = new TrackListUpdatesStore();
-  const clientMetricsStore = new GetClientMetrics5mStore();
-  const analyticsStore = new GetStreamAnalyticsStore();
 
-  // Types from Houdini
+  // Fragment stores for unmasking nested data
+  const streamCoreStore = new StreamCoreFieldsStore();
+  const streamMetricsStore = new StreamMetricsFieldsStore();
+
+  // Types from Houdini - derive from the new healthStore
   type StreamType = NonNullable<NonNullable<typeof $streamStore.data>["stream"]>;
-  type HealthMetricType = NonNullable<NonNullable<typeof $currentHealthStore.data>["currentStreamHealth"]>;
-  type TrackListEventType = NonNullable<NonNullable<NonNullable<typeof $trackListEventsStore.data>["trackListEventsConnection"]>["edges"]>[0]["node"];
-  type RebufferingEventType = NonNullable<NonNullable<NonNullable<typeof $rebufferingEventsStore.data>["rebufferingEvents"]>[0]>;
-  type ClientMetric5mType = NonNullable<NonNullable<NonNullable<typeof $clientMetricsStore.data>["clientMetrics5mConnection"]>["edges"]>[0]["node"];
+  type HealthMetricType = NonNullable<NonNullable<NonNullable<NonNullable<typeof $healthStore.data>["stream"]>["healthConnection"]>["edges"]>[0]["node"];
+  type TrackListEventType = NonNullable<NonNullable<NonNullable<NonNullable<typeof $healthStore.data>["stream"]>["trackListConnection"]>["edges"]>[0]["node"];
+  type RebufferingEventType = NonNullable<NonNullable<NonNullable<NonNullable<typeof $healthStore.data>["stream"]>["rebufferingEventsConnection"]>["edges"]>[0]["node"];
+  type ClientMetric5mType = NonNullable<NonNullable<NonNullable<NonNullable<typeof $healthStore.data>["stream"]>["clientMetricsConnection"]>["edges"]>[0]["node"];
 
   // page is a store; derive the current param value so it updates on navigation
   let streamId = $derived(page?.params?.id as string ?? "");
 
-  // Derived state from Houdini stores
-  let stream = $derived($streamStore.data?.stream ?? null);
-  let currentHealth = $derived($currentHealthStore.data?.currentStreamHealth ?? null);
-  let streamAnalytics = $derived($analyticsStore.data?.streamAnalytics ?? null);
-  let healthMetrics = $derived(
-    $healthMetricsStore.data?.streamHealthMetricsConnection?.edges
-      ?.map(e => e?.node)
-      .filter((n): n is HealthMetricType => n !== null && n !== undefined) ?? []
+  // Get masked stream data from store
+  let maskedStream = $derived($streamStore.data?.stream ?? null);
+
+  // Unmask StreamCoreFields
+  let streamCoreStoreResult = $derived(
+    maskedStream ? fragment(maskedStream, streamCoreStore) : null
   );
-  
+  let streamCore = $derived(streamCoreStoreResult ? $streamCoreStoreResult : null);
+
+  // Unmask StreamMetricsFields
+  let streamMetricsStoreResult = $derived(
+    maskedStream?.metrics ? fragment(maskedStream.metrics, streamMetricsStore) : null
+  );
+  let streamMetrics = $derived(streamMetricsStoreResult ? $streamMetricsStoreResult : null);
+
+  // Combine unmasked data into stream object
+  let stream = $derived(
+    streamCore
+      ? {
+          ...streamCore,
+          metrics: streamMetrics,
+        }
+      : null
+  );
+  let currentHealth = $derived($healthStore.data?.stream?.currentHealth ?? null);
+  // Real-time metrics from STREAM_BUFFER subscription
+  let realtimeMetrics = $derived(stream?.id ? $realtimeStreamMetrics[stream.id] : null);
+  let streamAnalytics = $derived($healthStore.data?.stream?.analytics ?? null);
+  let healthMetrics = $derived(
+    ($healthStore.data?.stream?.healthConnection?.edges ?? [])
+      .map((e: { node: HealthMetricType }) => e?.node)
+      .filter((n: HealthMetricType | null | undefined): n is HealthMetricType => n !== null && n !== undefined)
+  );
+
   // Extract buffer health values for histogram (convert 0-1 ratio to 0-100 percentage)
   let bufferHealthValues = $derived(
     healthMetrics
-      .map(m => m.bufferHealth)
-      .filter(val => val !== null && val !== undefined)
-      .map(val => (val as number) * 100)
+      .map((m: HealthMetricType) => m.bufferHealth)
+      .filter((val: number | null | undefined) => val !== null && val !== undefined)
+      .map((val: number | null | undefined) => (val as number) * 100)
   );
 
   // Client metrics (viewer/connection quality)
   let clientMetrics = $derived(
-    $clientMetricsStore.data?.clientMetrics5mConnection?.edges
-      ?.map(e => e?.node)
-      .filter((n): n is ClientMetric5mType => n !== null && n !== undefined) ?? []
+    ($healthStore.data?.stream?.clientMetricsConnection?.edges ?? [])
+      .map((e: { node: ClientMetric5mType }) => e?.node)
+      .filter((n: ClientMetric5mType | null | undefined): n is ClientMetric5mType => n !== null && n !== undefined)
   );
 
   // Computed client quality stats
   let clientQualityStats = $derived(() => {
     if (clientMetrics.length === 0) return null;
 
-    const validPacketLoss = clientMetrics.filter(m => m.packetLossRate !== null && m.packetLossRate !== undefined);
-    const validQuality = clientMetrics.filter(m => m.avgConnectionQuality !== null && m.avgConnectionQuality !== undefined);
-    const validSessions = clientMetrics.filter(m => m.activeSessions !== null && m.activeSessions !== undefined);
+    const validPacketLoss = clientMetrics.filter((m: ClientMetric5mType) => m.packetLossRate !== null && m.packetLossRate !== undefined);
+    const validSessions = clientMetrics.filter((m: ClientMetric5mType) => m.activeSessions !== null && m.activeSessions !== undefined);
 
     return {
       avgPacketLoss: validPacketLoss.length > 0
@@ -82,9 +103,6 @@
         : null,
       peakPacketLoss: validPacketLoss.length > 0
         ? Math.max(...validPacketLoss.map(m => m.packetLossRate ?? 0))
-        : null,
-      avgConnectionQuality: validQuality.length > 0
-        ? validQuality.reduce((sum, m) => sum + (m.avgConnectionQuality ?? 0), 0) / validQuality.length
         : null,
       totalSessions: validSessions.length > 0
         ? validSessions.reduce((sum, m) => sum + (m.activeSessions ?? 0), 0)
@@ -95,20 +113,17 @@
 
   // Per-node breakdown from client metrics
   let nodeBreakdown = $derived(() => {
-    const nodeMap = new Map<string, { sessions: number; packetLoss: number[]; quality: number[] }>();
+    const nodeMap = new Map<string, { sessions: number; packetLoss: number[] }>();
 
     for (const metric of clientMetrics) {
       const nodeId = metric.nodeId ?? 'unknown';
       if (!nodeMap.has(nodeId)) {
-        nodeMap.set(nodeId, { sessions: 0, packetLoss: [], quality: [] });
+        nodeMap.set(nodeId, { sessions: 0, packetLoss: [] });
       }
       const node = nodeMap.get(nodeId)!;
       node.sessions += metric.activeSessions ?? 0;
       if (metric.packetLossRate !== null && metric.packetLossRate !== undefined) {
         node.packetLoss.push(metric.packetLossRate);
-      }
-      if (metric.avgConnectionQuality !== null && metric.avgConnectionQuality !== undefined) {
-        node.quality.push(metric.avgConnectionQuality);
       }
     }
 
@@ -125,8 +140,8 @@
   });
 
   let trackListEvents = $state<TrackListEventType[]>([]);
-  let rebufferingEvents = $derived($rebufferingEventsStore.data?.rebufferingEvents ?? []);
-  let loading = $derived($streamStore.fetching || $currentHealthStore.fetching);
+  let rebufferingEvents = $derived($healthStore.data?.stream?.rebufferingEventsConnection?.edges?.map(e => e.node) ?? []);
+  let loading = $derived($streamStore.fetching || $healthStore.fetching);
   let error = $state<string | null>(null);
 
   // Pagination state
@@ -139,10 +154,10 @@
 
   // Check if there are more pages to load from server
   let healthMetricsHasNextPage = $derived(
-    $healthMetricsStore.data?.streamHealthMetricsConnection?.pageInfo?.hasNextPage ?? false
+    $healthStore.data?.stream?.healthConnection?.pageInfo?.hasNextPage ?? false
   );
   let trackListEventsHasNextPage = $derived(
-    $trackListEventsStore.data?.trackListEventsConnection?.pageInfo?.hasNextPage ?? false
+    $healthStore.data?.stream?.trackListConnection?.pageInfo?.hasNextPage ?? false
   );
 
   // Time range for historical data (last 24 hours)
@@ -175,14 +190,14 @@
   // IMPORTANT: The length check must be INSIDE untrack() to avoid creating a reactive dependency
   // on trackListEvents, which would cause an effect loop
   $effect(() => {
-    const edges = $trackListEventsStore.data?.trackListEventsConnection?.edges;
+    const edges = $healthStore.data?.stream?.trackListConnection?.edges;
     if (edges) {
       untrack(() => {
         // Only sync if we haven't populated yet (check inside untrack to avoid dependency)
         if (trackListEvents.length === 0) {
           trackListEvents = edges
-            .map(e => e?.node)
-            .filter((n): n is TrackListEventType => n !== null && n !== undefined);
+            .map((e: { node: TrackListEventType }) => e?.node)
+            .filter((n: TrackListEventType | null | undefined): n is TrackListEventType => n !== null && n !== undefined);
         }
       });
     }
@@ -199,10 +214,9 @@
     // Set up auto-refresh every 30 seconds for current health
     refreshInterval = setInterval(async () => {
       try {
-        // Use stream.id (internal UUID) for analytics queries - this is the canonical identifier
-        const streamUUID = $streamStore.data?.stream?.id;
-        if (streamUUID) {
-          await currentHealthStore.fetch({ variables: { stream: streamUUID } });
+        // Use streamId (route param) which is the same as the internal UUID
+        if (streamId) {
+          await healthStore.fetch({ variables: { id: streamId, timeRange: getTimeRange(), metricsFirst: 100 } });
         }
       } catch (err) {
         console.error("Failed to refresh health data:", err);
@@ -218,10 +232,9 @@
   });
 
   function startTrackListSubscription() {
-    const streamData = $streamStore.data?.stream;
-    if (!streamData) return;
+    if (!stream) return;
     // Use stream.id (internal UUID) for subscriptions - this is the canonical identifier
-    trackListSub.listen({ stream: streamData.id });
+    trackListSub.listen({ stream: stream.id });
   }
 
 
@@ -259,26 +272,15 @@
   async function loadHealthData() {
     if (!streamId) return;
     try {
-      const streamIdParam = $streamStore.data?.stream?.id;
-      if (!streamIdParam) return;
-
-      // Load all health data in parallel
-      await Promise.all([
-        currentHealthStore.fetch({ variables: { stream: streamIdParam } }),
-        healthMetricsStore.fetch({
-          variables: { stream: streamIdParam, first: 100, timeRange: getTimeRange(), noCache: true },
-        }),
-        trackListEventsStore.fetch({
-          variables: { stream: streamIdParam, first: 100, timeRange: getTimeRange(), noCache: true },
-        }),
-        rebufferingEventsStore.fetch({ variables: { stream: streamIdParam, timeRange: getTimeRange() } }),
-        clientMetricsStore.fetch({
-          variables: { stream: streamIdParam, first: 288, timeRange: getTimeRange() }, // 288 = 24h at 5min intervals
-        }),
-        analyticsStore.fetch({
-          variables: { stream: streamIdParam, timeRange: getTimeRange() },
-        }),
-      ]);
+      // Use streamId (route param) which is the same as the internal UUID
+      // Load all health data in a single query via Stream edges
+      await healthStore.fetch({
+        variables: {
+          id: streamId,
+          timeRange: getTimeRange(),
+          metricsFirst: 100, // Combined for both health and client metrics
+        },
+      });
     } catch (err: any) {
       // Ignore AbortErrors which happen on navigation/cancellation
       if (err.name === 'AbortError' || err.message === 'aborted' || err.message === 'Aborted') {
@@ -337,55 +339,26 @@
   }
 
   async function loadMoreHealthMetrics() {
-    // First, show more from already loaded data
+    // Show more from already loaded data
     if (healthMetrics.length > healthMetricsDisplayCount) {
       healthMetricsDisplayCount = Math.min(healthMetricsDisplayCount + 10, healthMetrics.length);
-      return;
-    }
-    // If we've shown all loaded data and there's more on server, fetch next page
-    if (healthMetricsHasNextPage) {
-      loadingMoreHealthMetrics = true;
-      try {
-        await healthMetricsStore.loadNextPage();
-        healthMetricsDisplayCount += 10;
-      } catch (err) {
-        console.error("Failed to load more health metrics:", err);
-      } finally {
-        loadingMoreHealthMetrics = false;
-      }
     }
   }
 
   async function loadMoreTrackListEvents() {
-    // First, show more from already loaded data
+    // Show more from already loaded data
     if (trackListEvents.length > trackListDisplayCount) {
       trackListDisplayCount = Math.min(trackListDisplayCount + 10, trackListEvents.length);
-      return;
-    }
-    // If we've shown all loaded data and there's more on server, fetch next page
-    if (trackListEventsHasNextPage) {
-      loadingMoreTrackListEvents = true;
-      try {
-        await trackListEventsStore.loadNextPage();
-        // After loading more, sync from store
-        const edges = $trackListEventsStore.data?.trackListEventsConnection?.edges;
-        if (edges) {
-          trackListEvents = edges
-            .map(e => e?.node)
-            .filter((n): n is TrackListEventType => n !== null && n !== undefined);
-        }
-        trackListDisplayCount += 10;
-      } catch (err) {
-        console.error("Failed to load more track list events:", err);
-      } finally {
-        loadingMoreTrackListEvents = false;
-      }
     }
   }
 
   const ArrowLeftIcon = getIconComponent("ArrowLeft");
   const AlertTriangleIcon = getIconComponent("AlertTriangle");
   const PauseIcon = getIconComponent("Pause");
+  const InfoIcon = getIconComponent("Info");
+
+  // Protocol hint tooltip text for packet loss N/A values
+  const packetLossHint = "Packet statistics are available for UDP-based protocols (SRT, WebRTC) which prioritize low latency. HTTP-based protocols (HLS, DASH) use TCP which guarantees delivery but adds latency through retransmission.";
 </script>
 
 <svelte:head>
@@ -459,7 +432,7 @@
                 <div class="flex justify-between border-b border-border/30 pb-2">
                   <span class="text-muted-foreground">Bitrate</span>
                   <span class="font-mono text-success">
-                    {currentHealth.bitrate ? `${(currentHealth.bitrate / 1000000).toFixed(2)} Mbps` : 'N/A'}
+                    {currentHealth.bitrate ? `${(currentHealth.bitrate / 1000).toFixed(2)} Mbps` : 'N/A'}
                   </span>
                 </div>
                 <div class="flex justify-between">
@@ -518,10 +491,55 @@
               {#if currentHealth.bitrate}
                 <div class="p-4">
                   <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Bitrate</p>
-                  <p class="font-mono text-lg text-primary">{(currentHealth.bitrate / 1000000).toFixed(2)} Mbps</p>
+                  <p class="font-mono text-lg text-primary">{(currentHealth.bitrate / 1000).toFixed(2)} Mbps</p>
                 </div>
               {/if}
             </GridSeam>
+          </div>
+        {/if}
+
+        <!-- Real-time Metrics (from STREAM_BUFFER subscription) -->
+        {#if realtimeMetrics && (realtimeMetrics.streamJitterMs !== undefined || realtimeMetrics.streamBufferMs !== undefined || realtimeMetrics.maxKeepawaMs !== undefined)}
+          <div class="slab border-t-0">
+            <div class="slab-header flex items-center gap-2">
+              <h3>Real-time Metrics</h3>
+              <span class="px-2 py-0.5 bg-success/20 text-success text-xs rounded-full">LIVE</span>
+            </div>
+            <GridSeam cols={4} stack="2x2" surface="panel" flush={true}>
+              {#if realtimeMetrics.streamBufferMs !== undefined && realtimeMetrics.streamBufferMs !== null}
+                <div class="p-4">
+                  <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Buffer Depth</p>
+                  <p class="font-mono text-lg text-info">{realtimeMetrics.streamBufferMs}ms</p>
+                </div>
+              {/if}
+              {#if realtimeMetrics.streamJitterMs !== undefined && realtimeMetrics.streamJitterMs !== null}
+                <div class="p-4">
+                  <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Jitter</p>
+                  <p class="font-mono text-lg {realtimeMetrics.streamJitterMs > 100 ? 'text-destructive' : realtimeMetrics.streamJitterMs > 50 ? 'text-warning' : 'text-success'}">
+                    {realtimeMetrics.streamJitterMs}ms
+                  </p>
+                </div>
+              {/if}
+              {#if realtimeMetrics.maxKeepawaMs !== undefined && realtimeMetrics.maxKeepawaMs !== null}
+                <div class="p-4">
+                  <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Viewer Lag</p>
+                  <p class="font-mono text-lg text-muted-foreground">{realtimeMetrics.maxKeepawaMs}ms</p>
+                </div>
+              {/if}
+              {#if realtimeMetrics.trackCount !== undefined && realtimeMetrics.trackCount !== null}
+                <div class="p-4">
+                  <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Active Tracks</p>
+                  <p class="font-mono text-lg text-primary">{realtimeMetrics.trackCount}</p>
+                </div>
+              {/if}
+            </GridSeam>
+            {#if realtimeMetrics.hasIssues && realtimeMetrics.mistIssues}
+              <div class="p-4 bg-warning/10 border-t border-warning/30">
+                <p class="text-sm text-warning">
+                  <span class="font-medium">Issues detected:</span> {realtimeMetrics.mistIssues}
+                </p>
+              </div>
+            {/if}
           </div>
         {/if}
 
@@ -625,10 +643,15 @@
             </div>
             <div class="p-4">
               <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Packet Loss Rate</p>
-              <p class="font-mono text-lg {(streamAnalytics.packetLossRate ?? 0) > 0.01 ? 'text-warning' : 'text-success'}">
+              <p class="font-mono text-lg {(streamAnalytics.packetLossRate ?? 0) > 0.01 ? 'text-warning' : 'text-success'} flex items-center gap-1">
                 {streamAnalytics.packetLossRate !== null && streamAnalytics.packetLossRate !== undefined
                   ? `${(streamAnalytics.packetLossRate * 100).toFixed(3)}%`
                   : 'N/A'}
+                {#if streamAnalytics.packetLossRate === null || streamAnalytics.packetLossRate === undefined}
+                  <span title={packetLossHint}>
+                    <InfoIcon class="w-3.5 h-3.5 text-muted-foreground cursor-help" />
+                  </span>
+                {/if}
               </p>
             </div>
           </GridSeam>
@@ -651,20 +674,24 @@
           <GridSeam cols={4} stack="2x2" surface="panel" flush={true}>
             <div class="p-4">
               <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Avg Packet Loss</p>
-              <p class="font-mono text-lg {(stats?.avgPacketLoss ?? 0) > 0.01 ? 'text-warning' : 'text-success'}">
+              <p class="font-mono text-lg {(stats?.avgPacketLoss ?? 0) > 0.01 ? 'text-warning' : 'text-success'} flex items-center gap-1">
                 {stats?.avgPacketLoss != null ? `${(stats.avgPacketLoss * 100).toFixed(3)}%` : 'N/A'}
+                {#if stats?.avgPacketLoss == null}
+                  <span title={packetLossHint}>
+                    <InfoIcon class="w-3.5 h-3.5 text-muted-foreground cursor-help" />
+                  </span>
+                {/if}
               </p>
             </div>
             <div class="p-4">
               <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Peak Packet Loss</p>
-              <p class="font-mono text-lg {(stats?.peakPacketLoss ?? 0) > 0.05 ? 'text-destructive' : (stats?.peakPacketLoss ?? 0) > 0.01 ? 'text-warning' : 'text-success'}">
+              <p class="font-mono text-lg {(stats?.peakPacketLoss ?? 0) > 0.05 ? 'text-destructive' : (stats?.peakPacketLoss ?? 0) > 0.01 ? 'text-warning' : 'text-success'} flex items-center gap-1">
                 {stats?.peakPacketLoss != null ? `${(stats.peakPacketLoss * 100).toFixed(3)}%` : 'N/A'}
-              </p>
-            </div>
-            <div class="p-4">
-              <p class="text-xs text-muted-foreground uppercase tracking-wide mb-1">Avg Connection Quality</p>
-              <p class="font-mono text-lg {(stats?.avgConnectionQuality ?? 1) < 0.95 ? 'text-warning' : 'text-success'}">
-                {stats?.avgConnectionQuality != null ? `${(stats.avgConnectionQuality * 100).toFixed(1)}%` : 'N/A'}
+                {#if stats?.peakPacketLoss == null}
+                  <span title={packetLossHint}>
+                    <InfoIcon class="w-3.5 h-3.5 text-muted-foreground cursor-help" />
+                  </span>
+                {/if}
               </p>
             </div>
             <div class="p-4">
@@ -673,22 +700,22 @@
             </div>
           </GridSeam>
 
-          <!-- Packet Loss Trend Chart -->
+          <!-- Client Packet Loss Trend Chart -->
           {#if clientMetrics.length > 1}
             <div class="slab-body--padded border-t border-border/30">
-              <h4 class="text-sm font-medium text-muted-foreground mb-3">Packet Loss Over Time</h4>
+              <h4 class="text-sm font-medium text-muted-foreground mb-3">Packet Loss Trend</h4>
               <HealthTrendChart
                 data={clientMetrics.map(m => ({
                   timestamp: m.timestamp,
-                  bufferHealth: m.avgConnectionQuality,
-                  bitrate: m.packetLossRate !== null ? m.packetLossRate * 100000000 : null,
+                  packetLoss: m.packetLossRate,
                 }))}
                 height={200}
-                showBufferHealth={true}
-                showBitrate={true}
+                showBufferHealth={false}
+                showBitrate={false}
+                showPacketLoss={true}
               />
               <p class="text-xs text-muted-foreground mt-2">
-                Blue: Connection Quality (%) • Orange: Packet Loss (scaled)
+                Packet Loss (red, lower=better)
               </p>
             </div>
           {/if}
@@ -709,8 +736,13 @@
                     <div class="flex gap-4 text-right">
                       <div>
                         <p class="text-xs text-muted-foreground">Packet Loss</p>
-                        <p class="font-mono text-sm {(node.avgPacketLoss ?? 0) > 0.01 ? 'text-warning' : 'text-success'}">
+                        <p class="font-mono text-sm {(node.avgPacketLoss ?? 0) > 0.01 ? 'text-warning' : 'text-success'} flex items-center justify-end gap-1">
                           {node.avgPacketLoss !== null ? `${(node.avgPacketLoss * 100).toFixed(3)}%` : 'N/A'}
+                          {#if node.avgPacketLoss === null}
+                            <span title={packetLossHint}>
+                              <InfoIcon class="w-3 h-3 text-muted-foreground cursor-help" />
+                            </span>
+                          {/if}
                         </p>
                       </div>
                       <div>
@@ -754,7 +786,7 @@
                     <div>
                       <span class="text-muted-foreground text-xs">Bitrate</span>
                       <p class="font-mono text-info">
-                        {metric.bitrate ? `${(metric.bitrate / 1000000).toFixed(2)} Mbps` : 'N/A'}
+                        {metric.bitrate ? `${(metric.bitrate / 1000).toFixed(2)} Mbps` : 'N/A'}
                       </p>
                     </div>
                     <div>

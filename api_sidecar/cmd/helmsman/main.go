@@ -77,24 +77,39 @@ func main() {
 		InfrastructureEvents:       metricsCollector.NewCounter("infrastructure_events_total", "Infrastructure events", []string{"event_type"}),
 		NodeHealthChecks:           metricsCollector.NewCounter("node_health_checks_total", "Node health check results", []string{"status"}),
 		ResourceAllocationDuration: metricsCollector.NewHistogram("resource_allocation_duration_seconds", "Resource allocation timing", []string{"operation"}, nil),
+		MistWebhookRequests:        metricsCollector.NewCounter("mist_webhook_requests_total", "MistServer webhook requests received/processed", []string{"trigger_type", "status"}),
 	}
 	handlers.Init(logger, handlerMetrics, cfg.NodeID)
 
 	// Initialize Prometheus monitoring
 	handlers.InitPrometheusMonitor(logger)
 
-	// Initialize cleanup monitor for storage management
+	// Initialize storage management
 	if cfg.StorageLocalPath != "" {
+		// Initialize cleanup monitor for storage management
 		handlers.InitCleanupMonitor(logger, cfg.StorageLocalPath)
+
+		// Initialize dual-storage manager (presigned URL mode - S3 creds held by Foghorn)
+		thresholds := handlers.StorageThresholds{
+			FreezeThreshold: cfg.FreezeThreshold,
+			TargetThreshold: cfg.TargetAfterFreeze,
+		}
+		if err := handlers.InitStorageManager(logger, cfg.StorageLocalPath, cfg.NodeID, thresholds); err != nil {
+			logger.WithError(err).Error("Failed to initialize storage manager")
+		}
 	}
 
 	// Start control client to Foghorn
 	control.Start(logger, cfg)
 
 	// Add the local MistServer node to monitoring (use configured node ID)
-	handlers.AddPrometheusNodeDirect(cfg.NodeID, cfg.MistServerURL)
+	// MistServerURL is internal (for API calls), EdgePublicURL is client-facing (for Foghorn BaseUrl)
+	handlers.AddPrometheusNodeDirect(cfg.NodeID, cfg.MistServerURL, cfg.EdgePublicURL)
 
-	logger.WithField("mistserver_url", cfg.MistServerURL).Info("Added MistServer node for monitoring")
+	logger.WithFields(logging.Fields{
+		"mistserver_url":  cfg.MistServerURL,
+		"edge_public_url": cfg.EdgePublicURL,
+	}).Info("Added MistServer node for monitoring")
 
 	// Setup router with unified monitoring
 	r := server.SetupServiceRouter(logger, "helmsman", healthChecker, metricsCollector)
@@ -123,7 +138,11 @@ func main() {
 		webhooks.POST("/mist/user_new", handlers.HandleUserNew)
 		webhooks.POST("/mist/user_end", handlers.HandleUserEnd)
 		webhooks.POST("/mist/live_track_list", handlers.HandleLiveTrackList)
-		webhooks.POST("/mist/live_bandwidth", handlers.HandleLiveBandwidth)
+		webhooks.POST("/mist/recording_segment", handlers.HandleRecordingSegment)
+
+		// Processing billing triggers (for tracking transcoding usage)
+		webhooks.POST("/mist/livepeer_segment_complete", handlers.HandleLivepeerSegmentComplete)
+		webhooks.POST("/mist/process_av_segment_complete", handlers.HandleProcessAVSegmentComplete)
 	}
 
 	// Graceful shutdown handling
@@ -133,6 +152,9 @@ func main() {
 	go func() {
 		sig := <-quit
 		logger.WithField("signal", sig.String()).Info("Shutdown signal received")
+
+		// Stop storage manager
+		handlers.StopStorageManager()
 
 		// Stop cleanup monitor
 		handlers.StopCleanupMonitor()

@@ -1,0 +1,41 @@
+query GetRebufferingEventsConnection(
+  $internalName: String
+  $nodeId: String
+  $timeRange: TimeRangeInput
+  $first: Int = 100
+  $after: String
+  $last: Int
+  $before: String
+  $noCache: Boolean = false
+) {
+  rebufferingEventsConnection(
+    internalName: $internalName
+    nodeId: $nodeId
+    timeRange: $timeRange
+    first: $first
+    after: $after
+    last: $last
+    before: $before
+    noCache: $noCache
+  ) {
+    edges {
+      cursor
+      node {
+        timestamp
+        stream
+        nodeId
+        bufferState
+        previousState
+        rebufferStart
+        rebufferEnd
+      }
+    }
+    pageInfo {
+      hasNextPage
+      hasPreviousPage
+      startCursor
+      endCursor
+    }
+    totalCount
+  }
+}

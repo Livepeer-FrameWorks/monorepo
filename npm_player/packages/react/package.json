@@ -1,0 +1,71 @@
+{
+  "name": "@livepeer-frameworks/player-react",
+  "version": "0.0.3",
+  "type": "module",
+  "description": "React components for FrameWorks streaming player",
+  "main": "dist/cjs/index.js",
+  "module": "dist/esm/index.js",
+  "types": "dist/types/index.d.ts",
+  "files": [
+    "dist",
+    "src"
+  ],
+  "exports": {
+    ".": {
+      "import": "./dist/esm/index.js",
+      "require": "./dist/cjs/index.js",
+      "types": "./dist/types/index.d.ts"
+    },
+    "./player.css": "./src/player.css"
+  },
+  "scripts": {
+    "build": "NODE_ENV=production rollup -c",
+    "build:watch": "NODE_ENV=development rollup -c --watch",
+    "type-check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@livepeer-frameworks/player-core": "workspace:*",
+    "class-variance-authority": "^0.7.0"
+  },
+  "peerDependencies": {
+    "@radix-ui/react-context-menu": "^2.2.0",
+    "@radix-ui/react-select": "^2.0.0",
+    "@radix-ui/react-slider": "^1.1.0",
+    "@radix-ui/react-slot": "^1.1.0",
+    "lucide-react": "^0.400.0",
+    "react": "^17.0.0 || ^18.0.0 || ^19.0.0",
+    "react-dom": "^17.0.0 || ^18.0.0 || ^19.0.0"
+  },
+  "devDependencies": {
+    "@babel/preset-env": "^7.26.0",
+    "@babel/preset-react": "^7.26.3",
+    "@babel/preset-typescript": "^7.27.1",
+    "@radix-ui/react-context-menu": "^2.2.16",
+    "@radix-ui/react-select": "^2.0.0",
+    "@radix-ui/react-slider": "^1.1.2",
+    "@radix-ui/react-slot": "^1.1.1",
+    "@rollup/plugin-babel": "^6.0.4",
+    "@rollup/plugin-commonjs": "^28.0.6",
+    "@rollup/plugin-node-resolve": "^16.0.1",
+    "@rollup/plugin-terser": "^0.4.4",
+    "@rollup/plugin-typescript": "^12.1.4",
+    "@rollup/plugin-url": "^8.0.2",
+    "@types/react": "^19.1.11",
+    "@types/react-dom": "^19.1.7",
+    "lucide-react": "^0.468.0",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "rollup": "^4.48.1",
+    "rollup-plugin-peer-deps-external": "^2.2.4",
+    "tslib": "^2.8.1",
+    "typescript": "^5.9.2"
+  },
+  "keywords": [
+    "react",
+    "streaming",
+    "player",
+    "video"
+  ],
+  "author": "Livepeer FrameWorks",
+  "license": "Unlicense"
+}

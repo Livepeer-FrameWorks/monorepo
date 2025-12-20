@@ -47,8 +47,8 @@ enum EventType {
   EVENT_TYPE_PUSH_REWRITE = 35;
   EVENT_TYPE_PUSH_OUT_START = 36;
   EVENT_TYPE_PUSH_END = 37;
-  EVENT_TYPE_STREAM_BANDWIDTH = 38;
   EVENT_TYPE_RECORDING_COMPLETE = 39;
+  EVENT_TYPE_VOD_LIFECYCLE = 40;
 }
 
 // ============================================================================
@@ -87,9 +87,14 @@ message EventData {
     helmsmancontrol.ViewerConnectTrigger viewer_connect = 10;
     helmsmancontrol.ViewerDisconnectTrigger viewer_disconnect = 11;
     helmsmancontrol.StreamEndTrigger stream_end = 12;
-    helmsmancontrol.StreamBandwidthTrigger stream_bandwidth = 13;
     helmsmancontrol.RecordingCompleteTrigger recording = 14;
+    helmsmancontrol.VodLifecycleData vod_lifecycle = 15;
+    helmsmancontrol.StreamLifecycleUpdate stream_lifecycle = 16;  // Rich stream health data
+    helmsmancontrol.StreamBufferTrigger stream_buffer = 17;       // Buffer state updates
   }
+
+  reserved 13;
+  reserved "stream_bandwidth";
 }
 
 // ============================================================================

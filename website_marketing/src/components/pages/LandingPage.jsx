@@ -1,6 +1,6 @@
 import { motion } from 'framer-motion'
 // Demo player wrapper with status/health integration
-import { Player as FrameworksPlayer } from '@livepeer-frameworks/player'
+import { Player as FrameworksPlayer } from '@livepeer-frameworks/player-react'
 import StatusTag from '../shared/StatusTag'
 import {
   MarketingIconBadge,
@@ -73,7 +73,7 @@ const LandingPage = () => {
       icon: VideoCameraIcon,
       tone: 'accent',
       badge: 'Industry First',
-      status: 'pipeline',
+      status: 'soon',
       statusNote: 'In pipeline: shipping to alpha cohorts; discovery matrix still expanding.',
     },
     {
@@ -83,7 +83,7 @@ const LandingPage = () => {
       icon: FilmIcon,
       tone: 'purple',
       badge: 'Advanced Feature',
-      status: 'pipeline',
+      status: 'soon',
       statusNote: 'In pipeline: limited internal demos; capacity and UX hardening underway.',
     },
     {
@@ -93,7 +93,7 @@ const LandingPage = () => {
       icon: GlobeAltIcon,
       tone: 'green',
       badge: 'Unique Model',
-      status: 'pipeline',
+      status: 'soon',
       statusNote: 'Invite-only: attaching your own edge nodes is being rolled out to pilots.',
     },
     {

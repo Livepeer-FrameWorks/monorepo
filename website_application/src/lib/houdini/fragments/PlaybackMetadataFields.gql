@@ -1,0 +1,37 @@
+# All fields available on PlaybackMetadata type
+fragment PlaybackMetadataFields on PlaybackMetadata {
+  status
+  isLive
+  viewers
+  bufferState
+  tracks {
+    type
+    codec
+    bitrateKbps
+    width
+    height
+    channels
+    sampleRate
+  }
+  protocolHints
+  instances {
+    nodeId
+    viewers
+    bufferState
+    bytesUp
+    bytesDown
+    totalConnections
+    inputs
+    lastUpdate
+  }
+  dvrStatus
+  dvrSourceUri
+  contentId
+  contentType
+  title
+  description
+  durationSeconds
+  recordingSizeBytes
+  clipSource
+  createdAt
+}

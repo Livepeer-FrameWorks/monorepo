@@ -1,0 +1,14 @@
+# Get health status of service instances
+query GetServiceInstancesHealth($serviceId: String) {
+  serviceInstancesHealth(serviceId: $serviceId) {
+    instanceId
+    serviceId
+    clusterId
+    protocol
+    host
+    port
+    healthEndpoint
+    status
+    lastHealthCheck
+  }
+}

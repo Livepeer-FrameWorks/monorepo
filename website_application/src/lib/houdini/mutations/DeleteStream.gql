@@ -1,3 +1,4 @@
+# Delete a stream by its ID
 mutation DeleteStream($id: ID!) {
   deleteStream(id: $id) {
     __typename

@@ -107,7 +107,15 @@ CREATE TABLE IF NOT EXISTS routing_events (
     node_bucket_h3 Nullable(UInt64),
     node_bucket_res Nullable(UInt8),
     selected_node_id Nullable(String),
-    routing_distance_km Nullable(Float64)
+    routing_distance_km Nullable(Float64),
+
+    -- ===== DUAL-TENANT ATTRIBUTION =====
+    -- tenant_id = infra owner (cluster operator), stream_tenant_id = subject tenant (stream owner)
+    stream_tenant_id Nullable(UUID),
+    cluster_id LowCardinality(String) DEFAULT '',
+
+    -- ===== LATENCY =====
+    latency_ms Nullable(Float32)
 ) ENGINE = MergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (timestamp, internal_name)
@@ -277,8 +285,7 @@ CREATE TABLE IF NOT EXISTS client_metrics_5m (
     avg_bw_in Float64,
     avg_bw_out Float64,
     avg_connection_time Float32,
-    pkt_loss_rate Nullable(Float32),
-    avg_connection_quality Nullable(Float32)
+    pkt_loss_rate Nullable(Float32)
 ) ENGINE = MergeTree()
 PARTITION BY toYYYYMM(timestamp_5m)
 ORDER BY (timestamp_5m, tenant_id, internal_name, node_id)
@@ -295,8 +302,7 @@ SELECT
     avg(bandwidth_in) AS avg_bw_in,
     avg(bandwidth_out) AS avg_bw_out,
     avg(connection_time) AS avg_connection_time,
-    if(sum(packets_sent) > 0, sum(packets_lost) / sum(packets_sent), NULL) AS pkt_loss_rate,
-    avg(connection_quality) AS avg_connection_quality
+    if(sum(packets_sent) > 0, sum(packets_lost) / sum(packets_sent), NULL) AS pkt_loss_rate
 FROM client_metrics
 GROUP BY timestamp_5m, tenant_id, internal_name, node_id;
 
@@ -463,6 +469,7 @@ CREATE TABLE IF NOT EXISTS stream_health_5m (
     sample_issues Nullable(String),
     avg_bitrate Float32,
     avg_fps Float32,
+    avg_buffer_health Float32,
     buffer_dry_count UInt32,
     quality_tier LowCardinality(String)
 ) ENGINE = MergeTree()
@@ -480,12 +487,13 @@ SELECT
     countIf(buffer_state = 'DRY') AS rebuffer_count,
     countIf(has_issues = 1) AS issue_count,
     any(issues_description) AS sample_issues,
-    avg(bitrate) AS avg_bitrate,
-    avg(fps) AS avg_fps,
+    ifNull(avg(bitrate), 0) AS avg_bitrate,
+    ifNull(avg(fps), 0) AS avg_fps,
+    ifNull(avg(buffer_health), 0) AS avg_buffer_health,
     countIf(buffer_state = 'DRY') AS buffer_dry_count,
-    argMax(
+    ifNull(argMax(
         if(height >= 1080, '1080p+', if(height >= 720, '720p', if(height >= 480, '480p', 'SD'))), timestamp
-    ) AS quality_tier
+    ), 'Unknown') AS quality_tier
 FROM stream_health_metrics
 GROUP BY timestamp_5m, tenant_id, internal_name, node_id;
 
@@ -547,11 +555,11 @@ SELECT
     countIf(primary_height >= 720 AND primary_height < 1080) * 5 AS tier_720p_minutes,
     countIf(primary_height >= 480 AND primary_height < 720) * 5 AS tier_480p_minutes,
     countIf(primary_height < 480) * 5 AS tier_sd_minutes,
-    argMax(quality_tier, timestamp) AS primary_tier,
+    ifNull(argMax(quality_tier, timestamp), 'Unknown') AS primary_tier,
     countIf(primary_video_codec LIKE '%264%') * 5 AS codec_h264_minutes,
     countIf(primary_video_codec LIKE '%265%' OR primary_video_codec LIKE '%HEVC%') * 5 AS codec_h265_minutes,
-    avg(primary_video_bitrate) AS avg_bitrate,
-    avg(primary_fps) AS avg_fps
+    ifNull(toUInt32(avg(primary_video_bitrate)), 0) AS avg_bitrate,
+    ifNull(avg(primary_fps), 0) AS avg_fps
 FROM track_list_events
 WHERE track_count > 0
 GROUP BY day, tenant_id, internal_name;
@@ -582,7 +590,8 @@ CREATE TABLE IF NOT EXISTS clip_events (
     -- ===== OUTPUT DETAILS =====
     file_path Nullable(String),         -- FilePath from protobuf
     s3_url Nullable(String),            -- S3Url from protobuf
-    size_bytes Nullable(UInt64)         -- SizeBytes from protobuf
+    size_bytes Nullable(UInt64),        -- SizeBytes from protobuf
+    expires_at Nullable(Int64)
 ) ENGINE = MergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (timestamp, internal_name, request_id)
@@ -593,15 +602,20 @@ CREATE TABLE IF NOT EXISTS storage_snapshots (
     timestamp DateTime,
     tenant_id UUID,
     node_id LowCardinality(String),
-    
+
     -- ===== USAGE METRICS =====
     total_bytes UInt64,
     file_count UInt32,
-    
-    -- ===== BREAKDOWN =====
+
+    -- ===== BREAKDOWN (by content type) =====
     dvr_bytes UInt64,
     clip_bytes UInt64,
-    recording_bytes UInt64
+    vod_bytes UInt64,
+
+    -- ===== FROZEN BREAKDOWN (cold storage in S3) =====
+    frozen_dvr_bytes UInt64 DEFAULT 0,
+    frozen_clip_bytes UInt64 DEFAULT 0,
+    frozen_vod_bytes UInt64 DEFAULT 0
 ) ENGINE = MergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (timestamp, tenant_id, node_id)
@@ -667,9 +681,10 @@ CREATE TABLE IF NOT EXISTS live_streams (
     primary_codec Nullable(String),
     primary_bitrate Nullable(UInt32),
 
-    -- ===== PACKET STATISTICS (from MistServer, per-stream totals) =====
+    -- ===== PACKET STATISTICS (from MistServer active_streams API: packsent/packloss/packretrans) =====
     packets_sent Nullable(UInt64),
     packets_lost Nullable(UInt64),
+    packets_retransmitted Nullable(UInt64),
 
     -- ===== TIMING =====
     started_at Nullable(DateTime),
@@ -751,7 +766,8 @@ CREATE TABLE IF NOT EXISTS live_artifacts (
     -- ===== NODE =====
     processing_node_id Nullable(String),
 
-    updated_at DateTime
+    updated_at DateTime,
+    expires_at Nullable(DateTime)
 ) ENGINE = ReplacingMergeTree(updated_at)
 ORDER BY (tenant_id, request_id);
 
@@ -988,5 +1004,204 @@ SELECT
     uniq(country_code) AS unique_countries,
     uniq(city) AS unique_cities,
     sum(bytes_transferred) AS egress_bytes
+
 FROM connection_events
+
 GROUP BY day, tenant_id, internal_name;
+
+-- Storage lifecycle events (sync/eviction/cache)
+-- Dual-storage model: S3 is authoritative backup, local disk is cache
+CREATE TABLE IF NOT EXISTS storage_events (
+    timestamp DateTime,
+    tenant_id UUID,
+    internal_name String,
+    asset_hash String,
+
+    -- ===== ACTION =====
+    action LowCardinality(String),      -- freeze_started, frozen, defrost_started, defrosted, freeze_failed, defrost_failed
+    asset_type LowCardinality(String),  -- clip, dvr
+
+    -- ===== DETAILS =====
+    size_bytes UInt64,
+    s3_url Nullable(String),
+    local_path Nullable(String),
+    node_id LowCardinality(String),
+    duration_ms Nullable(Int64),        -- How long the operation took (sync/defrost)
+    warm_duration_ms Nullable(Int64),   -- For evicted: how long asset was cached before eviction
+    error Nullable(String)
+) ENGINE = MergeTree()
+PARTITION BY (toYYYYMM(timestamp), tenant_id)
+ORDER BY (timestamp, internal_name, asset_hash)
+TTL timestamp + INTERVAL 90 DAY;
+
+-- ============================================================================
+-- PROCESSING BILLING TABLES (For Livepeer Gateway and native transcoding)
+-- Tracks transcoding usage for billing and analytics
+-- ============================================================================
+
+-- Raw process billing events (from Helmsman via Decklog)
+CREATE TABLE IF NOT EXISTS process_billing (
+    timestamp DateTime,
+    tenant_id UUID,
+    node_id LowCardinality(String),
+    stream_name String,
+
+    -- ===== PROCESS TYPE =====
+    process_type LowCardinality(String),    -- Livepeer, AV, FFmpeg
+    track_type LowCardinality(String),      -- audio, video (KEY FOR BILLING)
+
+    -- ===== DURATION/USAGE =====
+    duration_ms Int64,                      -- Segment duration or time since last event
+
+    -- ===== CODEC INFO =====
+    input_codec Nullable(String),
+    output_codec Nullable(String),
+
+    -- ===== LIVEPEER-SPECIFIC =====
+    segment_number Nullable(Int32),
+    width Nullable(Int32),                  -- source width
+    height Nullable(Int32),                 -- source height
+    rendition_count Nullable(Int32),
+    broadcaster_url Nullable(String),
+    upload_time_us Nullable(Int64),         -- DEPRECATED: use turnaround_ms
+    livepeer_session_id Nullable(String),
+    segment_start_ms Nullable(Int64),
+    input_bytes Nullable(Int64),
+    output_bytes_total Nullable(Int64),
+    attempt_count Nullable(Int32),
+    turnaround_ms Nullable(Int64),
+    speed_factor Nullable(Float64),
+    renditions_json Nullable(String),       -- JSON array: [{name, bytes}, ...]
+
+    -- ===== MISTPROCAV-SPECIFIC =====
+    input_frames Nullable(Int64),           -- cumulative
+    output_frames Nullable(Int64),          -- cumulative
+    decode_us_per_frame Nullable(Int64),
+    transform_us_per_frame Nullable(Int64),
+    encode_us_per_frame Nullable(Int64),
+    is_final Nullable(UInt8),
+    input_frames_delta Nullable(Int64),     -- frames this window
+    output_frames_delta Nullable(Int64),    -- frames this window
+    input_bytes_delta Nullable(Int64),      -- bytes this window
+    output_bytes_delta Nullable(Int64),     -- bytes this window
+    input_width Nullable(Int32),
+    input_height Nullable(Int32),
+    output_width Nullable(Int32),
+    output_height Nullable(Int32),
+    input_fpks Nullable(Int32),             -- frames per 1000s (input)
+    output_fps_measured Nullable(Float64),  -- measured output FPS
+    sample_rate Nullable(Int32),            -- audio sample rate
+    channels Nullable(Int32),               -- audio channels
+    source_timestamp_ms Nullable(Int64),
+    sink_timestamp_ms Nullable(Int64),
+    source_advanced_ms Nullable(Int64),
+    sink_advanced_ms Nullable(Int64),
+    rtf_in Nullable(Float64),               -- real-time factor in
+    rtf_out Nullable(Float64),              -- real-time factor out
+    pipeline_lag_ms Nullable(Int64),
+    output_bitrate_bps Nullable(Int64)
+) ENGINE = MergeTree()
+PARTITION BY (toYYYYMM(timestamp), tenant_id)
+ORDER BY (tenant_id, stream_name, timestamp)
+TTL timestamp + INTERVAL 90 DAY;
+
+-- Hourly process billing rollup for efficient queries
+-- Includes codec + track_type dimensions for per-codec billing
+CREATE TABLE IF NOT EXISTS process_billing_hourly (
+    hour DateTime,
+    tenant_id UUID,
+    process_type LowCardinality(String),
+    output_codec LowCardinality(String),     -- h264, vp9, av1, hevc, aac, opus, etc.
+    track_type LowCardinality(String),       -- audio or video
+
+    -- ===== AGGREGATED METRICS =====
+    total_duration_ms AggregateFunction(sum, Int64),
+    segment_count AggregateFunction(count, UInt8),
+    unique_streams AggregateFunction(uniq, String)
+) ENGINE = AggregatingMergeTree()
+PARTITION BY toYYYYMM(hour)
+ORDER BY (hour, tenant_id, process_type, output_codec, track_type)
+TTL hour + INTERVAL 365 DAY;
+
+-- Aggregation MV → process_billing_hourly
+-- Extracts and normalizes codec + track_type from raw events
+CREATE MATERIALIZED VIEW IF NOT EXISTS process_billing_hourly_mv TO process_billing_hourly AS
+SELECT
+    toStartOfHour(timestamp) AS hour,
+    tenant_id,
+    process_type,
+    lower(coalesce(output_codec, 'unknown')) AS output_codec,
+    coalesce(track_type, 'video') AS track_type,
+    sumState(duration_ms) AS total_duration_ms,
+    countState() AS segment_count,
+    uniqState(stream_name) AS unique_streams
+FROM process_billing
+GROUP BY hour, tenant_id, process_type, output_codec, track_type;
+
+-- Daily tenant processing summary for billing
+-- Per-codec columns for accurate billing with codec multipliers
+CREATE TABLE IF NOT EXISTS process_billing_daily (
+    day Date,
+    tenant_id UUID,
+
+    -- ===== LIVEPEER (EXTERNAL GATEWAY) - Per Codec =====
+    livepeer_h264_seconds Float64,
+    livepeer_vp9_seconds Float64,
+    livepeer_av1_seconds Float64,
+    livepeer_hevc_seconds Float64,
+    livepeer_segment_count UInt64,
+    livepeer_unique_streams UInt32,
+
+    -- ===== NATIVE AV (LOCAL PROCESSING) - Per Codec =====
+    native_av_h264_seconds Float64,
+    native_av_vp9_seconds Float64,
+    native_av_av1_seconds Float64,
+    native_av_hevc_seconds Float64,
+    native_av_aac_seconds Float64,
+    native_av_opus_seconds Float64,
+    native_av_segment_count UInt64,
+    native_av_unique_streams UInt32,
+
+    -- ===== TRACK TYPE AGGREGATES (for quick audio vs video) =====
+    audio_seconds Float64,
+    video_seconds Float64,
+
+    -- ===== LEGACY TOTALS (backward compatibility) =====
+    livepeer_seconds Float64,
+    native_av_seconds Float64
+) ENGINE = SummingMergeTree()
+PARTITION BY toYYYYMM(day)
+ORDER BY (day, tenant_id)
+TTL day + INTERVAL 730 DAY;
+
+-- Aggregation MV → process_billing_daily
+-- Pivots hourly codec data into per-codec columns
+CREATE MATERIALIZED VIEW IF NOT EXISTS process_billing_daily_mv TO process_billing_daily AS
+SELECT
+    toDate(hour) AS day,
+    tenant_id,
+    -- Livepeer per-codec
+    sumMergeIf(total_duration_ms, process_type = 'Livepeer' AND output_codec = 'h264') / 1000.0 AS livepeer_h264_seconds,
+    sumMergeIf(total_duration_ms, process_type = 'Livepeer' AND output_codec = 'vp9') / 1000.0 AS livepeer_vp9_seconds,
+    sumMergeIf(total_duration_ms, process_type = 'Livepeer' AND output_codec = 'av1') / 1000.0 AS livepeer_av1_seconds,
+    sumMergeIf(total_duration_ms, process_type = 'Livepeer' AND output_codec IN ('hevc', 'h265')) / 1000.0 AS livepeer_hevc_seconds,
+    toUInt64(countMergeIf(segment_count, process_type = 'Livepeer')) AS livepeer_segment_count,
+    toUInt32(uniqMergeIf(unique_streams, process_type = 'Livepeer')) AS livepeer_unique_streams,
+    -- Native AV per-codec (video)
+    sumMergeIf(total_duration_ms, process_type = 'AV' AND output_codec = 'h264') / 1000.0 AS native_av_h264_seconds,
+    sumMergeIf(total_duration_ms, process_type = 'AV' AND output_codec = 'vp9') / 1000.0 AS native_av_vp9_seconds,
+    sumMergeIf(total_duration_ms, process_type = 'AV' AND output_codec = 'av1') / 1000.0 AS native_av_av1_seconds,
+    sumMergeIf(total_duration_ms, process_type = 'AV' AND output_codec IN ('hevc', 'h265')) / 1000.0 AS native_av_hevc_seconds,
+    -- Native AV per-codec (audio)
+    sumMergeIf(total_duration_ms, process_type = 'AV' AND output_codec = 'aac') / 1000.0 AS native_av_aac_seconds,
+    sumMergeIf(total_duration_ms, process_type = 'AV' AND output_codec = 'opus') / 1000.0 AS native_av_opus_seconds,
+    toUInt64(countMergeIf(segment_count, process_type = 'AV')) AS native_av_segment_count,
+    toUInt32(uniqMergeIf(unique_streams, process_type = 'AV')) AS native_av_unique_streams,
+    -- Track type aggregates
+    sumMergeIf(total_duration_ms, track_type = 'audio') / 1000.0 AS audio_seconds,
+    sumMergeIf(total_duration_ms, track_type = 'video') / 1000.0 AS video_seconds,
+    -- Legacy totals (backward compatibility)
+    sumMergeIf(total_duration_ms, process_type = 'Livepeer') / 1000.0 AS livepeer_seconds,
+    sumMergeIf(total_duration_ms, process_type = 'AV') / 1000.0 AS native_av_seconds
+FROM process_billing_hourly
+GROUP BY day, tenant_id;

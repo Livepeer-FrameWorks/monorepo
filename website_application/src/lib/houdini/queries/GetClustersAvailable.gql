@@ -1,3 +1,4 @@
+# Fetch list of clusters available for tenant enrollment with tier requirements
 query GetClustersAvailable {
   clustersAvailable {
     clusterId

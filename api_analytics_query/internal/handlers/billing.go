@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -17,6 +18,14 @@ import (
 
 	"github.com/sirupsen/logrus"
 )
+
+// sanitizeFloat returns 0.0 if f is NaN or Inf, otherwise returns f
+func sanitizeFloat(f float64) float64 {
+	if math.IsNaN(f) || math.IsInf(f, 0) {
+		return 0
+	}
+	return f
+}
 
 // BillingSummarizer handles usage summarization for billing
 type BillingSummarizer struct {
@@ -203,7 +212,7 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 		AND timestamp BETWEEN ? AND ?
 	`, tenantID, startTime, endTime).Scan(&peakBandwidth)
 	if err != nil && err != database.ErrNoRows {
-		bs.logger.WithError(err).Debug("Failed to query peak bandwidth from client_metrics_5m, defaulting to 0")
+		bs.logger.WithError(err).Info("Failed to query peak bandwidth from client_metrics_5m, defaulting to 0")
 		peakBandwidth = 0
 	}
 
@@ -221,17 +230,24 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 		uniqueUsers = 0
 	}
 
-	// Query ClickHouse for average storage usage (snapshots)
-	var avgStorageGB float64
+	// Query ClickHouse for average storage usage (snapshots) with breakdown
+	var avgStorageGB, avgClipStorageGB, avgDvrStorageGB, avgVodStorageGB float64
 	err = bs.clickhouse.QueryRowContext(ctx, `
-		SELECT COALESCE(avg(total_bytes) / (1024*1024*1024), 0) as avg_storage_gb
+		SELECT
+			COALESCE(avg(total_bytes) / (1024*1024*1024), 0) as avg_storage_gb,
+			COALESCE(avg(clip_bytes) / (1024*1024*1024), 0) as avg_clip_storage_gb,
+			COALESCE(avg(dvr_bytes) / (1024*1024*1024), 0) as avg_dvr_storage_gb,
+			COALESCE(avg(vod_bytes) / (1024*1024*1024), 0) as avg_vod_storage_gb
 		FROM storage_snapshots
 		WHERE tenant_id = ?
 		AND timestamp BETWEEN ? AND ?
-	`, tenantID, startTime, endTime).Scan(&avgStorageGB)
+	`, tenantID, startTime, endTime).Scan(&avgStorageGB, &avgClipStorageGB, &avgDvrStorageGB, &avgVodStorageGB)
 	if err != nil && err != database.ErrNoRows {
-		bs.logger.WithError(err).Debug("Failed to query storage snapshots, defaulting to 0")
+		bs.logger.WithError(err).Info("Failed to query storage snapshots, defaulting to 0")
 		avgStorageGB = 0
+		avgClipStorageGB = 0
+		avgDvrStorageGB = 0
+		avgVodStorageGB = 0
 	}
 
 	// Derive clip storage additions from clip_events (stage='done')
@@ -246,7 +262,7 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 		AND timestamp BETWEEN ? AND ?
 	`, tenantID, startTime, endTime).Scan(&clipStorageAddedGB, &clipsAdded)
 	if err != nil && err != database.ErrNoRows {
-		bs.logger.WithError(err).Debug("Failed to query clip events for storage additions, defaulting to 0")
+		bs.logger.WithError(err).Info("Failed to query clip events for storage additions, defaulting to 0")
 		clipStorageAddedGB = 0
 		clipsAdded = 0
 	}
@@ -266,7 +282,7 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 		AND timestamp BETWEEN ? AND ?
 	`, tenantID, startTime, endTime).Scan(&recordingGB)
 	if err != nil && err != database.ErrNoRows {
-		bs.logger.WithError(err).Debug("Failed to query recording data from ClickHouse, defaulting to 0")
+		bs.logger.WithError(err).Info("Failed to query recording data from ClickHouse, defaulting to 0")
 		recordingGB = 0
 	}
 
@@ -304,39 +320,200 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 		for geoRows.Next() {
 			var cm models.CountryMetrics
 			if err := geoRows.Scan(&cm.CountryCode, &cm.ViewerCount, &cm.ViewerHours, &cm.EgressGB, &cm.Percentage); err == nil {
+				cm.ViewerHours = sanitizeFloat(cm.ViewerHours)
+				cm.EgressGB = sanitizeFloat(cm.EgressGB)
+				cm.Percentage = sanitizeFloat(cm.Percentage)
 				geoBreakdown = append(geoBreakdown, cm)
 			}
 		}
 	}
 
+	// Derive unique countries from geo breakdown
+	uniqueCountries := len(geoBreakdown)
+
+	// Query ClickHouse for unique cities
+	var uniqueCities int
+	err = bs.clickhouse.QueryRowContext(ctx, `
+		SELECT count(DISTINCT city)
+		FROM periscope.viewer_geo_hourly
+		WHERE tenant_id = ?
+		AND hour BETWEEN ? AND ?
+		AND city != '' AND city != '--'
+	`, tenantID, startTime, endTime).Scan(&uniqueCities)
+	if err != nil && err != database.ErrNoRows {
+		bs.logger.WithError(err).Warn("Failed to query unique cities")
+		uniqueCities = 0
+	}
+
+	// Calculate average viewers from hourly data
+	var avgViewers float64
+	err = bs.clickhouse.QueryRowContext(ctx, `
+		SELECT COALESCE(avg(hourly_viewers), 0) as avg_viewers
+		FROM (
+			SELECT hour, sum(viewer_count) as hourly_viewers
+			FROM periscope.viewer_geo_hourly
+			WHERE tenant_id = ?
+			AND hour BETWEEN ? AND ?
+			GROUP BY hour
+		)
+	`, tenantID, startTime, endTime).Scan(&avgViewers)
+	if err != nil && err != database.ErrNoRows {
+		bs.logger.WithError(err).Info("Failed to query average viewers, defaulting to 0")
+		avgViewers = 0
+	}
+
+	// DVR storage metrics from dvr_events
+	var dvrAdded int
+	var dvrStorageAddedGB float64
+	err = bs.clickhouse.QueryRowContext(ctx, `
+		SELECT
+			COALESCE(countIf(event_type = 'recording_complete'), 0) as dvr_added,
+			COALESCE(sumIf(size_bytes, event_type = 'recording_complete') / (1024*1024*1024), 0) as dvr_storage_added_gb
+		FROM periscope.dvr_events
+		WHERE tenant_id = ?
+		AND timestamp BETWEEN ? AND ?
+	`, tenantID, startTime, endTime).Scan(&dvrAdded, &dvrStorageAddedGB)
+	if err != nil && err != database.ErrNoRows {
+		bs.logger.WithError(err).Info("Failed to query DVR events, defaulting to 0")
+		dvrAdded = 0
+		dvrStorageAddedGB = 0
+	}
+
+	dvrDeleted := 0
+	dvrStorageDeletedGB := float64(0)
+
+	// VOD storage metrics from live_artifacts (content_type='vod')
+	var vodAdded, vodDeleted int
+	var vodStorageAddedGB, vodStorageDeletedGB float64
+	err = bs.clickhouse.QueryRowContext(ctx, `
+		SELECT
+			COALESCE(countIf(stage = 'completed'), 0) as vod_added,
+			COALESCE(countIf(stage = 'deleted'), 0) as vod_deleted,
+			COALESCE(sumIf(size_bytes, stage = 'completed') / (1024*1024*1024), 0) as vod_storage_added_gb,
+			COALESCE(sumIf(size_bytes, stage = 'deleted') / (1024*1024*1024), 0) as vod_storage_deleted_gb
+		FROM live_artifacts
+		WHERE tenant_id = ?
+		AND content_type = 'vod'
+		AND requested_at BETWEEN ? AND ?
+	`, tenantID, startTime, endTime).Scan(&vodAdded, &vodDeleted, &vodStorageAddedGB, &vodStorageDeletedGB)
+	if err != nil && err != database.ErrNoRows {
+		bs.logger.WithError(err).Info("Failed to query VOD events from live_artifacts, defaulting to 0")
+		vodAdded = 0
+		vodDeleted = 0
+		vodStorageAddedGB = 0
+		vodStorageDeletedGB = 0
+	}
+
+	// Processing/transcoding usage from process_billing_daily (with per-codec breakdown)
+	var livepeerSeconds, nativeAvSeconds float64
+	var livepeerSegmentCount, nativeAvSegmentCount int
+	var livepeerUniqueStreams, nativeAvUniqueStreams int
+	// Per-codec breakdown
+	var livepeerH264Seconds, livepeerVP9Seconds, livepeerAV1Seconds, livepeerHEVCSeconds float64
+	var nativeAvH264Seconds, nativeAvVP9Seconds, nativeAvAV1Seconds, nativeAvHEVCSeconds float64
+	var nativeAvAACSeconds, nativeAvOpusSeconds float64
+	var audioSeconds, videoSeconds float64
+
+	err = bs.clickhouse.QueryRowContext(ctx, `
+		SELECT
+			-- Legacy totals (backward compatibility)
+			COALESCE(sum(livepeer_seconds), 0) as livepeer_seconds,
+			COALESCE(sum(livepeer_segment_count), 0) as livepeer_segment_count,
+			COALESCE(max(livepeer_unique_streams), 0) as livepeer_unique_streams,
+			COALESCE(sum(native_av_seconds), 0) as native_av_seconds,
+			COALESCE(sum(native_av_segment_count), 0) as native_av_segment_count,
+			COALESCE(max(native_av_unique_streams), 0) as native_av_unique_streams,
+			-- Livepeer per-codec
+			COALESCE(sum(livepeer_h264_seconds), 0) as livepeer_h264_seconds,
+			COALESCE(sum(livepeer_vp9_seconds), 0) as livepeer_vp9_seconds,
+			COALESCE(sum(livepeer_av1_seconds), 0) as livepeer_av1_seconds,
+			COALESCE(sum(livepeer_hevc_seconds), 0) as livepeer_hevc_seconds,
+			-- Native AV per-codec
+			COALESCE(sum(native_av_h264_seconds), 0) as native_av_h264_seconds,
+			COALESCE(sum(native_av_vp9_seconds), 0) as native_av_vp9_seconds,
+			COALESCE(sum(native_av_av1_seconds), 0) as native_av_av1_seconds,
+			COALESCE(sum(native_av_hevc_seconds), 0) as native_av_hevc_seconds,
+			COALESCE(sum(native_av_aac_seconds), 0) as native_av_aac_seconds,
+			COALESCE(sum(native_av_opus_seconds), 0) as native_av_opus_seconds,
+			-- Track type aggregates
+			COALESCE(sum(audio_seconds), 0) as audio_seconds,
+			COALESCE(sum(video_seconds), 0) as video_seconds
+		FROM process_billing_daily
+		WHERE tenant_id = ?
+		AND day BETWEEN toDate(?) AND toDate(?)
+	`, tenantID, startTime, endTime).Scan(
+		&livepeerSeconds, &livepeerSegmentCount, &livepeerUniqueStreams,
+		&nativeAvSeconds, &nativeAvSegmentCount, &nativeAvUniqueStreams,
+		&livepeerH264Seconds, &livepeerVP9Seconds, &livepeerAV1Seconds, &livepeerHEVCSeconds,
+		&nativeAvH264Seconds, &nativeAvVP9Seconds, &nativeAvAV1Seconds, &nativeAvHEVCSeconds,
+		&nativeAvAACSeconds, &nativeAvOpusSeconds,
+		&audioSeconds, &videoSeconds)
+	if err != nil && err != database.ErrNoRows {
+		bs.logger.WithError(err).Info("Failed to query processing usage, defaulting to 0")
+		livepeerSeconds = 0
+		nativeAvSeconds = 0
+	}
+
 	// Skip if no usage data
 	if streamHours == 0 && egressGB == 0 && maxViewers == 0 && totalStreams == 0 {
-		bs.logger.WithField("tenant_id", tenantID).Debug("No usage data for tenant in period, skipping")
+		bs.logger.WithField("tenant_id", tenantID).Info("No usage data for tenant in period, skipping")
 		return nil, nil
 	}
 
 	summary := &models.UsageSummary{
-		TenantID:          tenantID,
-		ClusterID:         clusterID,
-		Period:            fmt.Sprintf("%s/%s", startTime.Format(time.RFC3339), endTime.Format(time.RFC3339)),
-		StreamHours:       streamHours,
-		EgressGB:          egressGB,
-		MaxViewers:        maxViewers,
-		TotalStreams:      totalStreams,
-		TotalViewers:      uniqueViewers, // Unique viewers for the period from tenant_viewer_daily
-		PeakBandwidthMbps: peakBandwidth,
-		UniqueUsers:       uniqueUsers, // MTD unique sessions from connection_events
-		ViewerHours:       viewerHours,
-		RecordingGB:       recordingGB,
-		// Storage and clip lifecycle
-		StorageGB:            storageGB,
-		AverageStorageGB:     avgStorageGB,
+		TenantID:             tenantID,
+		ClusterID:            clusterID,
+		Period:               fmt.Sprintf("%s/%s", startTime.Format(time.RFC3339), endTime.Format(time.RFC3339)),
+		StreamHours:          sanitizeFloat(streamHours),
+		EgressGB:             sanitizeFloat(egressGB),
+		MaxViewers:           maxViewers,
+		TotalStreams:         totalStreams,
+		TotalViewers:         uniqueViewers,
+		PeakBandwidthMbps:    sanitizeFloat(peakBandwidth),
+		UniqueUsers:          uniqueUsers,
+		ViewerHours:          sanitizeFloat(viewerHours),
+		RecordingGB:          sanitizeFloat(recordingGB),
+		StorageGB:            sanitizeFloat(storageGB),
+		AverageStorageGB:     sanitizeFloat(avgStorageGB),
 		ClipsAdded:           clipsAdded,
 		ClipsDeleted:         clipsDeleted,
-		ClipStorageAddedGB:   clipStorageAddedGB,
-		ClipStorageDeletedGB: clipStorageDeletedGB,
-		Timestamp:            time.Now(),
-		GeoBreakdown:         geoBreakdown,
+		ClipStorageAddedGB:   sanitizeFloat(clipStorageAddedGB),
+		ClipStorageDeletedGB: sanitizeFloat(clipStorageDeletedGB),
+		DvrAdded:             dvrAdded,
+		DvrDeleted:           dvrDeleted,
+		DvrStorageAddedGB:    sanitizeFloat(dvrStorageAddedGB),
+		DvrStorageDeletedGB:  sanitizeFloat(dvrStorageDeletedGB),
+		VodAdded:             vodAdded,
+		VodDeleted:           vodDeleted,
+		VodStorageAddedGB:    sanitizeFloat(vodStorageAddedGB),
+		VodStorageDeletedGB:  sanitizeFloat(vodStorageDeletedGB),
+		// Processing/transcoding usage (legacy totals)
+		LivepeerSeconds:       sanitizeFloat(livepeerSeconds),
+		LivepeerSegmentCount:  livepeerSegmentCount,
+		LivepeerUniqueStreams: livepeerUniqueStreams,
+		NativeAvSeconds:       sanitizeFloat(nativeAvSeconds),
+		NativeAvSegmentCount:  nativeAvSegmentCount,
+		NativeAvUniqueStreams: nativeAvUniqueStreams,
+		// Per-codec breakdown: Livepeer
+		LivepeerH264Seconds: sanitizeFloat(livepeerH264Seconds),
+		LivepeerVP9Seconds:  sanitizeFloat(livepeerVP9Seconds),
+		LivepeerAV1Seconds:  sanitizeFloat(livepeerAV1Seconds),
+		LivepeerHEVCSeconds: sanitizeFloat(livepeerHEVCSeconds),
+		// Per-codec breakdown: Native AV
+		NativeAvH264Seconds: sanitizeFloat(nativeAvH264Seconds),
+		NativeAvVP9Seconds:  sanitizeFloat(nativeAvVP9Seconds),
+		NativeAvAV1Seconds:  sanitizeFloat(nativeAvAV1Seconds),
+		NativeAvHEVCSeconds: sanitizeFloat(nativeAvHEVCSeconds),
+		NativeAvAACSeconds:  sanitizeFloat(nativeAvAACSeconds),
+		NativeAvOpusSeconds: sanitizeFloat(nativeAvOpusSeconds),
+		// Track type aggregates
+		AudioSeconds:    sanitizeFloat(audioSeconds),
+		VideoSeconds:    sanitizeFloat(videoSeconds),
+		Timestamp:       time.Now(),
+		AvgViewers:      sanitizeFloat(avgViewers),
+		UniqueCountries: uniqueCountries,
+		UniqueCities:    uniqueCities,
+		GeoBreakdown:    geoBreakdown,
 	}
 
 	bs.logger.WithFields(logging.Fields{
@@ -347,7 +524,7 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 		"unique_viewers": uniqueViewers,
 		"max_viewers":    maxViewers,
 		"total_streams":  totalStreams,
-	}).Debug("Generated usage summary for tenant")
+	}).Info("Generated usage summary for tenant")
 
 	return summary, nil
 }

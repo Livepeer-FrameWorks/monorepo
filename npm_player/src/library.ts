@@ -30,10 +30,47 @@ export { default as useViewerEndpoints } from "./hooks/useViewerEndpoints";
 // =====================================================
 // Core Classes
 // =====================================================
-export { QualityMonitor } from "./core/QualityMonitor";
+export { QualityMonitor, PROTOCOL_THRESHOLDS } from "./core/QualityMonitor";
+export type { PlayerProtocol } from "./core/QualityMonitor";
 export { TelemetryReporter } from "./core/TelemetryReporter";
 export { ABRController } from "./core/ABRController";
 export { MetaTrackManager } from "./core/MetaTrackManager";
+export { MistReporter } from "./core/MistReporter";
+export type { MistReporterStats, MistReporterOptions, MistReporterInitialReport } from "./core/MistReporter";
+export { MistSignaling } from "./core/MistSignaling";
+export type { MistSignalingConfig, MistSignalingEvents, MistTimeUpdate, MistSignalingState } from "./core/MistSignaling";
+export { LiveDurationProxy, createLiveVideoProxy } from "./core/LiveDurationProxy";
+export type { LiveDurationProxyOptions, LiveDurationState } from "./core/LiveDurationProxy";
+export { TimerManager } from "./core/TimerManager";
+
+// URL utilities
+export {
+  appendUrlParams,
+  parseUrlParams,
+  stripUrlParams,
+  buildUrl,
+  isSecureUrl,
+  httpToWs,
+  wsToHttp,
+  matchPageProtocol,
+} from "./core/UrlUtils";
+
+// Codec utilities
+export {
+  translateCodec,
+  isCodecSupported,
+  getBestSupportedTrack,
+} from "./core/CodecUtils";
+export type { TrackInfo as CodecTrackInfo } from "./core/CodecUtils";
+
+// Subtitle management
+export { SubtitleManager } from "./core/SubtitleManager";
+export type { SubtitleTrackInfo, SubtitleManagerConfig } from "./core/SubtitleManager";
+
+// =====================================================
+// Alternative Player Components
+// =====================================================
+export { MistWebRTCPlayer } from "./components/players/MistWebRTCPlayer";
 
 // =====================================================
 // Types
@@ -75,7 +112,29 @@ export type {
   ABRMode,
   ABROptions,
   QualityLevel,
+  // Library configuration types
+  HlsJsConfig,
+  DashJsConfig,
 } from "./types";
+
+// =====================================================
+// Vanilla JS Player (for non-React frameworks)
+// =====================================================
+export { FrameWorksPlayer } from "./vanilla/FrameWorksPlayer";
+export type { FrameWorksPlayerOptions } from "./vanilla/FrameWorksPlayer";
+
+// =====================================================
+// Headless Core (framework-agnostic)
+// =====================================================
+export { TypedEventEmitter } from "./core/EventEmitter";
+export { GatewayClient } from "./core/GatewayClient";
+export type { GatewayClientConfig, GatewayClientEvents, GatewayStatus } from "./core/GatewayClient";
+export { StreamStateClient } from "./core/StreamStateClient";
+export type { StreamStateClientConfig, StreamStateClientEvents } from "./core/StreamStateClient";
+export { PlayerController } from "./core/PlayerController";
+export type { PlayerControllerConfig, PlayerControllerEvents } from "./core/PlayerController";
+export { InteractionController } from "./core/InteractionController";
+export type { InteractionControllerConfig, InteractionState } from "./core/InteractionController";
 
 // =====================================================
 // Styles & Core Exports

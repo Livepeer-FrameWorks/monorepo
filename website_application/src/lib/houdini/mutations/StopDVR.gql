@@ -1,3 +1,4 @@
+# Stop an active DVR recording session
 mutation StopDVR($dvrHash: ID!) {
   stopDVR(dvrHash: $dvrHash) {
     __typename

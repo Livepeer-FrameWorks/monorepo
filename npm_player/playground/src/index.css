@@ -286,9 +286,7 @@ body {
 .workspace-layout {
   display: grid;
   grid-template-columns: 1fr;
-  border: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
-  border-radius: var(--radius-lg);
-  overflow: hidden;
+  border-top: 1px solid hsl(var(--tn-fg-gutter) / 0.3);
 }
 
 @media (min-width: 1280px) {

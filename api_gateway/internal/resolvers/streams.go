@@ -400,6 +400,11 @@ func (r *Resolver) DoCreateClip(ctx context.Context, input model.CreateClipInput
 		}
 	}
 
+	if input.ExpiresAt != nil {
+		exp := int64(*input.ExpiresAt)
+		req.ExpiresAt = &exp
+	}
+
 	// Call Commodore gRPC (context metadata carries auth)
 	clipResp, err := r.Clients.Commodore.CreateClip(ctx, req)
 	if err != nil {
@@ -493,6 +498,132 @@ func (r *Resolver) DoGetStreamKeys(ctx context.Context, streamID string) ([]*pb.
 	return keysResp.StreamKeys, nil
 }
 
+// DoGetStreamKeysConnection returns a Relay-style connection for stream keys.
+// Stream keys accumulate over time and can grow unbounded.
+func (r *Resolver) DoGetStreamKeysConnection(ctx context.Context, streamID string, first *int, after *string, last *int, before *string) (*model.StreamKeysConnection, error) {
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Returning demo stream keys connection")
+		now := time.Now()
+		lastUsed1 := now.Add(-1 * time.Hour)
+		lastUsed2 := now.Add(-3 * 24 * time.Hour)
+		keys := []*pb.StreamKey{
+			{
+				Id:         "sk_demo_1",
+				TenantId:   "tenant_demo_1",
+				UserId:     "user_demo_1",
+				StreamId:   streamID,
+				KeyValue:   "sk_demo_live_primary",
+				KeyName:    "Primary Key",
+				IsActive:   true,
+				LastUsedAt: timestamppb.New(lastUsed1),
+				CreatedAt:  timestamppb.New(now.Add(-7 * 24 * time.Hour)),
+				UpdatedAt:  timestamppb.New(now.Add(-7 * 24 * time.Hour)),
+			},
+			{
+				Id:         "sk_demo_2",
+				TenantId:   "tenant_demo_1",
+				UserId:     "user_demo_1",
+				StreamId:   streamID,
+				KeyValue:   "sk_demo_live_backup",
+				KeyName:    "Backup Key",
+				IsActive:   false,
+				LastUsedAt: timestamppb.New(lastUsed2),
+				CreatedAt:  timestamppb.New(now.Add(-30 * 24 * time.Hour)),
+				UpdatedAt:  timestamppb.New(now.Add(-30 * 24 * time.Hour)),
+			},
+		}
+		edges := make([]*model.StreamKeyEdge, len(keys))
+		for i, key := range keys {
+			cursor := pagination.EncodeCursor(key.CreatedAt.AsTime(), key.Id)
+			edges[i] = &model.StreamKeyEdge{
+				Cursor: cursor,
+				Node:   key,
+			}
+		}
+		pageInfo := &model.PageInfo{
+			HasPreviousPage: false,
+			HasNextPage:     false,
+		}
+		if len(edges) > 0 {
+			pageInfo.StartCursor = &edges[0].Cursor
+			pageInfo.EndCursor = &edges[len(edges)-1].Cursor
+		}
+		return &model.StreamKeysConnection{
+			Edges:      edges,
+			PageInfo:   pageInfo,
+			TotalCount: len(keys),
+		}, nil
+	}
+
+	// Fetch all stream keys (Commodore doesn't support pagination for keys yet)
+	keysResp, err := r.Clients.Commodore.ListStreamKeys(ctx, streamID, nil)
+	if err != nil {
+		r.Logger.WithError(err).Error("Failed to get stream keys")
+		return nil, fmt.Errorf("failed to get stream keys: %w", err)
+	}
+
+	keys := keysResp.StreamKeys
+	totalCount := len(keys)
+
+	// Client-side pagination
+	startIdx := 0
+	endIdx := totalCount
+	limit := pagination.DefaultLimit
+	if first != nil {
+		limit = pagination.ClampLimit(*first)
+	}
+
+	// Handle cursor-based pagination
+	if after != nil && *after != "" {
+		cursor, err := pagination.DecodeCursor(*after)
+		if err == nil && cursor != nil {
+			for i, key := range keys {
+				if key.CreatedAt.AsTime().Equal(cursor.Timestamp) || key.CreatedAt.AsTime().After(cursor.Timestamp) {
+					startIdx = i + 1
+					break
+				}
+			}
+		}
+	}
+
+	if startIdx+limit < endIdx {
+		endIdx = startIdx + limit
+	}
+
+	// Slice keys
+	if startIdx >= totalCount {
+		keys = []*pb.StreamKey{}
+	} else {
+		keys = keys[startIdx:endIdx]
+	}
+
+	// Build edges
+	edges := make([]*model.StreamKeyEdge, len(keys))
+	for i, key := range keys {
+		cursor := pagination.EncodeCursor(key.CreatedAt.AsTime(), key.Id)
+		edges[i] = &model.StreamKeyEdge{
+			Cursor: cursor,
+			Node:   key,
+		}
+	}
+
+	// Build page info
+	pageInfo := &model.PageInfo{
+		HasPreviousPage: startIdx > 0,
+		HasNextPage:     endIdx < totalCount,
+	}
+	if len(edges) > 0 {
+		pageInfo.StartCursor = &edges[0].Cursor
+		pageInfo.EndCursor = &edges[len(edges)-1].Cursor
+	}
+
+	return &model.StreamKeysConnection{
+		Edges:      edges,
+		PageInfo:   pageInfo,
+		TotalCount: totalCount,
+	}, nil
+}
+
 // DoCreateStreamKey creates a new stream key for a specific stream
 func (r *Resolver) DoCreateStreamKey(ctx context.Context, streamID string, input model.CreateStreamKeyInput) (*pb.StreamKey, error) {
 	if middleware.IsDemoMode(ctx) {
@@ -582,8 +713,11 @@ func (r *Resolver) DoGetClips(ctx context.Context, streamID *string) ([]*pb.Clip
 	}
 
 	// Get tenant_id from context
-	tenantID, ok := ctx.Value("tenant_id").(string)
-	if !ok {
+	var tenantID string
+	if v, ok := ctx.Value("tenant_id").(string); ok {
+		tenantID = v
+	}
+	if tenantID == "" {
 		return nil, fmt.Errorf("tenant context required")
 	}
 
@@ -688,7 +822,7 @@ func stringPtr(s string) *string {
 // === DVR & Recording Config ===
 
 // DoStartDVR starts a DVR recording
-func (r *Resolver) DoStartDVR(ctx context.Context, internalName string, streamID *string) (*pb.StartDVRResponse, error) {
+func (r *Resolver) DoStartDVR(ctx context.Context, internalName string, streamID *string, expiresAt *int) (*pb.StartDVRResponse, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo: start DVR")
 		return &pb.StartDVRResponse{Status: "started", DvrHash: "dvr_demo_hash"}, nil
@@ -698,6 +832,10 @@ func (r *Resolver) DoStartDVR(ctx context.Context, internalName string, streamID
 	req := &pb.StartDVRRequest{InternalName: internalName}
 	if streamID != nil {
 		req.StreamId = streamID
+	}
+	if expiresAt != nil {
+		exp := int64(*expiresAt)
+		req.ExpiresAt = &exp
 	}
 
 	// Call Commodore gRPC (context metadata carries auth)
@@ -732,16 +870,75 @@ func (r *Resolver) DoStopDVR(ctx context.Context, dvrHash string) (model.StopDVR
 	return &model.DeleteSuccess{Success: true, DeletedID: dvrHash}, nil
 }
 
+// DoDeleteDVR deletes a DVR recording and its files
+func (r *Resolver) DoDeleteDVR(ctx context.Context, dvrHash string) (model.DeleteDVRResult, error) {
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Demo: delete DVR")
+		return &model.DeleteSuccess{Success: true, DeletedID: dvrHash}, nil
+	}
+
+	// Call Commodore gRPC (context metadata carries auth)
+	if err := r.Clients.Commodore.DeleteDVR(ctx, dvrHash); err != nil {
+		r.Logger.WithError(err).Error("Failed to delete DVR")
+		if strings.Contains(err.Error(), "not found") {
+			return &model.NotFoundError{
+				Message:      "DVR recording not found",
+				Code:         strPtr("NOT_FOUND"),
+				ResourceType: "DVRRequest",
+				ResourceID:   dvrHash,
+			}, nil
+		}
+		return nil, fmt.Errorf("failed to delete DVR: %w", err)
+	}
+	return &model.DeleteSuccess{Success: true, DeletedID: dvrHash}, nil
+}
+
 // DoListDVRRequests lists DVR recordings with cursor pagination
 func (r *Resolver) DoListDVRRequests(ctx context.Context, internalName *string, pagination *pb.CursorPaginationRequest) (*pb.ListDVRRecordingsResponse, error) {
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo: list DVR requests")
-		return &pb.ListDVRRecordingsResponse{DvrRecordings: []*pb.DVRInfo{}}, nil
+		now := time.Now()
+		duration1 := int32(3600)  // 1 hour
+		duration2 := int32(1800)  // 30 minutes so far
+		size1 := int64(5368709120) // ~5 GB
+		size2 := int64(1073741824) // ~1 GB so far
+		return &pb.ListDVRRecordingsResponse{
+			DvrRecordings: []*pb.DVRInfo{
+				{
+					DvrHash:         "pb_dvr_demo_1",
+					InternalName:    "stream_demo_1",
+					Status:          "completed",
+					StartedAt:       timestamppb.New(now.Add(-48 * time.Hour)),
+					EndedAt:         timestamppb.New(now.Add(-47 * time.Hour)),
+					DurationSeconds: &duration1,
+					SizeBytes:       &size1,
+					CreatedAt:       timestamppb.New(now.Add(-48 * time.Hour)),
+					UpdatedAt:       timestamppb.New(now.Add(-47 * time.Hour)),
+				},
+				{
+					DvrHash:         "pb_dvr_demo_2",
+					InternalName:    "stream_demo_2",
+					Status:          "recording",
+					StartedAt:       timestamppb.New(now.Add(-30 * time.Minute)),
+					DurationSeconds: &duration2,
+					SizeBytes:       &size2,
+					CreatedAt:       timestamppb.New(now.Add(-30 * time.Minute)),
+					UpdatedAt:       timestamppb.New(now),
+				},
+			},
+			Pagination: &pb.CursorPaginationResponse{
+				TotalCount:  2,
+				HasNextPage: false,
+			},
+		}, nil
 	}
 
 	// Get tenant_id from context
-	tenantID, ok := ctx.Value("tenant_id").(string)
-	if !ok {
+	var tenantID string
+	if v, ok := ctx.Value("tenant_id").(string); ok {
+		tenantID = v
+	}
+	if tenantID == "" {
 		return nil, fmt.Errorf("tenant context required")
 	}
 
@@ -812,7 +1009,10 @@ func int64Ptr(i int64) *int64 {
 }
 
 func (r *Resolver) getStreamsMemoized(ctx context.Context) ([]*pb.Stream, error) {
-	tenantID, _ := ctx.Value("tenant_id").(string)
+	tenantID := ""
+	if v, ok := ctx.Value("tenant_id").(string); ok {
+		tenantID = v
+	}
 
 	var streams []*pb.Stream
 
@@ -846,7 +1046,10 @@ func (r *Resolver) getStreamsMemoized(ctx context.Context) ([]*pb.Stream, error)
 }
 
 func (r *Resolver) getStreamMemoized(ctx context.Context, streamID string) (*pb.Stream, error) {
-	tenantID, _ := ctx.Value("tenant_id").(string)
+	tenantID := ""
+	if v, ok := ctx.Value("tenant_id").(string); ok {
+		tenantID = v
+	}
 	var stream *pb.Stream
 
 	if lds := loaders.FromContext(ctx); lds != nil && lds.Memo != nil {
@@ -947,7 +1150,8 @@ func (r *Resolver) DoGetStreamsConnection(ctx context.Context, first *int, after
 func (r *Resolver) buildStreamsConnection(streams []*pb.Stream, total int, hasMore bool, offset int) *model.StreamsConnection {
 	edges := make([]*model.StreamEdge, len(streams))
 	for i, stream := range streams {
-		cursor := pagination.EncodeIndexCursor(offset + i)
+		// Use keyset cursor (timestamp + ID) for stable pagination
+		cursor := pagination.EncodeCursor(stream.CreatedAt.AsTime(), stream.InternalName)
 		edges[i] = &model.StreamEdge{
 			Cursor: cursor,
 			Node:   stream,
@@ -959,10 +1163,8 @@ func (r *Resolver) buildStreamsConnection(streams []*pb.Stream, total int, hasMo
 		HasNextPage:     hasMore,
 	}
 	if len(edges) > 0 {
-		firstCursor := pagination.EncodeIndexCursor(offset)
-		lastCursor := pagination.EncodeIndexCursor(offset + len(streams) - 1)
-		pageInfo.StartCursor = &firstCursor
-		pageInfo.EndCursor = &lastCursor
+		pageInfo.StartCursor = &edges[0].Cursor
+		pageInfo.EndCursor = &edges[len(edges)-1].Cursor
 	}
 
 	return &model.StreamsConnection{
@@ -974,83 +1176,114 @@ func (r *Resolver) buildStreamsConnection(streams []*pb.Stream, total int, hasMo
 
 // DoGetClipsConnection retrieves clips with Relay-style cursor pagination
 func (r *Resolver) DoGetClipsConnection(ctx context.Context, streamID *string, first *int, after *string, last *int, before *string) (*model.ClipsConnection, error) {
-	// TODO: Implement bidirectional keyset pagination once Commodore supports it
-	_ = last
-	_ = before
-	// Parse pagination parameters
-	limit := pagination.DefaultLimit
-	offset := 0
-
+	// Build cursor pagination request with bidirectional support
+	paginationReq := &pb.CursorPaginationRequest{
+		First: int32(pagination.DefaultLimit),
+	}
 	if first != nil {
-		limit = pagination.ClampLimit(*first)
+		paginationReq.First = int32(pagination.ClampLimit(*first))
+	}
+	if after != nil && *after != "" {
+		paginationReq.After = after
+	}
+	if last != nil {
+		paginationReq.Last = int32(pagination.ClampLimit(*last))
+	}
+	if before != nil && *before != "" {
+		paginationReq.Before = before
 	}
 
 	// Check for demo mode
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo clips connection")
 		clips, _ := r.DoGetClips(ctx, streamID)
-		return r.buildClipsConnection(clips, len(clips), false, offset), nil
+		return r.buildClipsConnectionFromProto(clips, nil), nil
 	}
 
 	// Get tenant_id from context
-	tenantID, ok := ctx.Value("tenant_id").(string)
-	if !ok {
+	var tenantID string
+	if v, ok := ctx.Value("tenant_id").(string); ok {
+		tenantID = v
+	}
+	if tenantID == "" {
 		return nil, fmt.Errorf("tenant context required")
 	}
 
 	// gRPC uses context metadata for auth (set by userContextInterceptor)
-	clipsResp, err := r.Clients.Commodore.GetClips(ctx, tenantID, streamID, nil)
+	clipsResp, err := r.Clients.Commodore.GetClips(ctx, tenantID, streamID, paginationReq)
 	if err != nil {
 		r.Logger.WithError(err).Error("Failed to get clips")
 		return nil, fmt.Errorf("failed to get clips: %w", err)
 	}
 
-	// gRPC client returns []*pb.ClipInfo directly
-	allClips := clipsResp.Clips
-	total := len(allClips)
+	// Enrich with lifecycle data from Periscope (size_bytes, status, storage_location, etc.)
+	if l := loaders.FromContext(ctx); l != nil && l.ArtifactLifecycle != nil && len(clipsResp.Clips) > 0 {
+		hashes := make([]string, len(clipsResp.Clips))
+		for i, clip := range clipsResp.Clips {
+			hashes[i] = clip.ClipHash
+		}
 
-	// Apply pagination in-memory
-	startIdx := offset
-	if startIdx > total {
-		startIdx = total
+		states, err := l.ArtifactLifecycle.LoadMany(ctx, tenantID, hashes)
+		if err != nil {
+			r.Logger.WithError(err).Warn("Failed to load clip lifecycle data")
+		} else {
+			for _, clip := range clipsResp.Clips {
+				if state, ok := states[clip.ClipHash]; ok && state != nil {
+					// Convert uint64 to int64 for size_bytes
+					if state.SizeBytes != nil {
+						sizeInt64 := int64(*state.SizeBytes)
+						clip.SizeBytes = &sizeInt64
+					}
+					clip.Status = state.Stage
+					if state.FilePath != nil {
+						clip.StoragePath = *state.FilePath
+					}
+					if state.S3Url != nil {
+						storageLocation := "s3"
+						clip.StorageLocation = &storageLocation
+					}
+				}
+			}
+		}
 	}
-	end := startIdx + limit
-	if end > total {
-		end = total
-	}
 
-	paginatedClips := allClips[startIdx:end]
-	hasMore := end < total
-
-	return r.buildClipsConnection(paginatedClips, total, hasMore, offset), nil
+	return r.buildClipsConnectionFromProto(clipsResp.Clips, clipsResp.Pagination), nil
 }
 
-// buildClipsConnection constructs a ClipsConnection from a slice of clips
-func (r *Resolver) buildClipsConnection(clips []*pb.ClipInfo, total int, hasMore bool, offset int) *model.ClipsConnection {
+// buildClipsConnectionFromProto constructs a ClipsConnection from proto response with keyset pagination
+func (r *Resolver) buildClipsConnectionFromProto(clips []*pb.ClipInfo, paginationResp *pb.CursorPaginationResponse) *model.ClipsConnection {
 	edges := make([]*model.ClipEdge, len(clips))
 	for i, clip := range clips {
-		cursor := pagination.EncodeIndexCursor(offset + i)
+		// Use keyset cursor (timestamp + clip_hash) for stable pagination
+		cursor := pagination.EncodeCursor(clip.CreatedAt.AsTime(), clip.ClipHash)
 		edges[i] = &model.ClipEdge{
 			Cursor: cursor,
 			Node:   clip,
 		}
 	}
 
+	// Build page info from proto pagination response
 	pageInfo := &model.PageInfo{
-		HasPreviousPage: offset > 0,
-		HasNextPage:     hasMore,
+		HasPreviousPage: paginationResp != nil && paginationResp.HasPreviousPage,
+		HasNextPage:     paginationResp != nil && paginationResp.HasNextPage,
 	}
-	if len(edges) > 0 {
-		firstCursor := pagination.EncodeIndexCursor(offset)
-		lastCursor := pagination.EncodeIndexCursor(offset + len(clips) - 1)
-		pageInfo.StartCursor = &firstCursor
-		pageInfo.EndCursor = &lastCursor
+	if paginationResp != nil {
+		pageInfo.StartCursor = paginationResp.StartCursor
+		pageInfo.EndCursor = paginationResp.EndCursor
+	}
+
+	totalCount := 0
+	if paginationResp != nil {
+		totalCount = int(paginationResp.TotalCount)
+	} else {
+		// Fallback for demo mode where pagination is nil
+		totalCount = len(clips)
 	}
 
 	return &model.ClipsConnection{
 		Edges:      edges,
 		PageInfo:   pageInfo,
-		TotalCount: total,
+		TotalCount: totalCount,
 	}
 }
 
@@ -1079,13 +1312,55 @@ func (r *Resolver) DoGetDVRRecordingsConnection(ctx context.Context, internalNam
 		return nil, err
 	}
 
+	// Extract tenant_id for lifecycle lookup
+	var tenantID string
+	if v, ok := ctx.Value("tenant_id").(string); ok {
+		tenantID = v
+	}
+
+	// Enrich with lifecycle data from Periscope (size_bytes, status, storage_location, etc.)
+	if l := loaders.FromContext(ctx); l != nil && l.ArtifactLifecycle != nil && tenantID != "" && len(response.DvrRecordings) > 0 {
+		hashes := make([]string, len(response.DvrRecordings))
+		for i, dvr := range response.DvrRecordings {
+			hashes[i] = dvr.DvrHash
+		}
+
+		states, err := l.ArtifactLifecycle.LoadMany(ctx, tenantID, hashes)
+		if err != nil {
+			r.Logger.WithError(err).Warn("Failed to load DVR lifecycle data")
+		} else {
+			for _, dvr := range response.DvrRecordings {
+				if state, ok := states[dvr.DvrHash]; ok && state != nil {
+					// Convert uint64 to int64 for size_bytes
+					if state.SizeBytes != nil {
+						sizeInt64 := int64(*state.SizeBytes)
+						dvr.SizeBytes = &sizeInt64
+					}
+					dvr.Status = state.Stage
+					if state.StartedAt != nil {
+						dvr.StartedAt = state.StartedAt
+					}
+					if state.CompletedAt != nil {
+						dvr.EndedAt = state.CompletedAt
+					}
+					if state.ManifestPath != nil {
+						dvr.ManifestPath = *state.ManifestPath
+					}
+					if state.S3Url != nil {
+						dvr.S3Url = state.S3Url
+						storageLocation := "s3"
+						dvr.StorageLocation = &storageLocation
+					}
+				}
+			}
+		}
+	}
+
 	// Build edges from proto response (DVRInfo maps to DVRRequest via autobind)
 	edges := make([]*model.DVRRecordingEdge, len(response.DvrRecordings))
 	for i, dvrInfo := range response.DvrRecordings {
-		cursor := dvrInfo.DvrHash
-		if cursor == "" {
-			cursor = pagination.EncodeIndexCursor(i)
-		}
+		// Use keyset cursor (timestamp + dvr_hash) for stable pagination
+		cursor := pagination.EncodeCursor(dvrInfo.CreatedAt.AsTime(), dvrInfo.DvrHash)
 		edges[i] = &model.DVRRecordingEdge{
 			Cursor: cursor,
 			Node:   dvrInfo, // pb.DVRInfo autobinds to DVRRequest

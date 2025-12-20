@@ -1,0 +1,20 @@
+# Create a new private cluster with bootstrap token
+mutation CreatePrivateCluster($input: CreatePrivateClusterInput!) {
+  createPrivateCluster(input: $input) {
+    __typename
+    ... on CreatePrivateClusterResponse {
+      cluster {
+        ...ClusterFields
+      }
+      bootstrapToken {
+        ...BootstrapTokenFields
+      }
+    }
+    ... on ValidationError {
+      ...ValidationErrorFields @mask_disable
+    }
+    ... on AuthError {
+      ...AuthErrorFields @mask_disable
+    }
+  }
+}

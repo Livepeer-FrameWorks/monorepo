@@ -1,0 +1,80 @@
+{
+  "name": "@livepeer-frameworks/player-core",
+  "version": "0.0.3",
+  "type": "module",
+  "description": "Core player logic for FrameWorks streaming - framework agnostic",
+  "main": "dist/cjs/index.js",
+  "module": "dist/esm/index.js",
+  "types": "dist/types/index.d.ts",
+  "style": "dist/player.css",
+  "files": [
+    "dist",
+    "src"
+  ],
+  "exports": {
+    ".": {
+      "import": "./dist/esm/index.js",
+      "require": "./dist/cjs/index.js",
+      "types": "./dist/types/index.d.ts"
+    },
+    "./vanilla": {
+      "import": "./dist/esm/vanilla.js",
+      "require": "./dist/cjs/vanilla.js",
+      "types": "./dist/types/vanilla/index.d.ts"
+    },
+    "./player.css": "./dist/player.css",
+    "./styles.css": "./dist/player.css"
+  },
+  "scripts": {
+    "build": "pnpm run build:css && NODE_ENV=production rollup -c",
+    "build:watch": "NODE_ENV=development rollup -c --watch",
+    "build:css": "mkdir -p ./dist && cp ./src/styles/player.css ./dist/player.css",
+    "type-check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "clsx": "^2.1.1",
+    "tailwind-merge": "^2.5.2"
+  },
+  "peerDependencies": {
+    "dashjs": "^4.0.0 || ^5.0.0",
+    "hls.js": "^1.0.0",
+    "video.js": "^8.0.0"
+  },
+  "peerDependenciesMeta": {
+    "dashjs": {
+      "optional": true
+    },
+    "hls.js": {
+      "optional": true
+    },
+    "video.js": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@rollup/plugin-commonjs": "^28.0.6",
+    "@rollup/plugin-node-resolve": "^16.0.1",
+    "@rollup/plugin-terser": "^0.4.4",
+    "@rollup/plugin-typescript": "^12.1.4",
+    "@rollup/plugin-url": "^8.0.2",
+    "@tailwindcss/postcss": "^4.1.14",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.47",
+    "postcss-cli": "^11.0.1",
+    "postcss-prefix-selector": "^2.1.1",
+    "rollup": "^4.48.1",
+    "tailwindcss": "^4.1.14",
+    "tslib": "^2.8.1",
+    "typescript": "^5.9.2"
+  },
+  "keywords": [
+    "streaming",
+    "mistserver",
+    "webrtc",
+    "player",
+    "hls",
+    "dash"
+  ],
+  "author": "Livepeer FrameWorks",
+  "license": "Unlicense"
+}

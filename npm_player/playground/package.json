@@ -1,5 +1,5 @@
 {
-  "name": "@livepeer-frameworks/player-playground",
+  "name": "@livepeer-frameworks/sdk-playground",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -9,11 +9,17 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@livepeer-frameworks/player": "file:..",
+    "@livepeer-frameworks/player-core": "workspace:*",
+    "@livepeer-frameworks/player-react": "workspace:*",
+    "@livepeer-frameworks/streamcrafter-core": "workspace:*",
+    "@livepeer-frameworks/streamcrafter-react": "workspace:*",
     "@radix-ui/react-accordion": "^1.1.2",
     "@radix-ui/react-alert-dialog": "^1.0.6",
+    "@radix-ui/react-context-menu": "^2.2.16",
     "@radix-ui/react-dialog": "^1.0.6",
     "@radix-ui/react-label": "^2.0.2",
+    "@radix-ui/react-select": "^2.0.0",
+    "@radix-ui/react-slider": "^1.1.2",
     "@radix-ui/react-slot": "^1.1.1",
     "@radix-ui/react-switch": "^1.0.4",
     "@radix-ui/react-tabs": "^1.0.7",

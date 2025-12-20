@@ -1,13 +1,17 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { get } from "svelte/store";
+  import { goto } from "$app/navigation";
   import { resolve } from "$app/paths";
   import { auth } from "$lib/stores/auth";
   import {
-    GetNodesStore,
+    fragment,
+    GetNodesConnectionStore,
     GetGeographicDistributionStore,
-    GetLoadBalancingMetricsStore,
     GetRoutingEventsStore,
-    GetConnectionEventsStore
+    GetConnectionEventsStore,
+    GetViewerGeoHourlyStore,
+    NodeCoreFieldsStore,
   } from "$houdini";
   import { getIconComponent } from "$lib/iconUtils";
   import { Button } from "$lib/components/ui/button";
@@ -20,25 +24,30 @@
   import RoutingMap from "$lib/components/charts/RoutingMap.svelte";
   import CountryChoropleth from "$lib/components/charts/CountryChoropleth.svelte";
   import { getCountryName } from "$lib/utils/country-names";
+  import EmptyState from "$lib/components/EmptyState.svelte";
 
   // Houdini stores
-  const nodesStore = new GetNodesStore();
+  const nodesStore = new GetNodesConnectionStore();
   const geoDistStore = new GetGeographicDistributionStore();
-  const loadBalancingStore = new GetLoadBalancingMetricsStore();
   const routingEventsStore = new GetRoutingEventsStore();
   const connectionEventsStore = new GetConnectionEventsStore();
+  const viewerGeoHourlyStore = new GetViewerGeoHourlyStore();
+
+  // Fragment stores for unmasking nested data
+  const nodeCoreStore = new NodeCoreFieldsStore();
 
   // Types from Houdini
-  type NodeData = NonNullable<NonNullable<typeof $nodesStore.data>["nodes"]>[0];
-  type LoadBalancingMetric = NonNullable<NonNullable<typeof $loadBalancingStore.data>["loadBalancingMetrics"]>[0];
+  type NodeData = NonNullable<NonNullable<NonNullable<typeof $nodesStore.data>["nodesConnection"]>["edges"]>[0]["node"];
+  type RoutingEventNode = NonNullable<NonNullable<NonNullable<typeof $routingEventsStore.data>["routingEventsConnection"]>["edges"]>[0]["node"];
   type ConnectionEventNode = NonNullable<NonNullable<NonNullable<typeof $connectionEventsStore.data>["connectionEventsConnection"]>["edges"]>[0]["node"];
 
   let isAuthenticated = false;
   let loading = $derived(
     $nodesStore.fetching ||
     $geoDistStore.fetching ||
-    $loadBalancingStore.fetching ||
-    $connectionEventsStore.fetching
+    $routingEventsStore.fetching ||
+    $connectionEventsStore.fetching ||
+    $viewerGeoHourlyStore.fetching
   );
 
   // Pagination state for connection events
@@ -46,10 +55,39 @@
   let hasMoreEvents = $derived($connectionEventsStore.data?.connectionEventsConnection?.pageInfo?.hasNextPage ?? false);
   let totalEventsCount = $derived($connectionEventsStore.data?.connectionEventsConnection?.totalCount ?? 0);
 
-  // Derived data from stores
-  let nodes = $derived($nodesStore.data?.nodes ?? []);
+  // Get masked nodes from edges
+  let maskedNodes = $derived(
+    $nodesStore.data?.nodesConnection?.edges?.map(e => e.node) ?? []
+  );
+
+  // Unmask nodes with fragment() and get() pattern
+  let nodes = $derived(
+    maskedNodes.map(node => get(fragment(node, nodeCoreStore)))
+  );
   let geographicDistribution = $derived($geoDistStore.data?.geographicDistribution ?? null);
-  let loadBalancingMetrics = $derived($loadBalancingStore.data?.loadBalancingMetrics ?? []);
+
+  // Transform hourly geo data for CountryTrendChart (from dedicated MV)
+  // Falls back to viewersByCountry from geographicDistribution if hourly data not available
+  let countryTrendData = $derived.by(() => {
+    const hourlyEdges = $viewerGeoHourlyStore.data?.viewerGeoHourlyConnection?.edges ?? [];
+
+    // Use hourly MV data if available (more granular)
+    if (hourlyEdges.length > 0) {
+      return hourlyEdges.map(edge => ({
+        timestamp: edge.node.hour,
+        countryCode: edge.node.countryCode,
+        viewerCount: edge.node.viewerCount,
+      }));
+    }
+
+    // Fallback to viewersByCountry from geographicDistribution
+    return geographicDistribution?.viewersByCountry ?? [];
+  });
+
+  // Routing events with latency and distance data
+  let routingEvents = $derived(
+    ($routingEventsStore.data?.routingEventsConnection?.edges ?? []).map(e => e.node)
+  );
 
   // Viewer events from connection events store (with pagination support)
   let viewerEvents = $derived(
@@ -263,18 +301,21 @@
     return h3Index.slice(0, 8) + '...';
   }
 
-  // Bucket hotspot list (client buckets)
-  let bucketHotspots = $derived.by(() => {
-    // Build bucket->country map from events
+  // Bucket bucket->country map from events (for name resolution)
+  let bucketCountryMap = $derived.by(() => {
     const edges = $routingEventsStore.data?.routingEventsConnection?.edges ?? [];
-    const countryMap: Record<string, string> = {};
+    const map: Record<string, string> = {};
     for (const edge of edges) {
       const evt = edge.node;
       if (evt.clientBucket?.h3Index && evt.clientCountry) {
-        countryMap[evt.clientBucket.h3Index] = evt.clientCountry;
+        map[evt.clientBucket.h3Index] = evt.clientCountry;
       }
     }
+    return map;
+  });
 
+  // Bucket hotspot list (client buckets)
+  let bucketHotspots = $derived.by(() => {
     const stats = routingMapData.bucketStats || {};
     const arr = Object.entries(stats)
       .map(([id, s]) => {
@@ -287,7 +328,7 @@
           successRate: s.count ? Math.round((s.success / s.count) * 100) : 0,
           avgDistance: s.count ? s.distanceSum / s.count : 0,
           nodeSeen: s.nodeSeen,
-          label: resolveBucketLocation(rawIndex, countryMap)
+          label: resolveBucketLocation(rawIndex, bucketCountryMap)
         };
       })
       .sort((a, b) => b.count - a.count);
@@ -366,7 +407,6 @@
   }
 
   let routingEfficiency = $derived.by((): RoutingEfficiency & { avgLatency: number } => {
-    const routingEvents = $routingEventsStore.data?.routingEventsConnection?.edges ?? [];
     if (routingEvents.length === 0) {
       return { efficiency: 0, avgScore: 0, totalDecisions: 0, avgDistance: 0, avgLatency: 0 };
     }
@@ -374,21 +414,15 @@
     let successCount = 0;
     let totalScore = 0;
     let totalDistance = 0;
+    let totalLatency = 0;
+    let latencyCount = 0;
 
-    for (const edge of routingEvents) {
-      const event = edge.node;
+    for (const event of routingEvents) {
       if (event.selectedNode) successCount++;
       totalScore += event.score ?? 0;
       totalDistance += event.routingDistance ?? 0;
-    }
-
-    // Calculate avg latency from load balancing metrics (has latencyMs)
-    const lbMetrics = loadBalancingMetrics;
-    let totalLatency = 0;
-    let latencyCount = 0;
-    for (const metric of lbMetrics) {
-      if (metric.latencyMs) {
-        totalLatency += metric.latencyMs;
+      if (event.latencyMs) {
+        totalLatency += event.latencyMs;
         latencyCount++;
       }
     }
@@ -458,6 +492,12 @@
     return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
   }
 
+  const hasAnyData = $derived(
+    (geographicDistribution?.totalViewers ?? 0) > 0 ||
+    routingMapData.routes.length > 0 ||
+    viewerEvents.length > 0
+  );
+
   let error = $state<string | null>(null);
 
   const timeRange = {
@@ -483,9 +523,9 @@
       await Promise.all([
         nodesStore.fetch(),
         geoDistStore.fetch({ variables: { stream: null, timeRange } }),
-        loadBalancingStore.fetch({ variables: { timeRange } }),
         routingEventsStore.fetch({ variables: { stream: null, timeRange } }),
         connectionEventsStore.fetch({ variables: { timeRange } }),
+        viewerGeoHourlyStore.fetch({ variables: { timeRange, first: 500 } }).catch(() => null),
       ]);
 
       if ($nodesStore.errors?.length) {
@@ -495,8 +535,8 @@
       if ($geoDistStore.errors?.length) {
         console.error("Failed to load geographic distribution:", $geoDistStore.errors);
       }
-      if ($loadBalancingStore.errors?.length) {
-        console.error("Failed to load load balancing metrics:", $loadBalancingStore.errors);
+      if ($routingEventsStore.errors?.length) {
+        console.error("Failed to load routing events:", $routingEventsStore.errors);
       }
     } catch (err: any) {
       error = err.message || "Failed to load data";
@@ -509,7 +549,7 @@
     if (!hasMoreEvents || loadingMoreEvents) return;
     try {
       loadingMoreEvents = true;
-      await connectionEventsStore.loadNextPage({ first: 50 });
+      await connectionEventsStore.loadNextPage();
     } catch (err) {
       console.error("Failed to load more events:", err);
     } finally {
@@ -541,9 +581,9 @@
     const mediumRange = { total: 0, success: 0 };
     const longRange = { total: 0, success: 0 };
 
-    for (const metric of loadBalancingMetrics) {
-      const distance = metric.routingDistance || 0;
-      const isSuccess = metric.status === 'success' || metric.status === 'SUCCESS';
+    for (const event of routingEvents) {
+      const distance = event.routingDistance || 0;
+      const isSuccess = event.status === 'success' || event.status === 'SUCCESS';
 
       if (distance < 500) {
         shortRange.total++;
@@ -561,7 +601,7 @@
       short: shortRange.total > 0 ? Math.round((shortRange.success / shortRange.total) * 100) : 0,
       medium: mediumRange.total > 0 ? Math.round((mediumRange.success / mediumRange.total) * 100) : 0,
       long: longRange.total > 0 ? Math.round((longRange.success / longRange.total) * 100) : 0,
-      hasData: loadBalancingMetrics.length > 0
+      hasData: routingEvents.length > 0
     };
   });
 
@@ -650,7 +690,7 @@
             <DashboardMetricCard
               icon={ActivityIcon}
               iconColor="text-warning"
-              value={loadBalancingMetrics.length}
+              value={routingEvents.length}
               valueColor="text-warning"
               label="Routing Events"
             />
@@ -755,8 +795,8 @@
           </div>
         {/if}
 
-        <!-- Country Trend Slab -->
-        {#if geographicDistribution?.viewersByCountry?.length}
+        <!-- Country Trend Slab (from hourly MV or fallback to viewersByCountry) -->
+        {#if countryTrendData.length > 0}
           <div class="slab col-span-full">
             <div class="slab-header">
               <h3>Viewer Trends by Country (Over Time)</h3>
@@ -764,7 +804,7 @@
             <div class="slab-body--padded">
               <div class="p-4 border border-border/30 bg-muted/20">
                 <CountryTrendChart
-                  data={geographicDistribution.viewersByCountry}
+                  data={countryTrendData}
                   height={300}
                   maxCountries={6}
                 />
@@ -774,6 +814,7 @@
         {/if}
 
         <!-- Routing Efficiency Slab -->
+        {#if routingEfficiency.totalDecisions > 0}
         <div class="slab">
           <div class="slab-header">
             <div class="flex items-center gap-2">
@@ -855,6 +896,8 @@
             {/if}
           </div>
         </div>
+        {/if}
+
 
         <!-- Routing Map Slab -->
         {#if routingMapData.routes.length > 0}
@@ -1064,8 +1107,12 @@
                   <tbody>
                     {#each bucketFlows.slice(0, 10) as flow (flow.from + flow.to)}
                       <tr class="border-b border-border/30 hover:bg-muted/15">
-                        <td class="py-2 px-4 font-mono text-xs">{flow.from.slice(0,6)}…</td>
-                        <td class="py-2 px-4 font-mono text-xs">{flow.to.slice(0,6)}…</td>
+                        <td class="py-2 px-4 text-xs font-mono" title={flow.from}>
+                          {resolveBucketLocation(flow.from, bucketCountryMap)}
+                        </td>
+                        <td class="py-2 px-4 text-xs font-mono" title={flow.to}>
+                          {resolveBucketLocation(flow.to, bucketCountryMap)}
+                        </td>
                         <td class="py-2 px-4 font-semibold text-foreground">{flow.count}</td>
                         <td class="py-2 px-4 text-xs text-muted-foreground">{Math.round(flow.avgDistance)} km</td>
                         <td class="py-2 px-4">
@@ -1139,12 +1186,16 @@
                     </tr>
                   </thead>
                   <tbody>
-                    {#each recentRoutingEvents as evt (evt.timestamp + evt.selectedNode)}
+                    {#each recentRoutingEvents as evt, i (i)}
                       <tr class="border-b border-border/30 hover:bg-muted/15">
                         <td class="py-2 px-4 text-xs text-muted-foreground">{new Date(evt.timestamp).toLocaleTimeString()}</td>
                         <td class="py-2 px-4 font-mono text-xs">{evt.streamName}</td>
-                        <td class="py-2 px-4 font-mono text-xs">{formatBucketId(evt.clientBucket)}</td>
-                        <td class="py-2 px-4 font-mono text-xs">{formatBucketId(evt.nodeBucket)}</td>
+                        <td class="py-2 px-4 text-xs font-mono" title={evt.clientBucket?.h3Index || ''}>
+                          {evt.clientBucket?.h3Index ? resolveBucketLocation(evt.clientBucket.h3Index, bucketCountryMap) : '—'}
+                        </td>
+                        <td class="py-2 px-4 text-xs font-mono" title={evt.nodeBucket?.h3Index || ''}>
+                          {evt.nodeBucket?.h3Index ? resolveBucketLocation(evt.nodeBucket.h3Index, bucketCountryMap) : '—'}
+                        </td>
                         <td class="py-2 px-4 font-mono text-xs">{evt.selectedNode}</td>
                         <td class="py-2 px-4">
                           <span class="px-2 py-0.5 rounded text-xs font-mono {evt.status === 'success' || evt.status === 'SUCCESS' ? 'bg-success/20 text-success' : 'bg-destructive/20 text-destructive'}">
@@ -1195,7 +1246,7 @@
               <div class="flex items-center justify-between w-full">
                 <h3>Viewer Connection Events</h3>
                 <span class="text-xs text-muted-foreground">
-                  {viewerEvents.length} of {totalEventsCount} events
+                  Showing {viewerEvents.length} of {totalEventsCount} events
                 </span>
               </div>
             </div>
@@ -1284,7 +1335,17 @@
           </div>
         {/if}
 
-
+        {#if !hasAnyData}
+          <div class="col-span-full">
+            <EmptyState
+              iconName="Globe2"
+              title="No geographic data"
+              description="Viewer locations and routing events will appear here once you have active streams."
+              actionText="View Streams"
+              onAction={() => goto(resolve("/streams"))}
+            />
+          </div>
+        {/if}
       </div>
     </div>
   {/if}

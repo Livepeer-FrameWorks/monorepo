@@ -1,10 +1,15 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
+  import { get } from "svelte/store";
   import { goto } from "$app/navigation";
+  import { resolve } from "$app/paths";
   import {
+    fragment,
     GetDVRRequestsStore,
-    GetStreamsStore,
-    DvrLifecycleStore
+    GetStreamsConnectionStore,
+    DvrLifecycleStore,
+    DeleteDVRStore,
+    StreamCoreFieldsStore
   } from "$houdini";
   import type { DvrLifecycle$result } from "$houdini";
   import { toast } from "$lib/stores/toast.js";
@@ -12,6 +17,7 @@
     formatBytes,
     formatDuration,
     formatDate,
+    formatExpiry,
   } from "$lib/utils/formatters.js";
   import { Input } from "$lib/components/ui/input";
   import { Button } from "$lib/components/ui/button";
@@ -31,25 +37,35 @@
   } from "$lib/components/ui/select";
   import { GridSeam } from "$lib/components/layout";
   import DashboardMetricCard from "$lib/components/shared/DashboardMetricCard.svelte";
+  import DeleteRecordingModal from "$lib/components/recordings/DeleteRecordingModal.svelte";
   import { getIconComponent } from "$lib/iconUtils";
   import { getContentDeliveryUrls } from "$lib/config";
   import PlaybackProtocols from "$lib/components/PlaybackProtocols.svelte";
+  import EmptyState from "$lib/components/EmptyState.svelte";
 
   // Houdini stores
   const dvrRequestsStore = new GetDVRRequestsStore();
-  const streamsStore = new GetStreamsStore();
+  const streamsStore = new GetStreamsConnectionStore();
   const dvrLifecycleSub = new DvrLifecycleStore();
+  const deleteDvrMutation = new DeleteDVRStore();
+
+  // Fragment stores for unmasking
+  const streamCoreStore = new StreamCoreFieldsStore();
 
   // Types from Houdini
   type DvrRequestData = NonNullable<NonNullable<NonNullable<typeof $dvrRequestsStore.data>["dvrRecordingsConnection"]>["edges"]>[0]["node"];
   type DvrLifecycleEvent = NonNullable<DvrLifecycle$result["dvrLifecycle"]>;
-  type StreamData = NonNullable<NonNullable<typeof $streamsStore.data>["streams"]>[0];
+  type StreamData = NonNullable<NonNullable<NonNullable<typeof $streamsStore.data>["streamsConnection"]>["edges"]>[0]["node"];
 
   // Derived state from Houdini stores
   let loading = $derived($dvrRequestsStore.fetching || $streamsStore.fetching);
   let recordingsEdges = $derived($dvrRequestsStore.data?.dvrRecordingsConnection?.edges ?? []);
   let recordings = $derived(recordingsEdges.map(e => e.node));
-  let streams = $derived($streamsStore.data?.streams ?? []);
+  let maskedStreams = $derived($streamsStore.data?.streamsConnection?.edges?.map(e => e.node) ?? []);
+  // Unmask stream core fields to access id property
+  let streams = $derived(
+    maskedStreams.map(node => get(fragment(node, streamCoreStore)))
+  );
 
   let error = $state<string | null>(null);
   let statusFilter = $state("all");
@@ -111,6 +127,11 @@
   let completedCount = $derived(filteredRecordings.filter((r) => r.status === "completed").length);
   let recordingCount = $derived(filteredRecordings.filter((r) => r.status === "recording").length);
   let failedCount = $derived(filteredRecordings.filter((r) => r.status === "failed").length);
+  
+  // Recording deletion
+  let deletingRecordingHash = $state("");
+  let showDeleteModal = $state(false);
+  let recordingToDelete = $state<DvrRequestData | null>(null);
 
   async function loadRecordings() {
     try {
@@ -196,6 +217,38 @@
     }
   }
 
+  function confirmDeleteRecording(recording: DvrRequestData) {
+    recordingToDelete = recording;
+    showDeleteModal = true;
+  }
+
+  async function deleteRecording() {
+    if (!recordingToDelete) return;
+    const hash = recordingToDelete.dvrHash;
+
+    try {
+      deletingRecordingHash = hash;
+      const result = await deleteDvrMutation.mutate({ dvrHash: hash });
+
+      const deleteResult = result.data?.deleteDVR;
+      if (deleteResult?.__typename === "DeleteSuccess") {
+        toast.success("Recording deleted successfully");
+        // Remove from list locally if possible, or reload
+        loadRecordings();
+      } else if (deleteResult) {
+        const errorResult = deleteResult as unknown as { message?: string };
+        toast.error(errorResult.message || "Failed to delete recording");
+      }
+    } catch (err) {
+      console.error("Failed to delete recording:", err);
+      toast.error("Failed to delete recording");
+    } finally {
+      deletingRecordingHash = "";
+      showDeleteModal = false;
+      recordingToDelete = null;
+    }
+  }
+
   function getStatusColor(status: string | null | undefined): string {
     switch (status?.toLowerCase()) {
       case "completed":
@@ -206,11 +259,43 @@
         return "text-primary bg-primary/10 border-primary/20";
       case "failed":
         return "text-destructive bg-destructive/10 border-destructive/20";
+      case "deleted":
+        return "text-muted-foreground bg-muted border-border opacity-70";
       case "paused":
         return "text-muted-foreground bg-muted border-border";
       default:
         return "text-muted-foreground bg-muted border-border";
     }
+  }
+
+  function isRecordingReady(status: string | null | undefined): boolean {
+    const s = status?.toLowerCase();
+    // Status may be null when lifecycle data isn't populated from Periscope
+    // Consider ready if status indicates completion or if status is not set (assume ready)
+    return s === "completed" || s === "status_stopped" || s === "stopped" || s === undefined || s === null || s === "";
+  }
+
+  function isRecordingActive(status: string | null | undefined): boolean {
+    const s = status?.toLowerCase();
+    return s === "recording" || s === "started" || s === "status_started";
+  }
+
+  function isRecordingFailed(status: string | null | undefined): boolean {
+    const s = status?.toLowerCase();
+    return s === "failed" || s === "error" || s === "status_failed";
+  }
+
+  function isRecordingDeleted(status: string | null | undefined): boolean {
+    return status?.toLowerCase() === "deleted";
+  }
+
+  // Check if recording can be played - has hash and isn't actively recording or failed
+  function canPlayRecording(recording: DvrRequestData): boolean {
+    if (!recording.dvrHash) return false;
+    if (isRecordingFailed(recording.status)) return false;
+    if (isRecordingActive(recording.status)) return false;
+    if (isRecordingDeleted(recording.status)) return false;
+    return true; // Has hash and not in a bad state
   }
 
   function nextPage() {
@@ -261,6 +346,7 @@
   const Share2Icon = getIconComponent("Share2");
   const Trash2Icon = getIconComponent("Trash2");
   const ChevronUpIcon = getIconComponent("ChevronUp");
+  const SnowflakeIcon = getIconComponent("Snowflake");
 
   // Expanded row tracking
   let expandedRecording = $state<string | null>(null);
@@ -341,6 +427,7 @@
             label="Recording"
           />
         </div>
+
         <div>
           <DashboardMetricCard
             icon={XCircleIcon}
@@ -430,29 +517,26 @@
                 </div>
               </div>
             {:else if paginatedRecordings.length === 0}
-              <div class="flex flex-col items-center justify-center py-16 m-4 border-2 border-dashed border-border/50 rounded-lg bg-muted/5">
-                <div class="w-16 h-16 rounded-full bg-muted/30 flex items-center justify-center mb-6">
-                  <FilmIcon class="w-8 h-8 text-muted-foreground" />
-                </div>
-                <h3 class="text-xl font-semibold mb-3">No recordings found</h3>
-                <p class="text-muted-foreground mb-8 max-w-sm text-lg text-center">
-                  {#if searchQuery || statusFilter !== "all"}
-                    Try adjusting your search query or changing the status filters.
-                  {:else}
-                    Recordings of your live streams will appear here.
-                  {/if}
-                </p>
+              <div class="p-8">
                 {#if searchQuery || statusFilter !== "all"}
-                  <Button
-                    variant="outline"
-                    size="lg"
-                    onclick={() => {
+                  <EmptyState
+                    iconName="Film"
+                    title="No recordings found"
+                    description="Try adjusting your search query or changing the status filters."
+                    actionText="Clear Filters"
+                    onAction={() => {
                       searchQuery = "";
                       statusFilter = "all";
                     }}
-                  >
-                    Clear Filters
-                  </Button>
+                  />
+                {:else}
+                  <EmptyState
+                    iconName="Film"
+                    title="No recordings yet"
+                    description="Recordings of your live streams will appear here."
+                    actionText="Manage Streams"
+                    onAction={() => goto(resolve("/streams"))}
+                  />
                 {/if}
               </div>
             {:else}
@@ -495,13 +579,19 @@
                       >
                         Created
                       </TableHead>
+                      <TableHead
+                        class="px-4 py-2 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider"
+                      >
+                        Expires
+                      </TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody class="divide-y divide-border">
                     {#each paginatedRecordings as recording (recording.dvrHash)}
+                      {@const isDeleted = isRecordingDeleted(recording.status)}
                       <TableRow
-                        class="hover:bg-muted/50 transition-colors cursor-pointer group"
-                        onclick={() => recording.status === "completed" && playRecording(recording.dvrHash)}
+                        class="transition-colors group {isDeleted ? 'opacity-60 bg-muted/30 cursor-not-allowed' : 'hover:bg-muted/50 cursor-pointer'}"
+                        onclick={() => !isDeleted && canPlayRecording(recording) && playRecording(recording.dvrHash)}
                       >
                         <!-- Actions Column (Left, Horizontal) -->
                         <TableCell
@@ -509,7 +599,9 @@
                           onclick={(e) => e.stopPropagation()}
                         >
                           <div class="flex items-center gap-1">
-                            {#if recording.status === "completed" && recording.dvrHash}
+                            {#if isDeleted}
+                              <span class="text-[10px] text-muted-foreground px-2 italic">Deleted</span>
+                            {:else if canPlayRecording(recording)}
                               {@const urls = getContentDeliveryUrls(recording.dvrHash, "dvr")}
                               
                               <Button
@@ -542,8 +634,8 @@
                                 variant="ghost"
                                 size="sm"
                                 class="h-7 w-7 p-0 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity focus:opacity-100"
-                                title="Delete Recording (Not implemented)"
-                                disabled
+                                title="Delete Recording"
+                                onclick={() => confirmDeleteRecording(recording)}
                               >
                                 <Trash2Icon class="w-3.5 h-3.5" />
                               </Button>
@@ -581,16 +673,45 @@
                         </TableCell>
 
                         <TableCell class="px-4 py-2">
-                          <span
-                            class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border {getStatusColor(recording.status)}"
-                          >
-                            {recording.status || "Unknown"}
-                          </span>
+                          <div class="flex flex-col gap-1.5 min-w-[100px]">
+                            <div class="flex items-center gap-2 flex-wrap">
+                              <span
+                                class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border {getStatusColor(recording.status)}"
+                              >
+                                {#if recording.status === 'recording'}
+                                  <span class="relative flex h-2 w-2 mr-1.5">
+                                    <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-destructive opacity-75"></span>
+                                    <span class="relative inline-flex rounded-full h-2 w-2 bg-destructive"></span>
+                                  </span>
+                                {/if}
+                                {recording.status || "Unknown"}
+                              </span>
+
+                              {#if recording.isFrozen}
+                                <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium border text-blue-400 bg-blue-400/10 border-blue-400/20" title="Archived to cold storage">
+                                  <SnowflakeIcon class="w-3 h-3" />
+                                  Frozen
+                                </span>
+                              {:else if recording.storageLocation === 's3'}
+                                <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium border text-cyan-500 bg-cyan-500/10 border-cyan-500/20" title="Stored in S3">
+                                  Cloud
+                                </span>
+                              {:else if recording.storageLocation === 'freezing'}
+                                <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium border text-blue-300 bg-blue-300/10 border-blue-300/20">
+                                  Freezing...
+                                </span>
+                              {:else if recording.storageLocation === 'defrosting'}
+                                <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium border text-orange-400 bg-orange-400/10 border-orange-400/20">
+                                  Defrosting...
+                                </span>
+                              {/if}
+                            </div>
+                          </div>
                         </TableCell>
 
                         <TableCell class="px-4 py-2 text-sm text-foreground">
                           {recording.durationSeconds
-                            ? formatDuration(recording.durationSeconds * 1000)
+                            ? formatDuration(recording.durationSeconds)
                             : "N/A"}
                         </TableCell>
                         <TableCell class="px-4 py-2 text-sm text-foreground">
@@ -603,13 +724,16 @@
                             ? formatDate(recording.createdAt)
                             : "N/A"}
                         </TableCell>
+                        <TableCell class="px-4 py-2 text-sm text-foreground">
+                          {formatExpiry(recording.expiresAt)}
+                        </TableCell>
                       </TableRow>
 
                       <!-- Expanded protocols row -->
-                      {#if expandedRecording === recording.dvrHash && recording.status === "completed"}
+                      {#if expandedRecording === recording.dvrHash && canPlayRecording(recording)}
                         <TableRow class="bg-muted/5 border-t-0">
-                          <TableCell colspan={7} class="px-4 py-4 cursor-default">
-                             <div class="pl-4 border-l-2 border-primary/20" onclick={(e) => e.stopPropagation()}>
+                          <TableCell colspan={8} class="px-4 py-4 cursor-default" onclick={(e) => e.stopPropagation()}>
+                            <div class="pl-4 border-l-2 border-primary/20">
                               <PlaybackProtocols
                                 contentId={recording.dvrHash}
                                 contentType="dvr"
@@ -728,3 +852,14 @@
   {/if}
   </div>
 </div>
+
+<DeleteRecordingModal
+  open={showDeleteModal && !!recordingToDelete}
+  recording={recordingToDelete}
+  deleting={!!deletingRecordingHash}
+  onConfirm={deleteRecording}
+  onCancel={() => {
+    showDeleteModal = false;
+    recordingToDelete = null;
+  }}
+/>

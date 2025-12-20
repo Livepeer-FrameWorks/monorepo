@@ -52,6 +52,24 @@ message ControlMessage {
     ArtifactDeleted artifact_deleted = 30;
     ClipDeleteRequest clip_delete = 31;
     DVRDeleteRequest dvr_delete = 32;
+    // Cold storage (S3) operations
+    FreezePermissionRequest freeze_permission_request = 40;
+    FreezePermissionResponse freeze_permission_response = 41;
+    FreezeProgress freeze_progress = 42;
+    FreezeComplete freeze_complete = 43;
+    DefrostRequest defrost_request = 44;
+    DefrostProgress defrost_progress = 45;
+    DefrostComplete defrost_complete = 46;
+    // Dual-storage sync operations (sync to S3 while keeping local)
+    CanDeleteRequest can_delete_request = 47;
+    CanDeleteResponse can_delete_response = 48;
+    SyncComplete sync_complete = 49;
+    // Incremental .dtsh sync (Foghorn -> Helmsman)
+    DtshSyncRequest dtsh_sync_request = 50;
+    // Transcode job operations (Foghorn <-> Helmsman)
+    TranscodeJobRequest transcode_job_request = 60;
+    TranscodeJobProgress transcode_job_progress = 61;
+    TranscodeJobComplete transcode_job_complete = 62;
   }
 }
 
@@ -79,6 +97,10 @@ message Register {
   // Optional stable fingerprint signals to aid node identity resolution.
   // Do not include volatile/process-specific values. Client-provided; server will add peer_ip & Geo.
   NodeFingerprint fingerprint = 11;
+  // Hardware specs detected at startup (for load balancing and capacity planning)
+  optional int32 cpu_cores = 12;      // Detected CPU cores (runtime.NumCPU)
+  optional int32 memory_gb = 13;      // Total RAM in GB
+  optional int32 disk_gb = 14;        // Total disk capacity in GB
 }
 
 // NodeFingerprint carries stable identity hints from Helmsman.
@@ -157,7 +179,6 @@ message MistTrigger {
     StreamBufferTrigger stream_buffer = 17;
     StreamEndTrigger stream_end = 18;
     StreamTrackListTrigger track_list = 19;            // formerly LiveTrackListTrigger
-    StreamBandwidthTrigger stream_bandwidth = 20;      // formerly LiveBandwidthTrigger
     RecordingCompleteTrigger recording_complete = 21;  // formerly RecordingEndTrigger
     StreamLifecycleUpdate stream_lifecycle_update = 22;
     ClientLifecycleUpdate client_lifecycle_update = 23;
@@ -166,7 +187,14 @@ message MistTrigger {
     ClipLifecycleData clip_lifecycle_data = 26;
     DVRLifecycleData dvr_lifecycle_data = 27;
     StorageSnapshot storage_snapshot = 28;
+    StorageLifecycleData storage_lifecycle_data = 29;
+    RecordingSegmentTrigger recording_segment = 30;
+    ProcessBillingEvent process_billing = 31;
+    VodLifecycleData vod_lifecycle_data = 32;
   }
+
+  reserved 20;
+  reserved "stream_bandwidth";
 }
 
 message MistTriggerResponse {
@@ -191,7 +219,7 @@ message TenantStorageUsage {
   uint32 file_count = 3;
   uint64 dvr_bytes = 4;
   uint64 clip_bytes = 5;
-  uint64 recording_bytes = 6;
+  uint64 vod_bytes = 6;
 }
 
 message ClipHashRequest {
@@ -260,6 +288,179 @@ message ClipDeleteRequest {
 message DVRDeleteRequest {
   string dvr_hash = 1;           // DVR identifier to delete
   string request_id = 2;         // Request ID for tracking
+}
+
+// FreezePermissionRequest is sent by Helmsman to request presigned URLs for freezing.
+// Helmsman detects storage pressure but cannot access S3 directly.
+message FreezePermissionRequest {
+  string request_id = 1;
+  string asset_type = 2;         // "clip" or "dvr"
+  string asset_hash = 3;         // clip_hash or dvr_hash
+  string local_path = 4;         // Local path to the asset
+  uint64 size_bytes = 5;         // Size of the asset to freeze
+  string node_id = 6;            // Node requesting the freeze
+  repeated string filenames = 7; // For DVR: list of relative filenames to upload (e.g., "segments/0_0.ts")
+}
+
+// FreezePermissionResponse is sent by Foghorn with presigned URLs for freezing.
+// If approved=false, Helmsman should not proceed (asset may be in use, etc.)
+message FreezePermissionResponse {
+  string request_id = 1;
+  string asset_hash = 2;
+  bool approved = 3;             // Whether freeze is approved
+  string presigned_put_url = 4;  // Presigned PUT URL (only if approved)
+  int64 url_expiry_seconds = 5;  // URL expiry time
+  string reason = 6;             // Reason if not approved
+  // For DVR: map of relative path -> presigned PUT URL
+  map<string, string> segment_urls = 7;
+}
+
+// Storage location enum for cold storage tracking
+enum StorageLocation {
+  STORAGE_LOCATION_UNSPECIFIED = 0;
+  STORAGE_LOCATION_LOCAL = 1;      // Asset is on local storage only
+  STORAGE_LOCATION_S3 = 2;         // Asset is on S3 only (frozen)
+  STORAGE_LOCATION_FREEZING = 3;   // Asset is being uploaded to S3
+  STORAGE_LOCATION_DEFROSTING = 4; // Asset is being downloaded from S3
+}
+
+// FreezeRequest tells Helmsman to upload an asset to S3 cold storage.
+// Foghorn generates presigned URLs - Helmsman never sees S3 credentials.
+message FreezeRequest {
+  string request_id = 1;         // Request ID for tracking
+  string asset_type = 2;         // "clip" or "dvr"
+  string asset_hash = 3;         // clip_hash or dvr_hash
+  string tenant_id = 4;          // Tenant owning the asset
+  string internal_name = 5;      // Stream internal name
+  string local_path = 6;         // Current local file/directory path
+  string presigned_put_url = 7;  // Presigned PUT URL for upload (time-limited, no creds needed)
+  bool delete_after_upload = 8;  // Delete local copy after successful upload
+  int64 url_expiry_seconds = 9;  // When the presigned URL expires
+}
+
+// FreezeProgress reports upload progress for freezing operations
+message FreezeProgress {
+  string request_id = 1;
+  string asset_hash = 2;
+  uint32 percent = 3;            // 0..100
+  uint64 bytes_uploaded = 4;
+  string message = 5;
+}
+
+// FreezeComplete indicates freeze operation has finished
+message FreezeComplete {
+  string request_id = 1;
+  string asset_hash = 2;
+  string status = 3;             // "success" or "failed"
+  string s3_url = 4;             // Full S3 URL (s3://bucket/key)
+  uint64 size_bytes = 5;
+  string error = 6;              // Error message if failed
+}
+
+// DefrostRequest tells Helmsman to download an asset from S3 cold storage.
+// Foghorn generates presigned URLs - Helmsman never sees S3 credentials.
+message DefrostRequest {
+  string request_id = 1;         // Request ID for tracking
+  string asset_type = 2;         // "clip" or "dvr"
+  string asset_hash = 3;         // clip_hash or dvr_hash
+  string tenant_id = 4;          // Tenant owning the asset
+  string internal_name = 5;      // Stream internal name
+  string presigned_get_url = 6;  // Presigned GET URL for download (time-limited, no creds needed)
+  string local_path = 7;         // Target local file/directory path
+  int32 timeout_seconds = 8;     // Max wait time for blocking defrost (0 = default 30s)
+  bool streaming = 9;            // For DVR: use streaming defrost (HLS live mode)
+  int64 url_expiry_seconds = 10; // When the presigned URL expires
+  // For DVR streaming defrost: map of segment filename -> presigned URL
+  map<string, string> segment_urls = 11;
+}
+
+// DefrostProgress reports download progress for defrosting operations
+message DefrostProgress {
+  string request_id = 1;
+  string asset_hash = 2;
+  uint32 percent = 3;            // 0..100
+  uint64 bytes_downloaded = 4;
+  int32 segments_downloaded = 5; // For DVR streaming defrost
+  int32 total_segments = 6;      // For DVR streaming defrost
+  string message = 7;
+}
+
+// DefrostComplete indicates defrost operation has finished
+message DefrostComplete {
+  string request_id = 1;
+  string asset_hash = 2;
+  string status = 3;             // "success", "failed", "ready" (for streaming DVR)
+  string local_path = 4;         // Local file/directory path
+  uint64 size_bytes = 5;
+  string error = 6;              // Error message if failed
+  string node_id = 7;            // Node that now has a cached copy (for multi-node tracking)
+}
+
+// CanDeleteRequest is sent by Helmsman to check if a local asset can be safely deleted.
+// Under dual-storage model, deletion is only safe if the asset is synced to S3.
+message CanDeleteRequest {
+  string asset_hash = 1;         // clip_hash or dvr_hash
+  string node_id = 2;            // Node asking to delete
+}
+
+// CanDeleteResponse tells Helmsman whether local deletion is safe
+message CanDeleteResponse {
+  string asset_hash = 1;
+  bool safe_to_delete = 2;       // True if asset is synced to S3
+  string reason = 3;             // "synced", "sync_pending", "sync_failed", "not_found"
+  int64 warm_duration_ms = 4;    // How long asset was cached (for EVICTED lifecycle events)
+}
+
+// SyncComplete indicates a sync (upload to S3 while keeping local) has finished.
+// Semantically different from FreezeComplete: sync keeps local copy.
+message SyncComplete {
+  string request_id = 1;
+  string asset_hash = 2;
+  string status = 3;             // "success" or "failed"
+  string s3_url = 4;             // Full S3 URL (s3://bucket/key)
+  uint64 size_bytes = 5;
+  string error = 6;              // Error message if failed
+  string node_id = 7;            // Node that initiated the sync
+  bool dtsh_included = 8;        // True if .dtsh index file was included in sync
+}
+
+// DtshSyncRequest is sent by Foghorn to Helmsman to request uploading just the .dtsh file.
+// This is used when .dtsh appeared after the main asset was already synced to S3.
+message DtshSyncRequest {
+  string request_id = 1;         // Request ID for tracking
+  string asset_type = 2;         // "clip" or "dvr"
+  string asset_hash = 3;         // clip_hash or dvr_hash
+  string local_path = 4;         // Path to the main asset (append .dtsh for clip, or directory for DVR)
+  string presigned_put_url = 5;  // Presigned PUT URL for uploading the .dtsh file
+  int64 url_expiry_seconds = 6;  // When the presigned URL expires
+  // For DVR: map of .dtsh filename -> presigned URL (since DVR can have multiple .dtsh files)
+  map<string, string> dtsh_urls = 7;
+}
+
+// StorageLifecycleData is emitted for analytics/observability of storage sync operations
+// Dual-storage model: S3 is authoritative backup, local disk is cache
+message StorageLifecycleData {
+  enum Action {
+    ACTION_UNSPECIFIED = 0;
+    ACTION_SYNC_STARTED = 1;  // Upload to S3 started (local copy retained)
+    ACTION_SYNCED = 2;        // Upload to S3 completed (local copy retained)
+    ACTION_EVICTED = 3;       // Local copy deleted (S3 has authoritative copy)
+    ACTION_CACHE_STARTED = 4; // Download from S3 started (refilling local cache)
+    ACTION_CACHED = 5;        // Downloaded from S3 to local cache (S3 copy retained)
+    ACTION_DELETED = 6;       // Asset deleted from both S3 and local (permanent removal)
+  }
+  Action action = 1;
+  string asset_type = 2;         // "clip" or "dvr"
+  string asset_hash = 3;         // clip_hash or dvr_hash
+  optional string tenant_id = 4;
+  optional string internal_name = 5;
+  uint64 size_bytes = 6;
+  optional string s3_url = 7;
+  optional string local_path = 8;
+  optional string node_id = 9;
+  optional string error = 10;
+  optional int64 duration_ms = 11;      // How long the operation took (sync/defrost duration)
+  optional int64 warm_duration_ms = 12; // For EVICTED: how long asset was cached before eviction
 }
 
 message DVRReadyRequest {
@@ -442,17 +643,6 @@ message StreamTrackListTrigger {
   optional int32 primary_audio_sample_rate = 15;
 }
 
-// StreamBandwidthTrigger (formerly LIVE_BANDWIDTH) provides transport bandwidth.
-message StreamBandwidthTrigger {
-  string stream_name = 1;
-  int64 current_bytes_per_second = 2;
-  
-  // Enrichment fields for analytics (populated by Foghorn)
-  optional bool threshold_exceeded = 3;
-  optional uint64 threshold_value = 4;
-  optional string node_id = 5;
-}
-
 // RecordingCompleteTrigger (formerly RECORDING_END) indicates recorder completion.
 message RecordingCompleteTrigger {
   string stream_name = 1;
@@ -466,6 +656,15 @@ message RecordingCompleteTrigger {
   
   // Enrichment fields for analytics (populated by Foghorn)
   optional string node_id = 9;
+}
+
+// RecordingSegmentTrigger (RECORDING_SEGMENT) indicates a new segment has been written.
+message RecordingSegmentTrigger {
+  string stream_name = 1;
+  string file_path = 2;
+  int64 duration_ms = 3;
+  int64 time_started = 4;
+  int64 time_ended = 5;
 }
 
 // Analytics event messages for forwarding to Decklog
@@ -498,9 +697,33 @@ message StreamLifecycleUpdate {
   // Stream timing (populated by Foghorn from state manager)
   optional int64 started_at = 23;       // Unix timestamp when stream went live
 
-  // Packet statistics (from MistServer Prometheus metrics via poller)
+  // Packet statistics (from MistServer active_streams API - packsent/packloss/packretrans)
   optional uint64 packets_sent = 24;
   optional uint64 packets_lost = 25;
+
+  // Replication status (true if this is a pull/replicated stream)
+  optional bool replicated = 26;
+
+  // Additional packet stat (packretrans from MistServer active_streams API)
+  optional uint64 packets_retransmitted = 27;
+
+  // Buffer health metrics (from health blob - top level fields)
+  optional uint32 buffer_ms = 28;          // health.buffer - available buffer in ms
+  optional uint32 jitter_ms = 29;          // health.jitter - highest jitter across tracks
+  optional uint32 max_keepaway_ms = 30;    // health.maxkeepaway - max distance from live point
+
+  // Full track details as JSON (serialized trackDetails array for storage)
+  optional string track_details_json = 31;
+
+  // Primary audio track metrics (first audio track found)
+  optional uint32 audio_channels = 32;
+  optional uint32 audio_sample_rate = 33;
+  optional string audio_codec = 34;
+  optional uint32 audio_bitrate = 35;
+
+  // Per-track buffer/jitter for primary video track
+  optional uint32 video_buffer_ms = 36;
+  optional uint32 video_jitter_ms = 37;
 }
 
 message ClientLifecycleUpdate {
@@ -585,6 +808,17 @@ message NodeLifecycleUpdate {
 
   // Current active viewer connections
   uint32 connections_current = 29;  // curr[0] - current viewer count
+
+  // Database UUID (enriched by Foghorn via Quartermaster lookup)
+  optional string node_uuid = 30;
+
+  // MistServer trigger health statistics (for debugging/monitoring)
+  string triggers_json = 40;        // {"STREAM_BUFFER": {count, fails, ms}, ...}
+
+  // Extended connection breakdown from MistServer curr array
+  uint32 connections_inputs = 41;    // curr[1] - input connections
+  uint32 connections_outgoing = 42;  // curr[2] - outgoing connections
+  uint32 connections_cached = 44;    // curr[4] - cached connections
 }
 
 // Load balancing specific data (no trigger equivalent - generated by Foghorn routing)
@@ -603,10 +837,14 @@ message LoadBalancingData {
   optional string selected_node_id = 12;
   optional double routing_distance_km = 13;
   // Enrichment fields added by Foghorn
-  optional string tenant_id = 14;
+  optional string tenant_id = 14;           // Infra owner tenant (cluster operator)
   optional string internal_name = 15;
   optional GeoBucket client_bucket = 16;
   optional GeoBucket node_bucket = 17;
+  // Dual-tenant attribution (RFC: routing-events-dual-tenant-attribution)
+  optional string stream_tenant_id = 18;    // Subject tenant (stream/customer owner)
+  optional string cluster_id = 19;          // Emitting cluster identifier
+  optional float latency_ms = 20;
 }
 
 // Clip lifecycle specific data (separate from ClipProgress/ClipDone control messages)
@@ -649,6 +887,7 @@ message ClipLifecycleData {
   optional int64 duration_sec = 18;
   // Clip creation mode (enriched by Foghorn)
   optional string clip_mode = 19;
+  optional int64 expires_at = 20;
 }
 
 // DVR lifecycle specific data (separate from DVR control messages)
@@ -680,6 +919,48 @@ message DVRLifecycleData {
   // Enrichment fields added by Foghorn
   optional string tenant_id = 10;
   optional string internal_name = 11;
+  optional int64 expires_at = 12;
+}
+
+// VOD lifecycle specific data (for user-uploaded video assets)
+//
+// VOD uploads differ from clips/DVR:
+// - User uploads directly to S3 via presigned URLs (no MistServer involved)
+// - Foghorn manages upload state and emits lifecycle events to Decklog
+// - Periscope Ingest writes to live_artifacts with content_type='vod'
+// - Gateway enriches VOD metadata from Periscope via ArtifactLifecycleLoader
+message VodLifecycleData {
+  enum Status {
+    STATUS_UNSPECIFIED = 0;
+    STATUS_REQUESTED = 1;    // Upload session created, presigned URLs generated
+    STATUS_UPLOADING = 2;    // Parts being uploaded (optional progress tracking)
+    STATUS_PROCESSING = 3;   // Upload complete, validation/transcoding in progress
+    STATUS_COMPLETED = 4;    // Asset ready for playback
+    STATUS_FAILED = 5;       // Upload or processing failed
+    STATUS_DELETED = 6;      // Asset deleted
+  }
+  Status status = 1;
+  string vod_hash = 2;                    // Artifact hash (from Commodore)
+  optional string upload_id = 3;          // S3 multipart upload ID
+  optional string filename = 4;
+  optional string content_type = 5;       // MIME type (video/mp4, etc.)
+  optional uint64 size_bytes = 6;         // Expected or actual size
+  optional string s3_url = 7;             // Final S3 URL when completed
+  optional string file_path = 8;          // Local file path (if applicable)
+  optional string error = 9;
+  optional int64 started_at = 10;         // When upload started
+  optional int64 completed_at = 11;       // When upload/processing completed
+  optional string node_id = 12;           // Processing node (if any)
+  // Enrichment fields
+  optional string tenant_id = 13;
+  optional string user_id = 14;
+  optional int64 expires_at = 15;         // Retention expiration
+  // Media metadata (populated after processing)
+  optional int64 duration_ms = 16;
+  optional string resolution = 17;        // "1920x1080"
+  optional string video_codec = 18;
+  optional string audio_codec = 19;
+  optional int32 bitrate_kbps = 20;
 }
 
 message NodeCapabilities {
@@ -688,6 +969,77 @@ message NodeCapabilities {
   bool storage = 3;
   bool processing = 4;
   repeated string roles = 5;
+}
+
+// Processing configuration sent from Foghorn to Helmsman
+// Enables MistProcLivepeer when Gateway is available
+message ProcessingConfig {
+  bool livepeer_gateway_available = 1;
+  string livepeer_gateway_url = 2;      // e.g., "http://livepeer-gateway:8935"
+  repeated string gateway_input_codecs = 3;  // ["H264"] - what Gateway accepts
+  repeated string local_input_codecs = 4;    // ["H264", "H265", "AV1", "VP9"] - what local MistServer accepts
+}
+
+// ProcessBillingEvent tracks transcoding usage for billing purposes
+// Emitted by Helmsman when MistServer triggers fire:
+// - LIVEPEER_SEGMENT_COMPLETE for Livepeer Gateway transcoding
+// - PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE for MistProcAV transcoding
+message ProcessBillingEvent {
+  string node_id = 1;
+  string stream_name = 2;
+  string process_type = 3;    // "Livepeer", "AV", "FFmpeg"
+  int64 duration_ms = 4;      // Duration in milliseconds (segment duration or since last event)
+  int64 timestamp = 5;        // Unix timestamp when event occurred
+  optional string tenant_id = 6; // Tenant context (enriched by Foghorn or Helmsman)
+
+  // Common fields
+  optional string input_codec = 10;
+  optional string output_codec = 11;
+  optional string track_type = 12;  // "audio" or "video" - KEY FOR BILLING
+
+  // Livepeer-specific (from LIVEPEER_SEGMENT_COMPLETE)
+  optional int32 segment_number = 20;
+  optional int32 width = 21;          // source width
+  optional int32 height = 22;         // source height
+  optional int32 rendition_count = 23;
+  optional string broadcaster_url = 24;
+  optional int64 upload_time_us = 25; // DEPRECATED: use turnaround_ms
+  optional string livepeer_session_id = 26;
+  optional int64 segment_start_ms = 27;
+  optional int64 input_bytes = 28;
+  optional int64 output_bytes_total = 29;
+  optional int32 attempt_count = 40;
+  optional int64 turnaround_ms = 41;
+  optional double speed_factor = 42;
+  optional string renditions_json = 43;  // JSON array: [{name, bytes}, ...]
+
+  // MistProcAV-specific (from PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE)
+  optional int64 input_frames = 30;           // cumulative
+  optional int64 output_frames = 31;          // cumulative
+  optional int64 decode_us_per_frame = 32;
+  optional int64 transform_us_per_frame = 33;
+  optional int64 encode_us_per_frame = 34;
+  optional bool is_final = 35;
+  optional int64 input_frames_delta = 50;     // frames this window
+  optional int64 output_frames_delta = 51;    // frames this window
+  optional int64 input_bytes_delta = 52;      // bytes this window
+  optional int64 output_bytes_delta = 53;     // bytes this window
+  optional int32 input_width = 54;
+  optional int32 input_height = 55;
+  optional int32 output_width = 56;
+  optional int32 output_height = 57;
+  optional int32 input_fpks = 58;             // frames per 1000s (input)
+  optional double output_fps_measured = 59;   // measured output FPS
+  optional int32 sample_rate = 60;            // audio sample rate
+  optional int32 channels = 61;               // audio channels
+  optional int64 source_timestamp_ms = 62;
+  optional int64 sink_timestamp_ms = 63;
+  optional int64 source_advanced_ms = 64;
+  optional int64 sink_advanced_ms = 65;
+  optional double rtf_in = 66;                // real-time factor in
+  optional double rtf_out = 67;               // real-time factor out
+  optional int64 pipeline_lag_ms = 68;
+  optional int64 output_bitrate_bps = 69;
 }
 
 message StorageInfo {
@@ -708,6 +1060,13 @@ message StreamData {
   uint64 bytes_up = 3;       // Upload bytes
   uint64 bytes_down = 4;     // Download bytes
   uint32 bandwidth = 5;      // Bandwidth per viewer
+  bool replicated = 6;       // True if this is a replicated (pull) stream
+
+  // Packet stats (for QoS monitoring) - MistServer pkts array
+  repeated int64 packet_counts = 7;       // [sent, lost, retransmit]
+
+  // Connection totals - MistServer tot array
+  repeated int64 total_connections = 8;   // [total_viewers, total_inputs, total_outputs]
 }
 
 // Stream track information (replaces JSON parsing)
@@ -749,6 +1108,7 @@ message StoredArtifact {
   uint64 size_bytes = 5;     // File size in bytes
   int64 created_at = 6;      // Creation timestamp (Unix seconds)
   string format = 7;         // File format (mp4, webm, etc.)
+  bool has_dtsh = 8;         // True if .dtsh index file exists locally
 }
 
 message StreamProcess {
@@ -786,4 +1146,46 @@ message ConfigSeed {
   // Tenant owning this node (resolved by Foghorn via Quartermaster)
   string tenant_id = 5;
   repeated StreamTemplate templates = 10;
+  // Processing configuration (Gateway availability, codec support)
+  ProcessingConfig processing = 11;
+}
+
+// ==================== Transcode Job Messages ====================
+
+// Transcode profile for ABR ladder generation
+message TranscodeProfile {
+  string name = 1;           // e.g., "720p", "1080p", "audio_only"
+  string codec = 2;          // H264, H265, AAC
+  int32 bitrate = 3;         // bps
+  int32 width = 4;
+  int32 height = 5;
+  double fps = 6;
+}
+
+// Transcode job request (Foghorn → Helmsman)
+message TranscodeJobRequest {
+  string job_id = 1;
+  string tenant_id = 2;
+  string artifact_hash = 3;        // Source artifact
+  string source_url = 4;           // Presigned URL for source
+  repeated TranscodeProfile profiles = 5;
+  bool use_gateway = 6;            // Use Livepeer Gateway if true
+  string gateway_url = 7;          // Gateway URL (if use_gateway=true)
+}
+
+// Transcode job progress (Helmsman → Foghorn)
+message TranscodeJobProgress {
+  string job_id = 1;
+  int32 percent = 2;               // 0-100
+  string status = 3;               // queued, processing, completed, failed
+  string message = 4;              // Status message / error
+}
+
+// Transcode job completion (Helmsman → Foghorn)
+message TranscodeJobComplete {
+  string job_id = 1;
+  string status = 2;               // success, failed
+  string output_artifact_hash = 3; // New artifact hash for output
+  string output_s3_url = 4;        // S3 URL of transcoded output
+  string error = 5;                // Error message if failed
 }

@@ -16,6 +16,7 @@ type Loaders struct {
 	ServiceInstancesByCluster *ServiceInstancesByClusterLoader
 	ServiceInstancesByNode    *ServiceInstancesByNodeLoader
 	StreamMetrics             *StreamMetricsLoader
+	ArtifactLifecycle         *ArtifactLifecycleLoader
 	Memo                      *Memoizer
 }
 
@@ -27,6 +28,7 @@ func New(serviceClients *clients.ServiceClients) *Loaders {
 		ServiceInstancesByCluster: NewServiceInstancesByClusterLoader(serviceClients),
 		ServiceInstancesByNode:    NewServiceInstancesByNodeLoader(serviceClients),
 		StreamMetrics:             NewStreamMetricsLoader(serviceClients.Periscope),
+		ArtifactLifecycle:         NewArtifactLifecycleLoader(serviceClients.Periscope),
 		Memo:                      NewMemoizer(),
 	}
 }

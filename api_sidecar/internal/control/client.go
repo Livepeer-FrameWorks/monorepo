@@ -27,6 +27,12 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+// DeleteClipFunc is the function type for clip deletion
+type DeleteClipFunc func(clipHash string) (uint64, error)
+
+// DeleteDVRFunc is the function type for DVR deletion
+type DeleteDVRFunc func(dvrHash string) (uint64, error)
+
 // Global state for metrics streaming
 var (
 	currentStream pb.HelmsmanControl_ConnectClient
@@ -34,11 +40,23 @@ var (
 	currentClient pb.HelmsmanControlClient
 	currentConfig *sidecarcfg.HelmsmanConfig
 	onSeed        func()
+	deleteClipFn  DeleteClipFunc
+	deleteDVRFn   DeleteDVRFunc
 )
 
 // SetOnSeed sets a callback invoked when Foghorn requests immediate JSON seed
 func SetOnSeed(cb func()) {
 	onSeed = cb
+}
+
+// SetDeleteClipHandler sets the callback for clip deletion
+func SetDeleteClipHandler(fn DeleteClipFunc) {
+	deleteClipFn = fn
+}
+
+// SetDeleteDVRHandler sets the callback for DVR deletion
+func SetDeleteDVRHandler(fn DeleteDVRFunc) {
+	deleteDVRFn = fn
 }
 
 // Start launches the Helmsman control client and maintains the stream to Foghorn
@@ -76,8 +94,10 @@ func GetCurrentNodeID() string {
 
 // SendMistTrigger forwards a typed MistServer trigger to Foghorn and returns response for blocking triggers
 func SendMistTrigger(mistTrigger *pb.MistTrigger, logger logging.Logger) (string, bool, error) {
+	triggerType := mistTrigger.TriggerType
 	stream := currentStream
 	if stream == nil {
+		TriggersSent.WithLabelValues(triggerType, "stream_disconnected").Inc()
 		return "", true, fmt.Errorf("gRPC control stream not connected")
 	}
 
@@ -87,8 +107,11 @@ func SendMistTrigger(mistTrigger *pb.MistTrigger, logger logging.Logger) (string
 	}
 
 	if err := stream.Send(msg); err != nil {
+		TriggersSent.WithLabelValues(triggerType, "error").Inc()
 		return "", true, fmt.Errorf("failed to send MistTrigger: %w", err)
 	}
+
+	TriggersSent.WithLabelValues(triggerType, "success").Inc()
 
 	// For non-blocking triggers, return immediately
 	if !mistTrigger.Blocking {
@@ -240,6 +263,10 @@ func runClient(addr string, logger logging.Logger) error {
 	// Send Register using config values
 	nodeID := cfg.NodeID
 	roles := deriveRolesFromConfig(cfg)
+
+	// Detect hardware specs at startup
+	hwSpecs := sidecarcfg.DetectHardware(cfg.StorageLocalPath)
+
 	reg := &pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_Register{Register: &pb.Register{
 		NodeId:          nodeID,
 		Roles:           roles,
@@ -252,6 +279,9 @@ func runClient(addr string, logger logging.Logger) error {
 		StoragePrefix:   cfg.StorageS3Prefix,
 		EnrollmentToken: cfg.EnrollmentToken,
 		Fingerprint:     collectNodeFingerprint(),
+		CpuCores:        &hwSpecs.CPUCores,
+		MemoryGb:        &hwSpecs.MemoryGB,
+		DiskGb:          &hwSpecs.DiskGB,
 	}}}
 	if err := stream.Send(reg); err != nil {
 		return err
@@ -287,6 +317,10 @@ func runClient(addr string, logger logging.Logger) error {
 				go handleDVRStart(logger, x.DvrStartRequest, func(m *pb.ControlMessage) { _ = stream.Send(m) })
 			case *pb.ControlMessage_DvrStopRequest:
 				go handleDVRStop(logger, x.DvrStopRequest, func(m *pb.ControlMessage) { _ = stream.Send(m) })
+			case *pb.ControlMessage_ClipDelete:
+				go handleClipDelete(logger, x.ClipDelete, func(m *pb.ControlMessage) { _ = stream.Send(m) })
+			case *pb.ControlMessage_DvrDelete:
+				go handleDVRDelete(logger, x.DvrDelete, func(m *pb.ControlMessage) { _ = stream.Send(m) })
 			case *pb.ControlMessage_MistTriggerResponse:
 				// Handle response from Foghorn for blocking triggers
 				go handleMistTriggerResponse(x.MistTriggerResponse)
@@ -307,6 +341,22 @@ func runClient(addr string, logger logging.Logger) error {
 					if nid := x.ConfigSeed.GetNodeId(); nid != "" {
 						currentNodeID = nid
 					}
+				}
+			case *pb.ControlMessage_FreezePermissionResponse:
+				// Handle freeze permission response from Foghorn
+				go handleFreezePermissionResponse(x.FreezePermissionResponse)
+			case *pb.ControlMessage_DefrostRequest:
+				// Handle defrost request from Foghorn
+				if defrostRequestHandler != nil {
+					go defrostRequestHandler(x.DefrostRequest)
+				}
+			case *pb.ControlMessage_CanDeleteResponse:
+				// Handle can-delete response from Foghorn
+				go handleCanDeleteResponse(x.CanDeleteResponse)
+			case *pb.ControlMessage_DtshSyncRequest:
+				// Handle incremental .dtsh sync request from Foghorn
+				if dtshSyncRequestHandler != nil {
+					go dtshSyncRequestHandler(x.DtshSyncRequest)
 				}
 			}
 		}
@@ -682,6 +732,93 @@ func handleDVRStop(logger logging.Logger, req *pb.DVRStopRequest, send func(*pb.
 	logger.WithField("dvr_hash", dvrHash).Info("DVR recording stopped successfully")
 }
 
+// handleClipDelete handles a clip delete request from Foghorn
+func handleClipDelete(logger logging.Logger, req *pb.ClipDeleteRequest, send func(*pb.ControlMessage)) {
+	clipHash := req.GetClipHash()
+	requestID := req.GetRequestId()
+
+	logger.WithFields(logging.Fields{
+		"clip_hash":  clipHash,
+		"request_id": requestID,
+	}).Info("Deleting clip files")
+
+	// Use the registered delete handler
+	if deleteClipFn == nil {
+		logger.Error("Clip delete handler not registered, cannot delete clip")
+		return
+	}
+
+	sizeBytes, err := deleteClipFn(clipHash)
+	if err != nil {
+		logger.WithFields(logging.Fields{
+			"clip_hash": clipHash,
+			"error":     err,
+		}).Error("Failed to delete clip files")
+		return
+	}
+
+	// Send artifact deleted notification back to Foghorn
+	if send != nil {
+		send(&pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_ArtifactDeleted{ArtifactDeleted: &pb.ArtifactDeleted{
+			ClipHash:  clipHash,
+			Reason:    "manual",
+			NodeId:    currentNodeID,
+			SizeBytes: sizeBytes,
+		}}})
+	}
+
+	logger.WithFields(logging.Fields{
+		"clip_hash":  clipHash,
+		"size_bytes": sizeBytes,
+	}).Info("Clip deleted successfully")
+}
+
+// handleDVRDelete handles a DVR delete request from Foghorn
+func handleDVRDelete(logger logging.Logger, req *pb.DVRDeleteRequest, send func(*pb.ControlMessage)) {
+	dvrHash := req.GetDvrHash()
+	requestID := req.GetRequestId()
+
+	logger.WithFields(logging.Fields{
+		"dvr_hash":   dvrHash,
+		"request_id": requestID,
+	}).Info("Deleting DVR recording files")
+
+	// Initialize DVR manager if not already done
+	initDVRManager()
+
+	// Stop the recording first if it's active
+	_ = dvrManager.StopRecording(dvrHash)
+
+	// Use the registered delete handler
+	if deleteDVRFn == nil {
+		logger.Error("DVR delete handler not registered, cannot delete DVR")
+		return
+	}
+
+	sizeBytes, err := deleteDVRFn(dvrHash)
+	if err != nil {
+		logger.WithFields(logging.Fields{
+			"dvr_hash": dvrHash,
+			"error":    err,
+		}).Error("Failed to delete DVR files")
+		return
+	}
+
+	// Send DVR stopped notification with deleted status
+	if send != nil {
+		send(&pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_DvrStopped{DvrStopped: &pb.DVRStopped{
+			RequestId: requestID,
+			DvrHash:   dvrHash,
+			Status:    "deleted",
+		}}})
+	}
+
+	logger.WithFields(logging.Fields{
+		"dvr_hash":   dvrHash,
+		"size_bytes": sizeBytes,
+	}).Info("DVR recording deleted successfully")
+}
+
 // SendDVRStreamEndNotification notifies Foghorn that a stream has ended and DVR recording should stop
 func SendDVRStreamEndNotification(internalName, nodeID string) error {
 	stream := currentStream
@@ -697,5 +834,343 @@ func SendDVRStreamEndNotification(internalName, nodeID string) error {
 	}
 
 	msg := &pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_DvrStopRequest{DvrStopRequest: dvrStopRequest}}
+	return stream.Send(msg)
+}
+
+// ==================== Cold Storage (Freeze/Defrost) Functions ====================
+
+// FreezePermissionHandler is called when Foghorn responds to a freeze permission request
+type FreezePermissionHandler func(*pb.FreezePermissionResponse)
+
+// DefrostRequestHandler is called when Foghorn sends a defrost request
+type DefrostRequestHandler func(*pb.DefrostRequest)
+
+// DtshSyncRequestHandler is called when Foghorn sends a request to sync just the .dtsh file
+type DtshSyncRequestHandler func(*pb.DtshSyncRequest)
+
+var (
+	freezePermissionHandlers = make(map[string]chan *pb.FreezePermissionResponse)
+	freezePermissionMutex    = make(chan struct{}, 1)
+	defrostRequestHandler    DefrostRequestHandler
+	dtshSyncRequestHandler   DtshSyncRequestHandler
+
+	// CanDelete request/response tracking
+	canDeleteHandlers = make(map[string]chan *pb.CanDeleteResponse)
+	canDeleteMutex    = make(chan struct{}, 1)
+)
+
+// SetDefrostRequestHandler sets the callback for defrost requests from Foghorn
+func SetDefrostRequestHandler(handler DefrostRequestHandler) {
+	defrostRequestHandler = handler
+}
+
+// SetDtshSyncRequestHandler sets the callback for incremental .dtsh sync requests from Foghorn
+func SetDtshSyncRequestHandler(handler DtshSyncRequestHandler) {
+	dtshSyncRequestHandler = handler
+}
+
+// RequestFreezePermission asks Foghorn for permission and presigned URL to freeze an asset.
+// This is a blocking call that waits for Foghorn's response.
+func RequestFreezePermission(ctx context.Context, assetType, assetHash, localPath string, sizeBytes uint64, filenames []string) (*pb.FreezePermissionResponse, error) {
+	stream := currentStream
+	if stream == nil {
+		return nil, fmt.Errorf("gRPC control stream not connected")
+	}
+
+	requestID := uuid.New().String()
+	responseChan := make(chan *pb.FreezePermissionResponse, 1)
+
+	// Register for response
+	freezePermissionMutex <- struct{}{}
+	freezePermissionHandlers[requestID] = responseChan
+	<-freezePermissionMutex
+
+	// Send request
+	req := &pb.FreezePermissionRequest{
+		RequestId: requestID,
+		AssetType: assetType,
+		AssetHash: assetHash,
+		LocalPath: localPath,
+		SizeBytes: sizeBytes,
+		NodeId:    currentNodeID,
+		Filenames: filenames,
+	}
+
+	msg := &pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_FreezePermissionRequest{FreezePermissionRequest: req}}
+	if err := stream.Send(msg); err != nil {
+		// Cleanup
+		freezePermissionMutex <- struct{}{}
+		delete(freezePermissionHandlers, requestID)
+		<-freezePermissionMutex
+		return nil, fmt.Errorf("failed to send freeze permission request: %w", err)
+	}
+
+	// Wait for response with timeout
+	select {
+	case resp := <-responseChan:
+		// Cleanup
+		freezePermissionMutex <- struct{}{}
+		delete(freezePermissionHandlers, requestID)
+		<-freezePermissionMutex
+		return resp, nil
+	case <-ctx.Done():
+		// Cleanup on timeout
+		freezePermissionMutex <- struct{}{}
+		delete(freezePermissionHandlers, requestID)
+		<-freezePermissionMutex
+		return nil, ctx.Err()
+	case <-time.After(30 * time.Second):
+		// Cleanup on default timeout
+		freezePermissionMutex <- struct{}{}
+		delete(freezePermissionHandlers, requestID)
+		<-freezePermissionMutex
+		return nil, fmt.Errorf("timeout waiting for freeze permission response")
+	}
+}
+
+// handleFreezePermissionResponse processes FreezePermissionResponse messages from the stream
+func handleFreezePermissionResponse(response *pb.FreezePermissionResponse) {
+	freezePermissionMutex <- struct{}{}
+	responseChan, exists := freezePermissionHandlers[response.RequestId]
+	<-freezePermissionMutex
+
+	if exists {
+		responseChan <- response
+	}
+}
+
+// SendFreezeProgress sends upload progress to Foghorn
+func SendFreezeProgress(requestID, assetHash string, percent uint32, bytesUploaded uint64) error {
+	stream := currentStream
+	if stream == nil {
+		return fmt.Errorf("gRPC control stream not connected")
+	}
+
+	progress := &pb.FreezeProgress{
+		RequestId:     requestID,
+		AssetHash:     assetHash,
+		Percent:       percent,
+		BytesUploaded: bytesUploaded,
+	}
+
+	msg := &pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_FreezeProgress{FreezeProgress: progress}}
+	return stream.Send(msg)
+}
+
+// SendFreezeComplete sends freeze completion status to Foghorn
+func SendFreezeComplete(requestID, assetHash, status, s3URL string, sizeBytes uint64, errMsg string) error {
+	stream := currentStream
+	if stream == nil {
+		return fmt.Errorf("gRPC control stream not connected")
+	}
+
+	complete := &pb.FreezeComplete{
+		RequestId: requestID,
+		AssetHash: assetHash,
+		Status:    status,
+		S3Url:     s3URL,
+		SizeBytes: sizeBytes,
+		Error:     errMsg,
+	}
+
+	msg := &pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_FreezeComplete{FreezeComplete: complete}}
+	return stream.Send(msg)
+}
+
+// SendDefrostProgress sends download progress to Foghorn
+func SendDefrostProgress(requestID, assetHash string, percent uint32, bytesDownloaded uint64, segmentsDownloaded, totalSegments int32, message string) error {
+	stream := currentStream
+	if stream == nil {
+		return fmt.Errorf("gRPC control stream not connected")
+	}
+
+	progress := &pb.DefrostProgress{
+		RequestId:          requestID,
+		AssetHash:          assetHash,
+		Percent:            percent,
+		BytesDownloaded:    bytesDownloaded,
+		SegmentsDownloaded: segmentsDownloaded,
+		TotalSegments:      totalSegments,
+		Message:            message,
+	}
+
+	msg := &pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_DefrostProgress{DefrostProgress: progress}}
+	return stream.Send(msg)
+}
+
+// SendDefrostComplete sends defrost completion status to Foghorn
+func SendDefrostComplete(requestID, assetHash, status, localPath string, sizeBytes uint64, errMsg string) error {
+	stream := currentStream
+	if stream == nil {
+		return fmt.Errorf("gRPC control stream not connected")
+	}
+
+	complete := &pb.DefrostComplete{
+		RequestId: requestID,
+		AssetHash: assetHash,
+		Status:    status,
+		LocalPath: localPath,
+		SizeBytes: sizeBytes,
+		Error:     errMsg,
+	}
+
+	msg := &pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_DefrostComplete{DefrostComplete: complete}}
+	return stream.Send(msg)
+}
+
+// SendStorageLifecycle sends a storage lifecycle event to Foghorn (for analytics)
+// StorageLifecycleData is sent via MistTrigger payload
+func SendStorageLifecycle(data *pb.StorageLifecycleData) error {
+	stream := currentStream
+	if stream == nil {
+		return fmt.Errorf("gRPC control stream not connected")
+	}
+
+	// StorageLifecycleData is sent as a MistTrigger with storage_lifecycle_data payload
+	trigger := &pb.MistTrigger{
+		TriggerType: "storage_lifecycle",
+		RequestId:   uuid.New().String(),
+		NodeId:      currentNodeID,
+		Blocking:    false,
+		TriggerPayload: &pb.MistTrigger_StorageLifecycleData{
+			StorageLifecycleData: data,
+		},
+	}
+
+	msg := &pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_MistTrigger{MistTrigger: trigger}}
+	return stream.Send(msg)
+}
+
+// SendProcessBillingEvent sends a process billing event to Foghorn (for analytics/billing)
+// ProcessBillingEvent tracks transcoding usage for Livepeer and native processes
+func SendProcessBillingEvent(event *pb.ProcessBillingEvent) error {
+	processType := event.ProcessType
+	stream := currentStream
+	if stream == nil {
+		BillingEventsSent.WithLabelValues(processType, "stream_disconnected").Inc()
+		return fmt.Errorf("gRPC control stream not connected")
+	}
+
+	// Ensure node_id is set
+	if event.NodeId == "" {
+		event.NodeId = currentNodeID
+	}
+
+	trigger := &pb.MistTrigger{
+		TriggerType: "process_billing",
+		RequestId:   uuid.New().String(),
+		NodeId:      currentNodeID,
+		Blocking:    false,
+		TriggerPayload: &pb.MistTrigger_ProcessBilling{
+			ProcessBilling: event,
+		},
+	}
+
+	// TRACE: Log what we're sending
+	fmt.Printf("[HELMSMAN TRACE] Sending process_billing trigger: payload_type=%T, payload_nil=%v\n",
+		trigger.GetTriggerPayload(), trigger.GetTriggerPayload() == nil)
+
+	msg := &pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_MistTrigger{MistTrigger: trigger}}
+	if err := stream.Send(msg); err != nil {
+		BillingEventsSent.WithLabelValues(processType, "error").Inc()
+		return err
+	}
+	BillingEventsSent.WithLabelValues(processType, "success").Inc()
+	return nil
+}
+
+// IsConnected returns true if the control stream is connected
+func IsConnected() bool {
+	return currentStream != nil
+}
+
+// ==================== Dual-Storage (Sync/CanDelete) Functions ====================
+
+// RequestCanDelete asks Foghorn if it's safe to delete a local artifact copy.
+// Returns true if the asset is synced to S3 and can be safely deleted locally.
+// Also returns warm_duration_ms (how long the asset was cached before eviction).
+func RequestCanDelete(ctx context.Context, assetHash string) (bool, string, int64, error) {
+	stream := currentStream
+	if stream == nil {
+		return false, "", 0, fmt.Errorf("gRPC control stream not connected")
+	}
+
+	responseChan := make(chan *pb.CanDeleteResponse, 1)
+
+	// Register for response
+	canDeleteMutex <- struct{}{}
+	canDeleteHandlers[assetHash] = responseChan
+	<-canDeleteMutex
+
+	// Send request
+	req := &pb.CanDeleteRequest{
+		AssetHash: assetHash,
+		NodeId:    currentNodeID,
+	}
+
+	msg := &pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_CanDeleteRequest{CanDeleteRequest: req}}
+	if err := stream.Send(msg); err != nil {
+		// Cleanup
+		canDeleteMutex <- struct{}{}
+		delete(canDeleteHandlers, assetHash)
+		<-canDeleteMutex
+		return false, "", 0, fmt.Errorf("failed to send can-delete request: %w", err)
+	}
+
+	// Wait for response with timeout
+	select {
+	case resp := <-responseChan:
+		// Cleanup
+		canDeleteMutex <- struct{}{}
+		delete(canDeleteHandlers, assetHash)
+		<-canDeleteMutex
+		return resp.SafeToDelete, resp.Reason, resp.WarmDurationMs, nil
+	case <-ctx.Done():
+		// Cleanup on timeout
+		canDeleteMutex <- struct{}{}
+		delete(canDeleteHandlers, assetHash)
+		<-canDeleteMutex
+		return false, "", 0, ctx.Err()
+	case <-time.After(10 * time.Second):
+		// Cleanup on default timeout
+		canDeleteMutex <- struct{}{}
+		delete(canDeleteHandlers, assetHash)
+		<-canDeleteMutex
+		return false, "", 0, fmt.Errorf("timeout waiting for can-delete response")
+	}
+}
+
+// handleCanDeleteResponse processes CanDeleteResponse messages from the stream
+func handleCanDeleteResponse(response *pb.CanDeleteResponse) {
+	canDeleteMutex <- struct{}{}
+	responseChan, exists := canDeleteHandlers[response.AssetHash]
+	<-canDeleteMutex
+
+	if exists {
+		responseChan <- response
+	}
+}
+
+// SendSyncComplete notifies Foghorn that a sync operation has completed.
+// Called after successfully uploading an artifact to S3 (while keeping the local copy).
+// dtshIncluded indicates whether the .dtsh index file was included in the sync.
+func SendSyncComplete(requestID, assetHash, status, s3URL string, sizeBytes uint64, errMsg string, dtshIncluded bool) error {
+	stream := currentStream
+	if stream == nil {
+		return fmt.Errorf("gRPC control stream not connected")
+	}
+
+	complete := &pb.SyncComplete{
+		RequestId:    requestID,
+		AssetHash:    assetHash,
+		Status:       status,
+		S3Url:        s3URL,
+		SizeBytes:    sizeBytes,
+		Error:        errMsg,
+		NodeId:       currentNodeID,
+		DtshIncluded: dtshIncluded,
+	}
+
+	msg := &pb.ControlMessage{SentAt: timestamppb.Now(), Payload: &pb.ControlMessage_SyncComplete{SyncComplete: complete}}
 	return stream.Send(msg)
 }

@@ -1,108 +1,27 @@
 {
-  "name": "@livepeer-frameworks/player",
+  "name": "@livepeer-frameworks/player-workspace",
   "version": "0.0.3",
+  "private": true,
   "type": "module",
   "packageManager": "pnpm@9.12.0",
-  "description": "FrameWorks streaming player components with Gateway integration and intelligent protocol selection",
-  "main": "dist/cjs/index.js",
-  "module": "dist/esm/index.js",
-  "types": "dist/types/index.d.ts",
-  "style": "dist/player.css",
-  "files": [
-    "dist"
-  ],
-  "exports": {
-    ".": {
-      "import": "./dist/esm/index.js",
-      "require": "./dist/cjs/index.js",
-      "types": "./dist/types/index.d.ts"
-    },
-    "./player.css": "./dist/player.css",
-    "./styles.css": "./dist/player.css",
-    "./dist/player.css": "./dist/player.css"
-  },
+  "description": "FrameWorks streaming player - monorepo workspace",
   "scripts": {
-    "start": "pnpm run dev",
-    "build": "pnpm run build:css && NODE_ENV=production rollup -c",
-    "build:watch": "NODE_ENV=development rollup -c --watch",
-    "build:css": "pnpm exec postcss ./src/styles/tailwind.css -o ./dist/player.css",
-    "build:css:watch": "pnpm exec postcss ./src/styles/tailwind.css -o ./dist/player.css --watch",
-    "dev": "pnpm exec concurrently \"pnpm run build:watch\" \"pnpm run build:css:watch\" \"pnpm run playground:dev\"",
-    "type-check": "tsc --noEmit",
-    "playground:dev": "npm --prefix playground run dev",
-    "playground:build": "npm --prefix playground run build",
-    "playground:preview": "npm --prefix playground run preview"
-  },
-  "babel": {
-    "presets": [
-      "@babel/preset-env",
-      "@babel/preset-react",
-      "@babel/preset-typescript"
-    ]
-  },
-  "dependencies": {
-    "@radix-ui/react-select": "^2.0.0",
-    "@radix-ui/react-slider": "^1.1.2",
-    "@radix-ui/react-slot": "^1.1.1",
-    "@web/rollup-plugin-copy": "^0.5.1",
-    "class-variance-authority": "^0.7.0",
-    "clsx": "^2.1.1",
-    "dashjs": "^4.7.4",
-    "hls.js": "^1.5.15",
-    "lucide-react": "^0.468.0",
-    "tailwind-merge": "^2.5.2",
-    "video.js": "^8.23.0"
-  },
-  "peerDependencies": {
-    "react": "^17.0.0 || ^18.0.0 || ^19.0.0",
-    "react-dom": "^17.0.0 || ^18.0.0 || ^19.0.0"
+    "build": "pnpm -r build",
+    "build:core": "pnpm --filter @livepeer-frameworks/player-core build",
+    "build:react": "pnpm --filter @livepeer-frameworks/player-react build",
+    "build:svelte": "pnpm --filter @livepeer-frameworks/player-svelte build",
+    "dev": "pnpm exec concurrently \"pnpm run build:core -- --watch\" \"pnpm run playground:dev\"",
+    "type-check": "pnpm -r type-check",
+    "playground:dev": "pnpm --filter playground run dev",
+    "playground:build": "pnpm --filter playground run build",
+    "clean": "rm -rf packages/*/dist packages/*/.svelte-kit"
   },
   "devDependencies": {
-    "@babel/preset-env": "^7.26.0",
-    "@babel/preset-react": "^7.26.3",
-    "@babel/preset-typescript": "^7.27.1",
-    "@rollup/plugin-babel": "^6.0.4",
-    "@rollup/plugin-commonjs": "^28.0.6",
-    "@rollup/plugin-node-resolve": "^16.0.1",
-    "@rollup/plugin-terser": "^0.4.4",
-    "@rollup/plugin-typescript": "^12.1.4",
-    "@rollup/plugin-url": "^8.0.2",
-    "@types/react": "^19.1.11",
-    "@types/react-dom": "^19.1.7",
-    "autoprefixer": "^10.4.20",
     "concurrently": "^9.0.1",
-    "postcss": "^8.4.47",
-    "postcss-cli": "^11.0.1",
-    "postcss-prefix-selector": "^1.16.1",
-    "@tailwindcss/postcss": "^4.1.14",
-    "react": "19.2.0",
-    "react-dom": "19.2.0",
-    "rollup": "^4.48.1",
-    "rollup-plugin-peer-deps-external": "^2.2.4",
-    "rollup-plugin-postcss": "^4.0.2",
-    "tailwindcss": "^4.1.14",
-    "tslib": "^2.8.1",
+    "postcss-import": "^16.1.1",
+    "postcss-prefix-selector": "^2.1.1",
     "typescript": "^5.9.2"
   },
-  "keywords": [
-    "react",
-    "streaming",
-    "mistserver",
-    "webrtc",
-    "player"
-  ],
   "author": "Livepeer FrameWorks",
-  "license": "Unlicense",
-  "browserslist": {
-    "production": [
-      ">0.2%",
-      "not dead",
-      "not op_mini all"
-    ],
-    "development": [
-      "last 1 chrome version",
-      "last 1 firefox version",
-      "last 1 safari version"
-    ]
-  }
+  "license": "Unlicense"
 }

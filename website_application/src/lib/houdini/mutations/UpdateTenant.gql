@@ -1,3 +1,4 @@
+# Update tenant settings and configuration
 mutation UpdateTenant($input: UpdateTenantInput!) {
   updateTenant(input: $input) {
     __typename

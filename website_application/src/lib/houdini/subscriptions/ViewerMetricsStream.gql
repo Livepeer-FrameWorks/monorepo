@@ -1,3 +1,5 @@
+# Live viewer connection and playback quality metrics
+# Includes bandwidth, packet loss, geographic location, and connection statistics
 subscription ViewerMetricsStream($stream: String!) {
   viewerMetrics(stream: $stream) {
     nodeId

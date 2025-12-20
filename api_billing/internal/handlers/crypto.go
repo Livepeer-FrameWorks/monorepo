@@ -116,7 +116,7 @@ func (cm *CryptoMonitor) checkWalletForPayments(walletID, tenantID, invoiceID, a
 		"asset":           asset,
 		"address":         address,
 		"expected_amount": expectedAmount,
-	}).Debug("Checking wallet for payments")
+	}).Info("Checking wallet for payments")
 
 	var transactions []CryptoTransaction
 	var err error
@@ -207,7 +207,7 @@ func (cm *CryptoMonitor) isValidPayment(tx CryptoTransaction, expectedAmount flo
 		"min_confirmations":    minConfirmations[asset],
 		"amount_valid":         isAmountValid,
 		"enough_confirmations": hasEnoughConfirmations,
-	}).Debug("Validating crypto payment")
+	}).Info("Validating crypto payment")
 
 	return isAmountValid && hasEnoughConfirmations
 }
@@ -545,7 +545,7 @@ func (cm *CryptoMonitor) getLivepeerTransactions(address string) ([]CryptoTransa
 		"network":  "ethereum",
 		"contract": "livepeer",
 		"tx_count": len(transactions),
-	}).Debug("Fetched Livepeer transactions")
+	}).Info("Fetched Livepeer transactions")
 
 	return transactions, nil
 }

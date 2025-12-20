@@ -45,7 +45,7 @@
       <span><kbd class="px-1 py-0.5 bg-muted border border-border/50 font-mono text-[10px]">Ctrl</kbd>+<kbd class="px-1 py-0.5 bg-muted border border-border/50 font-mono text-[10px]">Enter</kbd> run</span>
     </div>
   </div>
-  <div class="flex-1 min-h-[300px] overflow-hidden">
+  <div class="flex-1 min-h-[300px] max-h-[500px] overflow-hidden">
     {#if browser}
       <CodeMirrorEditor
         bind:value={query}

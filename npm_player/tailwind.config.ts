@@ -2,7 +2,22 @@ import type { Config } from "tailwindcss";
 
 const config: Config = {
   darkMode: ["class"],
-  content: ["./src/**/*.{ts,tsx,js,jsx}"],
+  content: [
+    "./src/**/*.{ts,tsx,js,jsx}",
+    "./packages/core/src/**/*.{ts,tsx,js,jsx}",
+    "./packages/react/src/**/*.{ts,tsx,js,jsx}",
+    "./packages/svelte/src/**/*.{svelte,ts,js}",
+    "./playground/src/**/*.{ts,tsx,js,jsx}",
+  ],
+  // Safelist critical classes that might be used in portals/dynamic content
+  safelist: [
+    "bg-black",
+    "bg-[#1a1b26]",
+    "bg-[#292e42]",
+    "text-[#a9b1d6]",
+    "text-[#c0caf5]",
+    "border-[#414868]/50",
+  ],
   theme: {
     container: {
       center: true,

@@ -1,3 +1,5 @@
+# Fetch platform-wide load balancing routing events with geographic and scoring details
+# Returns routing decisions across all streams for infrastructure analysis
 query GetPlatformRoutingEvents(
   $timeRange: TimeRangeInput
   $first: Int = 100
@@ -16,6 +18,7 @@ query GetPlatformRoutingEvents(
         timestamp
         streamName
         selectedNode
+        nodeId
         status
         score
         clientCountry
@@ -34,6 +37,10 @@ query GetPlatformRoutingEvents(
         }
         details
         routingDistance
+        latencyMs
+        candidatesCount
+        streamTenantId
+        clusterId
       }
     }
     pageInfo {

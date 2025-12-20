@@ -1,0 +1,2 @@
+/* Re-export core player CSS - apps import from wrapper, not core */
+@import "@livepeer-frameworks/player-core/player.css";

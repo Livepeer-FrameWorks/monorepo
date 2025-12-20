@@ -40,6 +40,39 @@ service InternalService {
 
   // Called by Foghorn to initiate DVR recording for a stream
   rpc StartDVR(shared.StartDVRRequest) returns (shared.StartDVRResponse);
+
+  // ============================================================================
+  // CLIP/DVR REGISTRY (Foghorn → Commodore)
+  // Business registry for clips and DVR recordings.
+  // See: docs/architecture/CLIP_DVR_REGISTRY.md
+  // ============================================================================
+
+  // Register a new clip in the business registry (called by Foghorn during CreateClip)
+  rpc RegisterClip(RegisterClipRequest) returns (RegisterClipResponse);
+
+  // Register a new DVR recording in the business registry (called by Foghorn during StartDVR)
+  rpc RegisterDVR(RegisterDVRRequest) returns (RegisterDVRResponse);
+
+  // Resolve clip hash to tenant context (for analytics enrichment and playback)
+  rpc ResolveClipHash(ResolveClipHashRequest) returns (ResolveClipHashResponse);
+
+  // Resolve DVR hash to tenant context (for analytics enrichment and playback)
+  rpc ResolveDVRHash(ResolveDVRHashRequest) returns (ResolveDVRHashResponse);
+
+  // Unified identifier resolution - checks streams, clips, and DVR in one call
+  // Used by Foghorn for analytics enrichment when local state cache misses
+  rpc ResolveIdentifier(ResolveIdentifierRequest) returns (ResolveIdentifierResponse);
+
+  // ============================================================================
+  // VOD REGISTRY (Foghorn → Commodore)
+  // Business registry for VOD assets. Mirrors clip/DVR pattern.
+  // ============================================================================
+
+  // Register a new VOD asset in the business registry (called by Foghorn during CreateVodUpload)
+  rpc RegisterVod(RegisterVodRequest) returns (RegisterVodResponse);
+
+  // Resolve VOD hash to tenant context (for analytics enrichment and playback)
+  rpc ResolveVodHash(ResolveVodHashRequest) returns (ResolveVodHashResponse);
 }
 
 // ============================================================================
@@ -112,6 +145,131 @@ message ValidateAPITokenResponse {
   string email = 4;                     // json:"email,omitempty"
   string role = 5;                      // json:"role,omitempty"
   repeated string permissions = 6;      // json:"permissions,omitempty"
+}
+
+// ============================================================================
+// CLIP/DVR BUSINESS REGISTRY (Foghorn → Commodore)
+// See: docs/architecture/CLIP_DVR_REGISTRY.md
+// ============================================================================
+
+// Register a new clip in the business registry
+// Called by Foghorn during CreateClip flow
+message RegisterClipRequest {
+  string tenant_id = 1;                 // Tenant context (from stream lookup)
+  string user_id = 2;                   // User who created the clip
+  string stream_id = 3;                 // Source stream UUID
+  string title = 4;                     // Optional clip title
+  string description = 5;               // Optional clip description
+  int64 start_time = 6;                 // Start timestamp (unix ms)
+  int64 duration = 7;                   // Duration (ms)
+  string clip_mode = 8;                 // absolute, relative, duration, clip_now
+  string requested_params = 9;          // Original request JSON for audit
+}
+
+message RegisterClipResponse {
+  string clip_hash = 1;                 // Generated hash (use as artifact_hash in Foghorn)
+  string clip_id = 2;                   // Commodore clips table UUID
+}
+
+// Register a new DVR recording in the business registry
+// Called by Foghorn during StartDVR flow
+message RegisterDVRRequest {
+  string tenant_id = 1;                 // Tenant context
+  string user_id = 2;                   // User who owns the recording
+  string stream_id = 3;                 // Source stream UUID (optional for legacy)
+  string internal_name = 4;             // MistServer stream name
+}
+
+message RegisterDVRResponse {
+  string dvr_hash = 1;                  // Generated hash (use as artifact_hash in Foghorn)
+  string dvr_id = 2;                    // Commodore dvr_recordings table UUID
+}
+
+// Resolve clip hash to tenant context
+// Used for analytics enrichment and playback authorization
+message ResolveClipHashRequest {
+  string clip_hash = 1;
+}
+
+message ResolveClipHashResponse {
+  bool found = 1;                       // Whether clip was found
+  string tenant_id = 2;                 // Tenant context for analytics
+  string user_id = 3;                   // Owner for authorization
+  string stream_id = 4;                 // Source stream UUID
+  string internal_name = 5;             // MistServer stream name (from stream lookup)
+  string title = 6;                     // Clip title
+  string description = 7;               // Clip description
+  int64 start_time = 8;                 // Start timestamp (unix ms)
+  int64 duration = 9;                   // Duration (ms)
+  string clip_mode = 10;                // How clip was created
+}
+
+// Resolve DVR hash to tenant context
+// Used for analytics enrichment and playback authorization
+message ResolveDVRHashRequest {
+  string dvr_hash = 1;
+}
+
+message ResolveDVRHashResponse {
+  bool found = 1;                       // Whether DVR was found
+  string tenant_id = 2;                 // Tenant context for analytics
+  string user_id = 3;                   // Owner for authorization
+  string stream_id = 4;                 // Source stream UUID
+  string internal_name = 5;             // MistServer stream name
+}
+
+// Unified identifier resolution - single call to check all Commodore registries
+// Lookup order: streams (internal_name), streams (playback_id), clips, DVR, VOD
+// Used by Foghorn for analytics enrichment when local state cache misses
+message ResolveIdentifierRequest {
+  string identifier = 1;                // Any identifier: internal_name, playback_id, clip_hash, dvr_hash, vod_hash
+}
+
+message ResolveIdentifierResponse {
+  bool found = 1;                       // Whether identifier was resolved
+  string tenant_id = 2;                 // Tenant context for analytics/billing
+  string user_id = 3;                   // Owner (if available)
+  string internal_name = 4;             // Canonical stream name (for streams, or parent for clips/DVR)
+  string identifier_type = 5;           // "stream", "playback_id", "clip", "dvr", "vod"
+  bool is_recording_enabled = 6;        // For streams: whether DVR auto-record is enabled
+}
+
+// ============================================================================
+// VOD BUSINESS REGISTRY (Foghorn → Commodore)
+// Mirrors clip/DVR registration pattern - Foghorn calls this to register before storing lifecycle
+// ============================================================================
+
+// Register a new VOD asset in the business registry
+// Called by Foghorn during CreateVodUpload flow (before storing in foghorn.artifacts)
+message RegisterVodRequest {
+  string tenant_id = 1;                 // Tenant context
+  string user_id = 2;                   // User who initiated upload
+  string filename = 3;                  // Original filename (used for hash generation)
+  // Optional business metadata (stored in commodore.vod_assets)
+  optional string title = 4;
+  optional string description = 5;
+  optional string content_type = 6;
+  optional int64 size_bytes = 7;
+}
+
+message RegisterVodResponse {
+  string vod_hash = 1;                  // Generated hash (use as artifact_hash in Foghorn)
+  string vod_id = 2;                    // Commodore vod_assets table UUID
+}
+
+// Resolve VOD hash to tenant context
+// Used for analytics enrichment, playback authorization, and lifecycle operations
+message ResolveVodHashRequest {
+  string vod_hash = 1;
+}
+
+message ResolveVodHashResponse {
+  bool found = 1;                       // Whether VOD was found
+  string tenant_id = 2;                 // Tenant context for analytics
+  string user_id = 3;                   // Owner for authorization
+  string filename = 4;                  // Original filename
+  string title = 5;                     // VOD title (if set)
+  string description = 6;               // VOD description (if set)
 }
 
 // ============================================================================
@@ -527,5 +685,27 @@ service DVRService {
 
 service ViewerService {
   rpc ResolveViewerEndpoint(shared.ViewerEndpointRequest) returns (shared.ViewerEndpointResponse);
+  rpc ResolveIngestEndpoint(shared.IngestEndpointRequest) returns (shared.IngestEndpointResponse);
   rpc GetStreamMeta(shared.StreamMetaRequest) returns (shared.StreamMetaResponse);
+}
+
+// ============================================================================
+// VOD SERVICE (Gateway → Commodore → Foghorn proxy)
+// User-initiated video uploads (distinct from clips/DVR which are stream-derived)
+// Uses shared types from shared.proto
+// ============================================================================
+
+service VodService {
+  // Initiate multipart upload - returns presigned URLs for direct S3 upload
+  rpc CreateVodUpload(shared.CreateVodUploadRequest) returns (shared.CreateVodUploadResponse);
+  // Finalize upload after all parts uploaded
+  rpc CompleteVodUpload(shared.CompleteVodUploadRequest) returns (shared.CompleteVodUploadResponse);
+  // Cancel in-progress upload
+  rpc AbortVodUpload(shared.AbortVodUploadRequest) returns (shared.AbortVodUploadResponse);
+  // Get single VOD asset
+  rpc GetVodAsset(shared.GetVodAssetRequest) returns (shared.VodAssetInfo);
+  // List VOD assets with pagination
+  rpc ListVodAssets(shared.ListVodAssetsRequest) returns (shared.ListVodAssetsResponse);
+  // Delete VOD asset
+  rpc DeleteVodAsset(shared.DeleteVodAssetRequest) returns (shared.DeleteVodAssetResponse);
 }

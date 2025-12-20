@@ -1,0 +1,25 @@
+{
+  "name": "@livepeer-frameworks/streamcrafter-workspace",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@9.12.0",
+  "description": "StreamCrafter - browser-based streaming with WebCodecs",
+  "scripts": {
+    "build": "pnpm -r build",
+    "build:core": "pnpm --filter @livepeer-frameworks/streamcrafter-core build",
+    "build:react": "pnpm --filter @livepeer-frameworks/streamcrafter-react build",
+    "build:svelte": "pnpm --filter @livepeer-frameworks/streamcrafter-svelte build",
+    "dev": "pnpm exec concurrently \"pnpm run build:core -- --watch\" \"pnpm run playground:dev\"",
+    "type-check": "pnpm -r type-check",
+    "playground:dev": "pnpm --filter playground run dev",
+    "playground:build": "pnpm --filter playground run build",
+    "clean": "rm -rf packages/*/dist packages/*/.svelte-kit"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.1",
+    "typescript": "^5.9.2"
+  },
+  "author": "Livepeer FrameWorks",
+  "license": "Unlicense"
+}

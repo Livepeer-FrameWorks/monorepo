@@ -86,6 +86,39 @@ service ClusterService {
 
   // List clusters the tenant is subscribed to
   rpc ListMySubscriptions(ListMySubscriptionsRequest) returns (ListClustersResponse);
+
+  // ============================================================================
+  // CLUSTER MARKETPLACE RPCS
+  // ============================================================================
+
+  // List clusters in marketplace (respects visibility + billing tier)
+  rpc ListMarketplaceClusters(ListMarketplaceClustersRequest) returns (ListMarketplaceClustersResponse);
+
+  // Get a marketplace cluster (with optional invite token for unlisted)
+  rpc GetMarketplaceCluster(GetMarketplaceClusterRequest) returns (MarketplaceClusterEntry);
+
+  // Update cluster marketplace settings (owner only)
+  rpc UpdateClusterMarketplace(UpdateClusterMarketplaceRequest) returns (ClusterResponse);
+
+  // Create a private cluster (self-hosted edge)
+  rpc CreatePrivateCluster(CreatePrivateClusterRequest) returns (CreatePrivateClusterResponse);
+
+  // Invite management (cluster owner)
+  rpc CreateClusterInvite(CreateClusterInviteRequest) returns (ClusterInvite);
+  rpc RevokeClusterInvite(RevokeClusterInviteRequest) returns (google.protobuf.Empty);
+  rpc ListClusterInvites(ListClusterInvitesRequest) returns (ListClusterInvitesResponse);
+
+  // For invited tenants: list pending invites
+  rpc ListMyClusterInvites(ListMyClusterInvitesRequest) returns (ListClusterInvitesResponse);
+
+  // Subscription with approval workflow
+  rpc RequestClusterSubscription(RequestClusterSubscriptionRequest) returns (ClusterSubscription);
+  rpc AcceptClusterInvite(AcceptClusterInviteRequest) returns (ClusterSubscription);
+
+  // Approval workflow (cluster owner)
+  rpc ListPendingSubscriptions(ListPendingSubscriptionsRequest) returns (ListPendingSubscriptionsResponse);
+  rpc ApproveClusterSubscription(ApproveClusterSubscriptionRequest) returns (ClusterSubscription);
+  rpc RejectClusterSubscription(RejectClusterSubscriptionRequest) returns (ClusterSubscription);
 }
 
 // NodeService handles infrastructure node management
@@ -102,6 +135,14 @@ service NodeService {
   // Get node owner (tenant) from node ID
   // Source: pkg/api/quartermaster/types.go:NodeOwnerResponse
   rpc GetNodeOwner(GetNodeOwnerRequest) returns (NodeOwnerResponse);
+
+  // Resolve node by logical name (node_id string like "edge-node-1") to get UUID
+  // Used by Foghorn to enrich subscription broadcasts with database UUID
+  rpc GetNodeByLogicalName(GetNodeByLogicalNameRequest) returns (NodeResponse);
+
+  // Update node hardware specs (detected at startup)
+  // Called by Foghorn when Helmsman registers with hardware info
+  rpc UpdateNodeHardware(UpdateNodeHardwareRequest) returns (google.protobuf.Empty);
 }
 
 // BootstrapService handles node enrollment and service discovery
@@ -300,6 +341,34 @@ message GetClusterRequest {
   string cluster_id = 1;
 }
 
+// ============================================================================
+// CLUSTER MARKETPLACE ENUMS
+// ============================================================================
+
+enum ClusterVisibility {
+  CLUSTER_VISIBILITY_UNSPECIFIED = 0;
+  CLUSTER_VISIBILITY_PUBLIC = 1;    // Anyone can see and subscribe
+  CLUSTER_VISIBILITY_UNLISTED = 2;  // Only visible with direct link/invite
+  CLUSTER_VISIBILITY_PRIVATE = 3;   // Only owner can see
+}
+
+enum ClusterPricingModel {
+  CLUSTER_PRICING_UNSPECIFIED = 0;
+  CLUSTER_PRICING_FREE_UNMETERED = 1;  // No charge, quota enforcement only
+  CLUSTER_PRICING_METERED = 2;          // Usage-based billing
+  CLUSTER_PRICING_MONTHLY = 3;          // Fixed monthly subscription
+  CLUSTER_PRICING_TIER_INHERIT = 4;     // Inherit from tenant tier (default)
+  CLUSTER_PRICING_CUSTOM = 5;           // Per-agreement pricing
+}
+
+enum ClusterSubscriptionStatus {
+  SUBSCRIPTION_STATUS_UNSPECIFIED = 0;
+  SUBSCRIPTION_STATUS_PENDING_APPROVAL = 1;
+  SUBSCRIPTION_STATUS_ACTIVE = 2;
+  SUBSCRIPTION_STATUS_SUSPENDED = 3;
+  SUBSCRIPTION_STATUS_REJECTED = 4;
+}
+
 // Matches pkg/models/infrastructure.go:InfrastructureCluster (lines 8-42)
 message InfrastructureCluster {
   string id = 1;                        // json:"id"
@@ -322,7 +391,18 @@ message InfrastructureCluster {
   bool is_active = 18;                  // json:"is_active"
   google.protobuf.Timestamp created_at = 19; // json:"created_at"
   google.protobuf.Timestamp updated_at = 20; // json:"updated_at"
-  bool is_default_cluster = 21; // new field, json:"is_default_cluster"
+  bool is_default_cluster = 21;         // json:"is_default_cluster"
+
+  // ===== MARKETPLACE FIELDS =====
+  // Note: Pricing config lives in Purser - these fields populated by Gateway
+  ClusterVisibility visibility = 30;    // Marketplace visibility
+  ClusterPricingModel pricing_model = 31; // Pricing model (from Purser)
+  int32 monthly_price_cents = 32;       // Monthly price in cents (from Purser)
+  optional string required_billing_tier = 33; // Required tier (from Purser)
+  bool requires_approval = 35;          // Subscription requires owner approval
+  optional string short_description = 36; // Marketplace listing description
+  optional string long_description = 37;  // Detailed terms
+  bool is_platform_cluster = 38;        // Platform-operated cluster
 }
 
 message ClusterResponse {
@@ -420,6 +500,177 @@ message UnsubscribeFromClusterRequest {
 message ListMySubscriptionsRequest {
   string tenant_id = 1;
   common.CursorPaginationRequest pagination = 2;
+}
+
+// ============================================================================
+// CLUSTER MARKETPLACE MESSAGES
+// ============================================================================
+
+// Marketplace cluster listing (public view)
+// Note: Pricing info comes from Purser - Gateway merges data
+message MarketplaceClusterEntry {
+  string cluster_id = 1;
+  string cluster_name = 2;
+  optional string short_description = 3;
+  ClusterVisibility visibility = 4;
+  // Pricing fields (populated by Gateway from Purser, not Quartermaster)
+  ClusterPricingModel pricing_model = 5;
+  int32 monthly_price_cents = 6;
+  optional string required_billing_tier = 7;
+  bool requires_approval = 8;
+  optional string owner_name = 9;  // Operator tenant name (not ID)
+  bool is_platform_cluster = 10;
+  int32 max_concurrent_streams = 11;
+  int32 max_concurrent_viewers = 12;
+  optional double current_utilization = 13;  // Percentage
+  bool is_subscribed = 14;  // Current tenant subscribed?
+  ClusterSubscriptionStatus subscription_status = 15;
+}
+
+message ListMarketplaceClustersRequest {
+  string tenant_id = 1;  // Requesting tenant (for visibility filtering)
+  // Pricing filter removed - handled by Purser
+  common.CursorPaginationRequest pagination = 3;
+}
+
+message ListMarketplaceClustersResponse {
+  repeated MarketplaceClusterEntry clusters = 1;
+  common.CursorPaginationResponse pagination = 2;
+}
+
+message GetMarketplaceClusterRequest {
+  string cluster_id = 1;
+  string tenant_id = 2;  // Requesting tenant
+  optional string invite_token = 3;  // For unlisted clusters
+}
+
+// Update cluster marketplace settings (operational only)
+// Pricing updates go through Purser's SetClusterPricing
+message UpdateClusterMarketplaceRequest {
+  string cluster_id = 1;
+  string tenant_id = 2;  // Must be owner
+  optional ClusterVisibility visibility = 3;
+  // Pricing fields (routed to Purser by Gateway)
+  optional ClusterPricingModel pricing_model = 4;
+  optional int32 monthly_price_cents = 5;
+  optional string required_billing_tier = 6;
+  optional bool requires_approval = 7;
+  optional string short_description = 8;
+  optional string long_description = 9;
+}
+
+// Private cluster creation (self-hosted edge)
+message CreatePrivateClusterRequest {
+  string tenant_id = 1;
+  string cluster_name = 2;
+  optional string region = 3;
+  optional string short_description = 4;
+}
+
+message CreatePrivateClusterResponse {
+  InfrastructureCluster cluster = 1;
+  BootstrapToken bootstrap_token = 2;  // One-time token shown on creation
+}
+
+// Cluster invite
+message ClusterInvite {
+  string id = 1;
+  string cluster_id = 2;
+  string invited_tenant_id = 3;
+  string invite_token = 4;  // Only visible to owner/invitee
+  string access_level = 5;
+  google.protobuf.Struct resource_limits = 6;
+  string status = 7;  // pending, accepted, expired, revoked
+  string created_by = 8;
+  google.protobuf.Timestamp created_at = 9;
+  optional google.protobuf.Timestamp expires_at = 10;
+  optional google.protobuf.Timestamp accepted_at = 11;
+  // Joined tenant/cluster info
+  optional string invited_tenant_name = 12;
+  optional string cluster_name = 13;  // Populated on fetch to avoid N+1
+}
+
+message CreateClusterInviteRequest {
+  string cluster_id = 1;
+  string owner_tenant_id = 2;  // Must be owner
+  string invited_tenant_id = 3;
+  string access_level = 4;
+  google.protobuf.Struct resource_limits = 5;
+  int32 expires_in_days = 6;
+}
+
+message RevokeClusterInviteRequest {
+  string invite_id = 1;
+  string owner_tenant_id = 2;  // Must be owner
+}
+
+message ListClusterInvitesRequest {
+  string cluster_id = 1;
+  string owner_tenant_id = 2;  // Must be owner
+  common.CursorPaginationRequest pagination = 3;
+}
+
+message ListMyClusterInvitesRequest {
+  string tenant_id = 1;  // Get my pending invites
+  common.CursorPaginationRequest pagination = 2;
+}
+
+message ListClusterInvitesResponse {
+  repeated ClusterInvite invites = 1;
+  common.CursorPaginationResponse pagination = 2;
+}
+
+// Cluster subscription with status
+message ClusterSubscription {
+  string id = 1;
+  string tenant_id = 2;
+  string cluster_id = 3;
+  string access_level = 4;
+  ClusterSubscriptionStatus subscription_status = 5;
+  google.protobuf.Struct resource_limits = 6;
+  optional google.protobuf.Timestamp requested_at = 7;
+  optional google.protobuf.Timestamp approved_at = 8;
+  optional string approved_by = 9;
+  optional string rejection_reason = 10;
+  optional google.protobuf.Timestamp expires_at = 11;
+  google.protobuf.Timestamp created_at = 12;
+  google.protobuf.Timestamp updated_at = 13;
+  // Joined cluster/tenant info
+  optional string cluster_name = 14;
+  optional string tenant_name = 15;
+}
+
+message RequestClusterSubscriptionRequest {
+  string tenant_id = 1;
+  string cluster_id = 2;
+  optional string invite_token = 3;  // For invite-based access
+}
+
+message AcceptClusterInviteRequest {
+  string tenant_id = 1;
+  string invite_token = 2;
+}
+
+message ListPendingSubscriptionsRequest {
+  string cluster_id = 1;
+  string owner_tenant_id = 2;  // Must be owner
+  common.CursorPaginationRequest pagination = 3;
+}
+
+message ListPendingSubscriptionsResponse {
+  repeated ClusterSubscription subscriptions = 1;
+  common.CursorPaginationResponse pagination = 2;
+}
+
+message ApproveClusterSubscriptionRequest {
+  string subscription_id = 1;
+  string owner_tenant_id = 2;  // Must be owner
+}
+
+message RejectClusterSubscriptionRequest {
+  string subscription_id = 1;
+  string owner_tenant_id = 2;  // Must be owner
+  optional string reason = 3;
 }
 
 // ============================================================================
@@ -531,6 +782,21 @@ message GetNodeOwnerRequest {
   string node_id = 1;
 }
 
+// Request to resolve node by logical name (node_id VARCHAR like "edge-node-1")
+// Used by Foghorn to get UUID for subscription enrichment
+message GetNodeByLogicalNameRequest {
+  string node_id = 1;  // Logical name like "edge-node-1"
+}
+
+// Request to update node hardware specs (detected at startup by Helmsman)
+// Sent by Foghorn when processing Register message with hardware info
+message UpdateNodeHardwareRequest {
+  string node_id = 1;           // Logical node ID (e.g., "edge-node-1")
+  optional int32 cpu_cores = 2; // Detected CPU cores
+  optional int32 memory_gb = 3; // Total RAM in GB
+  optional int32 disk_gb = 4;   // Total disk capacity in GB
+}
+
 // Matches pkg/api/quartermaster/types.go:NodeOwnerResponse (lines 431-437)
 message NodeOwnerResponse {
   string node_id = 1;                   // json:"node_id"
@@ -554,6 +820,7 @@ message BootstrapEdgeNodeRequest {
   repeated string local_ipv6 = 6;       // json:"local_ipv6,omitempty"
   optional string macs_sha256 = 7;      // json:"macs_sha256,omitempty"
   optional string machine_id_sha256 = 8; // json:"machine_id_sha256,omitempty"
+  optional string target_cluster_id = 9; // Target cluster (must match token binding if token has cluster_id)
 }
 
 // Matches pkg/api/quartermaster/types.go:BootstrapEdgeNodeResponse (lines 247-251)
@@ -575,6 +842,9 @@ message BootstrapServiceRequest {
   optional string advertise_host = 8;   // json:"advertise_host,omitempty"
   string host = 9;                      // json:"host"
   int32 port = 10;                      // json:"port"
+  // Explicit cluster binding - required when multiple clusters exist
+  // If omitted, falls back to token-bound cluster or single active cluster (dev only)
+  optional string cluster_id = 11;      // json:"cluster_id,omitempty"
 }
 
 // Matches pkg/api/quartermaster/types.go:BootstrapServiceResponse (lines 267-272)
@@ -583,6 +853,7 @@ message BootstrapServiceResponse {
   string instance_id = 2;               // json:"instance_id"
   string cluster_id = 3;                // json:"cluster_id"
   optional string node_id = 4;          // json:"node_id,omitempty"
+  optional string owner_tenant_id = 5;  // json:"owner_tenant_id,omitempty" - Cluster owner tenant for dual-tenant attribution
 }
 
 message ServiceDiscoveryRequest {

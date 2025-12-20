@@ -1,16 +1,18 @@
 <script lang="ts">
   import { onMount, onDestroy, untrack } from "svelte";
+  import { get } from "svelte/store";
   import { goto } from "$app/navigation";
   import { resolve } from "$app/paths";
   import { auth } from "$lib/stores/auth";
   import {
-    GetStreamsStore,
+    fragment,
+    GetStreamsConnectionStore,
     GetPlatformOverviewStore,
-    GetStreamAnalyticsSummaryStore,
-    GetViewerCountTimeSeriesStore,
-    GetQualityTierDailyStore,
+    GetStreamWithAnalyticsStore,
     ViewerMetricsStreamStore,
-    StreamStatus
+    StreamStatus,
+    StreamCoreFieldsStore,
+    StreamMetricsFieldsStore,
   } from "$houdini";
   import type { ViewerMetricsStream$result } from "$houdini";
   import { toast } from "$lib/stores/toast.js";
@@ -20,6 +22,14 @@
   import EmptyState from "$lib/components/EmptyState.svelte";
   import { Button } from "$lib/components/ui/button";
   import { Badge } from "$lib/components/ui/badge";
+  import {
+    Table,
+    TableBody,
+    TableCell,
+    TableHead,
+    TableHeader,
+    TableRow,
+  } from "$lib/components/ui/table";
   import { GridSeam } from "$lib/components/layout";
   import DashboardMetricCard from "$lib/components/shared/DashboardMetricCard.svelte";
   import ViewerTrendChart from "$lib/components/charts/ViewerTrendChart.svelte";
@@ -27,28 +37,43 @@
   import CodecDistributionChart from "$lib/components/charts/CodecDistributionChart.svelte";
 
   // Houdini stores
-  const streamsStore = new GetStreamsStore();
+  const streamsStore = new GetStreamsConnectionStore();
   const platformOverviewStore = new GetPlatformOverviewStore();
-  const streamAnalyticsStore = new GetStreamAnalyticsSummaryStore();
-  const viewerCountStore = new GetViewerCountTimeSeriesStore();
-  const qualityTierStore = new GetQualityTierDailyStore();
+  const streamAnalyticsStore = new GetStreamWithAnalyticsStore();
   const viewerMetricsSub = new ViewerMetricsStreamStore();
+
+  // Fragment stores for unmasking nested data
+  const streamCoreStore = new StreamCoreFieldsStore();
+  const streamMetricsStore = new StreamMetricsFieldsStore();
 
   let isAuthenticated = false;
   let user: any = null;
 
   // Derived state from Houdini stores
   let loading = $derived($streamsStore.fetching || $platformOverviewStore.fetching);
-  let streams = $derived($streamsStore.data?.streams ?? []);
+
+  // Get masked data
+  let maskedNodes = $derived($streamsStore.data?.streamsConnection?.edges?.map(e => e.node) ?? []);
+
+  // Unmask streams with fragment() and get() pattern
+  let streams = $derived(
+    maskedNodes.map(node => {
+      const core = get(fragment(node, streamCoreStore));
+      const metrics = node.metrics ? get(fragment(node.metrics, streamMetricsStore)) : null;
+      return { ...core, metrics };
+    })
+  );
+
   let platformOverview = $derived($platformOverviewStore.data?.platformOverview ?? null);
-  let analyticsData = $derived($streamAnalyticsStore.data?.streamAnalytics ?? null);
-  let viewerMetrics = $derived($viewerCountStore.data?.viewerCountTimeSeries ?? []);
+  let analyticsData = $derived($streamAnalyticsStore.data?.stream?.analytics ?? null);
+  let viewerMetrics = $derived($streamAnalyticsStore.data?.stream?.viewerTimeSeriesConnection?.edges?.map(e => e.node) ?? []);
   let qualityTierData = $derived.by(() => {
-    const edges = $qualityTierStore.data?.qualityTierDailyConnection?.edges ?? [];
+    const edges = $streamAnalyticsStore.data?.stream?.qualityDailyConnection?.edges ?? [];
     if (edges.length === 0) return null;
     // Aggregate all daily records into a single summary
+    type QualityEdge = NonNullable<typeof edges>[0];
     return edges.reduce(
-      (acc, edge) => ({
+      (acc: { tier1080pMinutes: number; tier720pMinutes: number; tier480pMinutes: number; tierSdMinutes: number }, edge: QualityEdge) => ({
         tier1080pMinutes: acc.tier1080pMinutes + (edge.node.tier1080pMinutes || 0),
         tier720pMinutes: acc.tier720pMinutes + (edge.node.tier720pMinutes || 0),
         tier480pMinutes: acc.tier480pMinutes + (edge.node.tier480pMinutes || 0),
@@ -62,15 +87,16 @@
   type CodecData = { codec: string; minutes: number };
 
   let codecData = $derived.by((): CodecData[] => {
-    const edges = $qualityTierStore.data?.qualityTierDailyConnection?.edges ?? [];
+    const edges = $streamAnalyticsStore.data?.stream?.qualityDailyConnection?.edges ?? [];
     if (edges.length === 0) return [];
 
     // Sum minutes by codec
     let h264 = 0;
     let h265 = 0;
     // Note: If you add more codecs to the backend query, add them here
+    type QualityEdge = NonNullable<typeof edges>[0];
 
-    edges.forEach(edge => {
+    edges.forEach((edge: QualityEdge) => {
       h264 += edge.node.codecH264Minutes || 0;
       h265 += edge.node.codecH265Minutes || 0;
     });
@@ -127,10 +153,9 @@
         platformOverviewStore.fetch({ variables: { timeRange } }).catch(() => null),
       ]);
 
-      // Select first stream if available
-      const streamsData = $streamsStore.data?.streams ?? [];
-      if (streamsData.length > 0) {
-        selectedStream = streamsData[0];
+      // Select first stream if available (use unmasked streams)
+      if (streams.length > 0) {
+        selectedStream = streams[0];
         await loadAnalyticsForStream(selectedStream.id);
         startRealTimeSubscriptions();
       }
@@ -154,11 +179,14 @@
     };
 
     try {
-      await Promise.all([
-        streamAnalyticsStore.fetch({ variables: { stream: streamId, timeRange } }).catch(() => null),
-        viewerCountStore.fetch({ variables: { stream: streamId, timeRange, interval: "5m" } }).catch(() => null),
-        qualityTierStore.fetch({ variables: { stream: streamId, timeRange: qualityTimeRange, first: 7 } }).catch(() => null),
-      ]);
+      await streamAnalyticsStore.fetch({
+        variables: {
+          id: streamId,
+          timeRange,
+          qualityTimeRange,
+          interval: "5m"
+        }
+      }).catch(() => null);
     } catch (error) {
       console.error("Failed to load analytics for stream:", error);
       toast.warning(
@@ -224,13 +252,6 @@
     return "text-destructive";
   }
 
-  function packetLossClass(loss: number) {
-    if (!hasValue(loss)) return "";
-    if (loss > 2) return "text-destructive";
-    if (loss > 1) return "text-warning";
-    return "text-success";
-  }
-
   function bufferStateClass(state: string | null | undefined) {
     switch (state) {
       case "FULL":
@@ -245,12 +266,13 @@
   // Icons
   const ChartLineIcon = getIconComponent("ChartLine");
   const UsersIcon = getIconComponent("Users");
-  const GlobeIcon = getIconComponent("Globe2");
   const ZapIcon = getIconComponent("Zap");
   const TrendingUpIcon = getIconComponent("TrendingUp");
   const GaugeIcon = getIconComponent("Gauge");
   const VideoIcon = getIconComponent("Video");
   const WifiIcon = getIconComponent("Wifi");
+  const DatabaseIcon = getIconComponent("Database");
+  const ClockIcon = getIconComponent("Clock");
 
   // Derived stats
   function formatDuration(seconds: number | undefined | null) {
@@ -286,14 +308,9 @@
           },
           hasValue(analyticsData.avgBitrate) && {
             key: "avgBitrate", label: "Avg Bitrate",
-            // avgBitrate is in bps, divide by 1,000,000 for Mbps
-            value: `${((analyticsData.avgBitrate ?? 0) / 1_000_000).toFixed(1)} Mbps`,
+            // avgBitrate is in kbps, divide by 1,000 for Mbps
+            value: `${((analyticsData.avgBitrate ?? 0) / 1_000).toFixed(1)} Mbps`,
             tone: "text-primary",
-          },
-          hasValue(analyticsData.packetLossRate) && {
-            key: "packetLoss", label: "Packet Loss",
-            value: `${((analyticsData.packetLossRate ?? 0) * 100).toFixed(2)}%`,
-            tone: packetLossClass((analyticsData.packetLossRate ?? 0) * 100),
           },
         ].filter(Boolean) as { key: string; label: string; value: string | number; tone: string }[]
       : [],
@@ -313,7 +330,7 @@
 
 <div class="h-full flex flex-col">
   <!-- Fixed Page Header -->
-  <div class="px-4 sm:px-6 lg:px-8 py-4 border-b border-[hsl(var(--tn-fg-gutter)/0.3)] shrink-0">
+  <div class="px-4 sm:px-6 lg:px-8 py-4 border-b border-[hsl(var(--tn-fg-gutter)/0.3)] shrink-0 flex justify-between items-center">
     <div class="flex items-center gap-3">
       <ChartLineIcon class="w-5 h-5 text-primary" />
       <div>
@@ -322,6 +339,16 @@
           Monitor your streaming performance and viewer engagement
         </p>
       </div>
+    </div>
+    <div class="flex items-center gap-2">
+      <Button href={resolve("/analytics/usage")} variant="outline" size="sm" class="gap-2">
+        <TrendingUpIcon class="w-4 h-4" />
+        Usage
+      </Button>
+      <Button href={resolve("/analytics/storage")} variant="outline" size="sm" class="gap-2">
+        <DatabaseIcon class="w-4 h-4" />
+        Storage
+      </Button>
     </div>
   </div>
 
@@ -359,66 +386,99 @@
           </div>
           <div>
             <DashboardMetricCard
-              icon={GlobeIcon}
-              iconColor="text-accent-purple"
-              value={formatNumber(platformOverview.totalUsers)}
-              valueColor="text-accent-purple"
-              label="Total Users"
+              icon={ClockIcon}
+              iconColor="text-warning"
+              value={platformOverview.viewerHours != null ? `${platformOverview.viewerHours.toFixed(1)}h` : "0h"}
+              valueColor="text-warning"
+              label="Viewer Hours"
             />
           </div>
           <div>
             <DashboardMetricCard
-              icon={WifiIcon}
-              iconColor="text-warning"
-              value={`${(platformOverview.totalBandwidth / 1000000).toFixed(1)}MB`}
-              valueColor="text-warning"
-              label="Total Bandwidth"
+              icon={TrendingUpIcon}
+              iconColor="text-purple-500"
+              value={formatNumber(platformOverview.peakConcurrentViewers)}
+              valueColor="text-purple-500"
+              label="Peak Concurrent"
             />
           </div>
         </GridSeam>
       {/if}
 
-      <!-- Main Content Grid -->
-      <div class="dashboard-grid">
-        <!-- Stream Selector Slab -->
-        {#if streams.length > 0}
-          <div class="slab">
-            <div class="slab-header">
-              <h3>Select Stream</h3>
+      <!-- Separator -->
+      <div class="section-divider py-8">
+        <div class="section-divider__bar"></div>
+      </div>
+
+      <!-- Stream Selection Table -->
+      {#if streams.length > 0}
+        <div class="slab border-t border-b border-[hsl(var(--tn-fg-gutter)/0.3)]">
+          <div class="slab-header flex justify-between items-center py-4">
+            <div class="flex flex-col gap-1">
+              <h3>Select Stream for Analysis</h3>
+              <p class="text-xs text-muted-foreground font-normal normal-case tracking-normal">
+                Click a row to update the detailed analytics view below
+              </p>
             </div>
-            <div class="slab-body--padded">
-              <div class="grid grid-cols-1 gap-2">
+            <Button href={resolve("/streams")} variant="ghost" size="sm" class="gap-2 text-muted-foreground hover:text-foreground">
+              <VideoIcon class="w-4 h-4" />
+              Manage Streams
+            </Button>
+          </div>
+          <div class="slab-body--flush">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Name</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead class="text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
                 {#each streams as stream (stream.id ?? stream.name)}
-                  <button
-                    class="w-full text-left p-3 border transition-all {selectedStream?.id === stream.id
-                      ? 'border-primary bg-primary/10 ring-1 ring-primary/30'
-                      : 'border-border hover:border-info bg-muted/30 hover:bg-muted/50'}"
+                  <TableRow
+                    class="cursor-pointer transition-colors hover:bg-muted/50 {selectedStream?.id === stream.id ? 'bg-primary/20 border-l-2 border-l-primary font-semibold' : ''}"
                     onclick={() => selectStream(stream)}
                   >
-                    <div class="flex items-center justify-between">
-                      <span class="font-medium text-foreground">{stream.name}</span>
-                      <span class="text-xs px-2 py-0.5 rounded {stream.metrics?.status === StreamStatus.LIVE ? 'bg-success/20 text-success' : 'bg-muted text-muted-foreground'}">
+                    <TableCell class="font-medium">
+                      {stream.name}
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant="outline" class="{stream.metrics?.status === StreamStatus.LIVE ? 'bg-success/10 text-success border-success/20' : 'bg-muted text-muted-foreground'}">
                         {stream.metrics?.status || "offline"}
-                      </span>
-                    </div>
-                  </button>
+                      </Badge>
+                    </TableCell>
+                    <TableCell class="text-right">
+                       <Button variant="ghost" size="icon" class="h-8 w-8 text-muted-foreground" onclick={(e) => { e.stopPropagation(); goto(resolve(`/streams/${stream.id}`)); }}>
+                          <ChartLineIcon class="h-4 w-4" />
+                       </Button>
+                    </TableCell>
+                  </TableRow>
                 {/each}
-              </div>
-            </div>
-            <div class="slab-actions">
-              <Button href={resolve("/streams")} variant="ghost" class="gap-2">
-                <VideoIcon class="w-4 h-4" />
-                Manage Streams
-              </Button>
-            </div>
+              </TableBody>
+            </Table>
           </div>
-        {/if}
+        </div>
+      {/if}
 
+      <!-- Separator for Stream Context -->
+      {#if selectedStream}
+        <div class="flex items-center gap-4 py-8 px-4 sm:px-0 max-w-5xl mx-auto w-full">
+           <div class="h-px flex-1 bg-[hsl(var(--tn-fg-gutter)/0.3)]"></div>
+           <span class="text-xs font-medium text-muted-foreground uppercase tracking-widest whitespace-nowrap">
+             Analytics for: <span class="text-primary">{selectedStream.name}</span>
+           </span>
+           <div class="h-px flex-1 bg-[hsl(var(--tn-fg-gutter)/0.3)]"></div>
+        </div>
+      {/if}
+
+      <!-- Main Content Grid -->
+      <div class="dashboard-grid">
         <!-- Stream Analytics Slab -->
         {#if selectedStream}
           <div class="slab">
             <div class="slab-header">
-              <h3>Stream Analytics: {selectedStream.name}</h3>
+              <h3>Overview</h3>
             </div>
             <div class="slab-body--padded space-y-4">
               {#if analyticsData}
@@ -488,7 +548,13 @@
                   </div>
                 {/if}
               {:else}
-                <p class="text-muted-foreground text-sm">No analytics data available</p>
+                <EmptyState
+                  iconName="Gauge"
+                  title="No analytics data available for this stream"
+                  description="Start streaming to generate analytics data. Ensure your stream is active and configured correctly."
+                  actionText="Go to Streams"
+                  onAction={() => goto(resolve("/streams"))}
+                />
               {/if}
             </div>
 
@@ -509,9 +575,13 @@
                   title=""
                 />
               {:else}
-                <div class="flex items-center justify-center h-[200px] border border-border/30 bg-muted/20">
-                  <p class="text-muted-foreground text-sm">No viewer data for this time range</p>
-                </div>
+                <EmptyState
+                  iconName="Users"
+                  title="No viewer data"
+                  description="No viewer data was recorded for the selected stream in the last 24 hours. Ensure the stream is live and has active viewers."
+                  actionText="View Stream"
+                  onAction={() => goto(resolve(`/streams/${selectedStream!.id}`))}
+                />
               {/if}
             </div>
             <div class="slab-actions">
@@ -530,19 +600,39 @@
               <h3>Quality Distribution (7 Days)</h3>
             </div>
             <div class="slab-body--padded">
-              <QualityTierChart data={qualityTierData} height={200} />
+              {#if qualityTierData && (qualityTierData.tier1080pMinutes > 0 || qualityTierData.tier720pMinutes > 0 || qualityTierData.tier480pMinutes > 0 || qualityTierData.tierSdMinutes > 0)}
+                <QualityTierChart data={qualityTierData} height={200} />
+              {:else}
+                <EmptyState
+                  iconName="Gauge"
+                  title="No quality distribution data"
+                  description="No quality tier data was recorded for the selected stream in the last 7 days. Ensure the stream is live and has active viewers."
+                  actionText="View Stream"
+                  onAction={() => goto(resolve(`/streams/${selectedStream!.id}`))}
+                />
+              {/if}
             </div>
           </div>
         {/if}
 
         <!-- Codec Distribution Slab -->
-        {#if selectedStream && codecData.length > 0}
+        {#if selectedStream}
           <div class="slab">
             <div class="slab-header">
               <h3>Codec Usage (7 Days)</h3>
             </div>
             <div class="slab-body--padded">
-              <CodecDistributionChart data={codecData} height={200} />
+              {#if codecData.length > 0}
+                <CodecDistributionChart data={codecData} height={200} />
+              {:else}
+                <EmptyState
+                  iconName="Video"
+                  title="No codec usage data"
+                  description="No codec usage data was recorded for the selected stream in the last 7 days. Ensure the stream is live and has active viewers."
+                  actionText="View Stream"
+                  onAction={() => goto(resolve(`/streams/${selectedStream!.id}`))}
+                />
+              {/if}
             </div>
           </div>
         {/if}

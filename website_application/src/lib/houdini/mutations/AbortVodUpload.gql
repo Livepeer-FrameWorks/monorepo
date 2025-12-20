@@ -1,0 +1,18 @@
+mutation AbortVodUpload($uploadId: ID!) {
+  abortVodUpload(uploadId: $uploadId) {
+    ... on DeleteSuccess {
+      success
+      deletedId
+    }
+    ... on NotFoundError {
+      message
+      code
+      resourceType
+      resourceId
+    }
+    ... on AuthError {
+      message
+      code
+    }
+  }
+}

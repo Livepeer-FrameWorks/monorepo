@@ -17,6 +17,7 @@
 		status?: string | null;
 		playbackId?: string | null;
 		createdAt?: string | null;
+		isFrozen?: boolean;
 	}
 
 	let {
@@ -64,13 +65,15 @@
 	}
 
 	const statusTone = $derived(
-		clip.status === "Available" || clip.status === "completed"
-			? "green"
-			: clip.status === "Processing" || clip.status === "processing"
-				? "yellow"
-				: clip.status === "Failed" || clip.status === "failed"
-					? "red"
-					: "blue"
+		clip.isFrozen 
+			? "blue"
+			: clip.status === "Available" || clip.status === "completed"
+				? "green"
+				: clip.status === "Processing" || clip.status === "processing"
+					? "yellow"
+					: clip.status === "Failed" || clip.status === "failed"
+						? "red"
+						: "blue"
 	);
 
 	const PlayIcon = getIconComponent("Play");
@@ -89,7 +92,7 @@
 			<p class="text-xs text-muted-foreground">From: {streamName}</p>
 		</div>
 		<Badge tone={statusTone} class="text-xs shrink-0">
-			{clip.status}
+			{clip.isFrozen ? "Frozen" : clip.status}
 		</Badge>
 	</div>
 

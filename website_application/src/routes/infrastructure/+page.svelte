@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount, onDestroy, untrack } from "svelte";
+  import { get } from "svelte/store";
   import { auth } from "$lib/stores/auth";
-  import { GetInfrastructureOverviewStore, SystemHealthStore, GetServiceInstancesConnectionStore } from "$houdini";
+  import { fragment, GetInfrastructureOverviewStore, SystemHealthStore, GetServiceInstancesConnectionStore, NodeCoreFieldsStore } from "$houdini";
   import type { SystemHealth$result } from "$houdini";
   import { toast } from "$lib/stores/toast.js";
   import LoadingCard from "$lib/components/LoadingCard.svelte";
@@ -28,6 +29,9 @@
   const systemHealthSub = new SystemHealthStore();
   const serviceInstancesStore = new GetServiceInstancesConnectionStore();
 
+  // Fragment stores for unmasking nested data
+  const nodeCoreStore = new NodeCoreFieldsStore();
+
   // Pagination state
   let loadingMoreInstances = $state(false);
 
@@ -36,8 +40,17 @@
   // Derived state from Houdini stores
   let loading = $derived($infrastructureStore.fetching);
   let tenant = $derived($infrastructureStore.data?.tenant ?? null);
-  let clusters = $derived($infrastructureStore.data?.clusters ?? []);
-  let nodes = $derived($infrastructureStore.data?.nodes ?? []);
+  let clusters = $derived($infrastructureStore.data?.clustersConnection?.edges?.map(e => e.node) ?? []);
+
+  // Get masked nodes from edges and unmask using fragment store
+  let maskedNodes = $derived(
+    $infrastructureStore.data?.nodesConnection?.edges?.map(e => e.node) ?? []
+  );
+
+  // Unmask nodes with fragment() and get() pattern
+  let nodes = $derived(
+    maskedNodes.map(node => get(fragment(node, nodeCoreStore)))
+  );
   let serviceInstances = $derived(
     $serviceInstancesStore.data?.serviceInstancesConnection?.edges?.map(e => e.node) ?? []
   );
@@ -70,10 +83,13 @@
     totalBandwidthOut: number;
   }
 
+  // Type for node metrics edge from the store
+  type NodeMetricsEdgeType = NonNullable<NonNullable<NonNullable<typeof $infrastructureStore.data>["nodeMetrics1hConnection"]>["edges"]>[0];
+
   // Derived performance metrics from the store data
   let nodePerformanceMetrics = $derived.by(() => {
     const nodeMetricsData = ($infrastructureStore.data?.nodeMetrics1hConnection?.edges || []).filter(
-      (edge) => edge?.node
+      (edge): edge is NonNullable<NodeMetricsEdgeType> => edge?.node !== undefined
     );
     if (nodeMetricsData.length === 0) return [] as NodePerformanceMetric[];
 
@@ -89,10 +105,10 @@
 
     const metrics: NodePerformanceMetric[] = [];
     for (const [nodeId, nodeEdges] of nodeMetricsByNode) {
-      const avgCpu = nodeEdges.reduce((sum, e) => sum + (e.node!.avgCpu || 0), 0) / nodeEdges.length;
-      const avgMemory = nodeEdges.reduce((sum, e) => sum + (e.node!.avgMemory || 0), 0) / nodeEdges.length;
-      const avgDisk = nodeEdges.reduce((sum, e) => sum + (e.node!.avgDisk || 0), 0) / nodeEdges.length;
-      const avgShm = nodeEdges.reduce((sum, e) => sum + (e.node!.avgShm || 0), 0) / nodeEdges.length;
+      const avgCpu = nodeEdges.reduce((sum: number, e) => sum + (e.node!.avgCpu || 0), 0) / nodeEdges.length;
+      const avgMemory = nodeEdges.reduce((sum: number, e) => sum + (e.node!.avgMemory || 0), 0) / nodeEdges.length;
+      const avgDisk = nodeEdges.reduce((sum: number, e) => sum + (e.node!.avgDisk || 0), 0) / nodeEdges.length;
+      const avgShm = nodeEdges.reduce((sum: number, e) => sum + (e.node!.avgShm || 0), 0) / nodeEdges.length;
       metrics.push({
         nodeId,
         avgCpuUsage: avgCpu,
@@ -106,7 +122,7 @@
 
   let networkIOMetrics = $derived.by(() => {
     const nodeMetricsData = ($infrastructureStore.data?.nodeMetrics1hConnection?.edges || []).filter(
-      (edge) => edge?.node
+      (edge): edge is NonNullable<NodeMetricsEdgeType> => edge?.node !== undefined
     );
     if (nodeMetricsData.length === 0) return [] as NetworkIOMetric[];
 
@@ -121,8 +137,8 @@
 
     const networkMetrics: NetworkIOMetric[] = [];
     for (const [nodeId, nodeEdges] of nodeMetricsByNode) {
-      const totalIn = nodeEdges.reduce((sum, e) => sum + (e.node!.totalBandwidthIn || 0), 0);
-      const totalOut = nodeEdges.reduce((sum, e) => sum + (e.node!.totalBandwidthOut || 0), 0);
+      const totalIn = nodeEdges.reduce((sum: number, e) => sum + (e.node!.totalBandwidthIn || 0), 0);
+      const totalOut = nodeEdges.reduce((sum: number, e) => sum + (e.node!.totalBandwidthOut || 0), 0);
       networkMetrics.push({
         nodeId,
         totalBandwidthIn: totalIn,
@@ -182,7 +198,45 @@
         return;
       }
 
-      // Initialize systemHealth from historical metrics so we don't wait for real-time events
+      // Initialize systemHealth - prefer liveState (real-time) over historical metrics
+      const initialHealth: Record<string, { event: SystemHealthEvent; ts: Date }> = {};
+
+      // First: Use liveState from nodes (real-time data from live_nodes table)
+      const nodesData = $infrastructureStore.data?.nodesConnection?.edges ?? [];
+      for (const edge of nodesData) {
+        const maskedNode = edge?.node;
+        if (!maskedNode) continue;
+
+        // Unmask the fragment to access nodeId and liveState
+        const unmaskedNode = get(fragment(maskedNode, nodeCoreStore));
+        const nodeId = unmaskedNode?.nodeId;
+        if (!nodeId) continue;
+
+        const liveState = unmaskedNode?.liveState;
+
+        if (liveState) {
+          // Use real-time data from live_nodes table (accurate absolute values)
+          initialHealth[nodeId] = {
+            event: {
+              node: nodeId,
+              location: liveState.location ?? '',
+              status: liveState.isHealthy ? 'HEALTHY' : 'UNHEALTHY',
+              cpuTenths: Math.round(liveState.cpuPercent * 10),
+              isHealthy: liveState.isHealthy,
+              ramMax: liveState.ramTotalBytes,
+              ramCurrent: liveState.ramUsedBytes,
+              diskTotalBytes: liveState.diskTotalBytes,
+              diskUsedBytes: liveState.diskUsedBytes,
+              shmTotalBytes: null,
+              shmUsedBytes: null,
+              timestamp: liveState.updatedAt,
+            } as SystemHealthEvent,
+            ts: new Date(liveState.updatedAt),
+          };
+        }
+      }
+
+      // Second: Fall back to historical metrics for nodes without liveState
       const metricsData = $infrastructureStore.data?.nodeMetrics1hConnection?.edges ?? [];
       if (metricsData.length > 0) {
         // Get most recent metric for each node
@@ -190,23 +244,24 @@
         for (const edge of metricsData) {
           if (!edge?.node) continue;
           const nodeId = edge.node.nodeId;
+          // Skip if we already have liveState for this node
+          if (initialHealth[nodeId]) continue;
+
           const existing = latestByNode.get(nodeId);
           if (!existing || new Date(edge.node.timestamp) > new Date(existing.node!.timestamp)) {
             latestByNode.set(nodeId, edge);
           }
         }
 
-        // Initialize systemHealth with historical data (converted to real-time format)
-        const initialHealth: Record<string, { event: SystemHealthEvent; ts: Date }> = {};
+        // Add historical data only for nodes without liveState
         for (const [nodeId, edge] of latestByNode) {
+          if (initialHealth[nodeId]) continue; // Skip if we have liveState
+
           const metric = edge.node!;
-          // Convert historical percentages to real-time format
-          // avgCpu is already 0-100, cpuTenths is 0-1000
+          // Convert historical percentages to approximate absolute values
           const cpuTenths = Math.round((metric.avgCpu ?? 0) * 10);
-          // Memory: convert percentage to fake absolute values (use 100GB as reference)
-          const ramMax = 100 * 1024 * 1024 * 1024; // 100GB in bytes as reference
+          const ramMax = 100 * 1024 * 1024 * 1024; // 100GB reference
           const ramCurrent = Math.round((metric.avgMemory ?? 0) / 100 * ramMax);
-          // Disk: similar approach
           const diskTotalBytes = 500 * 1024 * 1024 * 1024; // 500GB reference
           const diskUsedBytes = Math.round((metric.avgDisk ?? 0) / 100 * diskTotalBytes);
 
@@ -228,14 +283,14 @@
             ts: new Date(metric.timestamp),
           };
         }
-
-        // Initialize state (use untrack to avoid reactive loops)
-        untrack(() => {
-          if (Object.keys(systemHealth).length === 0) {
-            systemHealth = initialHealth;
-          }
-        });
       }
+
+      // Initialize state (use untrack to avoid reactive loops)
+      untrack(() => {
+        if (Object.keys(systemHealth).length === 0 && Object.keys(initialHealth).length > 0) {
+          systemHealth = initialHealth;
+        }
+      });
     } catch (error) {
       console.error("Failed to load infrastructure data:", error);
       toast.error("Failed to load infrastructure data. Please refresh the page.");

@@ -2,6 +2,7 @@
   import { formatDate, formatDuration } from "$lib/utils/stream-helpers";
   import { getIconComponent } from "$lib/iconUtils";
   import ViewerTrendChart from "$lib/components/charts/ViewerTrendChart.svelte";
+  import EmptyState from "$lib/components/EmptyState.svelte";
 
   // Local interface matching Houdini TrackListUpdates subscription
   interface StreamTrack {
@@ -29,13 +30,26 @@
     stream?: string | null;
   }
 
-  let { stream, streamKeys, recordings, analytics, tracks = null, viewerMetrics = [] }: {
+  interface DailyAnalytics {
+    day: string;
+    internalName: string;
+    totalViews: number;
+    uniqueViewers: number;
+    uniqueCountries: number;
+    uniqueCities: number;
+    egressBytes: number;
+    egressGb: number;
+  }
+
+  let { stream, streamKeys, recordings, clips = [], analytics, tracks = null, viewerMetrics = [], dailyAnalytics = [] }: {
     stream: any;
     streamKeys: any[];
     recordings: any[];
+    clips?: any[];
     analytics: any;
     tracks?: TrackInfo | null;
     viewerMetrics?: ViewerMetric[];
+    dailyAnalytics?: DailyAnalytics[];
   } = $props();
 
   // Separate video and audio tracks
@@ -45,6 +59,33 @@
   const audioTracks = $derived(
     tracks?.tracks?.filter((t: StreamTrack) => t.trackType === "audio") || []
   );
+
+  // Storage calculations
+  const storageStats = $derived.by(() => {
+    const loadedRecordings = recordings || [];
+    const loadedClips = clips || [];
+    
+    const recordingBytes = loadedRecordings.reduce((sum, r) => sum + (r.sizeBytes || 0), 0);
+    const clipBytes = loadedClips.reduce((sum, c) => sum + (c.sizeBytes || 0), 0);
+    const frozenRecordings = loadedRecordings.filter(r => r.isFrozen).length;
+    const frozenClips = loadedClips.filter(c => c.isFrozen).length;
+
+    return {
+      totalBytes: recordingBytes + clipBytes,
+      recordingBytes,
+      clipBytes,
+      frozenAssets: frozenRecordings + frozenClips,
+      totalAssets: loadedRecordings.length + loadedClips.length
+    };
+  });
+
+  function formatBytes(bytes: number): string {
+    if (bytes === 0) return "0 B";
+    const k = 1024;
+    const sizes = ["B", "KB", "MB", "GB", "TB"];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
+  }
 
   // Map viewer metrics for the chart
   const chartData = $derived(
@@ -56,6 +97,13 @@
   const ActivityIcon = $derived(getIconComponent("Activity"));
   const TrendingUpIcon = $derived(getIconComponent("TrendingUp"));
   const NetworkIcon = $derived(getIconComponent("Wifi"));
+  const HardDriveIcon = $derived(getIconComponent("HardDrive"));
+  const SnowflakeIcon = $derived(getIconComponent("Snowflake"));
+  const ScissorsIcon = $derived(getIconComponent("Scissors"));
+  const FilmIcon = $derived(getIconComponent("Film"));
+  const InfoIcon = $derived(getIconComponent("Info"));
+  const CalendarIcon = $derived(getIconComponent("Calendar"));
+  const GlobeIcon = $derived(getIconComponent("Globe"));
 
   // Format large numbers with commas
   function formatNumber(n: number | null | undefined): string {
@@ -241,21 +289,49 @@
             >{formatDuration(analytics.totalSessionDuration || 0)}</span
           >
         </div>
-        {#if analytics.avgConnectionQuality}
-          <div class="flex justify-between items-center">
-            <span class="text-muted-foreground">Connection Quality:</span>
-            <span
-              class="font-mono font-medium {analytics.avgConnectionQuality >
-              0.9
-                ? 'text-success'
-                : analytics.avgConnectionQuality > 0.7
-                  ? 'text-warning'
-                  : 'text-error'}"
-            >
-              {(analytics.avgConnectionQuality * 100).toFixed(1)}%
-            </span>
+      {/if}
+    </div>
+  </div>
+
+  <!-- Storage Summary -->
+  <div class="slab">
+    <div class="slab-header flex items-center gap-2">
+      <HardDriveIcon class="w-5 h-5 text-accent-purple" />
+      <h3 class="font-semibold text-xs uppercase tracking-wide text-muted-foreground">Storage Summary</h3>
+    </div>
+    <div class="slab-body--padded space-y-4">
+      <div class="flex justify-between items-center">
+        <span class="text-muted-foreground">Total Usage (Visible):</span>
+        <span class="font-mono text-accent-purple font-medium text-lg">
+          {formatBytes(storageStats.totalBytes)}
+        </span>
+      </div>
+      
+      <div class="grid grid-cols-2 gap-4 pt-2 border-t border-border/30">
+        <div>
+          <div class="flex items-center gap-1.5 mb-1">
+            <FilmIcon class="w-3.5 h-3.5 text-blue-500" />
+            <span class="text-xs text-muted-foreground">DVR Usage</span>
           </div>
-        {/if}
+          <p class="font-mono text-sm">{formatBytes(storageStats.recordingBytes)}</p>
+        </div>
+        <div>
+          <div class="flex items-center gap-1.5 mb-1">
+            <ScissorsIcon class="w-3.5 h-3.5 text-purple-500" />
+            <span class="text-xs text-muted-foreground">Clips Usage</span>
+          </div>
+          <p class="font-mono text-sm">{formatBytes(storageStats.clipBytes)}</p>
+        </div>
+      </div>
+
+      {#if storageStats.frozenAssets > 0}
+        <div class="flex items-center justify-between pt-2 border-t border-border/30 bg-blue-500/5 -mx-4 px-4 py-2 mt-2">
+          <div class="flex items-center gap-2 text-blue-400">
+            <SnowflakeIcon class="w-4 h-4" />
+            <span class="text-sm font-medium">Archived to Cold Storage</span>
+          </div>
+          <span class="font-mono text-blue-400 font-medium">{storageStats.frozenAssets} items</span>
+        </div>
       {/if}
     </div>
   </div>
@@ -285,10 +361,15 @@
           </div>
           <div>
             <span class="text-sm text-muted-foreground">Packet Loss Rate</span>
-            <p class="font-mono text-lg {getPacketLossColor(analytics.packetLossRate)}">
+            <p class="font-mono text-lg {getPacketLossColor(analytics.packetLossRate)} flex items-center gap-1">
               {analytics.packetLossRate !== null && analytics.packetLossRate !== undefined
                 ? `${(analytics.packetLossRate * 100).toFixed(3)}%`
                 : "N/A"}
+              {#if analytics.packetLossRate === null || analytics.packetLossRate === undefined}
+                <span title="Packet statistics are available for UDP-based protocols (SRT, WebRTC) which prioritize low latency. HTTP-based protocols (HLS, DASH) use TCP which guarantees delivery but adds latency through retransmission.">
+                  <InfoIcon class="w-3.5 h-3.5 text-muted-foreground cursor-help" />
+                </span>
+              {/if}
             </p>
           </div>
         </div>
@@ -310,10 +391,95 @@
           title=""
         />
       {:else}
-        <div class="flex items-center justify-center h-[200px] border border-border/30 bg-muted/20">
-          <p class="text-muted-foreground text-sm">No viewer data for this time range</p>
+        <div class="h-[200px] flex items-center justify-center">
+          <EmptyState
+            iconName="Users"
+            title="No viewer data"
+            description="Viewer activity for the last 24 hours will appear here."
+          />
         </div>
       {/if}
     </div>
   </div>
+
+  <!-- Daily Analytics History -->
+  {#if dailyAnalytics.length > 0}
+    <div class="slab col-span-full">
+      <div class="slab-header flex items-center gap-2">
+        <CalendarIcon class="w-5 h-5 text-info" />
+        <h3 class="font-semibold text-xs uppercase tracking-wide text-muted-foreground">Daily Analytics (Last 30 Days)</h3>
+        <span class="text-xs text-muted-foreground ml-auto">{dailyAnalytics.length} days</span>
+      </div>
+
+      <!-- Summary Cards -->
+      <div class="slab-body--padded grid grid-cols-2 md:grid-cols-4 gap-4 pb-4 border-b border-border/30">
+        <div>
+          <span class="text-sm text-muted-foreground">Total Views</span>
+          <p class="font-mono text-lg text-info font-medium">
+            {formatNumber(dailyAnalytics.reduce((sum, d) => sum + d.totalViews, 0))}
+          </p>
+        </div>
+        <div>
+          <span class="text-sm text-muted-foreground">Unique Viewers</span>
+          <p class="font-mono text-lg text-success font-medium">
+            {formatNumber(Math.max(...dailyAnalytics.map(d => d.uniqueViewers)))}
+            <span class="text-xs text-muted-foreground">peak</span>
+          </p>
+        </div>
+        <div>
+          <span class="text-sm text-muted-foreground">Countries Reached</span>
+          <p class="font-mono text-lg text-accent-purple font-medium flex items-center gap-1">
+            <GlobeIcon class="w-4 h-4" />
+            {Math.max(...dailyAnalytics.map(d => d.uniqueCountries))}
+          </p>
+        </div>
+        <div>
+          <span class="text-sm text-muted-foreground">Total Bandwidth</span>
+          <p class="font-mono text-lg text-warning font-medium">
+            {dailyAnalytics.reduce((sum, d) => sum + d.egressGb, 0).toFixed(2)} GB
+          </p>
+        </div>
+      </div>
+
+      <!-- Daily Breakdown Table -->
+      <div class="slab-body--padded overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="text-muted-foreground text-xs uppercase tracking-wide border-b border-border/30">
+              <th class="text-left py-2 px-2">Date</th>
+              <th class="text-right py-2 px-2">Views</th>
+              <th class="text-right py-2 px-2">Unique Viewers</th>
+              <th class="text-right py-2 px-2">Countries</th>
+              <th class="text-right py-2 px-2">Cities</th>
+              <th class="text-right py-2 px-2">Bandwidth</th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each dailyAnalytics.slice().reverse() as day (day.day)}
+              <tr class="border-b border-border/20 hover:bg-muted/20">
+                <td class="py-2 px-2 font-mono text-foreground">
+                  {new Date(day.day).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
+                </td>
+                <td class="py-2 px-2 text-right font-mono text-info">
+                  {formatNumber(day.totalViews)}
+                </td>
+                <td class="py-2 px-2 text-right font-mono text-success">
+                  {formatNumber(day.uniqueViewers)}
+                </td>
+                <td class="py-2 px-2 text-right font-mono text-accent-purple">
+                  {day.uniqueCountries}
+                </td>
+                <td class="py-2 px-2 text-right font-mono text-muted-foreground">
+                  {day.uniqueCities}
+                </td>
+                <td class="py-2 px-2 text-right font-mono text-warning">
+                  {day.egressGb.toFixed(2)} GB
+                </td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  {/if}
 </div>

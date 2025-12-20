@@ -1,3 +1,4 @@
+# Fetch paginated list of nodes with filtering by cluster, status, and type
 query GetNodesConnection(
   $clusterId: String
   $status: NodeStatus
@@ -15,30 +16,11 @@ query GetNodesConnection(
     edges {
       cursor
       node {
-        id
-        nodeName
-        clusterId
-        nodeType
-        status
-        region
-        externalIp
-        internalIp
-        wireguardIp
-        availabilityZone
-        cpuCores
-        memoryGb
-        diskGb
-        lastHeartbeat
-        createdAt
-        latitude
-        longitude
+        ...NodeCoreFields
       }
     }
     pageInfo {
-      hasNextPage
-      hasPreviousPage
-      startCursor
-      endCursor
+      ...PageInfoFields
     }
     totalCount
   }

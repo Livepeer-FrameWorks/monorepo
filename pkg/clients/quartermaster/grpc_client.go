@@ -219,6 +219,76 @@ func (c *GRPCClient) ListMySubscriptions(ctx context.Context, req *pb.ListMySubs
 }
 
 // ============================================================================
+// CLUSTER MARKETPLACE OPERATIONS
+// ============================================================================
+
+// ListMarketplaceClusters lists clusters in the marketplace (respects visibility + billing tier)
+func (c *GRPCClient) ListMarketplaceClusters(ctx context.Context, req *pb.ListMarketplaceClustersRequest) (*pb.ListMarketplaceClustersResponse, error) {
+	return c.cluster.ListMarketplaceClusters(ctx, req)
+}
+
+// GetMarketplaceCluster gets a marketplace cluster (with optional invite token for unlisted)
+func (c *GRPCClient) GetMarketplaceCluster(ctx context.Context, req *pb.GetMarketplaceClusterRequest) (*pb.MarketplaceClusterEntry, error) {
+	return c.cluster.GetMarketplaceCluster(ctx, req)
+}
+
+// UpdateClusterMarketplace updates cluster marketplace settings (owner only)
+func (c *GRPCClient) UpdateClusterMarketplace(ctx context.Context, req *pb.UpdateClusterMarketplaceRequest) (*pb.ClusterResponse, error) {
+	return c.cluster.UpdateClusterMarketplace(ctx, req)
+}
+
+// CreatePrivateCluster creates a private cluster (self-hosted edge)
+func (c *GRPCClient) CreatePrivateCluster(ctx context.Context, req *pb.CreatePrivateClusterRequest) (*pb.CreatePrivateClusterResponse, error) {
+	return c.cluster.CreatePrivateCluster(ctx, req)
+}
+
+// CreateClusterInvite creates an invite to a cluster (cluster owner)
+func (c *GRPCClient) CreateClusterInvite(ctx context.Context, req *pb.CreateClusterInviteRequest) (*pb.ClusterInvite, error) {
+	return c.cluster.CreateClusterInvite(ctx, req)
+}
+
+// RevokeClusterInvite revokes an invite to a cluster (cluster owner)
+func (c *GRPCClient) RevokeClusterInvite(ctx context.Context, req *pb.RevokeClusterInviteRequest) error {
+	_, err := c.cluster.RevokeClusterInvite(ctx, req)
+	return err
+}
+
+// ListClusterInvites lists invites for a cluster (cluster owner)
+func (c *GRPCClient) ListClusterInvites(ctx context.Context, req *pb.ListClusterInvitesRequest) (*pb.ListClusterInvitesResponse, error) {
+	return c.cluster.ListClusterInvites(ctx, req)
+}
+
+// ListMyClusterInvites lists pending invites for the current tenant
+func (c *GRPCClient) ListMyClusterInvites(ctx context.Context, req *pb.ListMyClusterInvitesRequest) (*pb.ListClusterInvitesResponse, error) {
+	return c.cluster.ListMyClusterInvites(ctx, req)
+}
+
+// RequestClusterSubscription requests subscription to a cluster (with approval workflow)
+func (c *GRPCClient) RequestClusterSubscription(ctx context.Context, req *pb.RequestClusterSubscriptionRequest) (*pb.ClusterSubscription, error) {
+	return c.cluster.RequestClusterSubscription(ctx, req)
+}
+
+// AcceptClusterInvite accepts a cluster invite
+func (c *GRPCClient) AcceptClusterInvite(ctx context.Context, req *pb.AcceptClusterInviteRequest) (*pb.ClusterSubscription, error) {
+	return c.cluster.AcceptClusterInvite(ctx, req)
+}
+
+// ListPendingSubscriptions lists pending subscription requests (cluster owner)
+func (c *GRPCClient) ListPendingSubscriptions(ctx context.Context, req *pb.ListPendingSubscriptionsRequest) (*pb.ListPendingSubscriptionsResponse, error) {
+	return c.cluster.ListPendingSubscriptions(ctx, req)
+}
+
+// ApproveClusterSubscription approves a subscription request (cluster owner)
+func (c *GRPCClient) ApproveClusterSubscription(ctx context.Context, req *pb.ApproveClusterSubscriptionRequest) (*pb.ClusterSubscription, error) {
+	return c.cluster.ApproveClusterSubscription(ctx, req)
+}
+
+// RejectClusterSubscription rejects a subscription request (cluster owner)
+func (c *GRPCClient) RejectClusterSubscription(ctx context.Context, req *pb.RejectClusterSubscriptionRequest) (*pb.ClusterSubscription, error) {
+	return c.cluster.RejectClusterSubscription(ctx, req)
+}
+
+// ============================================================================
 // NODE OPERATIONS
 // ============================================================================
 
@@ -260,6 +330,26 @@ func (c *GRPCClient) GetNodeOwner(ctx context.Context, nodeID string) (*pb.NodeO
 	return c.node.GetNodeOwner(ctx, &pb.GetNodeOwnerRequest{
 		NodeId: nodeID,
 	})
+}
+
+// GetNodeByLogicalName resolves a node by its logical name (node_id string like "edge-node-1")
+// Returns the full node record including the database UUID (id field)
+// Used by Foghorn to enrich subscription broadcasts with database UUID
+func (c *GRPCClient) GetNodeByLogicalName(ctx context.Context, nodeID string) (*pb.InfrastructureNode, error) {
+	resp, err := c.node.GetNodeByLogicalName(ctx, &pb.GetNodeByLogicalNameRequest{
+		NodeId: nodeID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.GetNode(), nil
+}
+
+// UpdateNodeHardware updates hardware specs for a node (detected at startup by Helmsman)
+// Called by Foghorn when processing Register message with hardware info
+func (c *GRPCClient) UpdateNodeHardware(ctx context.Context, req *pb.UpdateNodeHardwareRequest) error {
+	_, err := c.node.UpdateNodeHardware(ctx, req)
+	return err
 }
 
 // ============================================================================

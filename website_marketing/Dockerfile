@@ -41,6 +41,14 @@ RUN apk add --no-cache git ca-certificates tzdata \
 # copy workspace manifests first for better layer caching
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY npm_player/package.json npm_player/
+COPY npm_player/packages/core/package.json npm_player/packages/core/
+COPY npm_player/packages/react/package.json npm_player/packages/react/
+COPY npm_player/packages/svelte/package.json npm_player/packages/svelte/
+COPY npm_player/playground/package.json npm_player/playground/
+COPY npm_studio/package.json npm_studio/
+COPY npm_studio/packages/core/package.json npm_studio/packages/core/
+COPY npm_studio/packages/react/package.json npm_studio/packages/react/
+COPY npm_studio/packages/svelte/package.json npm_studio/packages/svelte/
 COPY website_marketing/package.json website_marketing/
 
 # install dependencies for the marketing workspace (dev deps required for build)

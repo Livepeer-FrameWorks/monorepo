@@ -1,0 +1,37 @@
+# Pending cluster subscription requests (admin view)
+query GetPendingSubscriptions(
+  $clusterId: ID!
+  $first: Int = 50
+  $after: String
+) {
+  pendingSubscriptionsConnection(
+    clusterId: $clusterId
+    first: $first
+    after: $after
+  ) {
+    edges {
+      cursor
+      node {
+        id
+        clusterId
+        tenantId
+        tenantName
+        accessLevel
+        subscriptionStatus
+        resourceLimits
+        requestedAt
+        approvedAt
+        approvedBy
+        rejectionReason
+        expiresAt
+        createdAt
+        updatedAt
+        clusterName
+      }
+    }
+    pageInfo {
+      ...PageInfoFields
+    }
+    totalCount
+  }
+}

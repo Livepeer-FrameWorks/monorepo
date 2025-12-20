@@ -273,6 +273,87 @@ func (es *EmailService) renderTemplate(templateName string, data EmailData) (str
             {{end}}
         </table>
         {{end}}
+
+        {{if or .UsageDetails.livepeer_h264_seconds .UsageDetails.native_av_h264_seconds}}
+        <h4 style="color: #2c3e50; margin-top: 20px;">Processing / Transcoding</h4>
+        <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 0.9em;">
+            <tr style="background-color: #f8f9fa;">
+                <th style="padding: 8px 10px; text-align: left; border-bottom: 1px solid #ddd;">Codec</th>
+                <th style="padding: 8px 10px; text-align: right; border-bottom: 1px solid #ddd;">Minutes</th>
+                <th style="padding: 8px 10px; text-align: right; border-bottom: 1px solid #ddd;">Rate</th>
+            </tr>
+            {{if .UsageDetails.livepeer_h264_seconds}}
+            <tr>
+                <td style="padding: 5px 10px; border-bottom: 1px solid #eee;">Livepeer H264</td>
+                <td style="padding: 5px 10px; text-align: right; border-bottom: 1px solid #eee;">{{printf "%.1f" (divFloat .UsageDetails.livepeer_h264_seconds 60)}} min</td>
+                <td style="padding: 5px 10px; text-align: right; border-bottom: 1px solid #eee;">1.0x</td>
+            </tr>
+            {{end}}
+            {{if .UsageDetails.livepeer_vp9_seconds}}
+            <tr>
+                <td style="padding: 5px 10px; border-bottom: 1px solid #eee;">Livepeer VP9</td>
+                <td style="padding: 5px 10px; text-align: right; border-bottom: 1px solid #eee;">{{printf "%.1f" (divFloat .UsageDetails.livepeer_vp9_seconds 60)}} min</td>
+                <td style="padding: 5px 10px; text-align: right; border-bottom: 1px solid #eee;">1.5x</td>
+            </tr>
+            {{end}}
+            {{if .UsageDetails.livepeer_av1_seconds}}
+            <tr>
+                <td style="padding: 5px 10px; border-bottom: 1px solid #eee;">Livepeer AV1</td>
+                <td style="padding: 5px 10px; text-align: right; border-bottom: 1px solid #eee;">{{printf "%.1f" (divFloat .UsageDetails.livepeer_av1_seconds 60)}} min</td>
+                <td style="padding: 5px 10px; text-align: right; border-bottom: 1px solid #eee;">2.0x</td>
+            </tr>
+            {{end}}
+            {{if .UsageDetails.livepeer_hevc_seconds}}
+            <tr>
+                <td style="padding: 5px 10px; border-bottom: 1px solid #eee;">Livepeer HEVC</td>
+                <td style="padding: 5px 10px; text-align: right; border-bottom: 1px solid #eee;">{{printf "%.1f" (divFloat .UsageDetails.livepeer_hevc_seconds 60)}} min</td>
+                <td style="padding: 5px 10px; text-align: right; border-bottom: 1px solid #eee;">1.5x</td>
+            </tr>
+            {{end}}
+            {{if .UsageDetails.native_av_h264_seconds}}
+            <tr>
+                <td style="padding: 5px 10px; border-bottom: 1px solid #eee;">Native AV H264</td>
+                <td style="padding: 5px 10px; text-align: right; border-bottom: 1px solid #eee;">{{printf "%.1f" (divFloat .UsageDetails.native_av_h264_seconds 60)}} min</td>
+                <td style="padding: 5px 10px; text-align: right; border-bottom: 1px solid #eee;">1.0x</td>
+            </tr>
+            {{end}}
+            {{if .UsageDetails.native_av_vp9_seconds}}
+            <tr>
+                <td style="padding: 5px 10px; border-bottom: 1px solid #eee;">Native AV VP9</td>
+                <td style="padding: 5px 10px; text-align: right; border-bottom: 1px solid #eee;">{{printf "%.1f" (divFloat .UsageDetails.native_av_vp9_seconds 60)}} min</td>
+                <td style="padding: 5px 10px; text-align: right; border-bottom: 1px solid #eee;">1.5x</td>
+            </tr>
+            {{end}}
+            {{if .UsageDetails.native_av_av1_seconds}}
+            <tr>
+                <td style="padding: 5px 10px; border-bottom: 1px solid #eee;">Native AV AV1</td>
+                <td style="padding: 5px 10px; text-align: right; border-bottom: 1px solid #eee;">{{printf "%.1f" (divFloat .UsageDetails.native_av_av1_seconds 60)}} min</td>
+                <td style="padding: 5px 10px; text-align: right; border-bottom: 1px solid #eee;">2.0x</td>
+            </tr>
+            {{end}}
+            {{if .UsageDetails.native_av_hevc_seconds}}
+            <tr>
+                <td style="padding: 5px 10px; border-bottom: 1px solid #eee;">Native AV HEVC</td>
+                <td style="padding: 5px 10px; text-align: right; border-bottom: 1px solid #eee;">{{printf "%.1f" (divFloat .UsageDetails.native_av_hevc_seconds 60)}} min</td>
+                <td style="padding: 5px 10px; text-align: right; border-bottom: 1px solid #eee;">1.5x</td>
+            </tr>
+            {{end}}
+            {{if .UsageDetails.native_av_aac_seconds}}
+            <tr>
+                <td style="padding: 5px 10px; border-bottom: 1px solid #eee; color: #666;">Audio (AAC)</td>
+                <td style="padding: 5px 10px; text-align: right; border-bottom: 1px solid #eee; color: #666;">{{printf "%.1f" (divFloat .UsageDetails.native_av_aac_seconds 60)}} min</td>
+                <td style="padding: 5px 10px; text-align: right; border-bottom: 1px solid #eee; color: #27ae60;">FREE</td>
+            </tr>
+            {{end}}
+            {{if .UsageDetails.native_av_opus_seconds}}
+            <tr>
+                <td style="padding: 5px 10px; border-bottom: 1px solid #eee; color: #666;">Audio (Opus)</td>
+                <td style="padding: 5px 10px; text-align: right; border-bottom: 1px solid #eee; color: #666;">{{printf "%.1f" (divFloat .UsageDetails.native_av_opus_seconds 60)}} min</td>
+                <td style="padding: 5px 10px; text-align: right; border-bottom: 1px solid #eee; color: #27ae60;">FREE</td>
+            </tr>
+            {{end}}
+        </table>
+        {{end}}
         {{end}}
         
         <p>Please log in to your account to view the invoice details and make payment:</p>
@@ -397,7 +478,17 @@ func (es *EmailService) renderTemplate(templateName string, data EmailData) (str
 		return "", fmt.Errorf("template %s not found", templateName)
 	}
 
-	tmpl, err := template.New(templateName).Parse(tmplContent)
+	// Template functions for email rendering
+	funcMap := template.FuncMap{
+		"divFloat": func(a, b float64) float64 {
+			if b == 0 {
+				return 0
+			}
+			return a / b
+		},
+	}
+
+	tmpl, err := template.New(templateName).Funcs(funcMap).Parse(tmplContent)
 	if err != nil {
 		return "", fmt.Errorf("failed to parse template: %w", err)
 	}

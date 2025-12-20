@@ -1,11 +1,17 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { get } from "svelte/store";
   import { resolve } from "$app/paths";
+  import { goto } from "$app/navigation";
   import { auth } from "$lib/stores/auth";
   import {
+    fragment,
     GetPlatformOverviewStore,
     GetBillingStatusStore,
     GetStreamsConnectionStore,
+    StreamCoreFieldsStore,
+    StreamMetricsFieldsStore,
+    BillingTierFieldsStore,
   } from "$houdini";
   import { toast } from "$lib/stores/toast.js";
   import { getIconComponent } from "$lib/iconUtils";
@@ -18,6 +24,7 @@
   import ServiceStatusList from "$lib/components/dashboard/ServiceStatusList.svelte";
   import LiveStreamHealthCards from "$lib/components/dashboard/LiveStreamHealthCards.svelte";
   import ObsSetupGuide from "$lib/components/dashboard/ObsSetupGuide.svelte";
+  import EmptyState from "$lib/components/EmptyState.svelte";
   import { EventLog, type StreamEvent } from "$lib/components/stream-details";
   import {
     realtimeStreams,
@@ -30,6 +37,11 @@
   const platformOverviewStore = new GetPlatformOverviewStore();
   const billingStatusStore = new GetBillingStatusStore();
   const streamsConnectionStore = new GetStreamsConnectionStore();
+
+  // Fragment stores for unmasking nested data
+  const streamCoreStore = new StreamCoreFieldsStore();
+  const streamMetricsStore = new StreamMetricsFieldsStore();
+  const tierFragmentStore = new BillingTierFieldsStore();
 
   // User type from auth store
   interface UserData {
@@ -86,8 +98,36 @@
     platformEvents = [event, ...platformEvents].slice(0, 50); // Keep last 50 events
   }
 
-  // Derived data from Houdini stores
-  let streams = $derived($streamsConnectionStore.data?.streamsConnection?.edges?.map(e => e.node) ?? []);
+  // Get masked data from Houdini stores
+  let maskedNodes = $derived($streamsConnectionStore.data?.streamsConnection?.edges?.map(e => e.node) ?? []);
+  let maskedBillingStatus = $derived($billingStatusStore.data?.billingStatus ?? null);
+
+  // Unmask streams with fragment() and get() pattern
+  let streams = $derived(
+    maskedNodes.map(node => {
+      const core = get(fragment(node, streamCoreStore));
+      const metrics = node.metrics ? get(fragment(node.metrics, streamMetricsStore)) : null;
+      return { ...core, metrics };
+    })
+  );
+
+  // Unmask billing tier
+  let currentTier = $derived(
+    maskedBillingStatus?.currentTier
+      ? get(fragment(maskedBillingStatus.currentTier, tierFragmentStore))
+      : null
+  );
+
+  // Combine billing status with unmasked tier
+  let billingStatus = $derived(
+    maskedBillingStatus
+      ? {
+          ...maskedBillingStatus,
+          currentTier
+        }
+      : null
+  );
+
   let usageData = $derived($platformOverviewStore.data?.platformOverview ? {
     totalStreams: $platformOverviewStore.data.platformOverview.totalStreams || 0,
     totalViewers: $platformOverviewStore.data.platformOverview.totalViewers || 0,
@@ -102,7 +142,6 @@
     ingestHours: $platformOverviewStore.data.platformOverview.ingestHours || 0,
     peakConcurrentViewers: $platformOverviewStore.data.platformOverview.peakConcurrentViewers || 0,
   } : null);
-  let billingStatus = $derived($billingStatusStore.data?.billingStatus ?? null);
 
   // Subscribe to auth store (user info only, streams fetched separately)
   auth.subscribe((authState) => {
@@ -339,22 +378,32 @@
             <h3>Streams Overview</h3>
           </div>
           <div class="slab-body--padded space-y-4">
-            <StreamStatsGrid
-              totalStreams={enhancedStreamStats.total}
-              liveStreams={enhancedStreamStats.live}
-              totalViewers={formatNumber(enhancedStreamStats.totalViewers)}
-            />
+            {#if enhancedStreamStats.total === 0}
+              <EmptyState
+                iconName="Video"
+                title="No streams yet"
+                description="Create your first stream to start broadcasting and see real-time stats."
+                actionText="Create Stream"
+                onAction={() => goto(resolve("/streams"))}
+              />
+            {:else}
+              <StreamStatsGrid
+                totalStreams={enhancedStreamStats.total}
+                liveStreams={enhancedStreamStats.live}
+                totalViewers={formatNumber(enhancedStreamStats.totalViewers)}
+              />
 
-            <ConnectionStatusBanner
-              visible={wsConnectionStatus.status !== "connected"}
-              message={wsConnectionStatus.message}
-            />
+              <ConnectionStatusBanner
+                visible={wsConnectionStatus.status !== "connected"}
+                message={wsConnectionStatus.message}
+              />
 
-            <PrimaryStreamCard
-              stream={primaryStream}
-              onCopyStreamKey={copyToClipboard}
-              createStreamUrl={resolve("/streams")}
-            />
+              <PrimaryStreamCard
+                stream={primaryStream}
+                onCopyStreamKey={copyToClipboard}
+                createStreamUrl={resolve("/streams")}
+              />
+            {/if}
           </div>
           <div class="slab-actions slab-actions--row">
             <Button href={resolve("/streams")} variant="ghost" class="gap-2">

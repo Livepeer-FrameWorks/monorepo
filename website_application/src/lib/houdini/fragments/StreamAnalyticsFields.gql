@@ -1,0 +1,69 @@
+fragment StreamAnalyticsFields on StreamAnalytics {
+  # Core identifiers
+  id
+  streamId
+  internalName
+
+  # Session timing
+  sessionStartTime
+  sessionEndTime
+  totalSessionDuration
+
+  # Viewer metrics
+  currentViewers
+  peakViewers
+  totalConnections
+  totalViews
+  uniqueViewers
+  avgViewers
+
+  # Bandwidth metrics
+  bandwidthIn
+  bandwidthOut
+  totalBandwidthGb
+  upbytes
+  downbytes
+
+  # Stream quality
+  bitrateKbps
+  resolution
+
+  # Network performance
+  packetsSent
+  packetsLost
+  packetsRetrans
+  packetLossRate
+  firstMs
+  lastMs
+
+  # Stream details
+  trackCount
+  inputs
+  outputs
+
+  # Location
+  nodeId
+  nodeName
+  latitude
+  longitude
+  location
+
+  # Status
+  status
+  mistStatus
+  lastUpdated
+
+  # Current health state
+  currentBufferState
+  currentIssues
+  currentCodec
+  currentFps
+  currentResolution
+  qualityTier
+
+  # Computed analytics
+  uniqueCountries
+  uniqueCities
+  avgBufferHealth
+  avgBitrate
+}

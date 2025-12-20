@@ -1,0 +1,21 @@
+fragment StreamMetricsFields on StreamMetrics {
+  status
+  isLive
+  currentViewers
+  peakViewers
+  totalViews
+  startedAt
+  endedAt
+  duration
+  lastEventAt
+  lastEventType
+  bufferState
+  qualityTier
+  primaryWidth
+  primaryHeight
+  primaryFps
+  primaryCodec
+  primaryBitrate
+  hasIssues
+  issuesDescription
+}
