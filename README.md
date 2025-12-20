@@ -6,6 +6,22 @@
 
 An open streaming stack for live video: apps, real‑time APIs, and analytics. Services are narrowly scoped. Frontend uses GraphQL; service-to-service uses HTTP/gRPC APIs; analytics and realtime use Kafka events. Each service owns its data (no cross‑DB access).
 
+## NPM packages
+
+FrameWorks ships official player and browser-ingest packages:
+
+**FrameWorks Player**
+
+[![npm](https://img.shields.io/npm/v/%40livepeer-frameworks%2Fplayer-react?label=@livepeer-frameworks%2Fplayer-react)](https://www.npmjs.com/package/@livepeer-frameworks/player-react)
+[![npm](https://img.shields.io/npm/v/%40livepeer-frameworks%2Fplayer-svelte?label=@livepeer-frameworks%2Fplayer-svelte)](https://www.npmjs.com/package/@livepeer-frameworks/player-svelte)
+[![npm](https://img.shields.io/npm/v/%40livepeer-frameworks%2Fplayer-core?label=@livepeer-frameworks%2Fplayer-core)](https://www.npmjs.com/package/@livepeer-frameworks/player-core)
+
+**StreamCrafter (browser ingest)**
+
+[![npm](https://img.shields.io/npm/v/%40livepeer-frameworks%2Fstreamcrafter-react?label=@livepeer-frameworks%2Fstreamcrafter-react)](https://www.npmjs.com/package/@livepeer-frameworks/streamcrafter-react)
+[![npm](https://img.shields.io/npm/v/%40livepeer-frameworks%2Fstreamcrafter-svelte?label=@livepeer-frameworks%2Fstreamcrafter-svelte)](https://www.npmjs.com/package/@livepeer-frameworks/streamcrafter-svelte)
+[![npm](https://img.shields.io/npm/v/%40livepeer-frameworks%2Fstreamcrafter-core?label=@livepeer-frameworks%2Fstreamcrafter-core)](https://www.npmjs.com/package/@livepeer-frameworks/streamcrafter-core)
+
 ## Architecture at a glance
 
 ![Microservices Architecture](website_docs/src/assets/diagrams/Microservices_Architecture.png)

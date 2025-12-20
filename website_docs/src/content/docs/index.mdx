@@ -21,41 +21,407 @@ hero:
       variant: minimal
 ---
 
-import { Card, CardGrid } from '@astrojs/starlight/components';
+## NPM Packages
+
+<section class="npm-section tokyo-night">
+	<div class="npm-kicker">Official packages for playback and browser ingest</div>
+	<div class="npm-grid">
+		<div class="npm-card">
+			<div class="npm-card-title">FrameWorks Player</div>
+			<div class="npm-card-desc">Drop-in playback for HLS, DASH, and WebRTC with gateway routing.</div>
+			<div class="npm-badges">
+				<a class="npm-badge npm-badge--blue" href="https://www.npmjs.com/package/@livepeer-frameworks/player-react">player-react</a>
+				<a class="npm-badge npm-badge--cyan" href="https://www.npmjs.com/package/@livepeer-frameworks/player-svelte">player-svelte</a>
+				<a class="npm-badge npm-badge--green" href="https://www.npmjs.com/package/@livepeer-frameworks/player-core">player-core</a>
+			</div>
+		</div>
+		<div class="npm-card">
+			<div class="npm-card-title">StreamCrafter</div>
+			<div class="npm-card-desc">WebCodecs-based browser ingest with WHIP and live controls.</div>
+			<div class="npm-badges">
+				<a class="npm-badge npm-badge--blue" href="https://www.npmjs.com/package/@livepeer-frameworks/streamcrafter-react">streamcrafter-react</a>
+				<a class="npm-badge npm-badge--cyan" href="https://www.npmjs.com/package/@livepeer-frameworks/streamcrafter-svelte">streamcrafter-svelte</a>
+				<a class="npm-badge npm-badge--amber" href="https://www.npmjs.com/package/@livepeer-frameworks/streamcrafter-core">streamcrafter-core</a>
+			</div>
+		</div>
+	</div>
+</section>
 
 ## Choose Your Path
 
-<CardGrid>
-	<Card title="I want to stream" icon="rocket">
-		Zero friction. Connect your OBS, go live, and reach the world with our global CDN.
-
-		[Get started →](/streamers/quick-start)
-	</Card>
-	<Card title="I want to run my own edge nodes" icon="cloud-download">
-		Scale efficiently. Run your own edge nodes to cut bandwidth costs while keeping the platform managed.
-
-		[Learn about hybrid →](/hybrid/overview)
-	</Card>
-	<Card title="I want to self-host everything" icon="setting">
-		Total sovereignty. Deploy the entire stack on your own hardware for maximum privacy and control.
-
-		[Infrastructure guide →](/operators/deployment)
-	</Card>
-</CardGrid>
+<section class="slab-grid path-grid tokyo-night">
+	<a class="slab path-slab" href="/streamers/quick-start">
+		<div class="slab-header">
+			<div class="slab-label">
+				<svg class="label-icon" viewBox="0 0 24 24" aria-hidden="true">
+					<rect x="3" y="5" width="18" height="14" rx="1" />
+					<path d="M10 9L16 12L10 15Z" />
+				</svg>
+				<span>Streamers</span>
+			</div>
+			<div class="slab-title">I want to stream</div>
+		</div>
+		<div class="slab-body">Zero friction. Connect OBS, go live, and reach the world with our global CDN.</div>
+		<div class="slab-actions">
+			<span>Get started</span>
+			<svg class="action-icon" viewBox="0 0 24 24" aria-hidden="true">
+				<path d="M5 12H19" />
+				<path d="M13 6L19 12L13 18" />
+			</svg>
+		</div>
+	</a>
+	<a class="slab path-slab" href="/hybrid/overview">
+		<div class="slab-header">
+			<div class="slab-label">
+				<svg class="label-icon" viewBox="0 0 24 24" aria-hidden="true">
+					<rect x="4" y="4" width="6" height="6" rx="1" />
+					<rect x="14" y="4" width="6" height="6" rx="1" />
+					<rect x="9" y="14" width="6" height="6" rx="1" />
+					<path d="M10 7H14" />
+					<path d="M12 10V14" />
+				</svg>
+				<span>Operators</span>
+			</div>
+			<div class="slab-title">I want to run my own edge nodes</div>
+		</div>
+		<div class="slab-body">Scale efficiently. Keep the platform managed while cutting bandwidth costs.</div>
+		<div class="slab-actions">
+			<span>Learn about hybrid</span>
+			<svg class="action-icon" viewBox="0 0 24 24" aria-hidden="true">
+				<path d="M5 12H19" />
+				<path d="M13 6L19 12L13 18" />
+			</svg>
+		</div>
+	</a>
+	<a class="slab path-slab" href="/operators/deployment">
+		<div class="slab-header">
+			<div class="slab-label">
+				<svg class="label-icon" viewBox="0 0 24 24" aria-hidden="true">
+					<rect x="5" y="10" width="14" height="9" rx="1" />
+					<path d="M8 10V7C8 4.8 9.8 3 12 3C14.2 3 16 4.8 16 7V10" />
+				</svg>
+				<span>Sovereign</span>
+			</div>
+			<div class="slab-title">I want to self-host everything</div>
+		</div>
+		<div class="slab-body">Total control. Deploy the full stack on your own hardware and network.</div>
+		<div class="slab-actions">
+			<span>Infrastructure guide</span>
+			<svg class="action-icon" viewBox="0 0 24 24" aria-hidden="true">
+				<path d="M5 12H19" />
+				<path d="M13 6L19 12L13 18" />
+			</svg>
+		</div>
+	</a>
+</section>
 
 ## Quick Links
 
-<CardGrid stagger>
-	<Card title="Encoder Setup" icon="document">
-		Configure [OBS, FFmpeg, or any RTMP encoder](/streamers/encoder-setup) for your streams.
-	</Card>
-	<Card title="GraphQL API" icon="puzzle">
-		Build integrations with our [GraphQL API](/streamers/api-reference).
-	</Card>
-	<Card title="CLI Reference" icon="laptop">
-		Manage clusters with the [FrameWorks CLI](/operators/cli-reference).
-	</Card>
-	<Card title="Architecture" icon="open-book">
-		Understand the [system design](/operators/architecture) behind FrameWorks.
-	</Card>
-</CardGrid>
+<section class="slab-grid quick-grid tokyo-night">
+	<a class="slab quick-slab" href="/streamers/encoder-setup">
+		<div class="slab-header">
+			<div class="slab-label">
+				<svg class="label-icon" viewBox="0 0 24 24" aria-hidden="true">
+					<rect x="4" y="6" width="16" height="12" rx="1" />
+					<path d="M9 11L12 13L15 11" />
+				</svg>
+				<span>Encoder Setup</span>
+			</div>
+		</div>
+		<div class="slab-body">OBS, FFmpeg, and RTMP ingest basics.</div>
+		<div class="slab-actions">
+			<span>Open guide</span>
+			<svg class="action-icon" viewBox="0 0 24 24" aria-hidden="true">
+				<path d="M5 12H19" />
+				<path d="M13 6L19 12L13 18" />
+			</svg>
+		</div>
+	</a>
+	<a class="slab quick-slab" href="/streamers/api-reference">
+		<div class="slab-header">
+			<div class="slab-label">
+				<svg class="label-icon" viewBox="0 0 24 24" aria-hidden="true">
+					<path d="M8 6L4 12L8 18" />
+					<path d="M16 6L20 12L16 18" />
+					<path d="M10 5H14" />
+				</svg>
+				<span>GraphQL API</span>
+			</div>
+		</div>
+		<div class="slab-body">Build integrations on top of the Gateway.</div>
+		<div class="slab-actions">
+			<span>See reference</span>
+			<svg class="action-icon" viewBox="0 0 24 24" aria-hidden="true">
+				<path d="M5 12H19" />
+				<path d="M13 6L19 12L13 18" />
+			</svg>
+		</div>
+	</a>
+	<a class="slab quick-slab" href="/operators/cli-reference">
+		<div class="slab-header">
+			<div class="slab-label">
+				<svg class="label-icon" viewBox="0 0 24 24" aria-hidden="true">
+					<rect x="3" y="6" width="18" height="12" rx="1" />
+					<path d="M7 10L10 12L7 14" />
+					<path d="M12 14H17" />
+				</svg>
+				<span>CLI Reference</span>
+			</div>
+		</div>
+		<div class="slab-body">Provision clusters and manage deployments.</div>
+		<div class="slab-actions">
+			<span>View commands</span>
+			<svg class="action-icon" viewBox="0 0 24 24" aria-hidden="true">
+				<path d="M5 12H19" />
+				<path d="M13 6L19 12L13 18" />
+			</svg>
+		</div>
+	</a>
+	<a class="slab quick-slab" href="/operators/architecture">
+		<div class="slab-header">
+			<div class="slab-label">
+				<svg class="label-icon" viewBox="0 0 24 24" aria-hidden="true">
+					<path d="M4 8H20" />
+					<path d="M4 12H20" />
+					<path d="M4 16H20" />
+					<path d="M8 8V16" />
+					<path d="M16 8V16" />
+				</svg>
+				<span>Architecture</span>
+			</div>
+		</div>
+		<div class="slab-body">Understand the systems behind FrameWorks.</div>
+		<div class="slab-actions">
+			<span>Explore systems</span>
+			<svg class="action-icon" viewBox="0 0 24 24" aria-hidden="true">
+				<path d="M5 12H19" />
+				<path d="M13 6L19 12L13 18" />
+			</svg>
+		</div>
+	</a>
+</section>
+
+<style>{`
+	.tokyo-night {
+		--tn-bg: #1a1b26;
+		--tn-surface: #24283b;
+		--tn-surface-2: #1f2335;
+		--tn-border: #414868;
+		--tn-text: #c0caf5;
+		--tn-muted: #a9b1d6;
+		--tn-blue: #7aa2f7;
+		--tn-cyan: #7dcfff;
+		--tn-green: #9ece6a;
+		--tn-amber: #e0af68;
+		color: var(--tn-text);
+	}
+
+	.slab-grid {
+		display: grid;
+		gap: 0;
+		border: 1px solid var(--tn-border);
+		background: linear-gradient(180deg, var(--tn-bg), #14151c);
+	}
+
+	.slab {
+		background: linear-gradient(180deg, rgba(36, 40, 59, 0.92), rgba(31, 35, 53, 0.92));
+		color: var(--tn-text);
+		display: flex;
+		flex-direction: column;
+		min-height: 100%;
+		outline: 1px solid rgba(65, 72, 104, 0.7);
+		outline-offset: -1px;
+		padding: 16px 16px 0;
+		position: relative;
+		text-decoration: none;
+		transition: background 160ms ease, box-shadow 160ms ease;
+	}
+
+	.slab:hover {
+		background: linear-gradient(180deg, rgba(46, 51, 73, 0.96), rgba(35, 40, 61, 0.96));
+		box-shadow: inset 0 0 0 1px rgba(122, 162, 247, 0.25);
+	}
+
+	.slab-header {
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+	}
+
+	.slab-label {
+		align-items: center;
+		color: var(--tn-cyan);
+		display: inline-flex;
+		font-family: "JetBrains Mono", "Fira Code", "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+		font-size: 0.72rem;
+		gap: 8px;
+		letter-spacing: 0.16em;
+		text-transform: uppercase;
+	}
+
+	.label-icon,
+	.action-icon {
+		fill: none;
+		stroke: currentColor;
+		stroke-linecap: round;
+		stroke-linejoin: round;
+		stroke-width: 1.6;
+	}
+
+	.label-icon {
+		height: 16px;
+		width: 16px;
+	}
+
+	.action-icon {
+		height: 18px;
+		width: 18px;
+	}
+
+	.slab-title {
+		font-family: "Space Grotesk", "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
+		font-size: 1.08rem;
+		font-weight: 600;
+	}
+
+	.slab-body {
+		color: var(--tn-muted);
+		line-height: 1.55;
+		margin: 12px 0 16px;
+	}
+
+	.slab-actions {
+		align-items: center;
+		border-top: 1px solid rgba(65, 72, 104, 0.7);
+		color: var(--tn-blue);
+		display: flex;
+		font-family: "JetBrains Mono", "Fira Code", "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+		justify-content: space-between;
+		margin-top: auto;
+		padding: 10px 16px;
+		position: relative;
+		transform: translateX(-16px);
+		width: calc(100% + 32px);
+	}
+
+	.path-grid {
+		border-radius: 10px;
+		grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+		margin-bottom: 12px;
+	}
+
+	.path-slab {
+		min-height: 220px;
+	}
+
+	.quick-grid {
+		border-radius: 10px;
+		grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+	}
+
+	.quick-slab .slab-body {
+		margin-top: 8px;
+	}
+
+	.npm-section.tokyo-night {
+		background:
+			linear-gradient(140deg, rgba(122, 162, 247, 0.12), rgba(125, 207, 255, 0.02) 50%),
+			radial-gradient(circle at top right, rgba(158, 206, 106, 0.14), transparent 45%),
+			repeating-linear-gradient(0deg, rgba(65, 72, 104, 0.18) 0, rgba(65, 72, 104, 0.18) 1px, transparent 1px, transparent 24px),
+			linear-gradient(180deg, var(--tn-bg), #16161e);
+		border: 1px solid var(--tn-border);
+		border-radius: 10px;
+		color: var(--tn-text);
+		padding: 20px;
+	}
+
+	.npm-kicker {
+		color: var(--tn-muted);
+		font-family: "JetBrains Mono", "Fira Code", "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+		font-size: 0.85rem;
+		letter-spacing: 0.04em;
+		margin-bottom: 16px;
+		text-transform: uppercase;
+	}
+
+	.npm-grid {
+		display: grid;
+		gap: 12px;
+		grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+	}
+
+	.npm-card {
+		background: linear-gradient(180deg, var(--tn-surface), var(--tn-surface-2));
+		border: 1px solid rgba(65, 72, 104, 0.6);
+		border-radius: 8px;
+		padding: 16px;
+		box-shadow: inset 0 0 0 1px rgba(122, 162, 247, 0.08);
+	}
+
+	.npm-card-title {
+		font-family: "Space Grotesk", "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
+		font-size: 1.05rem;
+		font-weight: 600;
+		margin-bottom: 6px;
+	}
+
+	.npm-card-desc {
+		color: var(--tn-muted);
+		margin-bottom: 12px;
+	}
+
+	.npm-badges {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 8px;
+	}
+
+	.npm-badge {
+		border: 1px solid rgba(122, 162, 247, 0.35);
+		border-radius: 999px;
+		color: var(--tn-text);
+		display: inline-flex;
+		font-family: "JetBrains Mono", "Fira Code", "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+		font-size: 0.82rem;
+		letter-spacing: 0.01em;
+		padding: 6px 12px;
+		text-decoration: none;
+		transition: transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease;
+	}
+
+	.npm-badge:hover {
+		border-color: rgba(125, 207, 255, 0.75);
+		box-shadow: 0 0 0 2px rgba(122, 162, 247, 0.15);
+		transform: translateY(-1px);
+	}
+
+	.npm-badge--blue {
+		background: rgba(122, 162, 247, 0.18);
+	}
+
+	.npm-badge--cyan {
+		background: rgba(125, 207, 255, 0.18);
+	}
+
+	.npm-badge--green {
+		background: rgba(158, 206, 106, 0.18);
+		border-color: rgba(158, 206, 106, 0.5);
+	}
+
+	.npm-badge--amber {
+		background: rgba(224, 175, 104, 0.18);
+		border-color: rgba(224, 175, 104, 0.5);
+	}
+
+	@media (max-width: 640px) {
+		.slab {
+			padding: 14px 14px 0;
+		}
+
+		.slab-actions {
+			padding: 10px 14px;
+			transform: translateX(-14px);
+			width: calc(100% + 28px);
+		}
+	}
+`}</style>
