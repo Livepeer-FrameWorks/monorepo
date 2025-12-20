@@ -1,6 +1,6 @@
 {
   "name": "@livepeer-frameworks/streamcrafter-workspace",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@9.12.0",

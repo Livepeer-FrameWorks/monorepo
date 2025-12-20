@@ -25,6 +25,10 @@ The `StreamCrafter` component is self-contained - pass a WHIP endpoint and get a
 - **Background-safe** - WebCodecs encoding continues in background tabs
 - **WHIP protocol** - Standard WebRTC-HTTP Ingest Protocol
 
+## Documentation
+
+Full docs and guides: https://docs.frameworks.network
+
 ## Installation
 
 ```bash

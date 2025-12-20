@@ -1,0 +1,67 @@
+# @livepeer-frameworks/player-react
+
+React wrapper for the FrameWorks player. Resolves endpoints via Gateway or Mist and renders the best available player (WebCodecs, HLS, etc).
+
+**Docs:** `docs.frameworks.network`
+
+## Install
+
+```bash
+pnpm add @livepeer-frameworks/player-react
+# or
+npm i @livepeer-frameworks/player-react
+```
+
+## Usage
+
+```tsx
+import { Player } from '@livepeer-frameworks/player-react';
+
+export default function App() {
+  return (
+    <div style={{ width: '100%', height: 500 }}>
+      <Player
+        contentType="live"
+        contentId="my-stream"
+        options={{ gatewayUrl: 'https://your-bridge/graphql' }}
+      />
+    </div>
+  );
+}
+```
+
+### Styles
+
+```ts
+import '@livepeer-frameworks/player-react/player.css';
+```
+
+## Controls & Shortcuts
+
+The player ships with keyboard/mouse shortcuts when the player is focused (click/tap once).
+
+**Keyboard**
+| Shortcut | Action | Notes |
+|---|---|---|
+| Space | Play/Pause | Hold = 2x speed (when seekable) |
+| K | Play/Pause | YouTube-style |
+| J / Left | Skip back 10s | Disabled on live-only |
+| L / Right | Skip forward 10s | Disabled on live-only |
+| Up / Down | Volume +/-10% | - |
+| M | Mute/Unmute | - |
+| F | Fullscreen toggle | - |
+| C | Captions toggle | - |
+| 0-9 | Seek to 0-90% | Disabled on live-only |
+| , / . | Prev/Next frame (paused) | WebCodecs = true step; others = buffered-only |
+
+**Mouse / Touch**
+| Gesture | Action | Notes |
+|---|---|---|
+| Double-click | Fullscreen toggle | Desktop |
+| Double-tap (left/right) | Skip +/-10s | Touch only, disabled on live-only |
+| Click/Tap and hold | 2x speed | Disabled on live-only |
+
+**Constraints**
+- Live-only streams disable seeking/skip/2x hold and frame-step.
+- Live with DVR buffer enables the same shortcuts as VOD.
+- Frame stepping only moves within already buffered ranges (no network seek). WebCodecs supports true frame stepping when paused.

@@ -8,6 +8,8 @@ The `Player` component resolves optimal endpoints via the FrameWorks Gateway, wh
 
 > **Looking for browser-based streaming (ingest)?** See [StreamCrafter](../npm_studio/README.md) - the companion library for WHIP publishing from camera/screen.
 
+**Docs:** `docs.frameworks.network`
+
 ## Packages
 
 This library is split into three packages:
