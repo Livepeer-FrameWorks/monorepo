@@ -109,6 +109,11 @@
       : null
   );
 
+  // Calculate total viewers for geo breakdown percentage
+  let geoTotalViewers = $derived(
+    usageSummary?.geoBreakdown?.reduce((sum, c) => sum + c.viewerCount, 0) ?? 0
+  );
+
   // Unmask live usage summary
   let liveUsage = $derived(
     billingData?.liveUsage
@@ -1661,15 +1666,16 @@
                       <td class="py-3 px-4 text-right font-mono">
                         {country.egressGb.toFixed(1)} GB
                       </td>
+                      {@const pct = geoTotalViewers > 0 ? (country.viewerCount / geoTotalViewers) * 100 : 0}
                       <td class="py-3 px-4 text-right">
                         <div class="flex items-center justify-end gap-2">
                           <div class="w-16 h-1.5 bg-muted rounded-full overflow-hidden">
                             <div
                               class="h-full bg-info"
-                              style="width: {Math.min(country.percentage || 0, 100)}%"
+                              style="width: {Math.min(pct, 100)}%"
                             ></div>
                           </div>
-                          <span class="font-mono text-xs w-12 text-right">{(country.percentage || 0).toFixed(1)}%</span>
+                          <span class="font-mono text-xs w-12 text-right">{pct.toFixed(1)}%</span>
                         </div>
                       </td>
                     </tr>

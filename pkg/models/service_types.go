@@ -46,12 +46,10 @@ type BillingStatus struct {
 // === PERISCOPE SERVICE TYPES ===
 
 // CountryMetrics represents viewer metrics for a single country
-// Used in geo_breakdown for rich billing/email summaries
 type CountryMetrics struct {
 	CountryCode string  `json:"country_code"`
 	ViewerCount int     `json:"viewer_count"`
 	ViewerHours float64 `json:"viewer_hours"`
-	Percentage  float64 `json:"percentage"` // Percentage of total viewers
 	EgressGB    float64 `json:"egress_gb"`
 }
 
@@ -131,7 +129,7 @@ type UsageSummary struct {
 	AvgViewers      float64          `json:"avg_viewers"`
 	UniqueCountries int              `json:"unique_countries"`
 	UniqueCities    int              `json:"unique_cities"`
-	GeoBreakdown    []CountryMetrics `json:"geo_breakdown"` // Rich geo breakdown with viewers, hours, percentage
+	GeoBreakdown    []CountryMetrics `json:"geo_breakdown"`
 
 	// API usage aggregates (from Gateway summaries)
 	APIRequests   float64             `json:"api_requests"`

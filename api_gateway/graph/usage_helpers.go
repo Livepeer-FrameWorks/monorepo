@@ -136,7 +136,6 @@ func parseGeoBreakdown(raw interface{}) []*proto.CountryMetrics {
 			CountryCode: stringFromMap(m, "country_code"),
 			ViewerCount: intFromMap(m, "viewer_count"),
 			ViewerHours: floatFromMap(m, "viewer_hours"),
-			Percentage:  floatFromMap(m, "percentage"),
 			EgressGb:    floatFromMap(m, "egress_gb"),
 		})
 	}

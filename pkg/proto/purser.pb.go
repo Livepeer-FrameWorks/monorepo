@@ -3123,7 +3123,6 @@ type CountryMetrics struct {
 	CountryCode   string                 `protobuf:"bytes,1,opt,name=country_code,json=countryCode,proto3" json:"country_code,omitempty"`   // ISO 2-letter country code
 	ViewerCount   int32                  `protobuf:"varint,2,opt,name=viewer_count,json=viewerCount,proto3" json:"viewer_count,omitempty"`  // Unique viewers from this country
 	ViewerHours   float64                `protobuf:"fixed64,3,opt,name=viewer_hours,json=viewerHours,proto3" json:"viewer_hours,omitempty"` // Total viewer-hours from this country
-	Percentage    float64                `protobuf:"fixed64,4,opt,name=percentage,proto3" json:"percentage,omitempty"`                      // Percentage of total viewers
 	EgressGb      float64                `protobuf:"fixed64,5,opt,name=egress_gb,json=egressGb,proto3" json:"egress_gb,omitempty"`          // Bandwidth egress from this country
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -3176,13 +3175,6 @@ func (x *CountryMetrics) GetViewerCount() int32 {
 func (x *CountryMetrics) GetViewerHours() float64 {
 	if x != nil {
 		return x.ViewerHours
-	}
-	return 0
-}
-
-func (x *CountryMetrics) GetPercentage() float64 {
-	if x != nil {
-		return x.Percentage
 	}
 	return 0
 }
@@ -9454,14 +9446,11 @@ const file_purser_proto_rawDesc = "" +
 	"\x12UsageIngestRequest\x12=\n" +
 	"\x0fusage_summaries\x18\x01 \x03(\v2\x14.purser.UsageSummaryR\x0eusageSummaries\x12\x16\n" +
 	"\x06source\x18\x02 \x01(\tR\x06source\x12\x1c\n" +
-	"\ttimestamp\x18\x03 \x01(\x03R\ttimestamp\"\xb6\x01\n" +
+	"\ttimestamp\x18\x03 \x01(\x03R\ttimestamp\"\x96\x01\n" +
 	"\x0eCountryMetrics\x12!\n" +
 	"\fcountry_code\x18\x01 \x01(\tR\vcountryCode\x12!\n" +
 	"\fviewer_count\x18\x02 \x01(\x05R\vviewerCount\x12!\n" +
-	"\fviewer_hours\x18\x03 \x01(\x01R\vviewerHours\x12\x1e\n" +
-	"\n" +
-	"percentage\x18\x04 \x01(\x01R\n" +
-	"percentage\x12\x1b\n" +
+	"\fviewer_hours\x18\x03 \x01(\x01R\vviewerHours\x12\x1b\n" +
 	"\tegress_gb\x18\x05 \x01(\x01R\begressGb\"\xd1\x11\n" +
 	"\fUsageSummary\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x1d\n" +

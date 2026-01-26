@@ -530,11 +530,11 @@ func GenerateBillingStatus() *pb.BillingStatusResponse {
 			UniqueCountries:   12,
 			UniqueCities:      58,
 			GeoBreakdown: []*pb.CountryMetrics{
-				{CountryCode: "US", ViewerCount: 245, ViewerHours: 82.5, Percentage: 52.3, EgressGb: 13.2},
-				{CountryCode: "GB", ViewerCount: 78, ViewerHours: 28.1, Percentage: 16.6, EgressGb: 4.2},
-				{CountryCode: "DE", ViewerCount: 52, ViewerHours: 18.4, Percentage: 11.1, EgressGb: 2.8},
-				{CountryCode: "FR", ViewerCount: 38, ViewerHours: 13.2, Percentage: 8.1, EgressGb: 2.1},
-				{CountryCode: "JP", ViewerCount: 25, ViewerHours: 8.7, Percentage: 5.3, EgressGb: 1.4},
+				{CountryCode: "US", ViewerCount: 245, ViewerHours: 82.5, EgressGb: 13.2},
+				{CountryCode: "GB", ViewerCount: 78, ViewerHours: 28.1, EgressGb: 4.2},
+				{CountryCode: "DE", ViewerCount: 52, ViewerHours: 18.4, EgressGb: 2.8},
+				{CountryCode: "FR", ViewerCount: 38, ViewerHours: 13.2, EgressGb: 2.1},
+				{CountryCode: "JP", ViewerCount: 25, ViewerHours: 8.7, EgressGb: 1.4},
 			},
 		},
 	}

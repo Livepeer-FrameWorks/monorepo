@@ -3444,15 +3444,13 @@ type UsageSummary {
   # Geographic
   uniqueCountries: Int!
   uniqueCities: Int!
-  geoBreakdown: [CountryMetrics!]!   # Rich geo breakdown with viewers, hours, percentage
+  geoBreakdown: [CountryMetrics!]!
 }
 
-# Rich country-level billing metrics (bound to purser.CountryMetrics)
 type CountryMetrics {
   countryCode: String!
   viewerCount: Int!
   viewerHours: Float!
-  percentage: Float!
   egressGb: Float!
 }
 

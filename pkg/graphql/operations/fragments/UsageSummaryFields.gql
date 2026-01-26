@@ -63,7 +63,6 @@ fragment UsageSummaryFields on UsageSummary {
     countryCode
     viewerCount
     viewerHours
-    percentage
     egressGb
   }
 }

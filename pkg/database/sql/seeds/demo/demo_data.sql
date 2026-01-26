@@ -259,11 +259,11 @@ VALUES
        "avg_bitrate": 4500,
        "packet_loss_rate": 0.0012,
        "geo_breakdown": [
-         {"country_code": "US", "viewer_count": 1511, "viewer_hours": 245.3, "percentage": 30.6, "egress_gb": 142.5},
-         {"country_code": "NL", "viewer_count": 993, "viewer_hours": 156.2, "percentage": 20.1, "egress_gb": 91.2},
-         {"country_code": "GB", "viewer_count": 491, "viewer_hours": 78.4, "percentage": 10.0, "egress_gb": 45.8},
-         {"country_code": "DE", "viewer_count": 456, "viewer_hours": 71.2, "percentage": 9.2, "egress_gb": 41.3},
-         {"country_code": "JP", "viewer_count": 510, "viewer_hours": 82.1, "percentage": 10.3, "egress_gb": 48.2}
+         {"country_code": "US", "viewer_count": 1511, "viewer_hours": 245.3, "egress_gb": 142.5},
+         {"country_code": "NL", "viewer_count": 993, "viewer_hours": 156.2, "egress_gb": 91.2},
+         {"country_code": "GB", "viewer_count": 491, "viewer_hours": 78.4, "egress_gb": 45.8},
+         {"country_code": "DE", "viewer_count": 456, "viewer_hours": 71.2, "egress_gb": 41.3},
+         {"country_code": "JP", "viewer_count": 510, "viewer_hours": 82.1, "egress_gb": 48.2}
        ]
      }',
      DATE_TRUNC('month', NOW()), NOW()),

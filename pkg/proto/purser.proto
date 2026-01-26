@@ -516,7 +516,6 @@ message CountryMetrics {
   string country_code = 1;              // ISO 2-letter country code
   int32 viewer_count = 2;               // Unique viewers from this country
   double viewer_hours = 3;              // Total viewer-hours from this country
-  double percentage = 4;                // Percentage of total viewers
   double egress_gb = 5;                 // Bandwidth egress from this country
 }
 

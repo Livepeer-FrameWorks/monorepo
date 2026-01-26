@@ -2308,9 +2308,6 @@ func (s *PurserServer) getCurrentMonthUsageSummary(ctx context.Context, tenantID
 		if hours, ok := g["viewer_hours"].(float64); ok {
 			cm.ViewerHours = hours
 		}
-		if pct, ok := g["percentage"].(float64); ok {
-			cm.Percentage = pct
-		}
 		if egress, ok := g["egress_gb"].(float64); ok {
 			cm.EgressGb = egress
 		}

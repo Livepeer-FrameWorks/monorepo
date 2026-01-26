@@ -289,24 +289,15 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 	// Recording GB maps to DVR storage in the v2 model (use average DVR storage)
 	recordingGB := avgDvrStorageGB
 
-	// Query ClickHouse for geo breakdown (top 10 countries with rich metrics)
-	// Returns: country_code, viewer_count, viewer_hours, egress_gb, percentage
+	// Query ClickHouse for geo breakdown (top 10 countries with raw metrics)
+	// Percentage is calculated downstream by consumers
 	var geoBreakdown []models.CountryMetrics
 	geoRows, err := bs.clickhouse.QueryContext(ctx, `
-		WITH totals AS (
-			SELECT sum(viewer_count) as total_viewers
-			FROM periscope.viewer_geo_hourly
-			WHERE tenant_id = ?
-			AND hour BETWEEN ? AND ?
-		)
 		SELECT
 			country_code,
 			sum(viewer_count) as total_viewer_count,
 			sum(viewer_hours) as viewer_hours,
-			sum(egress_gb) as egress_gb,
-			if((SELECT total_viewers FROM totals) > 0,
-			   sum(viewer_count) * 100.0 / (SELECT total_viewers FROM totals),
-			   0) as percentage
+			sum(egress_gb) as egress_gb
 		FROM periscope.viewer_geo_hourly
 		WHERE tenant_id = ?
 		AND hour BETWEEN ? AND ?
@@ -314,7 +305,7 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 		GROUP BY country_code
 		ORDER BY total_viewer_count DESC
 		LIMIT 10
-	`, tenantID, startTime, endTime, tenantID, startTime, endTime)
+	`, tenantID, startTime, endTime)
 
 	if err != nil && err != database.ErrNoRows {
 		bs.logger.WithError(err).Warn("Failed to query geo breakdown")
@@ -322,10 +313,9 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 		defer geoRows.Close()
 		for geoRows.Next() {
 			var cm models.CountryMetrics
-			if err := geoRows.Scan(&cm.CountryCode, &cm.ViewerCount, &cm.ViewerHours, &cm.EgressGB, &cm.Percentage); err == nil {
+			if err := geoRows.Scan(&cm.CountryCode, &cm.ViewerCount, &cm.ViewerHours, &cm.EgressGB); err == nil {
 				cm.ViewerHours = sanitizeFloat(cm.ViewerHours)
 				cm.EgressGB = sanitizeFloat(cm.EgressGB)
-				cm.Percentage = sanitizeFloat(cm.Percentage)
 				geoBreakdown = append(geoBreakdown, cm)
 			}
 		}
